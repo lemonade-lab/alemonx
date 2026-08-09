@@ -61,6 +61,16 @@ func main() {
 		log.Fatal(err)
 	}
 	yes, arguments := flagPresent(arguments, "--yes")
+	if len(arguments) > 0 && arguments[0] == "update-watch" {
+		if len(arguments) != 1 {
+			usage()
+			return
+		}
+		if watchErr := system.WatchUpdate(port); watchErr != nil {
+			log.Printf("更新验证失败：%v", watchErr)
+		}
+		return
+	}
 	if len(arguments) > 0 && (arguments[0] == "--version" || arguments[0] == "version") {
 		fmt.Println(Version)
 		return
@@ -200,6 +210,19 @@ func main() {
 			return
 		}
 	}
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("ALX_DEPLOYMENT")), "production") {
+		if !strings.EqualFold(strings.TrimSpace(os.Getenv("ALX_OPS_STORAGE")), "sqlite") {
+			log.Fatal("ALX_DEPLOYMENT=production 要求 ALX_OPS_STORAGE=sqlite")
+		}
+		manager, authErr := access.New()
+		if authErr != nil {
+			log.Fatalf("生产模式无法加载身份认证：%v", authErr)
+		}
+		status, statusErr := manager.Status("")
+		if statusErr != nil || !status.Enabled {
+			log.Fatal("ALX_DEPLOYMENT=production 要求先启用本地身份认证（alx auth enable）")
+		}
+	}
 	serve(env("alx_BIND", "127.0.0.1"), port)
 }
 
@@ -251,7 +274,10 @@ func serve(host, port string) {
 	stopCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	go func() {
-		<-stopCtx.Done()
+		select {
+		case <-stopCtx.Done():
+		case <-runtime.UpdateRequested():
+		}
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = runtime.Shutdown(shutdownCtx)
@@ -275,9 +301,8 @@ func startupMessage(version, host, port string) string {
 	address := "http://" + addressHost + ":" + port
 	return fmt.Sprintf(`
 
-  ALemonX v%s 已准备就绪
+  ALemonX v%s  工作台
   ───────────────────────────────────────
-  机器人工作台：
 
   现在开始
   1. 在浏览器打开：%s

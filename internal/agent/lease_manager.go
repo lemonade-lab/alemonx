@@ -47,9 +47,9 @@ func (m *RepositoryLeaseManager) Acquire(ctx context.Context, key, owner string,
 		return err
 	}
 	m.mu.Lock()
-	if previous := m.held[key]; previous != nil {
-		previous()
-	}
+	// A successful same-owner Acquire renews/replaces the durable lease. Do not
+	// invoke the previous release closure here: it addresses the same key and
+	// would immediately expire the newly acquired lease.
 	m.held[key] = release
 	m.mu.Unlock()
 	return nil

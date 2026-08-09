@@ -431,7 +431,7 @@
   --theme-surface-raised: #f2f1ee;
   --theme-surface-hover: #eae8e4;
   --theme-surface-active: #e0ddd7;
-  --theme-surface-input: #ffffff;
+  --theme-surface-input: #ffffffe0;
   --theme-surface-invert: #1c1a17;
   --theme-surface-overlay: rgb(28 26 23 / 0.36);
   /* Text */
@@ -5187,8 +5187,6 @@ textarea:hover {
   .workbench-dock.workbench-dock-visible {
     align-items: center;
     background: rgb(255 255 255 / 0.58);
-    backdrop-filter: blur(18px) saturate(1.25);
-    -webkit-backdrop-filter: blur(18px) saturate(1.25);
     border: 1px solid rgb(255 255 255 / 0.65);
     border-radius: 18px;
     box-shadow: 0 18px 42px rgb(28 26 23 / 0.12);
@@ -5209,11 +5207,8 @@ textarea:hover {
   }
 
   .workbench-dock-items {
-    border-bottom: 1px solid var(--theme-border-default);
-    border-top: 1px solid var(--theme-border-default);
     display: grid;
-    gap: 5px;
-    padding: 10px 0;
+    gap: 16px;
   }
 
   .workbench-dock-apps {

@@ -195,6 +195,60 @@ func (m *TaskManager) ApprovePlan(id string) (AgentTask, error) {
 	return managed.Task, nil
 }
 
+// RetryStep re-queues only the current failed/verifying step. Unlike
+// UpdatePlan it preserves the prior approval: retrying a failed execution is
+// not an edit to the plan and must not silently discard an approval already
+// granted for this exact plan.
+func (m *TaskManager) RetryStep(id, stepID string) (AgentTask, error) {
+	m.mu.Lock()
+	managed, ok := m.tasks[id]
+	if !ok {
+		loaded, err := m.store.LoadTask(id)
+		if err != nil {
+			m.mu.Unlock()
+			return AgentTask{}, errors.New("任务不存在")
+		}
+		managed = &ManagedTask{Task: loaded}
+		m.tasks[id] = managed
+	}
+	if managed.Task.Status == TaskCompleted || managed.Task.Status == TaskRolledBack {
+		m.mu.Unlock()
+		return AgentTask{}, errors.New("任务已结束")
+	}
+	if !managed.Task.Plan.Approved {
+		m.mu.Unlock()
+		return AgentTask{}, errors.New("任务计划尚未批准")
+	}
+	if managed.Task.Plan.CurrentStep < 0 || managed.Task.Plan.CurrentStep >= len(managed.Task.Plan.Steps) {
+		m.mu.Unlock()
+		return AgentTask{}, errors.New("当前计划步骤无效")
+	}
+	step := &managed.Task.Plan.Steps[managed.Task.Plan.CurrentStep]
+	if step.ID != stepID {
+		m.mu.Unlock()
+		return AgentTask{}, errors.New("只能重试当前失败步骤")
+	}
+	if step.Status != "failed" && step.Status != "verifying" {
+		m.mu.Unlock()
+		return AgentTask{}, errors.New("只有失败或验证中的步骤可以重试")
+	}
+	step.Status, step.Result = "pending", ""
+	step.Attempts++
+	previous := managed.Task
+	managed.Task.Status, managed.Task.LastError, managed.Task.Updated = TaskQueued, "", time.Now()
+	if err := m.store.SaveTask(managed.Task); err != nil {
+		m.mu.Unlock()
+		return AgentTask{}, err
+	}
+	m.notifyLocked(id)
+	current, observer := managed.Task, m.observer
+	m.mu.Unlock()
+	if observer != nil && previous.Status != current.Status {
+		observer(previous, current)
+	}
+	return current, nil
+}
+
 func (m *TaskManager) Resume(id string, runner TaskRunner) error {
 	m.mu.Lock()
 	managed, ok := m.tasks[id]
@@ -310,14 +364,12 @@ func (m *TaskManager) UpdatePlan(id string, plan TaskPlan) (AgentTask, error) {
 	if err := ValidateTaskPlan(plan); err != nil {
 		return AgentTask{}, err
 	}
-	// A changed plan affects execution intent, not tool authorization. Risky
-	// tools are still gated by the task's approver, so editing a paused/pending
-	// plan must not introduce a second, unrelated approval checkpoint.
-	plan.Approved = true
+	// Editing a plan changes the executable intent. It must therefore return to
+	// plan_pending even though individual ask-mode tool calls have their own
+	// confirmation flow.
+	plan.Approved = false
 	managed.Task.Plan = plan
-	if managed.Task.Status == TaskPlanPending {
-		managed.Task.Status = TaskQueued
-	}
+	managed.Task.Status = TaskPlanPending
 	managed.Task.Updated = time.Now()
 	if err := m.store.SaveTask(managed.Task); err != nil {
 		return AgentTask{}, err

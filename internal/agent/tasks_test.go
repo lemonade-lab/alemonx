@@ -113,11 +113,29 @@ func TestUpdatePlanKeepsExecutionReady(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !updated.Plan.Approved {
-		t.Fatal("编辑计划不应撤销任务的执行就绪状态")
+	if updated.Plan.Approved {
+		t.Fatal("编辑计划必须撤销此前批准")
 	}
-	if updated.Status != TaskQueued {
-		t.Fatalf("编辑待批准计划后状态 = %q，期望 queued", updated.Status)
+	if updated.Status != TaskPlanPending {
+		t.Fatalf("编辑待批准计划后状态 = %q，期望 plan_pending", updated.Status)
+	}
+}
+
+func TestRetryStepPreservesApprovalAndOnlyRetriesCurrentStep(t *testing.T) {
+	manager := NewTaskManager(NewTaskStoreAt(t.TempDir()))
+	plan := TaskPlan{Goal: "g", Completion: "c", CurrentStep: 0, Approved: true, Steps: []PlanStep{{ID: "implement", Status: "failed", Result: "verify failed"}, {ID: "verify", Status: "pending"}}}
+	if _, err := manager.Create(AgentTask{ID: "retry-step", Status: TaskFailed, Plan: plan}, func(context.Context, AgentTask, func(Event)) (string, error) { return "ok", nil }); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := manager.RetryStep("retry-step", "implement")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !updated.Plan.Approved || updated.Status != TaskQueued || updated.Plan.Steps[0].Status != "pending" || updated.Plan.Steps[0].Attempts != 1 {
+		t.Fatalf("retry state = %+v", updated)
+	}
+	if _, err := manager.RetryStep("retry-step", "verify"); err == nil {
+		t.Fatal("cannot skip directly to a later step")
 	}
 }
 

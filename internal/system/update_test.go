@@ -10,13 +10,14 @@ import (
 )
 
 func TestWindowsRestartScriptQuotesPathsAndHandlesNoAppArguments(t *testing.T) {
-	script := windowsRestartScript(`C:\Program Files\ALemonX\alx.exe`, `C:\Program Files\ALemonX\alx.exe.new.exe`, `C:\Program Files\ALemonX\alx.previous.exe`, nil)
+	script := windowsRestartScript(`C:\Program Files\ALemonX\alx.exe`, `C:\Program Files\ALemonX\alx.exe.new.exe`, `C:\Program Files\ALemonX\alx.previous.exe`, nil, "17390")
 	for _, want := range []string{
 		"$target='C:\\Program Files\\ALemonX\\alx.exe'",
 		"$arguments=@()",
 		"$attempt -lt 150",
-		"Move-Item -LiteralPath $target -Destination $backup",
-		"Start-Process -FilePath $target -ArgumentList $arguments",
+		"Remove-Item -LiteralPath $target -Force",
+		"$watcherArgs=@('update-watch','--port','17390')",
+		"Start-Process -FilePath $target -ArgumentList $watcherArgs",
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("restart script missing %q: %s", want, script)
@@ -64,5 +65,29 @@ func TestReadyPendingUpdateRejectsTamperedArchive(t *testing.T) {
 	_, _, ready, err := ReadyPendingUpdate()
 	if err != nil || ready {
 		t.Fatalf("tampered pending update must not be ready: ready=%v err=%v", ready, err)
+	}
+}
+
+func TestUpdateTransactionPersistsAndConfirmsMatchingVersion(t *testing.T) {
+	t.Setenv("ALX_TEST_CACHE_DIR", t.TempDir())
+	transaction := UpdateTransaction{
+		Phase:           UpdatePhaseRestarting,
+		TargetVersion:   "v1.2.3",
+		PreviousVersion: "v1.2.2",
+		ArchivePath:     "/tmp/alx.zip",
+	}
+	if err := SaveUpdateTransaction(transaction); err != nil {
+		t.Fatal(err)
+	}
+	if _, healthy, err := MarkUpdateHealthy("1.2.2"); err != nil || healthy {
+		t.Fatalf("wrong version must not confirm update: healthy=%v err=%v", healthy, err)
+	}
+	confirmed, healthy, err := MarkUpdateHealthy("1.2.3")
+	if err != nil || !healthy || confirmed.Phase != UpdatePhaseHealthy {
+		t.Fatalf("matching version = (%+v, %v, %v), want healthy transaction", confirmed, healthy, err)
+	}
+	stored, exists, err := ReadUpdateTransaction()
+	if err != nil || !exists || stored.Phase != UpdatePhaseHealthy {
+		t.Fatalf("stored transaction = (%+v, %v, %v), want healthy", stored, exists, err)
 	}
 }

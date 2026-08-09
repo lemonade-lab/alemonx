@@ -309,7 +309,6 @@ function WorkbenchDock({
         </button>
         {terminalWindow.open && (
           <div className="workbench-dock-apps">
-            <small>应用</small>
             <button
               className={terminalWindow.minimized ? '' : 'active'}
               onClick={onTerminal}
@@ -1233,9 +1232,9 @@ function FlowView({
   const isWeb = goal?.id === 'web'
   const isBuild = goal?.id === 'build'
   const purposeOptions = [
-    ['develop', '开发', '创建一个可按需配置的 AlemonJS 开发项目。'],
     ['deploy', '部署', '部署源码版、桌面版、手机版或 Web 版。'],
-    ['manage', '管理', '进入后台，管理已有机器人项目。']
+    ['develop', '开发', '按需选择并创建 AlemonJS 开发模板。'],
+    ['manage', '管理', '如果已有可用项目, 点击进入管理面板。']
   ]
   return (
     <section className="wizard">

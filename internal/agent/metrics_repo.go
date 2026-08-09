@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 )
@@ -21,6 +22,7 @@ type MetricPoint struct {
 	Fingerprint string    `json:"fingerprint,omitempty"`
 	Value       float64   `json:"value"`
 	Updated     time.Time `json:"updated"`
+	WindowStart time.Time `json:"windowStart"`
 }
 
 type metricValue struct {
@@ -29,7 +31,11 @@ type metricValue struct {
 	FP      string    `json:"fingerprint"`
 	Value   float64   `json:"value"`
 	Updated time.Time `json:"updated"`
+	Bucket  time.Time `json:"bucket"`
 }
+
+const metricBucket = 5 * time.Minute
+const metricRetention = 90 * 24 * time.Hour
 
 var metricsMu sync.Mutex
 
@@ -49,18 +55,22 @@ func (s *OpsStore) updateMetric(name, root, fingerprint string, value float64) e
 	if err := readJSONFile(path, &items); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
+	now := time.Now().UTC()
+	bucket := now.Truncate(metricBucket)
 	found := false
 	for i := range items {
-		if items[i].Name == name && items[i].Root == root && items[i].FP == fingerprint {
+		if items[i].Name == name && items[i].Root == root && items[i].FP == fingerprint && items[i].Bucket.Equal(bucket) {
 			items[i].Value += value
-			items[i].Updated = time.Now()
+			items[i].Updated = now
 			found = true
 			break
 		}
 	}
 	if !found {
-		items = append(items, metricValue{Name: name, Root: root, FP: fingerprint, Value: value, Updated: time.Now()})
+		items = append(items, metricValue{Name: name, Root: root, FP: fingerprint, Value: value, Updated: now, Bucket: bucket})
 	}
+	cutoff := now.Add(-metricRetention)
+	items = slices.DeleteFunc(items, func(item metricValue) bool { return !item.Bucket.IsZero() && item.Bucket.Before(cutoff) })
 	return atomicJSONFile(path, items)
 }
 
@@ -79,10 +89,14 @@ func (s *OpsStore) Query(root string, from, to time.Time) ([]MetricPoint, error)
 	}
 	out := make([]MetricPoint, 0, len(items))
 	for _, item := range items {
-		if root != "" && item.Root != root || !from.IsZero() && item.Updated.Before(from) || !to.IsZero() && item.Updated.After(to) {
+		at := item.Bucket
+		if at.IsZero() {
+			at = item.Updated
+		}
+		if root != "" && item.Root != root || !from.IsZero() && at.Add(metricBucket).Before(from) || !to.IsZero() && at.After(to) {
 			continue
 		}
-		out = append(out, MetricPoint{Name: item.Name, Root: item.Root, Fingerprint: item.FP, Value: item.Value, Updated: item.Updated})
+		out = append(out, MetricPoint{Name: item.Name, Root: item.Root, Fingerprint: item.FP, Value: item.Value, Updated: item.Updated, WindowStart: item.Bucket})
 	}
 	return out, nil
 }
@@ -129,7 +143,12 @@ func snapshotMetrics(items []metricValue, root string) OpsMetrics {
 func (s *SQLiteOpsRepository) Increment(name, root, fingerprint string, value int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, err := s.db.Exec(`INSERT INTO ops_metrics(metric_name,project_root,fingerprint,value,window_start,window_end,updated) VALUES(?,?,?,?,?,?,?) ON CONFLICT(metric_name,project_root,fingerprint) DO UPDATE SET value=value+excluded.value,updated=excluded.updated`, name, root, fingerprint, value, time.Now().UTC(), time.Now().UTC(), time.Now().UTC())
+	now := time.Now().UTC()
+	bucket := now.Truncate(metricBucket)
+	_, err := s.db.Exec(`INSERT INTO ops_metric_buckets(metric_name,project_root,fingerprint,bucket_start,value,updated) VALUES(?,?,?,?,?,?) ON CONFLICT(metric_name,project_root,fingerprint,bucket_start) DO UPDATE SET value=value+excluded.value,updated=excluded.updated`, name, root, fingerprint, bucket.Format(time.RFC3339Nano), value, now.Format(time.RFC3339Nano))
+	if err == nil {
+		_, _ = s.db.Exec(`DELETE FROM ops_metric_buckets WHERE bucket_start<?`, now.Add(-metricRetention).Format(time.RFC3339Nano))
+	}
 	return err
 }
 
@@ -137,14 +156,18 @@ func (s *SQLiteOpsRepository) Observe(name, root string, value float64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now().UTC()
-	_, err := s.db.Exec(`INSERT INTO ops_metrics(metric_name,project_root,fingerprint,value,window_start,window_end,updated) VALUES(?,?,?,?,?,?,?) ON CONFLICT(metric_name,project_root,fingerprint) DO UPDATE SET value=value+excluded.value,updated=excluded.updated`, name, root, "", value, now, now, now)
+	bucket := now.Truncate(metricBucket)
+	_, err := s.db.Exec(`INSERT INTO ops_metric_buckets(metric_name,project_root,fingerprint,bucket_start,value,updated) VALUES(?,?,?,?,?,?) ON CONFLICT(metric_name,project_root,fingerprint,bucket_start) DO UPDATE SET value=value+excluded.value,updated=excluded.updated`, name, root, "", bucket.Format(time.RFC3339Nano), value, now.Format(time.RFC3339Nano))
+	if err == nil {
+		_, _ = s.db.Exec(`DELETE FROM ops_metric_buckets WHERE bucket_start<?`, now.Add(-metricRetention).Format(time.RFC3339Nano))
+	}
 	return err
 }
 
 func (s *SQLiteOpsRepository) Snapshot(root string) (OpsMetrics, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	rows, err := s.db.Query(`SELECT metric_name,value FROM ops_metrics WHERE project_root=? OR ?=''`, root, root)
+	rows, err := s.db.Query(`SELECT metric_name,SUM(value) FROM ops_metric_buckets WHERE project_root=? OR ?='' GROUP BY metric_name`, root, root)
 	if err != nil {
 		return OpsMetrics{}, err
 	}
@@ -164,17 +187,20 @@ func (s *SQLiteOpsRepository) Snapshot(root string) (OpsMetrics, error) {
 func (s *SQLiteOpsRepository) Query(root string, from, to time.Time) ([]MetricPoint, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	query := `SELECT metric_name,project_root,fingerprint,value,updated FROM ops_metrics WHERE (project_root=? OR ?='')`
+	query := `SELECT metric_name,project_root,fingerprint,value,bucket_start,updated FROM ops_metric_buckets WHERE (project_root=? OR ?='')`
 	args := []any{root, root}
 	if !from.IsZero() {
-		query += ` AND updated>=?`
-		args = append(args, from.UTC())
+		// RFC3339Nano omits trailing fractional zeroes, so lexical comparison can
+		// exclude a bucket exactly at the query boundary ("...00Z" sorts after
+		// "...00.1Z"). Let SQLite compare actual timestamps instead.
+		query += ` AND julianday(bucket_start)>=julianday(?)`
+		args = append(args, from.UTC().Add(-metricBucket).Format(time.RFC3339Nano))
 	}
 	if !to.IsZero() {
-		query += ` AND updated<=?`
-		args = append(args, to.UTC())
+		query += ` AND julianday(bucket_start)<=julianday(?)`
+		args = append(args, to.UTC().Format(time.RFC3339Nano))
 	}
-	query += ` ORDER BY updated DESC, metric_name ASC`
+	query += ` ORDER BY bucket_start DESC, metric_name ASC`
 	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		return nil, err
@@ -183,11 +209,12 @@ func (s *SQLiteOpsRepository) Query(root string, from, to time.Time) ([]MetricPo
 	var out []MetricPoint
 	for rows.Next() {
 		var item MetricPoint
-		var updated string
-		if err := rows.Scan(&item.Name, &item.Root, &item.Fingerprint, &item.Value, &updated); err != nil {
+		var bucket, updated string
+		if err := rows.Scan(&item.Name, &item.Root, &item.Fingerprint, &item.Value, &bucket, &updated); err != nil {
 			return nil, err
 		}
 		item.Updated, _ = time.Parse(time.RFC3339Nano, updated)
+		item.WindowStart, _ = time.Parse(time.RFC3339Nano, bucket)
 		out = append(out, item)
 	}
 	return out, rows.Err()

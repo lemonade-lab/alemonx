@@ -56,6 +56,7 @@ func MigrateOpsJSONToSQLite(sourceDir, databasePath, backupDir string) error {
 	if err != nil {
 		return err
 	}
+	defer repo.Close()
 	source := NewOpsStoreAt(sourceDir)
 	incidents, err := source.ListIncidents()
 	if err != nil {

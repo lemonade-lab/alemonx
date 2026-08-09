@@ -103,6 +103,74 @@ printf '{"output":"已检查"}'
 	}
 }
 
+func TestRegistryRunWithProgressForwardsStructuredStderr(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture is Unix-only")
+	}
+	root := t.TempDir()
+	directory := filepath.Join(root, "fixture")
+	if err := os.MkdirAll(filepath.Join(directory, "web"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	key := runtime.GOOS + "-" + runtime.GOARCH
+	manifest := `{"id":"fixture","name":"Fixture","version":"1.0.0","entry":{"` + key + `":"runner"},"web":{"root":"web"}}`
+	if err := os.WriteFile(filepath.Join(directory, manifestName), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "runner"), []byte(`#!/bin/sh
+cat >/dev/null
+printf '%s\n' '@alx-progress {"stage":"download","percent":25,"message":"正在下载"}' >&2
+printf '{"output":"完成"}'
+`), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var received []Progress
+	output, err := NewRegistry(root).RunWithProgress("fixture", "install", nil, true, func(event Progress) {
+		received = append(received, event)
+	})
+	if err != nil || output != "完成" {
+		t.Fatalf("run = %q, %v", output, err)
+	}
+	if len(received) != 1 || received[0] != (Progress{Stage: "download", Percent: 25, Message: "正在下载"}) {
+		t.Fatalf("progress = %#v", received)
+	}
+}
+
+func TestRegistryRunForwardsExecutorConfirmation(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture is Unix-only")
+	}
+	root := t.TempDir()
+	directory := filepath.Join(root, "fixture")
+	if err := os.MkdirAll(filepath.Join(directory, "web"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	key := runtime.GOOS + "-" + runtime.GOARCH
+	manifest := `{"id":"fixture","name":"Fixture","version":"1.0.0","entry":{"` + key + `":"runner"},"web":{"root":"web"}}`
+	if err := os.WriteFile(filepath.Join(directory, manifestName), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "runner"), []byte(`#!/bin/sh
+payload="$(cat)"
+case "$payload" in *'"confirm":true'*) printf '{"output":"confirmed"}' ;; *) printf '{"error":"confirmation missing"}' ;; esac
+`), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	output, err := NewRegistry(root).Run("fixture", "install", nil, true)
+	if err != nil || output != "confirmed" {
+		t.Fatalf("run = %q, %v", output, err)
+	}
+}
+
+func TestParseProgressRejectsInvalidFrames(t *testing.T) {
+	if _, ok := parseProgress(`@alx-progress {"stage":"download","percent":101}`); ok {
+		t.Fatal("out-of-range progress must be ignored")
+	}
+	if _, ok := parseProgress("runner diagnostic"); ok {
+		t.Fatal("ordinary stderr must not become progress")
+	}
+}
+
 func TestRegistrySkipsMalformedPlugin(t *testing.T) {
 	root := t.TempDir()
 	broken := filepath.Join(root, "broken")

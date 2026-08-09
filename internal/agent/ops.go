@@ -52,6 +52,21 @@ type OpsSignal struct {
 	Timestamp   time.Time `json:"timestamp"`
 }
 
+type FileLogCursor struct {
+	LogPath   string `json:"logPath,omitempty"`
+	Device    int64  `json:"device,omitempty"`
+	Inode     uint64 `json:"inode,omitempty"`
+	Offset    int64  `json:"offset"`
+	BytesRead int64  `json:"bytesRead,omitempty"`
+	Rotations int64  `json:"rotations,omitempty"`
+}
+
+type StreamLogCursor struct {
+	WindowHash string    `json:"windowHash,omitempty"`
+	Events     int64     `json:"events,omitempty"`
+	Updated    time.Time `json:"updated,omitempty"`
+}
+
 type LogCursor struct {
 	ProjectRoot string    `json:"projectRoot"`
 	ProcessName string    `json:"processName"`
@@ -65,6 +80,10 @@ type LogCursor struct {
 	Mode        string    `json:"mode,omitempty"` // batch/fallback/error
 	LastError   string    `json:"lastError,omitempty"`
 	Updated     time.Time `json:"updated"`
+	// File is authoritative for PM2 file batch reads. Stream is independent
+	// state for fallback tailing and never participates in a file seek.
+	File   FileLogCursor   `json:"file,omitempty"`
+	Stream StreamLogCursor `json:"stream,omitempty"`
 }
 
 type Incident struct {
@@ -521,32 +540,54 @@ func (s *OpsStore) ResetBudget(root string) error {
 	return atomicJSONFile(s.policyPath(root), policy)
 }
 func (s *OpsStore) UpdateMaintenanceByTask(taskID, status, lastError string) error {
-	items, err := s.ListMaintenance()
+	return s.TransitionMaintenanceForTask(taskID, status, lastError)
+}
+
+// TransitionMaintenanceForTask is deliberately the shared projection rule for
+// both repository implementations. JSON cannot atomically rename several
+// files, so a later ReconcileMaintenance can repeat this idempotent operation.
+func (s *OpsStore) TransitionMaintenanceForTask(taskID, status, lastError string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	items, err := listOpsJSON[MaintenanceRun](s.dir, "maintenance-")
 	if err != nil {
 		return err
 	}
-	for _, item := range items {
-		if item.TaskID != taskID {
+	for _, run := range items {
+		if run.TaskID != taskID {
 			continue
 		}
-		item.Status = status
-		item.Error = lastError
-		if status == "completed" || status == "failed" || status == "cancelled" {
-			now := time.Now()
-			item.Finished = &now
+		now := time.Now()
+		incident := Incident{}
+		_ = readJSONFile(s.incidentPath(run.IncidentID), &incident)
+		switch status {
+		case "completed":
+			duration := 5 * time.Minute
+			var policy OpsPolicy
+			if readJSONFile(s.policyPath(incident.ProjectRoot), &policy) == nil && policy.ObservationMinutes > 0 {
+				duration = time.Duration(policy.ObservationMinutes) * time.Minute
+			}
+			run.Status, run.Error, run.Finished = "observing", "", nil
+			run.ObservationStarted, run.ObservationUntil = now, now.Add(duration)
+			incident.Status = IncidentObserving
+		case "failed", "cancelled":
+			run.Status, run.Error, run.Finished = status, lastError, &now
+			incident.Status = IncidentTodo
+			if incident.ID != "" {
+				todo := OpsTodo{ID: "todo-" + incident.ID, IncidentID: incident.ID, ProjectRoot: incident.ProjectRoot, Title: "处理：" + incident.ProcessName, Summary: incident.Sample, Severity: incident.Severity, Reason: lastError, Status: "open", Created: now, Updated: now}
+				_ = atomicJSONFile(s.todoPath(todo.ID), todo)
+			}
+		default:
+			return nil
 		}
-		if err := s.SaveMaintenance(item); err != nil {
+		incident.Updated = now
+		if err := atomicJSONFile(s.runPath(run.ID), run); err != nil {
 			return err
 		}
-		if incident, incidentErr := s.GetIncident(item.IncidentID); incidentErr == nil {
-			switch status {
-			case "completed":
-				incident.Status = IncidentObserving
-			case "failed", "cancelled":
-				incident.Status = IncidentTodo
+		if incident.ID != "" {
+			if err := atomicJSONFile(s.incidentPath(incident.ID), incident); err != nil {
+				return err
 			}
-			incident.Updated = time.Now()
-			_ = s.SaveIncident(incident)
 		}
 		return nil
 	}

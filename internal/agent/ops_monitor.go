@@ -62,6 +62,8 @@ type OpsMonitor struct {
 	releaseLease    func()
 	seen            map[string]time.Time
 	fallbackStarted bool
+	fallbackCancel  context.CancelFunc
+	lastBatchProbe  time.Time
 }
 
 func (m *OpsMonitor) Start(ctx context.Context) error {
@@ -149,6 +151,12 @@ func (m *OpsMonitor) poll(ctx context.Context) {
 	m.mu.Lock()
 	fallbackActive := m.fallbackStarted
 	m.mu.Unlock()
+	if fallbackActive && m.BatchSource != nil {
+		m.tryRestoreBatch(ctx)
+		m.mu.Lock()
+		fallbackActive = m.fallbackStarted
+		m.mu.Unlock()
+	}
 	if m.BatchSource != nil && !fallbackActive {
 		for _, root := range m.BatchRoots {
 			processes := []string{"pm2"}
@@ -180,6 +188,45 @@ func (m *OpsMonitor) poll(ctx context.Context) {
 	}
 }
 
+// tryRestoreBatch probes metadata reads without ingesting lines while the
+// stream fallback owns consumption. A successful probe cancels the fallback;
+// the following poll resumes normal file-offset ingestion.
+func (m *OpsMonitor) tryRestoreBatch(ctx context.Context) {
+	m.mu.Lock()
+	if time.Since(m.lastBatchProbe) < 5*time.Minute {
+		m.mu.Unlock()
+		return
+	}
+	m.lastBatchProbe = time.Now()
+	m.mu.Unlock()
+	for _, root := range m.BatchRoots {
+		processes := []string{"pm2"}
+		if m.BatchProcess != nil && len(m.BatchProcess(root)) > 0 {
+			processes = m.BatchProcess(root)
+		}
+		for _, process := range processes {
+			var cursor LogCursor
+			if m.CursorStore != nil {
+				cursor, _ = m.CursorStore.GetLogCursor(root, process)
+			}
+			if _, err := m.BatchSource.ReadBatch(ctx, root, process, cursor); err != nil {
+				return
+			}
+		}
+	}
+	m.mu.Lock()
+	if m.fallbackStarted {
+		if m.fallbackCancel != nil {
+			m.fallbackCancel()
+		}
+		m.fallbackStarted, m.fallbackCancel = false, nil
+	}
+	m.mu.Unlock()
+	if m.OnSignal != nil {
+		m.OnSignal(OpsSignal{Kind: "log_batch", Status: "recovered", Message: "已切回 PM2 批采集", Timestamp: time.Now()})
+	}
+}
+
 func (m *OpsMonitor) startFallback(ctx context.Context) {
 	m.mu.Lock()
 	if m.fallbackStarted || m.Stream == nil {
@@ -187,6 +234,8 @@ func (m *OpsMonitor) startFallback(ctx context.Context) {
 		return
 	}
 	m.fallbackStarted = true
+	fallbackCtx, fallbackCancel := context.WithCancel(ctx)
+	m.fallbackCancel = fallbackCancel
 	m.mu.Unlock()
 	if m.CursorStore != nil {
 		for _, root := range m.BatchRoots {
@@ -202,7 +251,10 @@ func (m *OpsMonitor) startFallback(ctx context.Context) {
 			}
 		}
 	}
-	go m.stream(ctx)
+	if m.OnSignal != nil {
+		m.OnSignal(OpsSignal{Kind: "log_batch", Status: "fallback", Message: "PM2 文件批采集失败，已切换流式回退", Timestamp: time.Now()})
+	}
+	go m.stream(fallbackCtx)
 }
 
 func (m *OpsMonitor) ingestBatch(ctx context.Context, root, process string) error {
@@ -233,8 +285,10 @@ func (m *OpsMonitor) ingestBatch(ctx context.Context, root, process string) erro
 		cursor.LogPath, cursor.Device, cursor.Inode = batch.LogPath, batch.Device, batch.Inode
 		cursor.Offset = batch.Offset
 		cursor.BytesRead += batch.BytesRead
+		cursor.File = FileLogCursor{LogPath: batch.LogPath, Device: batch.Device, Inode: batch.Inode, Offset: batch.Offset, BytesRead: cursor.File.BytesRead + batch.BytesRead, Rotations: cursor.File.Rotations}
 		if batch.Rotated {
 			cursor.Rotations++
+			cursor.File.Rotations++
 		}
 		cursor.Mode, cursor.LastError = "batch", ""
 		cursor.Updated = time.Now()
@@ -282,7 +336,12 @@ func (m *OpsMonitor) ingestEvents(events []ErrorEvent) {
 				continue
 			}
 			previous, _ := m.CursorStore.GetLogCursor(parts[0], parts[1])
-			_ = m.CursorStore.SaveLogCursor(LogCursor{ProjectRoot: parts[0], ProcessName: parts[1], Offset: previous.Offset + cursorCounts[key], WindowHash: hash, Updated: time.Now()})
+			previous.ProjectRoot, previous.ProcessName = parts[0], parts[1]
+			previous.WindowHash, previous.Updated = hash, time.Now()
+			previous.Stream.WindowHash = hash
+			previous.Stream.Events += cursorCounts[key]
+			previous.Stream.Updated = previous.Updated
+			_ = m.CursorStore.SaveLogCursor(previous)
 		}
 	}
 }
@@ -314,7 +373,9 @@ func (m *OpsMonitor) stream(ctx context.Context) {
 func (m *OpsMonitor) Stop() error {
 	m.mu.Lock()
 	cancel, done := m.cancel, m.done
+	fallbackCancel := m.fallbackCancel
 	m.cancel, m.done = nil, nil
+	m.fallbackCancel, m.fallbackStarted = nil, false
 	release := m.releaseLease
 	m.releaseLease = nil
 	m.mu.Unlock()
@@ -322,6 +383,9 @@ func (m *OpsMonitor) Stop() error {
 		return nil
 	}
 	cancel()
+	if fallbackCancel != nil {
+		fallbackCancel()
+	}
 	if done != nil {
 		<-done
 	}

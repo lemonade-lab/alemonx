@@ -26,6 +26,7 @@ type CommandRunner interface {
 var allowedCommands = map[string]bool{
 	"yarn": true, "npm": true, "pnpm": true,
 	"node": true, "tsgo": true, "tsc": true, "eslint": true,
+	"go": true,
 }
 
 // forbiddenPackageSubcommands block package-manager subcommands with external
@@ -67,6 +68,11 @@ func (commandRunner) Run(ctx context.Context, root, command string, args []strin
 	if command == "node" {
 		if err := validateNodeArgs(args); err != nil {
 			return "", err
+		}
+	}
+	if command == "go" {
+		if len(args) == 0 || (args[0] != "test" && args[0] != "vet" && args[0] != "build") {
+			return "", fmt.Errorf("go 验证仅允许 test、vet 或 build")
 		}
 	}
 	timeoutCtx, cancel := context.WithTimeout(ctx, commandTimeout)

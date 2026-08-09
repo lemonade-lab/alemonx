@@ -187,6 +187,13 @@ func (s *server) eventsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	sub := s.eventGateway.subscribe()
 	defer s.eventGateway.unsubscribe(sub)
+	finishReplay := s.operationEvents.beginReplay()
+	replayFinished := false
+	defer func() {
+		if !replayFinished {
+			finishReplay()
+		}
+	}()
 	write := func(item eventEnvelope) bool {
 		if len(topics) > 0 && !topics[item.Topic] {
 			return true
@@ -224,6 +231,8 @@ func (s *server) eventsHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	finishReplay()
+	replayFinished = true
 	heartbeat := time.NewTicker(25 * time.Second)
 	defer heartbeat.Stop()
 	for {

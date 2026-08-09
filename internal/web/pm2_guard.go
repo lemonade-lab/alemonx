@@ -23,6 +23,8 @@ type GuardedPM2Executor struct {
 func (e GuardedPM2Executor) Run(ctx context.Context, root, action, owner string) (string, error) {
 	normalized := strings.ToLower(strings.TrimSpace(action))
 	switch normalized {
+	case "pm2":
+		normalized = "pm2"
 	case "status", "pm2-status":
 		normalized = "pm2-status"
 	case "logs", "pm2-logs":
@@ -31,13 +33,17 @@ func (e GuardedPM2Executor) Run(ctx context.Context, root, action, owner string)
 		normalized = "pm2-restart"
 	case "reload", "pm2-reload":
 		normalized = "pm2-reload"
+	case "delete", "pm2-delete":
+		normalized = "pm2-delete"
+	case "stop", "pm2-stop":
+		normalized = "pm2-stop"
 	default:
 		return "", fmt.Errorf("PM2 操作不在白名单：%s", action)
 	}
 	if e.Emergency != nil && e.Emergency() && normalized != "pm2-status" && normalized != "pm2-logs" {
 		return "", errors.New("AI 运维已紧急停止")
 	}
-	write := normalized == "pm2-restart" || normalized == "pm2-reload"
+	write := normalized == "pm2" || normalized == "pm2-stop" || normalized == "pm2-restart" || normalized == "pm2-reload" || normalized == "pm2-delete"
 	var beforeToken uint64
 	if write {
 		if e.Leases == nil || strings.TrimSpace(owner) == "" {
@@ -63,6 +69,7 @@ func (e GuardedPM2Executor) Run(ctx context.Context, root, action, owner string)
 	result, err := e.Robots.Run(root, normalized, "", "", "", "", "", true)
 	if err != nil {
 		e.audit(root, owner, normalized, "failed", err.Error())
+		recordPM2Metric(e.Store, "pm2_action_failure_total", root)
 		return result.Output, err
 	}
 	if write {
@@ -83,6 +90,12 @@ func (e GuardedPM2Executor) Run(ctx context.Context, root, action, owner string)
 	}
 	e.audit(root, owner, normalized, "success", "")
 	return result.Output, nil
+}
+
+func recordPM2Metric(store agent.OpsRepository, name, root string) {
+	if metrics, ok := store.(agent.MetricsRepository); ok {
+		_ = metrics.Increment(name, root, "", 1)
+	}
 }
 
 func (e GuardedPM2Executor) audit(root, owner, action, result, reason string) {

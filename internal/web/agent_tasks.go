@@ -28,6 +28,11 @@ type agentTaskInput struct {
 	Messages       []map[string]string `json:"messages"`
 	Isolation      string              `json:"isolation,omitempty"`
 	IdempotencyKey string              `json:"idempotencyKey,omitempty"`
+	// AutoMaintenance is server-only. It marks a low-risk policy-approved
+	// maintenance plan as executable without treating arbitrary API callers as
+	// implicitly approved.
+	AutoMaintenance     bool   `json:"-"`
+	VerificationCommand string `json:"-"`
 }
 
 const safeModelFailureMessage = "模型服务暂时无法继续处理，已保留当前进度。请稍后继续任务。"
@@ -97,7 +102,7 @@ func (s *server) agentTasksHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]any{"taskId": created.ID, "sessionId": created.SessionID, "status": created.Status, "task": publicTask(created)})
 }
 
-func (s *server) createAgentTask(input agentTaskInput, _ bool) (agent.AgentTask, error) {
+func (s *server) createAgentTask(input agentTaskInput, legacy bool) (agent.AgentTask, error) {
 	if len(input.Messages) == 0 {
 		return agent.AgentTask{}, errors.New("请填写要发送的消息。")
 	}
@@ -127,7 +132,7 @@ func (s *server) createAgentTask(input agentTaskInput, _ bool) (agent.AgentTask,
 		}
 		sessionID = session.ID
 	}
-	task := agent.AgentTask{SessionID: sessionID, GoalID: input.GoalID, Root: input.Root, Provider: input.Provider, Model: input.Model, Access: input.Access, IdempotencyKey: input.IdempotencyKey}
+	task := agent.AgentTask{SessionID: sessionID, GoalID: input.GoalID, Root: input.Root, Provider: input.Provider, Model: input.Model, Access: input.Access, IdempotencyKey: input.IdempotencyKey, VerificationCommand: input.VerificationCommand}
 	if input.Isolation == "" {
 		input.Isolation = "workspace"
 	}
@@ -143,11 +148,15 @@ func (s *server) createAgentTask(input agentTaskInput, _ bool) (agent.AgentTask,
 		// the user for permission, rather than treating a plan as a permission.
 		task.Plan = readOnlyTaskPlan(goal)
 	}
-	// “Approved” here means that the durable plan is executable by the state
-	// machine. It is deliberately not user authorization for file changes:
-	// askApprover continues to require confirmation for each risky tool call.
-	task.Plan.Approved = true
-	task.Status = agent.TaskQueued
+	// Only the legacy chat bridge and a policy-approved internal maintenance
+	// request may create an executable plan. New task/goal API requests wait in
+	// plan_pending until the user explicitly approves their plan.
+	task.Plan.Approved = legacy || input.AutoMaintenance
+	if task.Plan.Approved {
+		task.Status = agent.TaskQueued
+	} else {
+		task.Status = agent.TaskPlanPending
+	}
 	initial := make([]agent.Message, 0, len(input.Messages))
 	for _, message := range input.Messages {
 		initial = append(initial, agent.Message{Role: message["role"], Content: message["content"]})
@@ -172,10 +181,12 @@ func (s *server) createAgentTask(input agentTaskInput, _ bool) (agent.AgentTask,
 	}
 	checkpoint.TaskID = created.ID
 	_ = s.agentTaskStore.SaveCheckpoint(checkpoint)
-	if err := s.taskService.Start(created.ID); err != nil {
-		return agent.AgentTask{}, err
+	if created.Plan.Approved {
+		if err := s.taskService.Start(created.ID); err != nil {
+			return agent.AgentTask{}, err
+		}
+		created.Status = agent.TaskRunning
 	}
-	created.Status = agent.TaskRunning
 	return created, nil
 }
 
@@ -309,6 +320,51 @@ func (s *server) makeAgentTaskRunner(cfg ai.Resolved, checkpoint agent.AgentChec
 			checkpoint.SystemPrompt = agent.BuildSystemPrompt(workRoot, files, agentBasePrompt()+"\n当前计划步骤："+step.Title+"\n步骤说明："+step.Description)
 			checkpoint.Updated = time.Now()
 			_ = s.agentTaskStore.SaveCheckpoint(checkpoint)
+			// An OpsPolicy verification command is a server-side contract, not a
+			// suggestion to the model. Run it before the verify step may complete.
+			if stepID == "verify" && task.VerificationCommand != "" {
+				spec, specErr := agent.ParsePolicyVerificationCommand(task.VerificationCommand)
+				if specErr != nil {
+					return "", specErr
+				}
+				emit(agent.Event{Type: "tool", Tool: "agent_verify", Text: "执行策略验证：" + agent.ValidateVerifySpec(spec)})
+				output, verifyErr := agent.NewCommandRunner().Run(ctx, workRoot, spec.Command, spec.Args)
+				executor := agent.StepExecutor{Manager: s.agentTasks}
+				if verifyErr != nil {
+					_, _ = executor.MarkVerifying(task.ID, output)
+					_, _ = executor.Fail(task.ID, output+"\n"+verifyErr.Error())
+					conflicts, rollbackErr := snapshotStore.Rollback(task.ID, task.Root, false)
+					failure := "策略验证失败：" + verifyErr.Error()
+					if rollbackErr != nil {
+						failure += "；回滚需要人工处理：" + rollbackErr.Error() + " conflicts=" + strings.Join(conflicts, ",")
+					}
+					checkpoint.Status, checkpoint.LastError = agent.TaskFailed, failure
+					checkpoint.Context.Validation = append(checkpoint.Context.Validation, output)
+					_ = s.agentTaskStore.SaveCheckpoint(checkpoint)
+					emit(agent.Event{Type: "error", Tool: "agent_verify", Text: failure, Output: output})
+					return "", errors.New(failure)
+				}
+				if _, err := executor.MarkVerifying(task.ID, output); err != nil {
+					return "", err
+				}
+				if _, err := executor.Complete(task.ID, output); err != nil {
+					return "", err
+				}
+				checkpoint.Context.Validation = append(checkpoint.Context.Validation, output)
+				emit(agent.Event{Type: "result", Tool: "agent_verify", Text: "策略验证通过", Output: output})
+				updatedTask, getErr := s.agentTasks.Get(task.ID)
+				if getErr != nil {
+					return "", getErr
+				}
+				checkpoint.Plan, checkpoint.Updated = updatedTask.Plan, time.Now()
+				_ = s.agentTaskStore.SaveCheckpoint(checkpoint)
+				if checkpoint.Plan.CurrentStep < len(checkpoint.Plan.Steps)-1 {
+					if _, err := executor.Advance(task.ID); err != nil {
+						return "", err
+					}
+				}
+				continue
+			}
 			verifySeen, writeSeen := false, false
 			loop := agent.NewLoop(cfg, agent.ProjectTools(workRoot, files, agent.NewCommandRunner()), checkpoint.SystemPrompt, 40).WithContextBudget(120 * 1024).WithAutoVerify()
 			loop.WithVerificationObserver(func(v agent.VerificationResult) {
@@ -389,7 +445,11 @@ func (s *server) makeAgentTaskRunner(cfg ai.Resolved, checkpoint agent.AgentChec
 		review := agent.ReviewTaskWithModel(cfg, checkpoint.Plan, result.Answer, strings.Join(modified, "\n"))
 		reviewRaw, _ := json.Marshal(review)
 		emit(agent.Event{Type: "review", Text: string(reviewRaw)})
-		report := agent.TaskReport{Goal: checkpoint.Plan.Goal, Plan: checkpoint.Plan, ModifiedFiles: modified, Validation: []string{"Agent loop completed"}, Reviewer: review, Summary: review.Summary, RollbackTaskID: task.ID, GeneratedAt: time.Now()}
+		validation := append([]string(nil), checkpoint.Context.Validation...)
+		if len(validation) == 0 {
+			validation = []string{"Agent loop completed"}
+		}
+		report := agent.TaskReport{Goal: checkpoint.Plan.Goal, Plan: checkpoint.Plan, ModifiedFiles: modified, Validation: validation, Reviewer: review, Summary: review.Summary, RollbackTaskID: task.ID, GeneratedAt: time.Now()}
 		if worktree != nil {
 			report.Diff = worktree.Diff()
 		}
@@ -452,7 +512,6 @@ func (s *server) agentTaskHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if r.Method == http.MethodPatch {
-			wasPlanPending := task.Status == agent.TaskPlanPending
 			var plan agent.TaskPlan
 			if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&plan); err != nil {
 				writeError(w, http.StatusBadRequest, "计划格式无效。")
@@ -462,13 +521,6 @@ func (s *server) agentTaskHandler(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				writeError(w, http.StatusBadRequest, err.Error())
 				return
-			}
-			if wasPlanPending {
-				if err := s.agentTasks.Start(taskID); err != nil {
-					writeError(w, http.StatusBadRequest, err.Error())
-					return
-				}
-				updated, _ = s.agentTasks.Get(taskID)
 			}
 			writeJSON(w, http.StatusOK, updated.Plan)
 			return
@@ -501,32 +553,12 @@ func (s *server) agentTaskHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(parts) == 4 && parts[1] == "step" && parts[3] == "retry" && r.Method == http.MethodPost {
-		task, err := s.agentTasks.Get(taskID)
+		updated, err := s.agentTasks.RetryStep(taskID, parts[2])
 		if err != nil {
-			writeError(w, http.StatusNotFound, err.Error())
+			writeError(w, http.StatusConflict, err.Error())
 			return
 		}
-		plan := task.Plan
-		found := false
-		for i := range plan.Steps {
-			if plan.Steps[i].ID == parts[2] {
-				if plan.Steps[i].Status != "failed" && plan.Steps[i].Status != "verifying" {
-					writeError(w, http.StatusConflict, "只有失败或验证中的步骤可以重试。")
-					return
-				}
-				plan.Steps[i].Status = "pending"
-				plan.Steps[i].Attempts++
-				plan.CurrentStep = i
-				found = true
-				break
-			}
-		}
-		if !found {
-			writeError(w, http.StatusNotFound, "步骤不存在。")
-			return
-		}
-		updated, err := s.agentTasks.UpdatePlan(taskID, plan)
-		if err != nil {
+		if err := s.agentTasks.Start(taskID); err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}

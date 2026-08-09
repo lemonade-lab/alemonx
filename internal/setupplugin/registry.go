@@ -8,6 +8,7 @@ package setupplugin
 import (
 	"archive/tar"
 	"archive/zip"
+	"bufio"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
@@ -110,6 +111,15 @@ type ServiceSpec struct {
 	Embed       bool   `json:"embed,omitempty"`
 	RewriteHTML bool   `json:"rewriteHtml,omitempty"`
 	SSE         bool   `json:"sse,omitempty"`
+	WebSocket   bool   `json:"websocket,omitempty"`
+}
+
+// Progress is an optional, structured stderr event emitted while a plugin
+// action runs. Stdout remains reserved for the terminal alx/v1 response.
+type Progress struct {
+	Stage   string `json:"stage"`
+	Percent int    `json:"percent"`
+	Message string `json:"message"`
 }
 
 // Registry scans immediate child directories in order. Earlier roots win on
@@ -457,6 +467,7 @@ type request struct {
 	Method   string            `json:"method"`
 	Action   string            `json:"action"`
 	Params   map[string]string `json:"params,omitempty"`
+	Confirm  bool              `json:"confirm"`
 }
 
 type response struct {
@@ -471,6 +482,12 @@ type response struct {
 // anymore. "confirmed" is accepted for API compatibility but the web UI owns
 // its own confirmation UX.
 func (r *Registry) Run(id, actionID string, params map[string]string, confirmed bool) (string, error) {
+	return r.RunWithProgress(id, actionID, params, confirmed, nil)
+}
+
+// RunWithProgress executes a plugin while forwarding its optional stderr
+// progress frames. Unrecognised stderr remains diagnostic output on failure.
+func (r *Registry) RunWithProgress(id, actionID string, params map[string]string, confirmed bool, progress func(Progress)) (string, error) {
 	plugin, err := r.Find(id)
 	if err != nil {
 		return "", err
@@ -488,16 +505,50 @@ func (r *Registry) Run(id, actionID string, params map[string]string, confirmed 
 	if err != nil {
 		return "", err
 	}
-	payload, err := json.Marshal(request{Protocol: "alx/v1", Method: "run", Action: actionID, Params: params})
+	payload, err := json.Marshal(request{Protocol: "alx/v1", Method: "run", Action: actionID, Params: params, Confirm: confirmed})
 	if err != nil {
 		return "", err
 	}
 	command := exec.Command(entry.name, entry.args...)
 	command.Dir = plugin.Source
 	command.Stdin = strings.NewReader(string(payload))
-	output, err := command.CombinedOutput()
+	stdout, err := command.StdoutPipe()
 	if err != nil {
-		message := strings.TrimSpace(string(output))
+		return "", err
+	}
+	stderr, err := command.StderrPipe()
+	if err != nil {
+		return "", err
+	}
+	if err := command.Start(); err != nil {
+		return "", err
+	}
+	var stderrText strings.Builder
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		scanner := bufio.NewScanner(stderr)
+		scanner.Buffer(make([]byte, 1024), 256<<10)
+		for scanner.Scan() {
+			line := scanner.Text()
+			if event, ok := parseProgress(line); ok && progress != nil {
+				progress(event)
+				continue
+			}
+			stderrText.WriteString(line + "\n")
+		}
+	}()
+	output, readErr := io.ReadAll(stdout)
+	err = command.Wait()
+	<-done
+	if readErr != nil {
+		return "", readErr
+	}
+	if err != nil {
+		message := strings.TrimSpace(stderrText.String())
+		if message == "" {
+			message = strings.TrimSpace(string(output))
+		}
 		if errors.Is(err, exec.ErrNotFound) {
 			return "", fmt.Errorf("插件入口无法启动：未检测到 %s。请先安装插件所需运行环境后重试", entry.name)
 		}
@@ -517,6 +568,18 @@ func (r *Registry) Run(id, actionID string, params map[string]string, confirmed 
 		result.Output = "插件操作已完成。"
 	}
 	return result.Output, nil
+}
+
+func parseProgress(line string) (Progress, bool) {
+	const prefix = "@alx-progress "
+	if !strings.HasPrefix(line, prefix) {
+		return Progress{}, false
+	}
+	var event Progress
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(line, prefix)), &event); err != nil || event.Percent < 0 || event.Percent > 100 || event.Stage == "" {
+		return Progress{}, false
+	}
+	return event, true
 }
 
 type executable struct {

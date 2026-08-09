@@ -13,6 +13,7 @@ import (
 	"io"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -302,6 +303,7 @@ type server struct {
 	pm2Guard          *GuardedPM2Executor
 	opsOrchestrator   *agent.OpsOrchestrator
 	alerts            agent.AlertManager
+	alertWorker       *agent.AlertDeliveryWorker
 	opsPaused         bool
 	opsMonitor        *agent.OpsMonitor
 	agentConfirms     *agentConfirmManager
@@ -315,19 +317,46 @@ type server struct {
 	// pm2Status lets tests substitute a fake PM2 state. The default read runs a
 	// real `npx pm2 jlist` behind a short timeout so a missing pm2 never blocks
 	// a local start request for the full package-manager timeout.
-	pm2Status          func(string) (robot.PM2Status, error)
-	requestID          atomic.Uint64
-	nodeID             string
-	directoryRoots     []string
-	events             *robotEventHub
-	eventGateway       *eventGateway
-	operationEvents    *OperationEventStore
-	opsEvents          *opsEventHub
-	mcpEvents          *mcpEventHub
-	mcpMonitorStop     chan struct{}
-	pluginEventsStop   chan struct{}
-	robotProjectsMu    sync.Mutex
-	robotProjectsCache robotProjectsSnapshot
+	pm2Status             func(string) (robot.PM2Status, error)
+	requestID             atomic.Uint64
+	nodeID                string
+	directoryRoots        []string
+	events                *robotEventHub
+	eventGateway          *eventGateway
+	operationEvents       *OperationEventStore
+	opsEvents             *opsEventHub
+	mcpEvents             *mcpEventHub
+	mcpMonitorStop        chan struct{}
+	pluginEventsStop      chan struct{}
+	updateMonitorStop     chan struct{}
+	updateMu              sync.Mutex
+	updateStateMu         sync.RWMutex
+	updateState           updateStatusState
+	requestUpdateShutdown func()
+	robotProjectsMu       sync.Mutex
+	robotProjectsCache    robotProjectsSnapshot
+	pluginStatusMu        sync.Mutex
+	pluginStatusCache     map[string]*pluginStatusSnapshot
+}
+
+type pluginStatusSnapshot struct {
+	output    string
+	err       error
+	expiresAt time.Time
+	done      chan struct{}
+}
+
+type updateStatusState struct {
+	Update    releases.Update `json:"update"`
+	CheckedAt time.Time       `json:"checkedAt"`
+	Error     string          `json:"error,omitempty"`
+}
+
+type updateResponse struct {
+	releases.Update
+	Transaction *system.UpdateTransaction `json:"transaction,omitempty"`
+	CheckedAt   time.Time                 `json:"checkedAt"`
+	Error       string                    `json:"error,omitempty"`
 }
 
 type robotProjectItem struct {
@@ -352,9 +381,27 @@ func hostname() string {
 // Existing callers can keep using NewServer; production entrypoints should use
 // Runtime.Shutdown so monitors and task state are flushed before exit.
 type ServerRuntime struct {
-	Handler http.Handler
-	server  *server
-	once    sync.Once
+	Handler         http.Handler
+	server          *server
+	once            sync.Once
+	updateOnce      sync.Once
+	updateRequested chan struct{}
+}
+
+// RequestUpdateShutdown lets a completed update use the same graceful path as
+// SIGTERM instead of terminating the process from an HTTP handler.
+func (r *ServerRuntime) RequestUpdateShutdown() {
+	if r == nil || r.updateRequested == nil {
+		return
+	}
+	r.updateOnce.Do(func() { close(r.updateRequested) })
+}
+
+func (r *ServerRuntime) UpdateRequested() <-chan struct{} {
+	if r == nil || r.updateRequested == nil {
+		return nil
+	}
+	return r.updateRequested
 }
 
 func (r *ServerRuntime) Shutdown(ctx context.Context) error {
@@ -366,6 +413,9 @@ func (r *ServerRuntime) Shutdown(ctx context.Context) error {
 		s := r.server
 		if s.opsMonitor != nil {
 			_ = s.opsMonitor.Stop()
+		}
+		if s.alertWorker != nil {
+			_ = s.alertWorker.Stop()
 		}
 		s.stopGoalScheduler()
 		if s.pluginWatcher != nil {
@@ -383,6 +433,13 @@ func (r *ServerRuntime) Shutdown(ctx context.Context) error {
 			case <-s.pluginEventsStop:
 			default:
 				close(s.pluginEventsStop)
+			}
+		}
+		if s.updateMonitorStop != nil {
+			select {
+			case <-s.updateMonitorStop:
+			default:
+				close(s.updateMonitorStop)
 			}
 		}
 		if err := s.agentTasks.PauseRunning(); err != nil {
@@ -494,20 +551,44 @@ func NewServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	tasks := agent.NewTaskManager(taskStore)
 	opsDir := filepath.Join(filepath.Dir(taskStore.TasksDir()), "incidents")
 	var opsStore agent.OpsRepository = agent.NewOpsStoreAt(opsDir)
+	var opsStartupErr error
 	if strings.EqualFold(strings.TrimSpace(os.Getenv("ALX_OPS_STORAGE")), "sqlite") {
 		databasePath := strings.TrimSpace(os.Getenv("ALX_OPS_SQLITE_PATH"))
 		if databasePath == "" {
 			databasePath = filepath.Join(filepath.Dir(taskStore.TasksDir()), "ops.db")
 		}
 		if _, statErr := os.Stat(databasePath); os.IsNotExist(statErr) {
-			_ = agent.MigrateOpsJSONToSQLite(opsDir, databasePath, "")
+			opsStartupErr = agent.MigrateOpsJSONToSQLite(opsDir, databasePath, "")
 		}
-		if sqliteStore, sqliteErr := agent.NewSQLiteOpsRepository(databasePath); sqliteErr == nil {
-			opsStore = sqliteStore
+		if opsStartupErr == nil {
+			if sqliteStore, sqliteErr := agent.NewSQLiteOpsRepository(databasePath); sqliteErr == nil {
+				opsStore = sqliteStore
+			} else {
+				opsStartupErr = sqliteErr
+			}
+		}
+	}
+	// Local authentication has a single bootstrap account. Persist its admin
+	// role on first server start so production mode never relies on a client
+	// supplied role header and does not lock out the account that enabled auth.
+	if authStatus, authErr := identity.Status(""); authErr == nil && authStatus.Enabled && strings.TrimSpace(authStatus.Account) != "" {
+		if _, roleErr := opsStore.GetRole(authStatus.Account); roleErr != nil {
+			_ = opsStore.SaveRole(agent.OpsRoleBinding{Account: authStatus.Account, Role: "admin", Updated: time.Now()})
 		}
 	}
 	operationEvents := newOperationEventStore(filepath.Join(filepath.Dir(taskStore.TasksDir()), "operations", "events.db"))
-	s := &server{version: version, assets: assets, static: http.FileServer(http.FS(assets)), checker: system.NewChecker(), plugins: setupplugin.NewRegistry(), auth: identity, ai: aiManager, agentSessions: sessionStore, agentTaskStore: taskStore, agentTasks: tasks, taskService: &agent.TaskService{Manager: tasks}, goalStore: goalStore, opsStore: opsStore, goalSchedulerStop: make(chan struct{}), goalRunning: map[string]bool{}, agentConfirms: newAgentConfirmManager(), development: map[string]developmentProcess{}, webviewRuntimes: map[string]*webViewRuntime{}, stopping: map[string]bool{}, consoleCache: map[string]consoleSnapshot{}, outputBuffers: map[string]*operationOutputBuffer{}, directoryRoots: managedDirectoryRoots(), events: newRobotEventHub(), eventGateway: newEventGateway(), operationEvents: operationEvents, operations: operationEvents.snapshot(), opsEvents: newOpsEventHub(), mcpEvents: newMCPEventHub(), mcpMonitorStop: make(chan struct{}), pluginEventsStop: make(chan struct{}), nodeID: fmt.Sprintf("%s-%d", hostname(), os.Getpid())}
+	s := &server{version: version, assets: assets, static: http.FileServer(http.FS(assets)), checker: system.NewChecker(), plugins: setupplugin.NewRegistry(), auth: identity, ai: aiManager, agentSessions: sessionStore, agentTaskStore: taskStore, agentTasks: tasks, taskService: &agent.TaskService{Manager: tasks}, goalStore: goalStore, opsStore: opsStore, opsPaused: opsStartupErr != nil, goalSchedulerStop: make(chan struct{}), goalRunning: map[string]bool{}, agentConfirms: newAgentConfirmManager(), development: map[string]developmentProcess{}, webviewRuntimes: map[string]*webViewRuntime{}, stopping: map[string]bool{}, consoleCache: map[string]consoleSnapshot{}, outputBuffers: map[string]*operationOutputBuffer{}, directoryRoots: managedDirectoryRoots(), events: newRobotEventHub(), eventGateway: newEventGateway(), operationEvents: operationEvents, operations: operationEvents.snapshot(), opsEvents: newOpsEventHub(), mcpEvents: newMCPEventHub(), mcpMonitorStop: make(chan struct{}), pluginEventsStop: make(chan struct{}), updateMonitorStop: make(chan struct{}), updateState: updateStatusState{Update: releases.Update{Current: version}}, nodeID: fmt.Sprintf("%s-%d", hostname(), os.Getpid()), pluginStatusCache: map[string]*pluginStatusSnapshot{}}
+	if opsStartupErr != nil {
+		log.Printf("AI 运维 SQLite 初始化失败，已回退 JSON 并暂停自动维护: %v", opsStartupErr)
+	}
+	operationEvents.setRecoveredHandler(func() {
+		_, _ = s.publishEvent("system", "system.store-recovered", map[string]any{"type": "system.store-recovered"}, nil)
+	})
+	if operationEvents.wasRecovered() {
+		go func() {
+			_, _ = s.publishEvent("system", "system.store-recovered", map[string]any{"type": "system.store-recovered"}, nil)
+		}()
+	}
 	s.alerts.Record = func(alert agent.Alert) error {
 		return opsStore.SaveAlert(agent.AlertRecord{Alert: alert, Status: "open", Updated: time.Now()})
 	}
@@ -525,6 +606,10 @@ func NewServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	}
 	s.alerts.RetryStore = opsStore
 	s.alerts.Queue = opsStore
+	s.alertWorker = &agent.AlertDeliveryWorker{Manager: &s.alerts, Lease: agent.NewLeaseManager(opsStore), LeaseKey: "alert-delivery", LeaseOwner: s.nodeID, LeaseTTL: 45 * time.Second, Interval: 5 * time.Second, OnLeaseLost: func(err error) {
+		s.opsPaused = true
+		_ = opsStore.AppendSignal(agent.OpsSignal{Kind: "alert_delivery", Status: "lease_lost", Message: err.Error(), Timestamp: time.Now()})
+	}}
 	pm2Guard := GuardedPM2Executor{Robots: s.robots, Leases: agent.NewLeaseManager(opsStore), Store: opsStore, Emergency: func() bool { return s.opsPaused }}
 	s.pm2Guard = &pm2Guard
 	s.opsOrchestrator = &agent.OpsOrchestrator{
@@ -551,19 +636,19 @@ func NewServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 			}
 			return agent.AutoFixDecision{}, errors.New("没有可用的 AI Provider")
 		},
-		PM2: func(root, action string) (string, error) {
-			if !agent.IsAllowedPM2Action(action) {
-				return "", fmt.Errorf("PM2 操作不在白名单：%s", action)
-			}
-			result, err := s.robots.Run(root, action, "", "", "", "", "", true)
-			return result.Output, err
-		},
 		PM2Guarded: func(root, action, owner string) (string, error) {
 			return pm2Guard.Run(context.Background(), root, action, owner)
 		},
 		StartFix: func(incident agent.Incident, _ agent.AutoFixDecision) (string, error) {
 			if s.opsPaused {
 				return "", errors.New("全局 AI 运维已暂停")
+			}
+			policy, policyErr := s.opsStore.GetPolicy(incident.ProjectRoot)
+			if policyErr != nil || !policy.AllowCodeChanges {
+				return "", errors.New("当前策略不允许自动代码修改")
+			}
+			if _, verifyErr := agent.ParsePolicyVerificationCommand(policy.VerificationCommand); verifyErr != nil {
+				return "", errors.New("策略验证命令不可执行：" + verifyErr.Error())
 			}
 			providers, err := s.ai.List()
 			if err != nil {
@@ -573,7 +658,7 @@ func NewServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 				if !provider.HasKey {
 					continue
 				}
-				created, createErr := s.createAgentTask(agentTaskInput{Provider: provider.ID, Model: provider.Model, Root: incident.ProjectRoot, Access: "auto", Messages: []map[string]string{{"role": "user", "content": "生产错误自动维护：" + incident.Sample + "\n请先定位根因，仅修改必要文件，并运行验证命令。"}}, Isolation: "workspace"}, true)
+				created, createErr := s.createAgentTask(agentTaskInput{Provider: provider.ID, Model: provider.Model, Root: incident.ProjectRoot, Access: "auto", Messages: []map[string]string{{"role": "user", "content": "生产错误自动维护：" + incident.Sample + "\n请先定位根因，仅修改必要文件，并运行策略验证命令。"}}, Isolation: "workspace", AutoMaintenance: true, VerificationCommand: policy.VerificationCommand}, false)
 				if createErr == nil {
 					return created.ID, nil
 				}
@@ -592,7 +677,7 @@ func NewServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 		if previous.Status != current.Status && s.opsStore != nil {
 			status := string(current.Status)
 			if status == string(agent.TaskCompleted) || status == string(agent.TaskFailed) || status == string(agent.TaskCancelled) {
-				_ = s.opsStore.UpdateMaintenanceByTask(current.ID, status, current.LastError)
+				_ = s.opsStore.TransitionMaintenanceForTask(current.ID, status, current.LastError)
 				if status == string(agent.TaskCompleted) {
 					if runs, runsErr := s.opsStore.ListMaintenance(); runsErr == nil {
 						for _, run := range runs {
@@ -658,6 +743,13 @@ func NewServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	// reconciliation and the first scheduled/monitor event cannot bypass
 	// GoalRun or MaintenanceRun state synchronization.
 	s.startGoalScheduler()
+	if s.alertWorker != nil {
+		if err := s.alertWorker.Start(context.Background()); err != nil {
+			s.opsPaused = true
+			_ = opsStore.AppendSignal(agent.OpsSignal{Kind: "alert_delivery", Status: "unavailable", Message: err.Error(), Timestamp: time.Now()})
+			log.Printf("AI 运维告警 Worker 未启动，自动维护已暂停: %v", err)
+		}
+	}
 	if s.opsMonitor != nil {
 		_ = s.opsMonitor.Start(context.Background())
 	}
@@ -675,6 +767,7 @@ func NewServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	}
 	s.startPluginEventBridge()
 	s.startMCPStatusMonitor()
+	s.startUpdateStatusMonitor()
 	if len(templateFiles) > 0 {
 		templates, err := fs.Sub(templateFiles[0], "templates")
 		if err != nil {
@@ -693,6 +786,7 @@ func NewServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	mux.HandleFunc("/api/v1/projects", s.projectsHandler)
 	mux.HandleFunc("/api/v1/releases", s.releasesHandler)
 	mux.HandleFunc("/api/v1/update", s.updateHandler)
+	mux.HandleFunc("/api/v1/update/status", s.updateStatusHandler)
 	mux.HandleFunc("/api/v1/update/download", s.downloadUpdateHandler)
 	mux.HandleFunc("/api/v1/update/apply", s.applyUpdateHandler)
 	mux.HandleFunc("/api/v1/update/load", s.loadUpdateHandler)
@@ -742,6 +836,7 @@ func NewServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	mux.HandleFunc("/api/v1/robot/app/", s.robotAppHandler)
 	mux.HandleFunc("/api/v1/robot/runtime", s.robotRuntimeHandler)
 	mux.HandleFunc("/api/v1/robot/runtime/preflight", s.robotRuntimePreflightHandler)
+	mux.HandleFunc("/api/v1/robot/runtime/repair", s.robotRuntimeRepairHandler)
 	mux.HandleFunc("/api/v1/robot/tasks", s.robotTasksHandler)
 	mux.HandleFunc("/api/v1/robot/events", s.robotEventsHandler)
 	mux.HandleFunc("/api/v1/robot/packages", s.robotPackagesHandler)
@@ -773,7 +868,9 @@ func NewServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	// The Gin engine owns every request. Existing handlers remain standard
 	// net/http functions, preserving their API contracts during migration.
 	router.Any("/*path", gin.WrapH(mux))
-	return &ServerRuntime{Handler: router, server: s}
+	runtime := &ServerRuntime{Handler: router, server: s, updateRequested: make(chan struct{})}
+	s.requestUpdateShutdown = runtime.RequestUpdateShutdown
+	return runtime
 }
 
 const authCookieName = "alx_session"
@@ -817,6 +914,12 @@ func (s *server) authSetupHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	// The account that establishes local authentication is the only implicit
+	// administrator. Later authenticated accounts default to viewer unless an
+	// existing admin creates an explicit role binding.
+	if s.opsStore != nil {
+		_ = s.opsStore.SaveRole(agent.OpsRoleBinding{Account: strings.TrimSpace(input.Account), Role: "admin", Updated: time.Now()})
 	}
 	s.setAuthCookie(w, token)
 	writeJSON(w, http.StatusCreated, map[string]any{"enabled": true, "account": strings.TrimSpace(input.Account)})
@@ -1158,6 +1261,26 @@ func (s *server) startPluginEventBridge() {
 
 func (s *server) setupPluginActionHandler(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/v1/setup/plugins/"), "/")
+	if len(parts) == 2 && parts[1] == "status" && r.Method == http.MethodGet {
+		action := strings.TrimSpace(r.URL.Query().Get("action"))
+		if !setupPluginStatusAction(action) || len(r.URL.Query()) != 1 {
+			writeError(w, http.StatusBadRequest, "仅支持无参数的插件状态动作。")
+			return
+		}
+		output, err := s.pluginStatus(parts[0], action)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if !json.Valid([]byte(output)) {
+			writeError(w, http.StatusBadGateway, "插件状态返回无效 JSON。")
+			return
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_, _ = w.Write([]byte(output))
+		return
+	}
 	// A system plugin may expose a small, typed visual payload through its
 	// runner. This endpoint deliberately has no path parameter: the runner is
 	// responsible for reading only its own known runtime files, while the
@@ -1291,25 +1414,69 @@ func (s *server) setupPluginActionHandler(w http.ResponseWriter, r *http.Request
 	}
 	s.mu.Unlock()
 	go func() {
-		output, err := s.plugins.Run(parts[0], input.Action, input.Params, input.Confirm)
-		finished := time.Now()
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		for index := range s.operations {
-			if s.operations[index].ID != created.ID {
-				continue
-			}
-			s.operations[index].Status = "completed"
-			s.operations[index].Output = output
-			s.operations[index].FinishedAt = &finished
-			if err != nil {
-				s.operations[index].Status = "failed"
-				s.operations[index].Error = err.Error()
-			}
-			break
+		output, err := s.plugins.RunWithProgress(parts[0], input.Action, input.Params, input.Confirm, func(event setupplugin.Progress) {
+			s.updateOperation(created.ID, event.Percent, event.Message, "", false)
+		})
+		if err != nil {
+			s.updateOperation(created.ID, 100, output, err.Error(), true)
+			return
 		}
+		s.updateOperation(created.ID, 100, output, "", true)
 	}()
 	writeJSON(w, http.StatusAccepted, created)
+}
+
+func setupPluginStatusAction(action string) bool {
+	switch action {
+	case "status", "napcat-status", "luckylillia-status":
+		return true
+	default:
+		return false
+	}
+}
+
+// pluginStatus coalesces concurrent reads and keeps a one-second in-memory
+// result. Status polling must never allocate an operation task or write task
+// history; only mutating actions use the asynchronous task path.
+func (s *server) pluginStatus(pluginID, action string) (string, error) {
+	key := pluginID + "\x00" + action
+	s.pluginStatusMu.Lock()
+	if s.pluginStatusCache == nil {
+		s.pluginStatusCache = map[string]*pluginStatusSnapshot{}
+	}
+	if snapshot := s.pluginStatusCache[key]; snapshot != nil {
+		if snapshot.done != nil {
+			done := snapshot.done
+			s.pluginStatusMu.Unlock()
+			<-done
+			return snapshot.output, snapshot.err
+		}
+		if time.Now().Before(snapshot.expiresAt) {
+			output, err := snapshot.output, snapshot.err
+			s.pluginStatusMu.Unlock()
+			return output, err
+		}
+	}
+	snapshot := &pluginStatusSnapshot{done: make(chan struct{})}
+	s.pluginStatusCache[key] = snapshot
+	s.pluginStatusMu.Unlock()
+
+	output, err := s.plugins.Run(pluginID, action, nil, false)
+
+	s.pluginStatusMu.Lock()
+	snapshot.output, snapshot.err = output, err
+	snapshot.expiresAt = time.Now().Add(time.Second)
+	close(snapshot.done)
+	snapshot.done = nil
+	if len(s.pluginStatusCache) > 32 {
+		for staleKey, stale := range s.pluginStatusCache {
+			if stale != snapshot && stale.done == nil && !time.Now().Before(stale.expiresAt) {
+				delete(s.pluginStatusCache, staleKey)
+			}
+		}
+	}
+	s.pluginStatusMu.Unlock()
+	return output, err
 }
 
 // setupPluginWebHandler serves a setup plugin's static web UI. It is served
@@ -1453,6 +1620,59 @@ func (s *server) startMCPStatusMonitor() {
 			}
 		}
 	}()
+}
+
+// startUpdateStatusMonitor performs the only periodic release lookup on the
+// server. Dashboard tabs consume its persisted system event instead of each
+// issuing a browser timer request.
+func (s *server) startUpdateStatusMonitor() {
+	go func() {
+		s.refreshUpdateStatus()
+		ticker := time.NewTicker(12 * time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-s.updateMonitorStop:
+				return
+			case <-ticker.C:
+				s.refreshUpdateStatus()
+			}
+		}
+	}()
+}
+
+func sameUpdateStatus(left, right updateStatusState) bool {
+	return left.Update == right.Update && left.Error == right.Error
+}
+
+func (s *server) refreshUpdateStatus() updateStatusState {
+	next := updateStatusState{Update: releases.Update{Current: s.version}, CheckedAt: time.Now().UTC()}
+	update, err := releases.SetupUpdate(s.version)
+	if err != nil {
+		next.Error = safeStoreError(err)
+	} else {
+		if update.Available && update.PlatformMatched && update.IntegrityReady {
+			_, update.DownloadReady, err = system.CachedUpdate(update.AssetName, update.SHA256)
+			if err != nil {
+				next.Error = safeStoreError(err)
+			}
+		}
+		next.Update = update
+	}
+	s.updateStateMu.Lock()
+	previous := s.updateState
+	s.updateState = next
+	s.updateStateMu.Unlock()
+	if !sameUpdateStatus(previous, next) {
+		_, _ = s.publishEvent("system", "system.update.changed", map[string]any{"type": "system.update.changed", "update": next.Update, "checkedAt": next.CheckedAt, "error": next.Error}, nil)
+	}
+	return next
+}
+
+func (s *server) currentUpdateStatus() updateStatusState {
+	s.updateStateMu.RLock()
+	defer s.updateStateMu.RUnlock()
+	return s.updateState
 }
 
 func (s *server) systemEventsHandler(w http.ResponseWriter, r *http.Request) {
@@ -1776,19 +1996,54 @@ func (s *server) updateHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
 		return
 	}
-	update, err := releases.SetupUpdate(s.version)
-	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+	status := s.currentUpdateStatus()
+	if r.URL.Query().Get("refresh") == "1" {
+		status = s.refreshUpdateStatus()
+	}
+	transaction, exists, transactionErr := system.ReadUpdateTransaction()
+	if transactionErr != nil {
+		writeError(w, http.StatusInternalServerError, transactionErr.Error())
 		return
 	}
-	if update.Available && update.PlatformMatched && update.IntegrityReady {
-		_, update.DownloadReady, err = system.CachedUpdate(update.AssetName, update.SHA256)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
+	response := updateResponse{Update: status.Update, CheckedAt: status.CheckedAt, Error: status.Error}
+	if exists {
+		response.Transaction = &transaction
 	}
-	writeJSON(w, http.StatusOK, update)
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (s *server) updateStatusHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
+		return
+	}
+	s.confirmUpdateStartup()
+	transaction, exists, err := system.ReadUpdateTransaction()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !exists {
+		writeJSON(w, http.StatusOK, map[string]any{"phase": "idle"})
+		return
+	}
+	writeJSON(w, http.StatusOK, transaction)
+}
+
+func (s *server) confirmUpdateStartup() {
+	transaction, healthy, transactionErr := system.MarkUpdateHealthy(s.version)
+	if transactionErr != nil {
+		log.Printf("更新状态确认失败：%v", transactionErr)
+		return
+	}
+	if !healthy || transaction.ArchivePath == "" {
+		return
+	}
+	if _, pluginErr := system.SyncBundledPluginExecutors(transaction.ArchivePath); pluginErr != nil {
+		transaction.PluginError = pluginErr.Error()
+		_ = system.SaveUpdateTransaction(transaction)
+		log.Printf("新版已启动，但内置插件同步失败：%v", pluginErr)
+	}
 }
 
 func (s *server) aiProvidersHandler(w http.ResponseWriter, r *http.Request) {
@@ -1863,6 +2118,11 @@ func (s *server) downloadUpdateHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
 		return
 	}
+	if !s.updateMu.TryLock() {
+		writeError(w, http.StatusConflict, "已有更新任务正在进行，请等待完成。")
+		return
+	}
+	defer s.updateMu.Unlock()
 	update, err := releases.SetupUpdate(s.version)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
@@ -1880,10 +2140,17 @@ func (s *server) downloadUpdateHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "未找到当前系统对应的更新包，请使用手动更新。")
 		return
 	}
-	if _, err := system.DownloadUpdate(update.DownloadURL, update.AssetName, update.SHA256, update.Latest); err != nil {
+	transaction := system.UpdateTransaction{Phase: system.UpdatePhaseDownloading, TargetVersion: update.Latest, PreviousVersion: s.version, Port: updateRequestPort(r)}
+	_ = system.SaveUpdateTransaction(transaction)
+	path, err := system.DownloadUpdate(update.DownloadURL, update.AssetName, update.SHA256, update.Latest)
+	if err != nil {
+		transaction.Phase, transaction.Error = system.UpdatePhaseFailed, err.Error()
+		_ = system.SaveUpdateTransaction(transaction)
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
+	transaction.Phase, transaction.ArchivePath, transaction.Error = system.UpdatePhaseStaged, path, ""
+	_ = system.SaveUpdateTransaction(transaction)
 	writeJSON(w, http.StatusOK, map[string]string{"output": "更新包已下载完成。确认后将立即更新并重启应用。", "assetName": update.AssetName})
 }
 
@@ -1899,28 +2166,66 @@ func (s *server) applyUpdateHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "请确认立即更新并重启应用。")
 		return
 	}
+	if !s.updateMu.TryLock() {
+		writeError(w, http.StatusConflict, "已有更新任务正在进行，请等待完成。")
+		return
+	}
+	defer s.updateMu.Unlock()
 	update, path, ready, err := system.ReadyPendingUpdate()
 	if err != nil || !ready {
 		writeError(w, http.StatusBadRequest, "更新包尚未下载完成，请先下载。")
 		return
 	}
-	result, err := system.ReplaceExecutableFile(path)
+	transaction := system.UpdateTransaction{Phase: system.UpdatePhaseApplying, TargetVersion: update.Version, PreviousVersion: s.version, ArchivePath: path, Port: updateRequestPort(r)}
+	_ = system.SaveUpdateTransaction(transaction)
+	applied, err := system.ApplyUpdateFile(path)
 	if err != nil {
+		transaction.Phase, transaction.Error = system.UpdatePhaseFailed, err.Error()
+		_ = system.SaveUpdateTransaction(transaction)
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	transaction.Executable, transaction.BackupPath = applied.Executable, applied.BackupPath
+	transaction.Phase, transaction.Error = system.UpdatePhaseRestarting, ""
+	_ = system.SaveUpdateTransaction(transaction)
 	if err := system.ScheduleRestart(); err != nil {
-		writeError(w, http.StatusInternalServerError, "更新已完成，但无法自动重启："+err.Error())
+		if rollbackErr := system.RollbackAppliedUpdate(transaction, err); rollbackErr != nil {
+			writeError(w, http.StatusInternalServerError, "更新已完成，但无法自动重启且回滚失败："+rollbackErr.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "无法安排自动重启，已恢复旧版本："+err.Error())
 		return
 	}
 	if err := system.ClearPendingUpdate(); err != nil {
 		log.Printf("更新已完成，但无法清理更新元数据：%v", err)
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"output": result + " 正在重启应用。", "version": update.Version})
+	writeJSON(w, http.StatusOK, map[string]string{"output": applied.Message + " 正在重启应用。", "version": update.Version})
+	s.requestGracefulUpdateShutdown()
+}
+
+func (s *server) requestGracefulUpdateShutdown() {
+	if s.requestUpdateShutdown == nil {
+		return
+	}
 	go func() {
-		time.Sleep(350 * time.Millisecond)
-		os.Exit(0)
+		// Let the confirmation JSON flush before the server stops accepting work.
+		time.Sleep(150 * time.Millisecond)
+		s.requestUpdateShutdown()
 	}()
+}
+
+func updateRequestPort(r *http.Request) string {
+	host := strings.TrimSpace(r.Host)
+	if _, port, err := net.SplitHostPort(host); err == nil && port != "" {
+		return port
+	}
+	if strings.Trim(host, "[]") != "" && !strings.Contains(host, ":") {
+		return "17390"
+	}
+	if value := strings.TrimSpace(os.Getenv("PORT")); value != "" {
+		return value
+	}
+	return "17390"
 }
 
 func (s *server) loadUpdateHandler(w http.ResponseWriter, r *http.Request) {
@@ -1937,6 +2242,11 @@ func (s *server) loadUpdateHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "请确认载入更新包。")
 		return
 	}
+	if !s.updateMu.TryLock() {
+		writeError(w, http.StatusConflict, "已有更新任务正在进行，请等待完成。")
+		return
+	}
+	defer s.updateMu.Unlock()
 	file, header, err := r.FormFile("package")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "请选择更新包。")
@@ -1966,20 +2276,28 @@ func (s *server) loadUpdateHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "无法读取更新包。")
 		return
 	}
-	result, err := system.ReplaceExecutableFile(path)
+	transaction := system.UpdateTransaction{Phase: system.UpdatePhaseApplying, PreviousVersion: s.version, Port: updateRequestPort(r)}
+	_ = system.SaveUpdateTransaction(transaction)
+	applied, err := system.ApplyUpdateFile(path)
 	if err != nil {
+		transaction.Phase, transaction.Error = system.UpdatePhaseFailed, err.Error()
+		_ = system.SaveUpdateTransaction(transaction)
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	transaction.Executable, transaction.BackupPath = applied.Executable, applied.BackupPath
+	transaction.Phase, transaction.Error = system.UpdatePhaseRestarting, ""
+	_ = system.SaveUpdateTransaction(transaction)
 	if err := system.ScheduleRestart(); err != nil {
-		writeError(w, http.StatusInternalServerError, "更新已完成，但无法自动重启："+err.Error())
+		if rollbackErr := system.RollbackAppliedUpdate(transaction, err); rollbackErr != nil {
+			writeError(w, http.StatusInternalServerError, "更新已完成，但无法自动重启且回滚失败："+rollbackErr.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "无法安排自动重启，已恢复旧版本："+err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"output": result + " 正在重启应用。"})
-	go func() {
-		time.Sleep(350 * time.Millisecond)
-		os.Exit(0)
-	}()
+	writeJSON(w, http.StatusOK, map[string]string{"output": applied.Message + " 正在重启应用。"})
+	s.requestGracefulUpdateShutdown()
 }
 
 func (s *server) robotHandler(w http.ResponseWriter, r *http.Request) {
@@ -2402,6 +2720,46 @@ func (s *server) robotRuntimePreflightHandler(w http.ResponseWriter, r *http.Req
 	writeJSON(w, http.StatusOK, preflight)
 }
 
+// robotRuntimeRepairHandler exposes an inspect-first repair flow. GET is
+// side-effect free; POST performs only the planned safe changes unless a
+// caller explicitly confirms replacement of a custom runtime configuration.
+func (s *server) robotRuntimeRepairHandler(w http.ResponseWriter, r *http.Request) {
+	mode := strings.TrimSpace(r.URL.Query().Get("mode"))
+	if mode == "" {
+		mode = "all"
+	}
+	switch r.Method {
+	case http.MethodGet:
+		plan, err := s.robots.RuntimeRepairPlan(r.URL.Query().Get("root"), mode)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, plan)
+	case http.MethodPost:
+		var input struct {
+			Root             string `json:"root"`
+			Mode             string `json:"mode"`
+			ConfirmOverrides bool   `json:"confirmOverrides"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+			writeError(w, http.StatusBadRequest, "请求内容无法识别。")
+			return
+		}
+		if input.Mode != "" {
+			mode = input.Mode
+		}
+		result, err := s.robots.ApplyRuntimeRepair(input.Root, mode, input.ConfirmOverrides)
+		if err != nil {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error(), "repair": result})
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
+	}
+}
+
 func (s *server) robotValidateHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
@@ -2671,7 +3029,7 @@ func (s *server) robotTasksHandler(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		var result robot.Result
 		var err error
-		if input.Action == "pm2-reload" && s.pm2Guard != nil {
+		if strings.HasPrefix(input.Action, "pm2") && s.pm2Guard != nil {
 			var output string
 			output, err = s.pm2Guard.Run(context.Background(), input.Root, input.Action, created.ID)
 			result = robot.Result{Path: input.Root, Output: output}
@@ -2721,10 +3079,12 @@ func (s *server) addOperation(created operationTask) {
 // process boots. It emits one terminal readiness event for the task; the
 // process lifecycle itself remains represented by ordinary task events.
 func (s *server) watchAppReadiness(id, root string) {
-	ticker := time.NewTicker(500 * time.Millisecond)
-	defer ticker.Stop()
 	timeout := time.NewTimer(25 * time.Second)
 	defer timeout.Stop()
+	// Port checks are a server-side startup predicate, not a browser polling
+	// loop. Probe immediately and then back off so a slow dev server does not
+	// create two fixed requests per second for its entire boot window.
+	delay := 100 * time.Millisecond
 	for {
 		reachable, _, err := s.robots.AppPortReachable(root)
 		if err == nil && reachable {
@@ -2739,11 +3099,19 @@ func (s *server) watchAppReadiness(id, root string) {
 			s.publishRobotEvent(robotEvent{Type: "app-failed", TaskID: id, Text: message})
 			return
 		}
+		wait := time.NewTimer(delay)
 		select {
 		case <-timeout.C:
+			wait.Stop()
 			s.publishRobotEvent(robotEvent{Type: "app-failed", TaskID: id, Text: "应用服务启动超时，端口未响应。"})
 			return
-		case <-ticker.C:
+		case <-wait.C:
+			if delay < 2*time.Second {
+				delay *= 2
+				if delay > 2*time.Second {
+					delay = 2 * time.Second
+				}
+			}
 		}
 	}
 }
@@ -2842,8 +3210,11 @@ func (s *server) stopPM2ForStart(root string) error {
 	}
 	// pm2-delete removes the process entirely, which is more reliable than a
 	// graceful stop for guaranteeing the port is released before a local start.
-	_, stopErr := s.robots.Run(root, "pm2-delete", "", "", "", "", "", false)
-	return stopErr
+	if s.pm2Guard != nil {
+		_, stopErr := s.pm2Guard.Run(context.Background(), root, "pm2-delete", "system-local-start")
+		return stopErr
+	}
+	return errors.New("PM2 围栏执行器未初始化")
 }
 
 // stopLocalForStart stops a supervised local (dev/app) process so a new
@@ -4219,6 +4590,7 @@ func (s *server) spa() http.Handler {
 }
 
 func (s *server) health(w http.ResponseWriter, _ *http.Request) {
+	s.confirmUpdateStartup()
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "version": s.version})
 }
 

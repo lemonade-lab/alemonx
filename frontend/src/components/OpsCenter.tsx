@@ -39,10 +39,15 @@ type Policy = {
   observationMinutes: number
   maxModifiedFiles: number
   maxPm2Actions: number
+  verificationCommand?: string
 }
 type Audit = { id: string; actor: string; role: string; action: string; resource: string; result: string; created: string }
 type AlertRecord = { id: string; severity: string; kind: string; message: string; status: string; updated: string }
 type Lease = { key: string; ownerId: string; fencingToken: number; renewedAt: string; expiresAt: string }
+type CanaryReadiness = {
+  ready: boolean
+  checks: Array<{ name: string; passed: boolean; detail: string }>
+}
 
 const METRIC_ITEMS: Array<{ key: keyof Metrics; label: string }> = [
   { key: 'incidents', label: '事件' },
@@ -106,6 +111,7 @@ export function OpsCenter({ root, onBack }: { root: string; onBack?: () => void 
   const [audits, setAudits] = useState<Audit[]>([])
   const [alerts, setAlerts] = useState<AlertRecord[]>([])
   const [leases, setLeases] = useState<Lease[]>([])
+  const [readiness, setReadiness] = useState<CanaryReadiness | null>(null)
   const [policy, setPolicy] = useState<Policy>({
     projectRoot: root,
     mode: 'observe',
@@ -121,8 +127,9 @@ export function OpsCenter({ root, onBack }: { root: string; onBack?: () => void 
   const [confirmStop, setConfirmStop] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState<Incident | null>(null)
   const [confirmDeleteTodo, setConfirmDeleteTodo] = useState<Todo | null>(null)
+  const [operationReason, setOperationReason] = useState('')
   const load = useCallback(async () => {
-    const [i, t, m, x, p, a, h, l] = await Promise.all([
+    const [i, t, m, x, p, a, h, l, readinessResponse] = await Promise.all([
       fetch('/api/v1/ops/incidents'),
       fetch('/api/v1/ops/todos'),
       fetch('/api/v1/ops/maintenance'),
@@ -130,7 +137,8 @@ export function OpsCenter({ root, onBack }: { root: string; onBack?: () => void 
       fetch(`/api/v1/ops/policy?root=${encodeURIComponent(root)}`),
       fetch('/api/v1/ops/audit'),
       fetch('/api/v1/ops/alerts'),
-      fetch('/api/v1/ops/leases')
+      fetch('/api/v1/ops/leases'),
+      fetch(`/api/v1/ops/canary-readiness?root=${encodeURIComponent(root)}`)
     ])
     if (i.ok) setIncidents((await i.json()) as Incident[])
     if (t.ok) setTodos((await t.json()) as Todo[])
@@ -140,6 +148,7 @@ export function OpsCenter({ root, onBack }: { root: string; onBack?: () => void 
     if (a.ok) setAudits((await a.json()) as Audit[])
     if (h.ok) setAlerts((await h.json()) as AlertRecord[])
     if (l.ok) setLeases((await l.json()) as Lease[])
+    if (readinessResponse.ok) setReadiness((await readinessResponse.json()) as CanaryReadiness)
   }, [root])
   useEffect(() => {
     void load()
@@ -194,11 +203,11 @@ export function OpsCenter({ root, onBack }: { root: string; onBack?: () => void 
     }
   }
   const savePolicy = async () => {
-    setBusy(true)
-    try {
-      await fetch('/api/v1/ops/policy', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+	setBusy(true)
+	try {
+	  await fetch('/api/v1/ops/policy', {
+		method: 'PATCH',
+		headers: { 'Content-Type': 'application/json', 'X-Operation-Reason': operationReason },
         body: JSON.stringify(policy)
       })
       await load()
@@ -413,6 +422,22 @@ export function OpsCenter({ root, onBack }: { root: string; onBack?: () => void 
         </section>
       </div>
       <section className="mx-2.5 mt-4 rounded-lg border border-(--theme-border-default) bg-(--theme-surface-panel) p-4">
+		{readiness && (
+		  <div className="mb-4 rounded-md border border-(--theme-border-default) bg-(--theme-surface-muted) p-3">
+			<div className="flex items-center justify-between gap-3">
+			  <strong className="text-xs text-(--theme-text-strong)">Canary 准入检查</strong>
+			  <Badge text={readiness.ready ? 'ready' : 'blocked'} tone={readiness.ready ? 'success' : 'warning'} />
+			</div>
+			<div className="mt-2 grid gap-1 sm:grid-cols-2">
+			  {readiness.checks.map(check => (
+				<div className="flex items-center gap-1.5 text-[11px] text-(--theme-text-secondary)" key={check.name} title={check.detail}>
+				  <span className={check.passed ? 'text-(--theme-success-text)' : 'text-(--theme-warning-text)'}>{check.passed ? '✓' : '!'}</span>
+				  {check.name}
+				</div>
+			  ))}
+			</div>
+		  </div>
+		)}
         <header className="mb-4 flex items-center justify-between gap-3">
           <h2 className="text-sm font-semibold text-(--theme-text-strong)">
             AI 策略
@@ -500,6 +525,24 @@ export function OpsCenter({ root, onBack }: { root: string; onBack?: () => void 
               允许 PM2 控制
             </label>
           </fieldset>
+		  <label className="grid gap-1.5 text-xs text-(--theme-text-secondary)">
+			策略验证命令（允许代码修改时必填）
+			<input
+			  className={inputClass}
+			  placeholder="例如：yarn test"
+			  value={policy.verificationCommand ?? ''}
+			  onChange={event => setPolicy({ ...policy, verificationCommand: event.target.value })}
+			/>
+		  </label>
+		  <label className="grid gap-1.5 text-xs text-(--theme-text-secondary)">
+			本次策略调整理由
+			<input
+			  className={inputClass}
+			  placeholder="开启 canary 或代码修改前请填写"
+			  value={operationReason}
+			  onChange={event => setOperationReason(event.target.value)}
+			/>
+		  </label>
         </div>
       </section>
       {(alerts.length > 0 || audits.length > 0) && (

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"alemonx/internal/setupplugin"
+	"golang.org/x/net/websocket"
 )
 
 const localServicePrefix = "/api/v1/services/"
@@ -26,6 +27,33 @@ type localServiceView struct {
 	Reachable bool   `json:"reachable"`
 	ProxyURL  string `json:"proxyUrl"`
 	Embed     bool   `json:"embed"`
+}
+
+// localWebSocketFrame keeps the original WebSocket frame type. The standard
+// websocket.Message codec only preserves the type chosen by the caller; using
+// string here would silently turn binary WebUI frames into text frames.
+type localWebSocketFrame struct {
+	data        []byte
+	payloadType byte
+}
+
+var localWebSocketFrameCodec = websocket.Codec{
+	Marshal: func(value interface{}) ([]byte, byte, error) {
+		frame, ok := value.(localWebSocketFrame)
+		if !ok {
+			return nil, websocket.UnknownFrame, errors.New("invalid local WebSocket frame")
+		}
+		return frame.data, frame.payloadType, nil
+	},
+	Unmarshal: func(data []byte, payloadType byte, value interface{}) error {
+		frame, ok := value.(*localWebSocketFrame)
+		if !ok {
+			return errors.New("invalid local WebSocket frame destination")
+		}
+		frame.data = append(frame.data[:0], data...)
+		frame.payloadType = payloadType
+		return nil
+	},
 }
 
 func (s *server) localServicesHandler(w http.ResponseWriter, r *http.Request) {
@@ -51,10 +79,6 @@ func (s *server) localServiceProxyHandler(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusMethodNotAllowed, "本地服务不支持该请求方式。")
 		return
 	}
-	if isUpgradeRequest(r) {
-		writeError(w, http.StatusNotImplemented, "本地服务网关暂不支持 WebSocket。")
-		return
-	}
 	if rest := strings.TrimPrefix(r.URL.Path, localServicePrefix); strings.Count(rest, "/") == 1 && !strings.HasSuffix(r.URL.Path, "/") {
 		http.Redirect(w, r, r.URL.Path+"/", http.StatusTemporaryRedirect)
 		return
@@ -66,6 +90,14 @@ func (s *server) localServiceProxyHandler(w http.ResponseWriter, r *http.Request
 	}
 	if !localServiceReachable(r.Context(), service) {
 		writeError(w, http.StatusBadGateway, "本地服务尚未启动或无法连接。")
+		return
+	}
+	if isUpgradeRequest(r) {
+		if !service.WebSocket {
+			writeError(w, http.StatusNotImplemented, "该本地服务未声明 WebSocket 支持。 ")
+			return
+		}
+		s.localServiceWebSocketHandler(w, r, plugin, service, requestPath)
 		return
 	}
 	target, err := localServiceTarget(service, requestPath)
@@ -112,6 +144,55 @@ func (s *server) localServiceProxyHandler(w http.ResponseWriter, r *http.Request
 		},
 	}
 	proxy.ServeHTTP(w, r)
+}
+
+func (s *server) localServiceWebSocketHandler(w http.ResponseWriter, r *http.Request, plugin setupplugin.Plugin, service setupplugin.ServiceSpec, requestPath string) {
+	target, err := localServiceTarget(service, requestPath)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	target.Scheme = "ws"
+	cookiePrefix := localServiceCookiePrefix(plugin.ID, service.ID)
+	header := http.Header{}
+	for _, cookie := range r.Cookies() {
+		if strings.HasPrefix(cookie.Name, cookiePrefix) {
+			header.Add("Cookie", strings.TrimPrefix(cookie.Name, cookiePrefix)+"="+cookie.Value)
+		}
+	}
+	websocket.Handler(func(client *websocket.Conn) {
+		// The upstream sees a same-origin loopback request. Forwarding the
+		// workbench origin would make WebUI origin checks reject a safe proxy.
+		upstream, dialErr := websocket.DialConfig(&websocket.Config{Location: target, Origin: &url.URL{Scheme: "http", Host: target.Host}, Version: websocket.ProtocolVersionHybi13, Header: header})
+		if dialErr != nil {
+			_ = client.Close()
+			return
+		}
+		defer upstream.Close()
+		defer client.Close()
+		// Relay complete frames rather than raw io.Copy. This retains text vs.
+		// binary semantics while closing the opposite side when either peer ends.
+		go func() {
+			for {
+				var frame localWebSocketFrame
+				if err := localWebSocketFrameCodec.Receive(client, &frame); err != nil {
+					return
+				}
+				if localWebSocketFrameCodec.Send(upstream, frame) != nil {
+					return
+				}
+			}
+		}()
+		for {
+			var frame localWebSocketFrame
+			if err := localWebSocketFrameCodec.Receive(upstream, &frame); err != nil {
+				return
+			}
+			if localWebSocketFrameCodec.Send(client, frame) != nil {
+				return
+			}
+		}
+	}).ServeHTTP(w, r)
 }
 
 func (s *server) resolveLocalService(requestURL string) (setupplugin.Plugin, setupplugin.ServiceSpec, string, error) {

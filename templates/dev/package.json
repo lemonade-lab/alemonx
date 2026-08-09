@@ -6,6 +6,10 @@
     "@types/node": "^22",
     "@alemonjs/db": "^0.0.17",
     "jsxp": "^1.4.0",
+    "koa-router": "^14.0.0",
+    "react": "^19.0.0",
+    "@types/koa-router": "^7.4.8",
+    "@types/react": "^19.0.0",
     "alemonjs": "^2.1.94",
     "lvyjs": "^0.3.0-alpha.2"
   },

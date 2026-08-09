@@ -1042,85 +1042,11 @@ func (Manager) scriptCommand(root, script string) (*exec.Cmd, error) {
 }
 
 func (Manager) RepairRuntime(root, mode string) (Result, error) {
-	path, err := projectPath(root)
+	repair, err := (Manager{}).ApplyRuntimeRepair(root, mode, true)
 	if err != nil {
-		return Result{}, err
+		return Result{Output: repair.Output, Path: root}, err
 	}
-	data, err := os.ReadFile(filepath.Join(path, "package.json"))
-	if err != nil {
-		return Result{}, err
-	}
-	var manifest map[string]any
-	if err := json.Unmarshal(data, &manifest); err != nil {
-		return Result{}, errors.New("无法读取 package.json")
-	}
-	scripts, _ := manifest["scripts"].(map[string]any)
-	if scripts == nil {
-		scripts = map[string]any{}
-		manifest["scripts"] = scripts
-	}
-	dependencies, _ := manifest["devDependencies"].(map[string]any)
-	if dependencies == nil {
-		dependencies = map[string]any{}
-		manifest["devDependencies"] = dependencies
-	}
-	// The robot's startup script is the top-level index.js (import { start }
-	// from 'alemonjs'; start()). The package.json "main" field points at the
-	// build output (lib/index.js) which start() loads internally after a build.
-	// PM2 and the foreground run must launch index.js, never lib/index.js, and
-	// a repair must not rewrite the build artifact.
-	const entry = "index.js"
-	if mode == "dev" || mode == "app" {
-		// "app" repairs the foreground entry only; "dev" also wires the dev
-		// script to it. Both launch the robot's index.js.
-		if _, ok := scripts["app"]; !ok {
-			scripts["app"] = "node " + entry
-		}
-		if mode == "dev" {
-			if _, ok := scripts["dev"]; !ok {
-				scripts["dev"] = scripts["app"]
-			}
-		}
-	}
-	if mode == "pm2" {
-		scripts["start"] = "npx --yes pm2 startOrRestart pm2.config.cjs"
-		scripts["stop"] = "npx --yes pm2 stop pm2.config.cjs"
-		dependencies["pm2"] = "^5"
-		dependencies["yaml"] = "^2.6.0"
-		config := filepath.Join(path, "pm2.config.cjs")
-		// PM2 runs the script with its node interpreter by default, so the
-		// config points straight at index.js rather than a "node index.js"
-		// shell wrapper. The pm2 fallback keeps the config usable when loaded
-		// inside a desktop process that already provides globalThis.pm2, while
-		// a bare CLI run sees the default config below.
-		pm2Config := "const pm2 = globalThis.pm2;\n\nmodule.exports = pm2 || {\n  apps: [\n    {\n      name: 'alemonb',\n      script: './" + entry + "',\n      env: {\n        NODE_ENV: 'production'\n      }\n    }\n  ]\n};\n"
-		if err := os.WriteFile(config, []byte(pm2Config), 0644); err != nil {
-			if permissionError(err) {
-				return Result{}, permissionAdvice("保存 PM2 配置")
-			}
-			return Result{}, fmt.Errorf("无法写入 PM2 配置：%w", err)
-		}
-		entryFile := filepath.Join(path, entry)
-		if _, statErr := os.Stat(entryFile); os.IsNotExist(statErr) {
-			if err := os.WriteFile(entryFile, []byte("import { start } from 'alemonjs';\n\nstart();\n"), 0644); err != nil {
-				if permissionError(err) {
-					return Result{}, permissionAdvice("保存生产入口")
-				}
-				return Result{}, fmt.Errorf("无法写入生产入口：%w", err)
-			}
-		}
-	}
-	encoded, err := json.MarshalIndent(manifest, "", "  ")
-	if err != nil {
-		return Result{}, err
-	}
-	if err := os.WriteFile(filepath.Join(path, "package.json"), append(encoded, '\n'), 0644); err != nil {
-		if permissionError(err) {
-			return Result{}, permissionAdvice("保存 package.json")
-		}
-		return Result{}, err
-	}
-	return Result{Path: path, Output: "已补齐运行脚本与配置，请安装依赖后重试。"}, nil
+	return Result{Path: root, Output: repair.Output}, nil
 }
 
 func (m Manager) Read(root, name string) (Result, error) {

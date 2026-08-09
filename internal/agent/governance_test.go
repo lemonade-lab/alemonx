@@ -2,11 +2,65 @@ package agent
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 )
+
+func TestSQLiteV2MigrationBackfillsCoreColumns(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ops.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	incident := Incident{ID: "legacy", ProjectRoot: "/project", ProcessName: "bot", Fingerprint: "fp", Status: IncidentTriaged, Severity: "high", Occurrences: 2, FirstSeen: time.Now().Add(-time.Minute), LastSeen: time.Now(), Updated: time.Now()}
+	payload, _ := json.Marshal(incident)
+	_, err = db.Exec(`CREATE TABLE schema_meta(version INTEGER NOT NULL); INSERT INTO schema_meta(version) VALUES(1); CREATE TABLE incidents(id TEXT PRIMARY KEY, fingerprint TEXT, payload TEXT NOT NULL, updated TEXT NOT NULL); INSERT INTO incidents(id,fingerprint,payload,updated) VALUES(?,?,?,?)`, incident.ID, "", string(payload), time.Now().Format(time.RFC3339Nano))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	repo, err := NewSQLiteOpsRepository(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+	var version, occurrences int
+	var root, status string
+	if err := repo.db.QueryRow(`SELECT (SELECT version FROM schema_meta LIMIT 1), project_root, status, occurrences FROM incidents WHERE id=?`, incident.ID).Scan(&version, &root, &status, &occurrences); err != nil {
+		t.Fatal(err)
+	}
+	if version != sqliteOpsSchemaVersion || root != "/project" || status != string(IncidentTriaged) || occurrences != 2 {
+		t.Fatalf("migration backfill version=%d root=%q status=%q occurrences=%d", version, root, status, occurrences)
+	}
+}
+
+func TestSQLiteV2PreventsDuplicateActiveIncidentFingerprint(t *testing.T) {
+	repo, err := NewSQLiteOpsRepository(filepath.Join(t.TempDir(), "ops.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+	first := Incident{ID: "one", ProjectRoot: "/project", ProcessName: "bot", Fingerprint: "same", Status: IncidentDetected, Updated: time.Now()}
+	if err := repo.SaveIncident(first); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SaveIncident(Incident{ID: "two", ProjectRoot: "/project", ProcessName: "bot", Fingerprint: "same", Status: IncidentDetected, Updated: time.Now()}); err == nil {
+		t.Fatal("duplicate active fingerprint must be rejected")
+	}
+	first.Status = IncidentResolved
+	if err := repo.SaveIncident(first); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SaveIncident(Incident{ID: "two", ProjectRoot: "/project", ProcessName: "bot", Fingerprint: "same", Status: IncidentDetected, Updated: time.Now()}); err != nil {
+		t.Fatalf("resolved fingerprint may create a new incident: %v", err)
+	}
+}
 
 func TestOpsLeaseRejectsSecondOwnerAndReleases(t *testing.T) {
 	store := NewOpsStoreAt(t.TempDir())
@@ -145,6 +199,62 @@ func TestMetricsRepositoryAtomicSnapshot(t *testing.T) {
 	points, err = repo.Query("/p", time.Now().Add(-time.Minute), time.Now().Add(time.Minute))
 	if err != nil || len(points) == 0 {
 		t.Fatalf("sqlite metric query=%+v err=%v", points, err)
+	}
+}
+
+func TestMaintenanceTaskTransitionRepositoryContract(t *testing.T) {
+	tests := []struct {
+		name string
+		new  func(*testing.T) OpsRepository
+	}{
+		{name: "json", new: func(t *testing.T) OpsRepository { return NewOpsStoreAt(t.TempDir()) }},
+		{name: "sqlite", new: func(t *testing.T) OpsRepository {
+			repo, err := NewSQLiteOpsRepository(filepath.Join(t.TempDir(), "ops.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = repo.Close() })
+			return repo
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := tt.new(t)
+			now := time.Now()
+			incident := Incident{ID: "inc-1", ProjectRoot: "/p", ProcessName: "bot", Status: IncidentFixing, Updated: now}
+			run := MaintenanceRun{ID: "run-1", IncidentID: incident.ID, TaskID: "task-1", Status: "fixing", Created: now}
+			if err := repo.SaveIncident(incident); err != nil {
+				t.Fatal(err)
+			}
+			if err := repo.SaveMaintenance(run); err != nil {
+				t.Fatal(err)
+			}
+			if err := repo.SavePolicy(OpsPolicy{ProjectRoot: "/p", ObservationMinutes: 1}); err != nil {
+				t.Fatal(err)
+			}
+			if err := repo.TransitionMaintenanceForTask("task-1", "completed", ""); err != nil {
+				t.Fatal(err)
+			}
+			gotRun, err := repo.GetMaintenance("run-1")
+			if err != nil || gotRun.Status != "observing" || gotRun.ObservationUntil.IsZero() {
+				t.Fatalf("run=%+v err=%v", gotRun, err)
+			}
+			gotIncident, err := repo.GetIncident("inc-1")
+			if err != nil || gotIncident.Status != IncidentObserving {
+				t.Fatalf("incident=%+v err=%v", gotIncident, err)
+			}
+			if err := repo.TransitionMaintenanceForTask("task-1", "failed", "verify failed"); err != nil {
+				t.Fatal(err)
+			}
+			gotRun, _ = repo.GetMaintenance("run-1")
+			gotIncident, _ = repo.GetIncident("inc-1")
+			if gotRun.Status != "failed" || gotRun.Finished == nil || gotIncident.Status != IncidentTodo {
+				t.Fatalf("terminal projection run=%+v incident=%+v", gotRun, gotIncident)
+			}
+			if _, err := repo.GetTodo("todo-inc-1"); err != nil {
+				t.Fatalf("todo should be created: %v", err)
+			}
+		})
 	}
 }
 

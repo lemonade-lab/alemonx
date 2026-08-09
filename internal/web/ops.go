@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -15,6 +16,57 @@ import (
 	"alemonx/internal/agent"
 	"alemonx/internal/robot"
 )
+
+type canaryReadinessCheck struct {
+	Name   string `json:"name"`
+	Passed bool   `json:"passed"`
+	Detail string `json:"detail"`
+}
+
+type canaryReadiness struct {
+	Root   string                 `json:"root"`
+	Ready  bool                   `json:"ready"`
+	Checks []canaryReadinessCheck `json:"checks"`
+}
+
+func (s *server) canaryReadiness(root string) canaryReadiness {
+	report := canaryReadiness{Root: root}
+	add := func(name string, passed bool, detail string) {
+		report.Checks = append(report.Checks, canaryReadinessCheck{Name: name, Passed: passed, Detail: detail})
+	}
+	_, validRootErr := s.robots.Validate(root)
+	add("robot_project", validRootErr == nil, "机器人目录必须可验证")
+	_, sqlite := s.opsStore.(*agent.SQLiteOpsRepository)
+	add("sqlite_storage", sqlite, "生产自动维护要求 SQLite 存储")
+	production := strings.EqualFold(strings.TrimSpace(os.Getenv("ALX_DEPLOYMENT")), "production")
+	add("production_mode", production, "需要 ALX_DEPLOYMENT=production")
+	authReady := false
+	if s.auth != nil {
+		if status, err := s.auth.Status(""); err == nil {
+			authReady = status.Enabled
+		}
+	}
+	add("authenticated_operator", authReady, "本地身份认证必须启用")
+	policy, policyErr := s.opsStore.GetPolicy(root)
+	if policyErr != nil {
+		policy = agent.OpsPolicy{ProjectRoot: root, Mode: "observe"}
+	}
+	add("project_allowlist", policy.AutoAllowed, "项目必须已加入自动维护白名单")
+	add("pm2_permission", policy.AllowPM2Control, "canary 首期至少允许受围栏保护的 PM2 操作")
+	verificationReady := !policy.AllowCodeChanges
+	if policy.AllowCodeChanges {
+		_, verificationErr := agent.ParsePolicyVerificationCommand(policy.VerificationCommand)
+		verificationReady = verificationErr == nil
+	}
+	add("verification_contract", verificationReady, "允许代码修改时必须配置受控验证命令")
+	add("alert_worker", s.alertWorker != nil && s.alertWorker.Running() && len(s.alerts.Sinks) > 0, "告警投递 Worker 与至少一个接收端必须可用")
+	add("not_emergency_stopped", !s.opsPaused, "全局紧急停止必须处于关闭状态")
+	report.Ready = true
+	for _, check := range report.Checks {
+		report.Ready = report.Ready && check.Passed
+	}
+	return report
+}
 
 func (s *server) opsActor(r *http.Request) (string, string) {
 	if s != nil && s.auth != nil {
@@ -25,13 +77,16 @@ func (s *server) opsActor(r *http.Request) (string, string) {
 				return "anonymous", "viewer"
 			}
 			if status.Authenticated {
-				role := "admin"
+				role := "viewer"
 				if binding, roleErr := s.opsStore.GetRole(status.Account); roleErr == nil && binding.Role != "" {
 					role = binding.Role
 				}
 				return status.Account, role
 			}
 		}
+	}
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("ALX_DEPLOYMENT")), "production") {
+		return "anonymous", "viewer"
 	}
 	actor, role := strings.TrimSpace(r.Header.Get("X-Operator")), strings.ToLower(strings.TrimSpace(r.Header.Get("X-Role")))
 	if actor == "" {
@@ -267,8 +322,6 @@ func (s *server) newOpsMonitor() *agent.OpsMonitor {
 			_ = s.opsStore.SaveIncident(incident)
 		},
 		OnPoll: func() {
-			s.alerts.RetryQueue(context.Background())
-			s.alerts.RetryPending(context.Background())
 			if s.opsOrchestrator == nil {
 				return
 			}
@@ -389,6 +442,18 @@ func (s *server) opsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		policies, _ := s.opsStore.ListPolicies()
 		writeJSON(w, http.StatusOK, map[string]any{"metrics": metrics, "policies": policies, "paused": s.opsPaused, "nodeId": s.nodeID})
+		return
+	}
+	if path == "canary-readiness" && r.Method == http.MethodGet {
+		if !s.requireOpsRole(w, r, "admin", "canary.readiness", "ops") {
+			return
+		}
+		root := strings.TrimSpace(r.URL.Query().Get("root"))
+		if root == "" {
+			writeError(w, http.StatusBadRequest, "缺少 root")
+			return
+		}
+		writeJSON(w, http.StatusOK, s.canaryReadiness(root))
 		return
 	}
 	if path == "leases" && r.Method == http.MethodGet {
@@ -597,6 +662,16 @@ func (s *server) opsHandler(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 400, "auto 模式必须先加入项目白名单")
 			return
 		}
+		if policy.AllowCodeChanges {
+			if strings.TrimSpace(policy.VerificationCommand) == "" {
+				writeError(w, 400, "允许代码修改时必须配置验证命令")
+				return
+			}
+			if _, err := agent.ParsePolicyVerificationCommand(policy.VerificationCommand); err != nil {
+				writeError(w, 400, "验证命令无效："+err.Error())
+				return
+			}
+		}
 		if policy.MaxModifiedFiles < 0 || policy.MaxModifiedFiles > 100 || policy.MaxPM2Actions < 0 || policy.MaxPM2Actions > 20 || policy.ObservationMinutes < 0 || policy.ObservationMinutes > 1440 || policy.FailureCircuitBreak < 0 || policy.FailureCircuitBreak > 10 || policy.TokenBudget < 0 {
 			writeError(w, 400, "策略限制不能为负数")
 			return
@@ -605,9 +680,14 @@ func (s *server) opsHandler(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 400, "项目根目录无效")
 			return
 		}
+		oldPolicy, oldPolicyErr := s.opsStore.GetPolicy(policy.ProjectRoot)
+		if policy.Mode == "canary" && (oldPolicyErr != nil || oldPolicy.Mode != "canary") && policy.AllowCodeChanges {
+			writeError(w, 400, "首次进入 canary 仅允许 PM2 低风险操作；观察稳定后再单独开启代码修改")
+			return
+		}
 		if policy.Version <= 0 {
-			if old, oldErr := s.opsStore.GetPolicy(policy.ProjectRoot); oldErr == nil {
-				policy.Version = old.Version + 1
+			if oldPolicyErr == nil {
+				policy.Version = oldPolicy.Version + 1
 			} else {
 				policy.Version = 1
 			}

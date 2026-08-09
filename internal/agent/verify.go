@@ -46,6 +46,23 @@ type CommandSpec struct {
 	Args    []string
 }
 
+// ParsePolicyVerificationCommand turns the administrator supplied policy
+// value into the same shell-free command specification used by agent_verify.
+// It deliberately accepts only executables already enforced by CommandRunner.
+func ParsePolicyVerificationCommand(raw string) (CommandSpec, error) {
+	fields := splitFields(strings.TrimSpace(raw))
+	if len(fields) == 0 {
+		return CommandSpec{}, fmt.Errorf("验证命令为空或包含不允许的 shell 语法")
+	}
+	spec := CommandSpec{Command: fields[0], Args: fields[1:]}
+	switch spec.Command {
+	case "yarn", "npm", "pnpm", "node", "tsgo", "tsc", "eslint", "go":
+		return spec, nil
+	default:
+		return CommandSpec{}, fmt.Errorf("验证命令 %q 不在允许列表中", spec.Command)
+	}
+}
+
 // DiscoverVerifyCommand inspects package.json scripts and picks the first
 // verification candidate that exists. It never runs anything; it only resolves
 // which declared script maps to a whitelisted subcommand.

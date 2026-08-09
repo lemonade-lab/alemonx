@@ -38,18 +38,26 @@ func TestDevelopmentTemplatePackagesFollowSelections(t *testing.T) {
 	if err := json.Unmarshal(data, &pkg); err != nil {
 		t.Fatal(err)
 	}
-	for _, dependency := range []string{"@alemonjs/db", "@alemonjs/onebot", "alemonjs", "lvyjs"} {
+	for _, dependency := range []string{"@alemonjs/db", "@alemonjs/onebot", "alemonjs", "lvyjs", "koa-router"} {
 		if pkg.DevDependencies[dependency] == "" {
 			t.Errorf("expected %s to be installed", dependency)
 		}
 	}
-	for _, dependency := range []string{"@alemonjs/bubble", "@alemonjs/discord", "@alemonjs/qq-bot", "jsxp", "pm2", "tailwindcss", "@types/node"} {
+	for _, dependency := range []string{"@alemonjs/bubble", "@alemonjs/discord", "@alemonjs/qq-bot", "jsxp", "react", "pm2", "tailwindcss", "@types/node", "@types/koa-router", "@types/react"} {
 		if _, ok := pkg.DevDependencies[dependency]; ok {
 			t.Errorf("did not expect %s to be installed", dependency)
 		}
 	}
 	if pkg.Scripts["dev"] != "lvy app.js" {
 		t.Errorf("dev script = %q, want JavaScript entry", pkg.Scripts["dev"])
+	}
+	if _, ok := pkg.Scripts["view"]; ok {
+		t.Error("non-image JavaScript project should not retain a jsxp view script")
+	}
+	for _, path := range []string{"jsxp.config.tsx", "jsxp.config.jsx", "src/image", "yarn.lock"} {
+		if _, err := os.Stat(filepath.Join(root, path)); !os.IsNotExist(err) {
+			t.Errorf("non-image project should not retain %s", path)
+		}
 	}
 	if _, err := os.Stat(filepath.Join(root, "src", "index.js")); err != nil {
 		t.Errorf("JavaScript entry missing: %v", err)
@@ -60,6 +68,52 @@ func TestDevelopmentTemplatePackagesFollowSelections(t *testing.T) {
 	help, err := os.ReadFile(filepath.Join(root, "src", "response", "help.js"))
 	if err != nil || string(help) == "" || strings.Contains(string(help), "jsxp") {
 		t.Errorf("non-image help template = %q, %v", help, err)
+	}
+}
+
+func TestDevelopmentTemplateReactDependenciesFollowLanguage(t *testing.T) {
+	for _, language := range []string{"js", "ts"} {
+		t.Run(language, func(t *testing.T) {
+			root := t.TempDir()
+			if err := copyTemplate(os.DirFS("../../templates"), "dev", root); err != nil {
+				t.Fatal(err)
+			}
+			config := Config{Template: "dev", Language: language, ImageMode: "react", StyleMode: "css"}
+			if err := patchPackage(root, config); err != nil {
+				t.Fatal(err)
+			}
+			if err := patchDevelopmentSource(root, config); err != nil {
+				t.Fatal(err)
+			}
+			data, err := os.ReadFile(filepath.Join(root, "package.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var pkg struct {
+				DevDependencies map[string]string `json:"devDependencies"`
+				Scripts         map[string]string `json:"scripts"`
+			}
+			if err := json.Unmarshal(data, &pkg); err != nil {
+				t.Fatal(err)
+			}
+			for _, dependency := range []string{"jsxp", "react", "koa-router"} {
+				if pkg.DevDependencies[dependency] == "" {
+					t.Errorf("expected %s to be installed", dependency)
+				}
+			}
+			if language == "ts" && pkg.DevDependencies["@types/react"] == "" {
+				t.Error("TypeScript React project needs @types/react")
+			}
+			if language == "js" && pkg.DevDependencies["@types/react"] != "" {
+				t.Error("JavaScript React project should not install @types/react")
+			}
+			if pkg.Scripts["view"] == "" {
+				t.Error("React project should retain the jsxp view script")
+			}
+			if _, err := os.Stat(filepath.Join(root, "yarn.lock")); !os.IsNotExist(err) {
+				t.Error("template must not ship a package-manager lock file")
+			}
+		})
 	}
 }
 

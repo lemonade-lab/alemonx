@@ -1,4 +1,4 @@
-.PHONY: help dev build test test-agent test-all format lint dev-fe build-frontend release-check
+.PHONY: help dev build test test-agent test-all test-sqlite test-space format lint dev-fe build-frontend test-sse verify-sse release-check
 
 .DEFAULT_GOAL := help
 
@@ -35,11 +35,26 @@ build: ## Build the production binary
 test: ## Run Go tests
 	go test ./internal/...
 
-test-agent: ## Run Agent package tests
-	GOCACHE="$${GOCACHE:-$$(mktemp -d)}" go test ./internal/agent ./internal/web
+test-space: ## Fail early when the Go test temporary volume is too small
+	@tmp="$${ALX_TEST_TMPDIR:-$$(mktemp -d)}"; \
+	min="$${ALX_TEST_MIN_KB:-1048576}"; \
+	available="$$(df -Pk "$$tmp" | awk 'NR==2 {print $$4}')"; \
+	if [ -z "$$available" ] || [ "$$available" -lt "$$min" ]; then \
+		echo "测试临时目录空间不足：$$tmp 仅剩 $${available:-0} KiB，需要至少 $$min KiB。设置 ALX_TEST_TMPDIR 指向有足够空间的卷。"; \
+		exit 1; \
+	fi
 
-test-all: ## Run the complete Go test suite with injectable test storage
-	ALX_TEST_CACHE_DIR="$${ALX_TEST_CACHE_DIR:-$$(mktemp -d)}" GOCACHE="$${GOCACHE:-$$(mktemp -d)}" go test ./...
+test-agent: test-space ## Run Agent package tests
+	@tmp="$${ALX_TEST_TMPDIR:-$$(mktemp -d)}"; \
+	GOTMPDIR="$$tmp" GOCACHE="$${GOCACHE:-$$(mktemp -d)}" go test ./internal/agent ./internal/web
+
+test-all: test-space ## Run the complete Go test suite with injectable test storage
+	@tmp="$${ALX_TEST_TMPDIR:-$$(mktemp -d)}"; \
+	ALX_TEST_CACHE_DIR="$${ALX_TEST_CACHE_DIR:-$$(mktemp -d)}" GOTMPDIR="$$tmp" GOCACHE="$${GOCACHE:-$$(mktemp -d)}" go test ./...
+
+test-sqlite: test-space ## Run the complete suite using the production SQLite repository
+	@tmp="$${ALX_TEST_TMPDIR:-$$(mktemp -d)}"; \
+	ALX_OPS_STORAGE=sqlite ALX_OPS_SQLITE_PATH="$$tmp/ops.db" ALX_TEST_CACHE_DIR="$${ALX_TEST_CACHE_DIR:-$$(mktemp -d)}" GOTMPDIR="$$tmp" GOCACHE="$${GOCACHE:-$$(mktemp -d)}" go test ./...
 
 format: ## Format Go files
 	go fmt ./...
@@ -56,9 +71,23 @@ build-fe: ## Build the frontend into dist/
 
 build-frontend: build-fe ## Alias for the release gate
 
+test-sse: ## Run Chromium multi-tab SSE coordination tests
+	cd frontend && yarn test:sse
+
+verify-sse: ## Run the SSE reliability gate
+	ALX_TEST_CACHE_DIR="$${ALX_TEST_CACHE_DIR:-$$(mktemp -d)}" go test ./...
+	go test ./internal/web -run '^$$' -bench BenchmarkOperationOutputBatching -benchmem -benchtime=100x -count=1
+	cd frontend && yarn lint
+	cd frontend && yarn build
+	$(MAKE) test-sse
+	git diff --check
+
 release-check: ## Run the publishability gate
 	$(MAKE) test-agent
 	$(MAKE) test-all
+	$(MAKE) test-sqlite
+	@tmp="$${ALX_TEST_TMPDIR:-$$(mktemp -d)}"; \
+	GOTMPDIR="$$tmp" GOCACHE="$${GOCACHE:-$$(mktemp -d)}" go test -race ./internal/agent ./internal/web
 	cd frontend && yarn lint
 	$(MAKE) build-frontend
 	git diff --check

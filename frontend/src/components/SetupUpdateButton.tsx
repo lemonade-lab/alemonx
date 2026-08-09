@@ -9,7 +9,7 @@ import {
   Upload,
   X
 } from 'lucide-react'
-import { useCallback, useEffect, useId } from 'react'
+import { useCallback, useEffect, useId, useState } from 'react'
 import { ConfirmDialog } from './ConfirmDialog'
 import { Tabs } from './Tabs'
 import {
@@ -25,8 +25,24 @@ type Release = {
   assets: Array<{ name: string; url: string }>
 }
 
-const UPDATE_CHECK_CACHE_KEY = 'alx:update-check-at'
-const UPDATE_CHECK_INTERVAL = 12 * 60 * 60 * 1000
+type UpdateTransaction = {
+  phase: string
+  targetVersion?: string
+  previousVersion?: string
+  error?: string
+  pluginError?: string
+}
+
+const updatePhaseLabels: Record<string, string> = {
+  checking: '正在检查更新…',
+  downloading: '正在下载更新包…',
+  staged: '更新包已就绪，等待确认安装。',
+  applying: '正在替换应用文件…',
+  restarting: '正在重启并验证新版…',
+  healthy: '新版已验证并正常运行。',
+  rolled_back: '新版未能启动，已恢复旧版本。',
+  failed: '更新未完成。'
+}
 
 export function SetupUpdateButton() {
   const [check, { data, isFetching, error }] = useLazySetupUpdateQuery()
@@ -37,27 +53,31 @@ export function SetupUpdateButton() {
   const [busy, setBusy] = useStoreState(false)
   const [message, setMessage] = useStoreState('')
   const [confirmRestart, setConfirmRestart] = useStoreState(false)
+  const [transaction, setTransaction] = useState<UpdateTransaction | null>(null)
   const updateAvailable = Boolean(data?.available)
   const checkUpdate = useCallback(async (force = false) => {
-    let lastChecked = 0
     try {
-      lastChecked = Number(localStorage.getItem(UPDATE_CHECK_CACHE_KEY) || 0)
-    } catch {
-      // Storage may be unavailable in private browsing; check normally.
-    }
-    if (!force && lastChecked > 0 && Date.now() - lastChecked < UPDATE_CHECK_INTERVAL)
-      return
-    try {
-      await check().unwrap()
-      try {
-        localStorage.setItem(UPDATE_CHECK_CACHE_KEY, String(Date.now()))
-      } catch {
-        // A failed cache write should not affect update discovery.
+      if (force) {
+        const response = await fetch('/api/v1/update?refresh=1', { cache: 'no-store' })
+        if (!response.ok) throw new Error('更新检查暂不可用。')
       }
+      await check().unwrap()
     } catch {
-      // Keep the existing query error state visible without retrying on every mount.
+      // The server retains the last known status; a temporary failure should
+      // not turn into a client polling loop.
     }
   }, [check])
+  const loadUpdateStatus = useCallback(async () => {
+    try {
+      const response = await fetch('/api/v1/update/status', { cache: 'no-store' })
+      if (!response.ok) throw new Error('更新状态暂不可用。')
+      const next = (await response.json()) as UpdateTransaction
+      setTransaction(next.phase === 'idle' ? null : next)
+      return next
+    } catch {
+      return null
+    }
+  }, [])
   useEffect(() => {
     const closeWhenAnotherToolOpens = (event: Event) => {
       if ((event as CustomEvent<string>).detail !== 'update') setOpen(false)
@@ -73,13 +93,22 @@ export function SetupUpdateButton() {
   const releases = releaseData as Release[]
   const selected = releases.find(item => item.url === releaseURL) ?? releases[0]
 
-  // Only version discovery is automatic. Downloading and replacing the
-  // executable still require an explicit user confirmation.
+  // The server owns automatic version discovery. This initial request only
+  // reads its cached status; later changes arrive through the unified gateway.
   useEffect(() => {
     void checkUpdate()
-    const interval = window.setInterval(() => void checkUpdate(), UPDATE_CHECK_INTERVAL)
-    return () => window.clearInterval(interval)
   }, [checkUpdate])
+  useEffect(() => {
+    const onUpdateChanged = (event: Event) => {
+      const detail = (event as CustomEvent<{ type?: string }>).detail
+      if (detail?.type === 'system.update.changed') void checkUpdate()
+    }
+    window.addEventListener('alx:unified-event', onUpdateChanged)
+    return () => window.removeEventListener('alx:unified-event', onUpdateChanged)
+  }, [checkUpdate])
+  useEffect(() => {
+    if (open) void loadUpdateStatus()
+  }, [loadUpdateStatus, open])
 
   const api = async (path: string, options: RequestInit) => {
     const response = await fetch(path, options)
@@ -94,17 +123,29 @@ export function SetupUpdateButton() {
   const reconnectAfterRestart = () => {
     const deadline = Date.now() + 40_000
     const retry = () => {
-      void fetch('/api/v1/auth/status', { cache: 'no-store' })
-        .then(response => {
-          if (response.ok) {
+      void loadUpdateStatus()
+        .then(status => {
+          if (status?.phase === 'healthy') {
             window.location.reload()
             return
           }
-          throw new Error('应用仍在重启')
+          if (status?.phase === 'rolled_back' || status?.phase === 'failed') {
+            setBusy(false)
+            setMessage(status.error || updatePhaseLabels[status.phase])
+            return
+          }
+          if (Date.now() < deadline) window.setTimeout(retry, 500)
+          else {
+            setBusy(false)
+            setMessage('新版未在 40 秒内完成验证，请查看发布说明或使用手动安装。')
+          }
         })
         .catch(() => {
           if (Date.now() < deadline) window.setTimeout(retry, 500)
-          else window.location.reload()
+          else {
+            setBusy(false)
+            setMessage('无法确认新版是否已启动，请稍后重新检查。')
+          }
         })
     }
     // Give the old server enough time to send the update response and exit;
@@ -173,7 +214,8 @@ export function SetupUpdateButton() {
     setMode('now')
     setMessage('')
     setConfirmRestart(false)
-    void checkUpdate()
+    void checkUpdate(true)
+    void loadUpdateStatus()
   }
 
   return (
@@ -291,12 +333,12 @@ export function SetupUpdateButton() {
                   <i className="inline-flex size-8 items-center justify-center rounded-md bg-white text-slate-500">
                     <CheckCircle2 className="size-4" />
                   </i>
-                  <span className="grid gap-0.5">
+                  <span className="grid gap-0.5 leading-tight">
                     <small className="text-[11px] text-slate-500">
-                      当前版本
+                      已是最新 · 最新版本 {data?.latest ?? data?.current ?? '—'}
                     </small>
                     <strong className="text-sm text-slate-700">
-                      {data?.current || '已是最新'}
+                      当前 {data?.current ?? '—'}
                     </strong>
                   </span>
                 </div>
@@ -391,6 +433,14 @@ export function SetupUpdateButton() {
           {mode === 'now' && message && (
             <small className="rounded-md bg-slate-50 p-2 text-[11px] leading-4 text-slate-500">
               {message}
+            </small>
+          )}
+          {transaction && (
+            <small className="rounded-md bg-slate-50 p-2 text-[11px] leading-4 text-slate-500">
+              {updatePhaseLabels[transaction.phase] ?? '正在处理更新…'}
+              {transaction.targetVersion ? ` 目标 ${transaction.targetVersion}` : ''}
+              {transaction.error ? `：${transaction.error}` : ''}
+              {transaction.pluginError ? ` 插件同步：${transaction.pluginError}` : ''}
             </small>
           )}
           {data?.releaseUrl && (

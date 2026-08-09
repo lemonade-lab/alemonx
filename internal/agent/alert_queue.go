@@ -15,7 +15,7 @@ func (s *OpsStore) Enqueue(delivery AlertDelivery) error {
 		delivery.ID = newID("delivery")
 	}
 	if delivery.Status == "" {
-		delivery.Status = "failed"
+		delivery.Status = "pending"
 	}
 	if delivery.NextAttempt.IsZero() {
 		delivery.NextAttempt = time.Now()
@@ -45,7 +45,13 @@ func (s *OpsStore) ClaimDue(ctx context.Context, limit int) ([]AlertDelivery, er
 			continue
 		}
 		var item AlertDelivery
-		if readJSONFile(filepath.Join(s.dir, entry.Name()), &item) == nil && item.Status != "acked" && !item.NextAttempt.After(now) {
+		if readJSONFile(filepath.Join(s.dir, entry.Name()), &item) == nil && item.Status != "acked" && item.Status != "failed_permanent" && !item.NextAttempt.After(now) {
+			// A second worker must not claim an in-flight delivery. Treat a stale
+			// sending record as abandoned after one minute so a crashed worker
+			// cannot strand an alert forever.
+			if item.Status == "sending" && item.Updated.After(now.Add(-time.Minute)) {
+				continue
+			}
 			item.Status, item.Updated = "sending", now
 			if atomicJSONFile(filepath.Join(s.dir, entry.Name()), item) == nil {
 				out = append(out, item)
@@ -71,7 +77,11 @@ func (s *OpsStore) Fail(id string, nextAttempt time.Time, reason string) error {
 	if err := readJSONFile(path, &item); err != nil {
 		return err
 	}
+	item.Attempts++
 	item.Status, item.NextAttempt, item.LastError, item.Updated = "failed", nextAttempt, reason, time.Now()
+	if nextAttempt.After(time.Now().Add(50 * 365 * 24 * time.Hour)) {
+		item.Status = "failed_permanent"
+	}
 	return atomicJSONFile(path, item)
 }
 
@@ -80,7 +90,7 @@ func (s *SQLiteOpsRepository) Enqueue(delivery AlertDelivery) error {
 		delivery.ID = newID("delivery")
 	}
 	if delivery.Status == "" {
-		delivery.Status = "failed"
+		delivery.Status = "pending"
 	}
 	if delivery.NextAttempt.IsZero() {
 		delivery.NextAttempt = time.Now()
@@ -110,7 +120,7 @@ func (s *SQLiteOpsRepository) ClaimDue(ctx context.Context, limit int) ([]AlertD
 	if err != nil {
 		return nil, err
 	}
-	rows, err := tx.Query(`SELECT id,payload FROM alert_deliveries WHERE status!='acked' AND next_attempt<=? ORDER BY next_attempt ASC, id ASC LIMIT ?`, now.Format(time.RFC3339Nano), limit)
+	rows, err := tx.Query(`SELECT id,payload FROM alert_deliveries WHERE status IN ('pending','failed') AND next_attempt<=? OR (status='sending' AND updated<=?) ORDER BY next_attempt ASC, id ASC LIMIT ?`, now.Format(time.RFC3339Nano), now.Add(-time.Minute).Format(time.RFC3339Nano), limit)
 	if err != nil {
 		_ = tx.Rollback()
 		return nil, err
@@ -148,7 +158,11 @@ func (s *SQLiteOpsRepository) Ack(id string) error {
 
 func (s *SQLiteOpsRepository) Fail(id string, nextAttempt time.Time, reason string) error {
 	return s.updateDelivery(id, func(item *AlertDelivery) {
+		item.Attempts++
 		item.Status, item.NextAttempt, item.LastError, item.Updated = "failed", nextAttempt, reason, time.Now()
+		if nextAttempt.After(time.Now().Add(50 * 365 * 24 * time.Hour)) {
+			item.Status = "failed_permanent"
+		}
 	})
 }
 

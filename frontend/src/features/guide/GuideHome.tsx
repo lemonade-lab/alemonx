@@ -116,12 +116,12 @@ function PurposeGroup({
       ? [
           [
             'install',
-            '源码版',
-            '下载并安装一个可运行的 AlemonJS 机器人源码项目。'
+            '源码版(推荐)',
+            '创建一个可用于生产环境的机器人源码项目。'
           ],
-          ['desktop', '桌面版', '下载适合当前电脑的 AlemonDesk 安装包。'],
-          ['mobile', '手机版', '下载 Android 通用 APK 安装包。'],
-          ['web', 'Web 版', '下载 alx，或使用 Docker 部署。']
+          ['mobile', '手机版(简单)', '下载 Android 端的 通用 APK 安装包。'],
+          ['desktop', '桌面版(一般)', '下载 PC 端的 AlemonDesk 安装包。'],
+          ['web', 'Web版(困难)', '下载 alemongo，或使用 Docker 部署 alemongo。']
         ]
       : [
           [

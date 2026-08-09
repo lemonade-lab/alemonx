@@ -120,6 +120,19 @@ export type RuntimePreflight = {
   summary: string[]
   dependenciesComplete: boolean
 }
+export type RuntimeRepairPlan = {
+  phase: string
+  profile: string
+  mode: string
+  automatic: string[]
+  requiresConfirmation: string[]
+  blocked: string[]
+  diagnostics: string[]
+}
+export type RuntimeRepairResult = RuntimeRepairPlan & {
+  backupPath?: string
+  output?: string
+}
 type PackageManifest = {
   name: string
   version: string
@@ -182,6 +195,7 @@ export const workspaceApi = createApi({
     'PackageManifest',
     'Runtime',
     'OperationTasks',
+    'SetupUpdate',
     'SetupPlugins',
     'EnvironmentReport'
   ],
@@ -212,7 +226,7 @@ export const workspaceApi = createApi({
         downloadReady: boolean
       },
       void
-    >({ query: () => 'update' }),
+    >({ query: () => 'update', providesTags: ['SetupUpdate'] }),
     setupPlugins: build.query<SetupPlugin[], void>({
       query: () => 'setup/plugins',
       providesTags: ['SetupPlugins']
@@ -402,6 +416,16 @@ export const workspaceApi = createApi({
     }),
     robotRuntimePreflight: build.query<RuntimePreflight, string>({
       query: root => `robot/runtime/preflight?${new URLSearchParams({ root })}`
+    }),
+    robotRuntimeRepair: build.query<RuntimeRepairPlan, { root: string; mode: string }>({
+      query: ({ root, mode }) => `robot/runtime/repair?${new URLSearchParams({ root, mode })}`
+    }),
+    applyRuntimeRepair: build.mutation<
+      RuntimeRepairResult,
+      { root: string; mode: string; confirmOverrides: boolean }
+    >({
+      query: body => ({ url: 'robot/runtime/repair', method: 'POST', body }),
+      invalidatesTags: (_result, _error, body) => [{ type: 'Runtime', id: body.root }]
     }),
     robotProject: build.query<
       { valid: boolean; path?: string; error?: string },
@@ -594,6 +618,8 @@ export const {
   useRobotAppsQuery,
   useSetAppEnabledMutation,
   useLazyRobotRuntimePreflightQuery,
+  useLazyRobotRuntimeRepairQuery,
+  useApplyRuntimeRepairMutation,
   useLazyRobotProjectQuery,
   useLazyRobotFileQuery,
   useGitStatusQuery,

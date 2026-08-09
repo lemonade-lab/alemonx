@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,9 +26,49 @@ import (
 	"alemonx/internal/access"
 	"alemonx/internal/robot"
 	"alemonx/internal/setupplugin"
+	"alemonx/internal/system"
+	"golang.org/x/net/websocket"
 )
 
 var errInternalTest = errors.New("internal test failure")
+
+// newIPv4TestServer keeps tests portable in sandboxes that disallow the Go
+// httptest default IPv6 loopback listener. TEST_LISTEN_ADDR remains overridable
+// for CI environments with dedicated network namespaces.
+func newIPv4TestServer(t *testing.T, handler http.Handler) *httptest.Server {
+	t.Helper()
+	addr := os.Getenv("TEST_LISTEN_ADDR")
+	if addr == "" {
+		addr = "127.0.0.1:0"
+	}
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		t.Fatalf("test listener %s: %v", addr, err)
+	}
+	server := httptest.NewUnstartedServer(handler)
+	server.Listener = listener
+	server.Start()
+	t.Cleanup(server.Close)
+	return server
+}
+
+func TestUpdateStatusReportsIdleAndPersistedTransaction(t *testing.T) {
+	t.Setenv("ALX_TEST_CACHE_DIR", t.TempDir())
+	handler := newTestServer()
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/update/status", nil))
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"phase":"idle"`) {
+		t.Fatalf("idle update status = %d %s", response.Code, response.Body.String())
+	}
+	if err := system.SaveUpdateTransaction(system.UpdateTransaction{Phase: system.UpdatePhaseStaged, TargetVersion: "v1.2.3"}); err != nil {
+		t.Fatal(err)
+	}
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/update/status", nil))
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"phase":"staged"`) || !strings.Contains(response.Body.String(), `"targetVersion":"v1.2.3"`) {
+		t.Fatalf("staged update status = %d %s", response.Code, response.Body.String())
+	}
+}
 
 func newTestServer() http.Handler {
 	return NewServer("test", fstest.MapFS{"dist/index.html": &fstest.MapFile{Data: []byte("<!doctype html>")}})
@@ -550,7 +591,7 @@ func TestAppProxyFramePolicy(t *testing.T) {
 
 func TestLocalServiceProxyKeepsManagementCookieIsolated(t *testing.T) {
 	var upstreamCookie string
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	upstream := newIPv4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		upstreamCookie = r.Header.Get("Cookie")
 		if strings.TrimSuffix(r.URL.Path, "/") == "/webui" {
 			w.WriteHeader(http.StatusOK)
@@ -596,6 +637,126 @@ func TestLocalServiceProxyKeepsManagementCookieIsolated(t *testing.T) {
 	cookies := response.Result().Cookies()
 	if len(cookies) != 1 || !strings.HasPrefix(cookies[0].Name, "alxsvc_") || cookies[0].Path != "/api/v1/services/alemonx-qq/napcat-webui/" {
 		t.Fatalf("service cookie was not isolated: %+v", cookies)
+	}
+}
+
+func TestLocalServiceWebSocketRequiresManifestDeclaration(t *testing.T) {
+	upstream := newIPv4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
+	parsed, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, rawPort, err := net.SplitHostPort(parsed.Host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pluginsRoot := t.TempDir()
+	pluginRoot := filepath.Join(pluginsRoot, "alemonx-qq")
+	if err := os.MkdirAll(filepath.Join(pluginRoot, "web"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := fmt.Sprintf(`{"id":"alemonx-qq","name":"QQ","version":"1.0.0","web":{"root":"web"},"services":[{"id":"webui","name":"WebUI","host":"127.0.0.1","port":%s}]}`, rawPort)
+	if err := os.WriteFile(filepath.Join(pluginRoot, "alx.json"), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := &server{plugins: setupplugin.NewRegistry(pluginsRoot)}
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/services/alemonx-qq/webui/", nil)
+	request.Header.Set("Connection", "Upgrade")
+	request.Header.Set("Upgrade", "websocket")
+	response := httptest.NewRecorder()
+	s.localServiceProxyHandler(response, request)
+	if response.Code != http.StatusNotImplemented {
+		t.Fatalf("status = %d, want %d: %s", response.Code, http.StatusNotImplemented, response.Body.String())
+	}
+}
+
+func TestLocalServiceWebSocketProxyUsesDeclaredLoopbackTarget(t *testing.T) {
+	upstream := newIPv4TestServer(t, websocket.Handler(func(connection *websocket.Conn) {
+		defer connection.Close()
+		var message string
+		if err := websocket.Message.Receive(connection, &message); err == nil {
+			_ = websocket.Message.Send(connection, "echo:"+message)
+		}
+	}))
+	parsed, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, rawPort, err := net.SplitHostPort(parsed.Host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pluginsRoot := t.TempDir()
+	pluginRoot := filepath.Join(pluginsRoot, "alemonx-qq")
+	if err := os.MkdirAll(filepath.Join(pluginRoot, "web"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := fmt.Sprintf(`{"id":"alemonx-qq","name":"QQ","version":"1.0.0","web":{"root":"web"},"services":[{"id":"webui","name":"WebUI","host":"127.0.0.1","port":%s,"websocket":true}]}`, rawPort)
+	if err := os.WriteFile(filepath.Join(pluginRoot, "alx.json"), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := &server{plugins: setupplugin.NewRegistry(pluginsRoot)}
+	proxy := newIPv4TestServer(t, http.HandlerFunc(s.localServiceProxyHandler))
+	endpoint := "ws" + strings.TrimPrefix(proxy.URL, "http") + "/api/v1/services/alemonx-qq/webui/"
+	client, err := websocket.Dial(endpoint, "", proxy.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if err := websocket.Message.Send(client, "hello"); err != nil {
+		t.Fatal(err)
+	}
+	var response string
+	if err := websocket.Message.Receive(client, &response); err != nil {
+		t.Fatal(err)
+	}
+	if response != "echo:hello" {
+		t.Fatalf("response = %q", response)
+	}
+}
+
+func TestLocalServiceWebSocketProxyPreservesBinaryFrames(t *testing.T) {
+	upstream := newIPv4TestServer(t, websocket.Handler(func(connection *websocket.Conn) {
+		defer connection.Close()
+		var payload []byte
+		if err := websocket.Message.Receive(connection, &payload); err == nil {
+			_ = websocket.Message.Send(connection, append([]byte("echo:"), payload...))
+		}
+	}))
+	parsed, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, rawPort, err := net.SplitHostPort(parsed.Host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pluginsRoot := t.TempDir()
+	pluginRoot := filepath.Join(pluginsRoot, "alemonx-qq")
+	if err := os.MkdirAll(filepath.Join(pluginRoot, "web"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := fmt.Sprintf(`{"id":"alemonx-qq","name":"QQ","version":"1.0.0","web":{"root":"web"},"services":[{"id":"webui","name":"WebUI","host":"127.0.0.1","port":%s,"websocket":true}]}`, rawPort)
+	if err := os.WriteFile(filepath.Join(pluginRoot, "alx.json"), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := &server{plugins: setupplugin.NewRegistry(pluginsRoot)}
+	proxy := newIPv4TestServer(t, http.HandlerFunc(s.localServiceProxyHandler))
+	endpoint := "ws" + strings.TrimPrefix(proxy.URL, "http") + "/api/v1/services/alemonx-qq/webui/"
+	client, err := websocket.Dial(endpoint, "", proxy.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if err := websocket.Message.Send(client, []byte{0, 1, 2}); err != nil {
+		t.Fatal(err)
+	}
+	var response []byte
+	if err := websocket.Message.Receive(client, &response); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(response), "echo:\x00\x01\x02"; got != want {
+		t.Fatalf("response = %q, want %q", got, want)
 	}
 }
 
@@ -878,5 +1039,73 @@ func TestSetupPluginWebEmbeddable(t *testing.T) {
 	router.ServeHTTP(recorder, request)
 	if got := recorder.Header().Get("X-Frame-Options"); got != "" {
 		t.Fatalf("setup plugin web X-Frame-Options = %q, want empty", got)
+	}
+}
+
+func TestSetupPluginStatusIsReadOnlyAndCoalesced(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture is Unix-only")
+	}
+	root := t.TempDir()
+	pluginRoot := filepath.Join(root, "fixture")
+	if err := os.MkdirAll(filepath.Join(pluginRoot, "web"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	key := runtime.GOOS + "-" + runtime.GOARCH
+	manifest := `{"id":"fixture","name":"Fixture","version":"1.0.0","entry":{"` + key + `":"runner"},"web":{"root":"web"}}`
+	if err := os.WriteFile(filepath.Join(pluginRoot, "alx.json"), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pluginRoot, "runner"), []byte(`#!/bin/sh
+sleep 0.1
+echo x >> status-count
+printf '{"output":"{\\"engine\\":\\"fixture\\",\\"installed\\":true}"}'
+`), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	s := &server{plugins: setupplugin.NewRegistry(root)}
+	for range 2 {
+		recorder := httptest.NewRecorder()
+		s.setupPluginActionHandler(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/setup/plugins/fixture/status?action=status", nil))
+		if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"engine":"fixture"`) {
+			t.Fatalf("status = %d %s", recorder.Code, recorder.Body.String())
+		}
+	}
+	count, err := os.ReadFile(filepath.Join(pluginRoot, "status-count"))
+	if err != nil || strings.Count(string(count), "x") != 1 {
+		t.Fatalf("status runner executions = %q, %v", count, err)
+	}
+	if len(s.operations) != 0 {
+		t.Fatalf("read-only status must not create operations: %#v", s.operations)
+	}
+	// After the one-second cached result expires, parallel readers must join the
+	// same runner invocation rather than create a task (or two processes).
+	time.Sleep(1100 * time.Millisecond)
+	var readers sync.WaitGroup
+	results := make(chan int, 2)
+	for range 2 {
+		readers.Add(1)
+		go func() {
+			defer readers.Done()
+			recorder := httptest.NewRecorder()
+			s.setupPluginActionHandler(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/setup/plugins/fixture/status?action=status", nil))
+			results <- recorder.Code
+		}()
+	}
+	readers.Wait()
+	close(results)
+	for code := range results {
+		if code != http.StatusOK {
+			t.Fatalf("coalesced status = %d, want 200", code)
+		}
+	}
+	count, err = os.ReadFile(filepath.Join(pluginRoot, "status-count"))
+	if err != nil || strings.Count(string(count), "x") != 2 {
+		t.Fatalf("concurrent status runner executions = %q, %v", count, err)
+	}
+	recorder := httptest.NewRecorder()
+	s.setupPluginActionHandler(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/setup/plugins/fixture/status?action=install", nil))
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("non-status action = %d, want 400", recorder.Code)
 	}
 }

@@ -12,9 +12,12 @@ import (
 // web layer supplies guarded PM2/task callbacks, keeping this package safe to
 // test without spawning processes or calling an AI provider.
 type OpsOrchestrator struct {
-	Store      OpsRepository
-	Policy     func(string) (OpsPolicy, error)
-	StartFix   func(Incident, AutoFixDecision) (string, error)
+	Store    OpsRepository
+	Policy   func(string) (OpsPolicy, error)
+	StartFix func(Incident, AutoFixDecision) (string, error)
+	// PM2 is retained for source compatibility with embedders. Production
+	// callers must provide PM2Guarded; the unguarded callback is never used by
+	// the automatic-maintenance path.
 	PM2        func(string, string) (string, error)
 	PM2Guarded func(string, string, string) (string, error)
 	AI         func(Incident, OpsPolicy) (AutoFixDecision, error)
@@ -69,28 +72,12 @@ func (o *OpsOrchestrator) Analyze(id string) (Incident, AutoFixDecision, error) 
 			return incident, decision, fmt.Errorf("事件已有进行中的维护任务：%s", existing.ID)
 		}
 		run := MaintenanceRun{ID: fmt.Sprintf("maint-%d", o.now().UnixNano()), IncidentID: incident.ID, Decision: decision, Status: "running", Created: o.now()}
-		if o.PM2 == nil {
-			run.Status, run.Error = "failed", "PM2 控制未配置"
+		if o.PM2Guarded == nil {
+			run.Status, run.Error = "failed", "PM2 围栏执行器未配置"
 		} else {
-			if o.PM2Guarded == nil {
-				if _, budgetErr := o.Store.ConsumeBudget(incident.ProjectRoot, 0, 1, 0); budgetErr != nil {
-					run.Status, run.Error = "failed", budgetErr.Error()
-					_ = o.createTodo(incident, decision)
-					incident.Status = IncidentTodo
-					_ = o.Store.SaveMaintenance(run)
-					_ = o.Store.SaveIncident(incident)
-					return incident, decision, nil
-				}
-			}
 			var output string
 			var actionErr error
-			if o.PM2Guarded != nil {
-				output, actionErr = o.PM2Guarded(incident.ProjectRoot, "pm2-restart", incident.ID)
-			} else if o.PM2 != nil {
-				output, actionErr = o.PM2(incident.ProjectRoot, "pm2-restart")
-			} else {
-				actionErr = errors.New("PM2 控制未配置")
-			}
+			output, actionErr = o.PM2Guarded(incident.ProjectRoot, "pm2-restart", incident.ID)
 			run.PM2Actions = []string{"pm2-restart"}
 			run.PM2ActionCount = 1
 			if actionErr != nil {
@@ -232,7 +219,19 @@ func (o *OpsOrchestrator) Approve(id string) (Incident, error) {
 	if err != nil {
 		return Incident{}, err
 	}
-	decision := DecideAutoFix(incident, OpsPolicy{Mode: "auto", AllowCodeChanges: true, VerificationCommand: "approved by operator"})
+	policy := OpsPolicy{ProjectRoot: incident.ProjectRoot, Mode: "strict"}
+	if o.Policy != nil {
+		if current, policyErr := o.Policy(incident.ProjectRoot); policyErr == nil {
+			policy = current
+		}
+	}
+	// A one-time approval may bypass the mode's human gate, never the project
+	// whitelist, high-risk classifier or mandatory verification command.
+	if policy.Mode == "strict" || policy.Mode == "observe" {
+		policy.Mode = "auto"
+		policy.SingleApproval = true
+	}
+	decision := DecideAutoFix(incident, policy)
 	if decision.Action == "create_todo" {
 		return incident, errors.New("该事件仍被安全策略阻止")
 	}
@@ -255,7 +254,7 @@ func (o *OpsOrchestrator) Approve(id string) (Incident, error) {
 
 func IsAllowedPM2Action(action string) bool {
 	switch strings.ToLower(strings.TrimSpace(action)) {
-	case "pm2-status", "pm2-logs", "pm2-restart", "pm2-reload":
+	case "pm2", "pm2-status", "pm2-logs", "pm2-stop", "pm2-restart", "pm2-reload", "pm2-delete":
 		return true
 	default:
 		return false

@@ -159,7 +159,6 @@ func (c *Creator) Create(config Config) (Result, error) {
 	return result, nil
 }
 
-
 func validate(c Config) error {
 	if c.Template != "" && c.Template != "bot" && c.Template != "dev" {
 		return errors.New("项目模板无效")
@@ -259,11 +258,19 @@ func patchPackage(root string, config Config) error {
 	}
 	if config.ImageMode != "react" {
 		remove("jsxp")
+		remove("react")
+		remove("@types/react")
 		_ = os.RemoveAll(filepath.Join(root, "src", "image"))
 		_ = os.Remove(filepath.Join(root, "jsxp.config.tsx"))
+		_ = os.Remove(filepath.Join(root, "jsxp.config.jsx"))
+		delete(scripts, "view")
 	}
 	if config.ImageMode == "react" {
 		dependencies["jsxp"] = "1.4.0"
+		dependencies["react"] = "^19.0.0"
+		if config.Language == "ts" {
+			dependencies["@types/react"] = "^19.0.0"
+		}
 	}
 	if config.ImageMode != "react" || config.StyleMode != "tailwind" {
 		remove("tailwindcss")
@@ -279,6 +286,8 @@ func patchPackage(root string, config Config) error {
 	}
 	if config.Language == "js" {
 		remove("@types/node")
+		remove("@types/koa-router")
+		remove("@types/react")
 	}
 	if config.ESLint {
 		dependencies["eslint"] = "^9.0.0"
@@ -470,7 +479,11 @@ func patchDevelopmentSource(root string, config Config) error {
 	scripts, _ := pkg["scripts"].(map[string]any)
 	if scripts != nil && config.Language == "js" {
 		scripts["dev"] = "lvy app.js"
-		scripts["view"] = "lvy app.js --jsxp"
+		if config.ImageMode == "react" {
+			scripts["view"] = "lvy app.js --jsxp"
+		} else {
+			delete(scripts, "view")
+		}
 	}
 	encoded, err := json.MarshalIndent(pkg, "", "  ")
 	if err != nil {

@@ -45,6 +45,9 @@ type OpsRepository interface {
 	ConsumeBudget(string, int, int, int) (OpsBudget, error)
 	ResetBudget(string) error
 	UpdateMaintenanceByTask(string, string, string) error
+	// TransitionMaintenanceForTask keeps a task terminal transition and its
+	// Incident/MaintenanceRun projection identical across JSON and SQLite.
+	TransitionMaintenanceForTask(string, string, string) error
 	ReconcileMaintenance([]AgentTask) error
 	Metrics() (OpsMetrics, error)
 	AppendAudit(AuditEntry) error

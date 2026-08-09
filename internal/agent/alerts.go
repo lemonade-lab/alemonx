@@ -158,19 +158,54 @@ func (m *AlertManager) RetryQueue(ctx context.Context) {
 	}
 	for _, item := range items {
 		delivered := true
+		var deliveryErr error
 		for _, sink := range m.Sinks {
 			if sink == nil {
 				continue
 			}
 			if err := sink.Send(ctx, item.Alert); err != nil {
 				delivered = false
-				_ = m.Queue.Fail(item.ID, time.Now().Add(time.Minute), err.Error())
+				deliveryErr = err
+				break
 			}
 		}
 		if delivered {
 			_ = m.Queue.Ack(item.ID)
+			if metrics, ok := m.Queue.(MetricsRepository); ok {
+				_ = metrics.Increment("alert_delivery_total", item.Alert.ProjectRoot, item.Alert.Fingerprint, 1)
+			}
+			continue
+		}
+		policy := AlertPolicy{MaxRetries: 3, RetryBackoff: time.Minute}
+		if configured, ok := m.Policies[item.Alert.Severity]; ok {
+			if configured.MaxRetries >= 0 {
+				policy.MaxRetries = configured.MaxRetries
+			}
+			if configured.RetryBackoff > 0 {
+				policy.RetryBackoff = configured.RetryBackoff
+			}
+		}
+		// Attempts is persisted by Queue.Fail. A delivery that has exhausted
+		// its configured retries is kept for audit but is no longer claimable.
+		next := time.Now().Add(policy.RetryBackoff * time.Duration(1<<min(item.Attempts, 6)))
+		if item.Attempts+1 >= policy.MaxRetries {
+			next = time.Now().Add(100 * 365 * 24 * time.Hour)
+		}
+		if deliveryErr == nil {
+			deliveryErr = errors.New("没有可用告警接收端")
+		}
+		_ = m.Queue.Fail(item.ID, next, deliveryErr.Error())
+		if metrics, ok := m.Queue.(MetricsRepository); ok {
+			_ = metrics.Increment("alert_delivery_failure_total", item.Alert.ProjectRoot, item.Alert.Fingerprint, 1)
 		}
 	}
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func (m *AlertManager) Notify(ctx context.Context, alert Alert) {
@@ -200,6 +235,13 @@ func (m *AlertManager) Notify(ctx context.Context, alert Alert) {
 	m.mu.Unlock()
 	if m.Record != nil {
 		_ = m.Record(alert)
+	}
+	// Queue is the only delivery path when persistence is available. It makes
+	// restarts, retry ownership and duplicate suppression deterministic instead
+	// of racing a direct goroutine with RetryPending.
+	if m.Queue != nil {
+		_ = m.Queue.Enqueue(AlertDelivery{ID: "delivery-" + alert.ID, Alert: alert, NextAttempt: time.Now(), Status: "pending", Updated: time.Now()})
+		return
 	}
 	for _, sink := range m.Sinks {
 		if sink == nil {

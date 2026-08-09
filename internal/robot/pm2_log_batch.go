@@ -48,8 +48,12 @@ func (s PM2LogBatchSource) ReadBatch(ctx context.Context, root, process string, 
 		return agent.LogBatch{}, err
 	}
 	device, inode := fileIdentity(info)
-	offset := cursor.Offset
-	rotated := cursor.LogPath != "" && (cursor.LogPath != logPath || cursor.Device != device || cursor.Inode != inode || info.Size() < offset)
+	fileCursor := cursor.File
+	if fileCursor.LogPath == "" {
+		fileCursor = agent.FileLogCursor{LogPath: cursor.LogPath, Device: cursor.Device, Inode: cursor.Inode, Offset: cursor.Offset}
+	}
+	offset := fileCursor.Offset
+	rotated := fileCursor.LogPath != "" && (fileCursor.LogPath != logPath || fileCursor.Device != device || fileCursor.Inode != inode || info.Size() < offset)
 	if rotated {
 		offset = 0
 	}

@@ -106,6 +106,8 @@ import {
   useLazyRobotFileQuery,
   useLazyPackageConfigQuery,
   useLazyRobotRuntimePreflightQuery,
+  useLazyRobotRuntimeRepairQuery,
+  useApplyRuntimeRepairMutation,
   useLazyRobotProjectQuery,
   useLocalPackagesQuery,
   useLocalPackageVersionsQuery,
@@ -1328,6 +1330,18 @@ export function Dashboard({
           }, 100)
       } else if (envelope.topic === 'plugins')
         dispatch(workspaceApi.util.invalidateTags(['SetupPlugins']))
+      if (envelope.type === 'system.update.changed')
+        dispatch(workspaceApi.util.invalidateTags(['SetupUpdate']))
+      if (envelope.type === 'system.store-recovered') {
+        dispatch(
+          workspaceApi.util.invalidateTags([
+            'OperationTasks',
+            'SetupPlugins',
+            'SetupUpdate'
+          ])
+        )
+        window.dispatchEvent(new CustomEvent('alx:ops-changed'))
+      }
       if (envelope.type === 'system.cursor-expired') {
         dispatch(
           workspaceApi.util.invalidateTags(['OperationTasks', 'SetupPlugins'])
@@ -5562,6 +5576,8 @@ function RuntimePanel({
     useStoreState('运行前配置不完整')
   const [loadPackageConfig] = useLazyPackageConfigQuery()
   const [loadRuntimePreflight] = useLazyRobotRuntimePreflightQuery()
+  const [loadRuntimeRepair] = useLazyRobotRuntimeRepairQuery()
+  const [applyRuntimeRepair] = useApplyRuntimeRepairMutation()
   const [loginChoice, setLoginChoice] = useStoreState<LoginChoice | null>(null)
   const [connectionConfig, setConnectionConfig] = useStoreState<{
     package: string
@@ -5618,6 +5634,36 @@ function RuntimePanel({
   }
   const ask = (label: string, note: string, execute: () => void) =>
     setPending({ label, note, execute })
+  const repairRuntime = async (mode: string) => {
+    try {
+      const plan = await loadRuntimeRepair({ root, mode }, false).unwrap()
+      if (plan.blocked.length) {
+        setValidationTitle('无法自动修复')
+        setValidationMessage(plan.blocked.join('。'))
+        return
+      }
+      const apply = async (confirmOverrides: boolean) => {
+        try {
+          const result = await applyRuntimeRepair({ root, mode, confirmOverrides }).unwrap()
+          setValidationTitle(result.phase === 'healthy' ? '修复完成' : '修复结果')
+          setValidationMessage(result.output || result.diagnostics.join('。'))
+          await onRefreshOverview()
+        } catch (reason) {
+          setValidationTitle('修复未完成')
+          setValidationMessage(operationErrorMessage(reason, '修复失败，已尝试恢复运行配置。'))
+        }
+      }
+      const details = [...plan.automatic, ...plan.requiresConfirmation].join('；') || '当前运行配置无需修改。'
+      if (plan.requiresConfirmation.length) {
+        ask('确认覆盖自定义运行配置', details, () => { void apply(true) })
+      } else {
+        await apply(false)
+      }
+    } catch (reason) {
+      setValidationTitle('无法读取修复诊断')
+      setValidationMessage(operationErrorMessage(reason, '无法生成运行修复计划。'))
+    }
+  }
   const confirm = () => {
     pending?.execute()
     setPending(null)
@@ -6151,7 +6197,7 @@ function RuntimePanel({
                     disabled={busy}
                     onClick={() =>
                       ask('修复前台运行', '会补齐前台运行所需的命令。', () =>
-                        onRun('repair-app')
+                        void repairRuntime('app')
                       )
                     }
                   >
@@ -6244,7 +6290,7 @@ function RuntimePanel({
                       ask(
                         '修复开发命令',
                         '会补齐开发所需的运行命令，并保留现有设置。',
-                        () => onRun('repair-dev')
+                        () => void repairRuntime('dev')
                       )
                     }
                   >
@@ -6353,7 +6399,7 @@ function RuntimePanel({
                 disabled={busy}
                 onClick={() =>
                   ask('修复后台运行', '会补齐后台运行所需的设置和依赖。', () =>
-                    onRun('repair-pm2')
+                    void repairRuntime('pm2')
                   )
                 }
               >
@@ -7129,7 +7175,7 @@ function ReadonlyConsole({
           </div>
           <div className="flex items-center gap-1">
             <button
-              className="readonly-console-minimize inline-flex size-8 items-center justify-center rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-800"
+              className="readonly-console-minimize inline-flex size-8 items-center justify-center rounded-lg  text-slate-500 hover:bg-slate-50  dark:text-slate-300 dark:hover:bg-slate-800"
               onClick={onMinimize}
               aria-label="最小化运行终端"
               title="最小化"
@@ -7137,7 +7183,7 @@ function ReadonlyConsole({
               <Minus />
             </button>
             <button
-              className="readonly-console-refresh inline-flex size-8 items-center justify-center rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-800"
+              className="readonly-console-refresh inline-flex size-8 items-center justify-center rounded-lg  text-slate-500 hover:bg-slate-50  dark:text-slate-300 dark:hover:bg-slate-800"
               disabled={isFetching}
               onClick={() => void load({ root, refresh: true })}
               aria-label="刷新运行终端"
@@ -7146,7 +7192,7 @@ function ReadonlyConsole({
               <RefreshCw />
             </button>
             <button
-              className="readonly-console-window-close inline-flex size-8 items-center justify-center rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-800"
+              className="readonly-console-window-close inline-flex size-8 items-center justify-center rounded-lg  text-slate-500 hover:bg-slate-50  dark:text-slate-300 dark:hover:bg-slate-800"
               onClick={onClose}
               aria-label="关闭运行终端"
               title="关闭"
