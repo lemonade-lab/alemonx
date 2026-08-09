@@ -187,7 +187,10 @@ func TestRegistryReturnsStructuredActionData(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(directory, manifestName), []byte(manifest), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(directory, "runner"), []byte("#!/bin/sh\ncat >/dev/null\nprintf '{\\\"output\\\":\\\"完成\\\",\\\"data\\\":{\\\"ready\\\":true}}'\n"), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(directory, "runner"), []byte(`#!/bin/sh
+cat >/dev/null
+printf '%s' '{"output":"完成","data":{"ready":true}}'
+`), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	result, err := NewRegistry(root).RunResultWithProgress("fixture", "status", nil, false, nil)
