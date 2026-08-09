@@ -315,17 +315,30 @@ type server struct {
 	// pm2Status lets tests substitute a fake PM2 state. The default read runs a
 	// real `npx pm2 jlist` behind a short timeout so a missing pm2 never blocks
 	// a local start request for the full package-manager timeout.
-	pm2Status        func(string) (robot.PM2Status, error)
-	requestID        atomic.Uint64
-	nodeID           string
-	directoryRoots   []string
-	events           *robotEventHub
-	eventGateway     *eventGateway
-	operationEvents  *OperationEventStore
-	opsEvents        *opsEventHub
-	mcpEvents        *mcpEventHub
-	mcpMonitorStop   chan struct{}
-	pluginEventsStop chan struct{}
+	pm2Status          func(string) (robot.PM2Status, error)
+	requestID          atomic.Uint64
+	nodeID             string
+	directoryRoots     []string
+	events             *robotEventHub
+	eventGateway       *eventGateway
+	operationEvents    *OperationEventStore
+	opsEvents          *opsEventHub
+	mcpEvents          *mcpEventHub
+	mcpMonitorStop     chan struct{}
+	pluginEventsStop   chan struct{}
+	robotProjectsMu    sync.Mutex
+	robotProjectsCache robotProjectsSnapshot
+}
+
+type robotProjectItem struct {
+	Root string `json:"root"`
+	Name string `json:"name"`
+}
+
+type robotProjectsSnapshot struct {
+	rootsKey string
+	updated  time.Time
+	items    []robotProjectItem
 }
 
 func hostname() string {
@@ -715,7 +728,10 @@ func NewServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	mux.HandleFunc("/api/v1/setup/plugins/releases/", s.setupPluginReleasesHandler)
 	mux.HandleFunc("/api/v1/setup/plugins/", s.setupPluginActionHandler)
 	mux.HandleFunc("/api/v1/setup/plugins/web/", s.setupPluginWebHandler)
+	mux.HandleFunc("/api/v1/services", s.localServicesHandler)
+	mux.HandleFunc("/api/v1/services/", s.localServiceProxyHandler)
 	mux.HandleFunc("/api/v1/robot", s.robotHandler)
+	mux.HandleFunc("/api/v1/robot/projects", s.robotProjectsHandler)
 	mux.HandleFunc("/api/v1/robot/validate", s.robotValidateHandler)
 	mux.HandleFunc("/api/v1/robot/console", s.robotConsoleHandler)
 	mux.HandleFunc("/api/v1/robot/terminal", s.robotTerminalHandler)
@@ -736,6 +752,7 @@ func NewServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	mux.HandleFunc("/api/v1/robot/apps", s.robotAppsHandler)
 	mux.HandleFunc("/api/v1/robot/package-config", s.robotPackageConfigHandler)
 	mux.HandleFunc("/api/v1/robot/login", s.robotLoginHandler)
+	mux.HandleFunc("/api/v1/robot/onebot-sync", s.robotOneBotSyncHandler)
 	mux.HandleFunc("/api/v1/robot/manifest", s.robotManifestHandler)
 	mux.HandleFunc("/api/v1/robot/git-init", s.robotGitInitHandler)
 	mux.HandleFunc("/api/v1/robot/git", s.robotGitHandler)
@@ -1141,6 +1158,39 @@ func (s *server) startPluginEventBridge() {
 
 func (s *server) setupPluginActionHandler(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/v1/setup/plugins/"), "/")
+	// A system plugin may expose a small, typed visual payload through its
+	// runner. This endpoint deliberately has no path parameter: the runner is
+	// responsible for reading only its own known runtime files, while the
+	// workbench keeps those file paths out of browser-visible JSON.
+	if len(parts) == 2 && parts[1] == "qrcode" && r.Method == http.MethodGet {
+		if parts[0] != "alemonx-qq" {
+			writeError(w, http.StatusNotFound, "未找到插件二维码。")
+			return
+		}
+		output, err := s.plugins.Run(parts[0], "napcat-qrcode", nil, false)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		var payload struct {
+			Available bool   `json:"available"`
+			PNG       string `json:"png"`
+		}
+		if err := json.Unmarshal([]byte(output), &payload); err != nil || !payload.Available || payload.PNG == "" {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		image, err := base64.StdEncoding.DecodeString(payload.PNG)
+		if err != nil || len(image) < 8 || len(image) > 2<<20 || !bytes.Equal(image[:8], []byte{'\x89', 'P', 'N', 'G', '\r', '\n', '\x1a', '\n'}) {
+			writeError(w, http.StatusBadGateway, "插件返回的二维码图片无效。")
+			return
+		}
+		w.Header().Set("Content-Type", "image/png")
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		_, _ = w.Write(image)
+		return
+	}
 	if len(parts) == 2 && parts[1] == "versions" && r.Method == http.MethodGet {
 		versions, err := s.plugins.Versions(parts[0])
 		if err != nil {
@@ -1979,6 +2029,67 @@ func (s *server) robotHandler(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[ROBOT 同步] 完成 action=%s root=%q output=%dB", input.Action, input.Root, len(result.Output))
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+// robotProjectsHandler exposes only valid AlemonJS project directories below
+// the workbench's managed roots. System-plugin pages use it to offer a safe
+// target picker instead of accepting an arbitrary filesystem path.
+func (s *server) robotProjectsHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
+		return
+	}
+	refresh := r.URL.Query().Get("refresh") == "true"
+	roots := s.currentDirectoryRoots()
+	rootsKey := strings.Join(roots, "\x00")
+	s.robotProjectsMu.Lock()
+	if !refresh && s.robotProjectsCache.rootsKey == rootsKey && time.Since(s.robotProjectsCache.updated) < time.Minute {
+		items := append([]robotProjectItem(nil), s.robotProjectsCache.items...)
+		s.robotProjectsMu.Unlock()
+		writeJSON(w, http.StatusOK, map[string]any{"items": items, "cached": true})
+		return
+	}
+	s.robotProjectsMu.Unlock()
+	items := make([]robotProjectItem, 0, 16)
+	seen := map[string]bool{}
+	for _, base := range roots {
+		base = filepath.Clean(base)
+		_ = filepath.WalkDir(base, func(path string, entry fs.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return nil
+			}
+			if entry.IsDir() {
+				if path != base && (entry.Name() == "node_modules" || entry.Name() == ".git" || entry.Name() == ".alemon" || strings.HasPrefix(entry.Name(), ".")) {
+					return filepath.SkipDir
+				}
+				if rel, err := filepath.Rel(base, path); err == nil && rel != "." && strings.Count(rel, string(filepath.Separator)) >= 3 {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if entry.Name() != "alemon.config.yaml" {
+				return nil
+			}
+			root := filepath.Dir(path)
+			if seen[root] || len(items) >= 100 {
+				return nil
+			}
+			if _, err := os.Stat(filepath.Join(root, "package.json")); err != nil {
+				return nil
+			}
+			if _, err := s.robots.Read(root, "alemon.config.yaml"); err != nil {
+				return nil
+			}
+			seen[root] = true
+			items = append(items, robotProjectItem{Root: root, Name: filepath.Base(root)})
+			return nil
+		})
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].Name < items[j].Name })
+	s.robotProjectsMu.Lock()
+	s.robotProjectsCache = robotProjectsSnapshot{rootsKey: rootsKey, updated: time.Now(), items: append([]robotProjectItem(nil), items...)}
+	s.robotProjectsMu.Unlock()
+	writeJSON(w, http.StatusOK, map[string]any{"items": items, "cached": false})
 }
 
 // consolePayload splits the terminal's live process output from its static
@@ -3851,6 +3962,60 @@ func (s *server) robotLoginHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
+// robotOneBotSyncHandler is the only composite write used by system plugins.
+// It snapshots the robot configuration and restores it if selecting the login
+// connection fails, so a failed sync never leaves a partially changed robot.
+func (s *server) robotOneBotSyncHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
+		return
+	}
+	var input struct {
+		Root  string `json:"root"`
+		URL   string `json:"url"`
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, "请求内容无法识别。")
+		return
+	}
+	if strings.TrimSpace(input.URL) == "" || strings.TrimSpace(input.Token) == "" {
+		writeError(w, http.StatusBadRequest, "OneBot URL 和 Token 均不能为空，空 Token 不会覆盖机器人配置。")
+		return
+	}
+	definition, err := s.robots.PackageConfig(input.Root, "@alemonjs/onebot")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "目标机器人未安装或未声明 @alemonjs/onebot；请先在工作台安装连接包。")
+		return
+	}
+	fields := map[string]bool{}
+	for _, field := range definition.Fields {
+		fields[field.Name] = true
+	}
+	if !fields["url"] || !fields["token"] {
+		writeError(w, http.StatusBadRequest, "@alemonjs/onebot 未声明 url 和 token 配置，不能安全同步。")
+		return
+	}
+	previous, err := s.robots.Read(input.Root, "alemon.config.yaml")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if _, err := s.robots.SavePackageConfig(input.Root, "@alemonjs/onebot", map[string]string{"url": input.URL, "token": input.Token}); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if _, err := s.robots.SaveLogin(input.Root, "onebot", "@alemonjs/onebot"); err != nil {
+		if _, restoreErr := s.robots.Write(input.Root, "alemon.config.yaml", previous.Output); restoreErr != nil {
+			writeError(w, http.StatusInternalServerError, fmt.Sprintf("同步登录失败，且恢复原配置失败：%v", restoreErr))
+			return
+		}
+		writeError(w, http.StatusBadRequest, "同步登录失败，已恢复机器人原配置和登录方式："+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"synchronized": true, "restartRequired": true})
+}
+
 func (s *server) robotGitInitHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
@@ -4117,6 +4282,7 @@ func (s *server) ginHeaders() gin.HandlerFunc {
 		// SAMEORIGIN for them. Their responses carry their own CSP.
 		if !strings.HasPrefix(c.Request.URL.Path, "/api/v1/robot/webview/") &&
 			!strings.HasPrefix(c.Request.URL.Path, "/api/v1/robot/app/") &&
+			!strings.HasPrefix(c.Request.URL.Path, "/api/v1/services/") &&
 			!strings.HasPrefix(c.Request.URL.Path, "/api/v1/setup/plugins/web/") {
 			c.Header("X-Frame-Options", "DENY")
 		}

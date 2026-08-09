@@ -1,5 +1,5 @@
 import { useStoreState } from './store/guideStore'
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useDispatch, useSelector } from 'react-redux'
 import { useLocation, useNavigate } from 'react-router-dom'
 import {
@@ -21,6 +21,7 @@ import { GuideHome } from './features/guide/GuideHome'
 import { EnvironmentCheckPanel } from './features/guide/EnvironmentCheckPanel'
 import { guideIcons as icons } from './features/guide/icons'
 import { recommendReleaseAssets } from './features/guide/releaseAssets'
+import { Home, Terminal } from 'lucide-react'
 import type {
   Check,
   Creation,
@@ -61,10 +62,62 @@ export default function App() {
   const guideOpen = !location.pathname.startsWith('/dashboard')
   const activeID = selectedID ?? 'install'
   const activeGoal = goals.find(goal => goal.id === activeID)
+  const [workbenchOffset, setWorkbenchOffset] = useState({ x: 0, y: 0 })
+  const [terminalWindow, setTerminalWindow] = useState({
+    open: false,
+    minimized: false
+  })
+  const [mainWindowHidden, setMainWindowHidden] = useState(false)
+  const dragState = useRef<{
+    pointerId: number
+    startX: number
+    startY: number
+    originX: number
+    originY: number
+  } | null>(null)
+
+  function beginWorkbenchDrag(event: React.PointerEvent<HTMLDivElement>) {
+    const target = event.target as HTMLElement
+    if (!target.closest('.topbar') || target.closest('button, a, input, select, textarea')) return
+    dragState.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      originX: workbenchOffset.x,
+      originY: workbenchOffset.y
+    }
+    event.currentTarget.setPointerCapture(event.pointerId)
+    event.currentTarget.classList.add('workbench-dragging')
+  }
+
+  function moveWorkbench(event: React.PointerEvent<HTMLDivElement>) {
+    const drag = dragState.current
+    if (!drag || drag.pointerId !== event.pointerId) return
+    const shell = event.currentTarget
+    const windowElement = shell.querySelector<HTMLElement>('.guide-window')
+    if (!windowElement) return
+    const maxX = Math.max(0, (window.innerWidth - windowElement.offsetWidth) / 2 - 24)
+    const maxY = Math.max(0, (window.innerHeight - windowElement.offsetHeight) / 2 - 28)
+    setWorkbenchOffset({
+      x: Math.min(maxX, Math.max(-maxX, drag.originX + event.clientX - drag.startX)),
+      y: Math.min(maxY, Math.max(-maxY, drag.originY + event.clientY - drag.startY))
+    })
+  }
+
+  function endWorkbenchDrag(event: React.PointerEvent<HTMLDivElement>) {
+    if (dragState.current?.pointerId !== event.pointerId) return
+    dragState.current = null
+    event.currentTarget.releasePointerCapture(event.pointerId)
+    event.currentTarget.classList.remove('workbench-dragging')
+  }
 
   useEffect(() => {
     if (location.pathname === '/') navigate('/guide', { replace: true })
   }, [location.pathname, navigate])
+  useEffect(() => {
+    if (guideOpen) setTerminalWindow({ open: false, minimized: false })
+    setMainWindowHidden(false)
+  }, [guideOpen])
   function openGuide() {
     navigate('/guide')
     setCreation(null)
@@ -118,6 +171,25 @@ export default function App() {
 
   return (
     <div className="app-shell">
+      <div
+        className="workbench-stage"
+        onPointerDown={beginWorkbenchDrag}
+        onPointerMove={moveWorkbench}
+        onPointerUp={endWorkbenchDrag}
+        onPointerCancel={endWorkbenchDrag}
+      >
+        <WorkbenchDock
+          windowLabel={guideOpen ? '引导' : '工作台'}
+          windowHidden={mainWindowHidden}
+          onToggleWindow={() => setMainWindowHidden(value => !value)}
+          terminalWindow={terminalWindow}
+          onTerminal={() =>
+            window.dispatchEvent(new CustomEvent('alx:desktop-terminal-toggle'))
+          }
+        />
+        <div
+          className={`workbench-window-layer${mainWindowHidden ? ' workbench-window-hidden' : ''}`}
+        >
       {guideOpen ? (
         <GuideHome
           loading={loading}
@@ -142,6 +214,9 @@ export default function App() {
           onCheck={checkEnvironment}
           onCreate={createProject}
           onFix={setRepairCheck}
+          windowStyle={{
+            transform: `translate3d(${workbenchOffset.x}px, ${workbenchOffset.y}px, 0)`
+          }}
           renderFlow={registerBack => (
             <FlowView
               loading={loading}
@@ -166,29 +241,35 @@ export default function App() {
           )}
         />
       ) : (
-        <Dashboard
-          goals={goals}
-          goal={activeGoal}
-          report={report}
-          checking={checking}
-          error={error}
-          onClearError={() => setError('')}
-          defaultPage={
-            location.pathname.endsWith('/robot') ? 'robot' : 'environment'
-          }
-          onSelect={id => {
-            if (id === 'manage') {
-              navigate('/dashboard/robot')
-              return
-            }
-            navigate(`/guide/${id}/step/1`)
-            setError('')
-          }}
-          onOpenGuide={openGuide}
-          onCheck={checkEnvironment}
-          onFix={setRepairCheck}
-        />
-      )}
+            <Dashboard
+              goals={goals}
+              goal={activeGoal}
+              report={report}
+              checking={checking}
+              error={error}
+              onClearError={() => setError('')}
+              defaultPage={
+                location.pathname.endsWith('/robot') ? 'robot' : 'environment'
+              }
+              onSelect={id => {
+                if (id === 'manage') {
+                  navigate('/dashboard/robot')
+                  return
+                }
+                navigate(`/guide/${id}/step/1`)
+                setError('')
+              }}
+              onOpenGuide={openGuide}
+              onCheck={checkEnvironment}
+              onFix={setRepairCheck}
+              onWindowStateChange={setTerminalWindow}
+              windowStyle={{
+                transform: `translate3d(${workbenchOffset.x}px, ${workbenchOffset.y}px, 0)`
+              }}
+            />
+        )}
+        </div>
+      </div>
       {repairCheck && (
         <EnvironmentFixDialog
           check={repairCheck}
@@ -196,6 +277,51 @@ export default function App() {
         />
       )}
     </div>
+  )
+}
+
+function WorkbenchDock({
+  windowLabel,
+  windowHidden,
+  onToggleWindow,
+  terminalWindow,
+  onTerminal
+}: {
+  windowLabel: string
+  windowHidden: boolean
+  onToggleWindow: () => void
+  terminalWindow: { open: boolean; minimized: boolean }
+  onTerminal: () => void
+}) {
+  return (
+        <aside
+          className={`workbench-dock${terminalWindow.open ? ' workbench-dock-visible' : ''}`}
+          aria-label="工作台 Dock"
+        >
+      <div className="workbench-dock-items">
+        <button
+          className={windowHidden ? '' : 'active'}
+          onClick={onToggleWindow}
+          title={windowHidden ? `打开${windowLabel}` : `隐藏${windowLabel}`}
+        >
+          <Home className="size-5" />
+          <span>{windowLabel}</span>
+        </button>
+        {terminalWindow.open && (
+          <div className="workbench-dock-apps">
+            <small>应用</small>
+            <button
+              className={terminalWindow.minimized ? '' : 'active'}
+              onClick={onTerminal}
+              title={terminalWindow.minimized ? '恢复终端' : '最小化终端'}
+            >
+              <Terminal className="size-5" />
+              <span>终端</span>
+            </button>
+          </div>
+        )}
+      </div>
+    </aside>
   )
 }
 

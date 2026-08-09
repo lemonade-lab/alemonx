@@ -62,6 +62,7 @@ type Plugin struct {
 	Entry        map[string]string `json:"entry,omitempty"`
 	Development  *RuntimeSpec      `json:"development,omitempty"`
 	Web          *WebSpec          `json:"web,omitempty"`
+	Services     []ServiceSpec     `json:"services,omitempty"`
 	Runnable     bool              `json:"runnable"`
 	Enabled      bool              `json:"enabled"`
 	Online       bool              `json:"online,omitempty"`
@@ -94,6 +95,21 @@ type RuntimeSpec struct {
 // directly. Only installed, enabled plugins have their web root served.
 type WebSpec struct {
 	Root string `json:"root"`
+}
+
+// ServiceSpec is an allowlisted loopback HTTP service contributed by a setup
+// plugin. The browser never supplies its host or port; alx proxies only these
+// manifest-declared destinations through the authenticated management origin.
+type ServiceSpec struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Host        string `json:"host"`
+	Port        int    `json:"port"`
+	BasePath    string `json:"basePath,omitempty"`
+	HealthPath  string `json:"healthPath,omitempty"`
+	Embed       bool   `json:"embed,omitempty"`
+	RewriteHTML bool   `json:"rewriteHtml,omitempty"`
+	SSE         bool   `json:"sse,omitempty"`
 }
 
 // Registry scans immediate child directories in order. Earlier roots win on
@@ -650,6 +666,31 @@ func decodeManifest(data []byte, source string) (Plugin, error) {
 		return Plugin{}, errors.New("setup plugin web root must be a directory inside the plugin")
 	}
 	plugin.Web.Root = root
+	seenServices := map[string]bool{}
+	for index := range plugin.Services {
+		service := &plugin.Services[index]
+		service.ID = strings.TrimSpace(service.ID)
+		service.Name = strings.TrimSpace(service.Name)
+		service.Host = strings.TrimSpace(service.Host)
+		if !validID.MatchString(service.ID) || service.Name == "" || seenServices[service.ID] {
+			return Plugin{}, errors.New("setup plugin service requires a unique id and name")
+		}
+		if service.Host != "127.0.0.1" && service.Host != "localhost" || service.Port < 1 || service.Port > 65535 {
+			return Plugin{}, errors.New("setup plugin service must target a valid loopback port")
+		}
+		for _, value := range []*string{&service.BasePath, &service.HealthPath} {
+			path := strings.TrimSpace(*value)
+			if path == "" {
+				*value = "/"
+				continue
+			}
+			if !strings.HasPrefix(path, "/") || strings.Contains(path, "\\") || strings.Contains(path, "..") {
+				return Plugin{}, errors.New("setup plugin service path must stay within its loopback service")
+			}
+			*value = "/" + strings.TrimPrefix(filepath.ToSlash(filepath.Clean(path)), "/")
+		}
+		seenServices[service.ID] = true
+	}
 	if !validRuntime(plugin.Runtime) {
 		return Plugin{}, errors.New("setup plugin runtime must be binary, node or go")
 	}

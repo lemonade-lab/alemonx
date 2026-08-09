@@ -1,5 +1,5 @@
 import { useStoreState } from '../../store/guideStore'
-import { useEffect, useRef, type ReactNode } from 'react'
+import { useEffect, useRef, type CSSProperties, type ReactNode } from 'react'
 import { useDispatch } from 'react-redux'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { ArrowRight, Code2 } from 'lucide-react'
@@ -25,6 +25,7 @@ type Props = {
   onCheck: (variant?: string) => void
   onCreate: (config: ProjectConfig) => void
   onFix: (check: Check) => void
+  windowStyle?: CSSProperties
   renderFlow: (registerBack: (handler: () => void) => void) => ReactNode
 }
 
@@ -37,7 +38,8 @@ export function GuideHome({
   onClose,
   onClearError,
   onFix,
-  renderFlow
+  renderFlow,
+  windowStyle
 }: Props) {
   const backAction = useRef<() => void>(() => {})
   const dispatch = useDispatch()
@@ -63,7 +65,7 @@ export function GuideHome({
 
   return (
     <main className="guide-shell">
-      <section className="guide-window">
+      <section className="guide-window" style={windowStyle}>
         <GuideHeader
           onBack={() => (group ? navigate('/guide') : backAction.current())}
           onClose={onClose}

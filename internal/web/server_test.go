@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -543,6 +545,57 @@ func TestAppProxyFramePolicy(t *testing.T) {
 	router.ServeHTTP(recorder, request)
 	if got := recorder.Header().Get("X-Frame-Options"); got != "" {
 		t.Fatalf("app proxy X-Frame-Options = %q, want empty so it can be framed", got)
+	}
+}
+
+func TestLocalServiceProxyKeepsManagementCookieIsolated(t *testing.T) {
+	var upstreamCookie string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamCookie = r.Header.Get("Cookie")
+		if strings.TrimSuffix(r.URL.Path, "/") == "/webui" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		http.SetCookie(w, &http.Cookie{Name: "session", Value: "upstream", Path: "/"})
+		w.Header().Set("Location", "/next")
+		w.WriteHeader(http.StatusFound)
+	}))
+	defer upstream.Close()
+	parsed, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, rawPort, err := net.SplitHostPort(parsed.Host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, _ := strconv.Atoi(rawPort)
+	pluginsRoot := t.TempDir()
+	pluginRoot := filepath.Join(pluginsRoot, "alemonx-qq")
+	if err := os.MkdirAll(filepath.Join(pluginRoot, "web"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := fmt.Sprintf(`{"id":"alemonx-qq","name":"QQ","version":"1.0.0","web":{"root":"web"},"services":[{"id":"napcat-webui","name":"NapCat","host":"127.0.0.1","port":%d,"basePath":"/webui","healthPath":"/","embed":true,"rewriteHtml":true}]}`, port)
+	if err := os.WriteFile(filepath.Join(pluginRoot, "alx.json"), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := &server{plugins: setupplugin.NewRegistry(pluginsRoot)}
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/services/alemonx-qq/napcat-webui/page?x=1", nil)
+	request.AddCookie(&http.Cookie{Name: authCookieName, Value: "management-secret"})
+	s.localServiceProxyHandler(response, request)
+	if upstreamCookie != "" {
+		t.Fatalf("management cookie reached upstream: %q", upstreamCookie)
+	}
+	if response.Code != http.StatusFound {
+		t.Fatalf("status = %d, want 302", response.Code)
+	}
+	if got := response.Header().Get("Location"); got != "/api/v1/services/alemonx-qq/napcat-webui/next" {
+		t.Fatalf("location = %q", got)
+	}
+	cookies := response.Result().Cookies()
+	if len(cookies) != 1 || !strings.HasPrefix(cookies[0].Name, "alxsvc_") || cookies[0].Path != "/api/v1/services/alemonx-qq/napcat-webui/" {
+		t.Fatalf("service cookie was not isolated: %+v", cookies)
 	}
 }
 

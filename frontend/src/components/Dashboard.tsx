@@ -9,6 +9,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent,
   type PointerEvent as ReactPointerEvent,
+  type CSSProperties,
   type ReactNode
 } from 'react'
 import { createPortal } from 'react-dom'
@@ -70,6 +71,7 @@ import {
   Waypoints,
   Wifi,
   X,
+  Minus,
   type LucideIcon
 } from 'lucide-react'
 import { RobotConfigForm } from './RobotConfigForm'
@@ -180,6 +182,8 @@ type Props = {
   onClearError: () => void
   onCheck: () => void
   onFix: (check: Check) => void
+  windowStyle?: CSSProperties
+  onWindowStateChange?: (state: { open: boolean; minimized: boolean }) => void
   goals?: unknown
   goal?: unknown
   onSelect?: (id: string) => void
@@ -837,7 +841,9 @@ export function Dashboard({
   onOpenGuide,
   onClearError,
   onCheck,
-  onFix
+  onFix,
+  windowStyle,
+  onWindowStateChange
 }: Props) {
   const dispatch = useDispatch()
   const [page, setPage] = useStoreState<Page>('robot')
@@ -851,6 +857,7 @@ export function Dashboard({
   const [output, setOutput] = useStoreState('')
   const [outputFailed, setOutputFailed] = useStoreState(false)
   const [consoleOpen, setConsoleOpen] = useStoreState(false)
+  const [consoleMinimized, setConsoleMinimized] = useStoreState(false)
   const [busy, setBusy] = useStoreState(false)
   const [catalogTitle, setCatalogTitle] = useStoreState('')
   const [catalogItem, setCatalogItem] = useStoreState<CatalogItem | null>(null)
@@ -889,6 +896,22 @@ export function Dashboard({
     title: string
   } | null>(null)
   const [renameTitle, setRenameTitle] = useStoreState('')
+  useEffect(() => {
+    onWindowStateChange?.({ open: consoleOpen, minimized: consoleMinimized })
+  }, [consoleMinimized, consoleOpen, onWindowStateChange])
+  useEffect(() => {
+    const toggleTerminal = () => {
+      if (!consoleOpen) {
+        setConsoleOpen(true)
+        setConsoleMinimized(false)
+      } else {
+        setConsoleMinimized(value => !value)
+      }
+    }
+    window.addEventListener('alx:desktop-terminal-toggle', toggleTerminal)
+    return () =>
+      window.removeEventListener('alx:desktop-terminal-toggle', toggleTerminal)
+  }, [consoleOpen, setConsoleMinimized, setConsoleOpen])
   const loadAgentSessions = useCallback(async () => {
     try {
       const response = await fetch('/api/v1/agent/sessions')
@@ -2147,7 +2170,7 @@ export function Dashboard({
   return (
     <>
       <main className="guide-shell">
-        <section className="guide-window dashboard-window">
+        <section className="guide-window dashboard-window" style={windowStyle}>
           <header className="topbar flex min-h-11 min-w-0 items-center justify-between gap-2 border-b border-slate-200 bg-white/90 px-3 dark:border-slate-700">
             <div className="flex min-w-0 flex-1 items-center gap-1.5">
               <SetupUpdateButton />
@@ -2445,7 +2468,10 @@ export function Dashboard({
                     catalogTitle={catalogTitle}
                     developerMode={developerMode}
                     agentOpen={aiOpen}
-                    onOpenConsole={() => setConsoleOpen(true)}
+                    onOpenConsole={() => {
+                      setConsoleOpen(true)
+                      setConsoleMinimized(false)
+                    }}
                     onOpenAI={openAI}
                     onOpenOps={() => selectSystemFeature('ops')}
                     appLaunching={appLaunching}
@@ -2470,11 +2496,17 @@ export function Dashboard({
       {appContentOpen && (
         <AppEmbed root={root} onClose={() => setAppContentOpen(false)} />
       )}
-      <ReadonlyConsole
-        open={consoleOpen}
-        root={root}
-        onClose={() => setConsoleOpen(false)}
-      />
+      {consoleOpen && !consoleMinimized && (
+        <ReadonlyConsole
+          open
+          root={root}
+          onMinimize={() => setConsoleMinimized(true)}
+          onClose={() => {
+            setConsoleOpen(false)
+            setConsoleMinimized(false)
+          }}
+        />
+      )}
       <RobotGitControl
         project={gitProject}
         onClose={() => setGitProject(null)}
@@ -6734,11 +6766,13 @@ function StatusDot({
 function ReadonlyConsole({
   open,
   root,
-  onClose
+  onClose,
+  onMinimize
 }: {
   open: boolean
   root: string
   onClose: () => void
+  onMinimize: () => void
 }) {
   type TerminalTab = { id: string; label: string; kind: 'readonly' | 'shell' }
   const [load, { data, error, isFetching }] = useLazyRobotConsoleQuery()
@@ -7094,6 +7128,14 @@ function ReadonlyConsole({
             </small>
           </div>
           <div className="flex items-center gap-1">
+            <button
+              className="readonly-console-minimize inline-flex size-8 items-center justify-center rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-800"
+              onClick={onMinimize}
+              aria-label="最小化运行终端"
+              title="最小化"
+            >
+              <Minus />
+            </button>
             <button
               className="readonly-console-refresh inline-flex size-8 items-center justify-center rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-800"
               disabled={isFetching}

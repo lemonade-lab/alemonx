@@ -5160,6 +5160,120 @@ textarea:hover {
   }
 }
 
+/* Wide-screen workbench: leave the extra canvas breathing room for a vertical
+ * Dock, while keeping the existing dashboard window unchanged on tablets. */
+.workbench-stage {
+  min-height: 100vh;
+}
+
+.workbench-dock {
+  display: none;
+}
+
+.workbench-window-layer {
+  height: 100%;
+}
+
+.workbench-window-hidden {
+  display: none;
+}
+
+@media (min-width: 1440px) {
+  .workbench-stage {
+    min-height: 100vh;
+    position: relative;
+  }
+
+  .workbench-dock.workbench-dock-visible {
+    align-items: center;
+    background: rgb(255 255 255 / 0.58);
+    backdrop-filter: blur(18px) saturate(1.25);
+    -webkit-backdrop-filter: blur(18px) saturate(1.25);
+    border: 1px solid rgb(255 255 255 / 0.65);
+    border-radius: 18px;
+    box-shadow: 0 18px 42px rgb(28 26 23 / 0.12);
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    left: 28px;
+    padding: 12px 8px 9px;
+    position: fixed;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 40;
+  }
+
+  [data-theme='dark'] .workbench-dock {
+    background: rgb(39 37 34 / 0.62);
+    border-color: rgb(255 255 255 / 0.12);
+  }
+
+  .workbench-dock-items {
+    border-bottom: 1px solid var(--theme-border-default);
+    border-top: 1px solid var(--theme-border-default);
+    display: grid;
+    gap: 5px;
+    padding: 10px 0;
+  }
+
+  .workbench-dock-apps {
+    display: grid;
+    gap: 3px;
+    justify-items: center;
+  }
+
+  .workbench-dock-apps > small {
+    color: var(--theme-text-faint);
+    font-size: 0.58rem;
+    letter-spacing: 0.08em;
+  }
+
+  .workbench-dock button {
+    align-items: center;
+    background: transparent;
+    border: 0;
+    border-radius: 11px;
+    color: var(--theme-text-muted);
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    font: inherit;
+    font-size: 0.62rem;
+    gap: 4px;
+    justify-content: center;
+    min-height: 53px;
+    padding: 5px 4px;
+    transition: background 0.16s ease, color 0.16s ease, transform 0.16s ease;
+    width: 54px;
+  }
+
+  .workbench-dock button:hover,
+  .workbench-dock button.active {
+    background: var(--theme-accent-soft);
+    color: var(--theme-accent-text);
+    transform: translateY(-1px);
+  }
+
+  .workbench-dock-settings {
+    min-height: 34px !important;
+  }
+
+  .workbench-stage.workbench-dragging,
+  .workbench-stage.workbench-dragging .dashboard-window,
+  .workbench-stage.workbench-dragging .topbar {
+    cursor: grabbing;
+  }
+
+  .workbench-stage .dashboard-window {
+    transition: transform 0.12s ease-out;
+  }
+
+  .workbench-stage.workbench-dragging .dashboard-window {
+    transition: none;
+    user-select: none;
+  }
+}
+
 /* Runtime is a short decision flow, not a stack of competing cards. */
 .runtime-overview {
   gap: 16px;
