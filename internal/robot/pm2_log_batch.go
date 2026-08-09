@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 
 	"alemonx/internal/agent"
 )
@@ -87,12 +86,4 @@ func (s PM2LogBatchSource) ReadBatch(ctx context.Context, root, process string, 
 		}
 	}
 	return agent.LogBatch{ProjectRoot: root, ProcessName: process, LogPath: logPath, Device: device, Inode: inode, Offset: offset + consumed, BytesRead: consumed, Lines: lines, Rotated: rotated}, nil
-}
-
-func fileIdentity(info os.FileInfo) (int64, uint64) {
-	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !ok || stat == nil {
-		return 0, 0
-	}
-	return int64(stat.Dev), uint64(stat.Ino)
 }
