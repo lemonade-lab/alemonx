@@ -3,6 +3,7 @@ import { useEffect } from 'react'
 import { Package } from 'lucide-react'
 import { Tabs } from './Tabs'
 import { BotWorkspace } from './BotWorkspace'
+import { RobotPanelHeader } from './RobotPanelHeader'
 
 type Props = {
   content: string
@@ -62,20 +63,12 @@ export function NpmrcConfigForm({ content, onChange }: Props) {
     <BotWorkspace
       className="max-w-155"
       header={
-        editor === 'visual' ? (
-          <header className="bot-page-header flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <span className="bot-page-header-icon">
-                <Package className="size-4" />
-              </span>
-              <div className="bot-page-header-meta">
-                <strong>npm 源</strong>
-                <small>配置当前机器人的包下载源 · 修改后自动保存</small>
-              </div>
-            </div>
-              {mode}
-          </header>
-        ) : null
+        <RobotPanelHeader
+          icon={<Package className="size-4" />}
+          title="npm 源"
+          description="配置当前机器人的包下载源 · 修改后自动保存"
+          actions={mode}
+        />
       }
     >
       {editor === 'visual' ? (
@@ -114,18 +107,12 @@ export function NpmrcConfigForm({ content, onChange }: Props) {
           </div>
         </>
       ) : (
-        <section className="grid overflow-hidden rounded-xl border border-slate-200 bg-white">
-          <header className="flex items-center justify-between border-b border-slate-100 px-3 py-2.5">
-            {mode}
-            <small className="text-xs text-slate-400">修改后自动保存</small>
-          </header>
-          <textarea
-            className="min-h-72 w-full resize-y border-0 p-3 font-mono text-sm text-slate-700 outline-none"
-            value={content}
-            onChange={event => onChange(event.target.value)}
-            placeholder="npm 配置"
-          />
-        </section>
+        <textarea
+          className="min-h-72 w-full resize-y rounded-xl border border-slate-200 bg-white p-3 font-mono text-sm text-slate-700 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
+          value={content}
+          onChange={event => onChange(event.target.value)}
+          placeholder="npm 配置"
+        />
       )}
     </BotWorkspace>
   )

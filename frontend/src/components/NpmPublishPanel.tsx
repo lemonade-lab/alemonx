@@ -5,6 +5,7 @@ import { ChevronDown, File, Folder, Package, RefreshCw, X } from 'lucide-react'
 import { useNpmStatusQuery, useLazyNpmPackQuery } from '../store/workspaceApi'
 import { ErrorNotice } from './ErrorNotice'
 import { BotWorkspace } from './BotWorkspace'
+import { RobotPanelHeader } from './RobotPanelHeader'
 
 type SourceCommit = {
   sha: string
@@ -178,7 +179,13 @@ export function NpmPublishPanel({ root, busy, onRun }: Props) {
     return (
       <BotWorkspace
         className="npm-publish-panel max-w-190"
-        header={<header className="bot-page-header"><strong>NPM 发布</strong></header>}
+        header={
+          <RobotPanelHeader
+            icon={<Package className="size-4" />}
+            title="NPM 发布"
+            description="正在读取 npm 官方仓库与本机登录状态"
+          />
+        }
       >
         <p className="grid min-h-32 place-items-center text-sm text-slate-500">
           正在读取 npm 官方仓库与本机登录状态…
@@ -189,7 +196,13 @@ export function NpmPublishPanel({ root, busy, onRun }: Props) {
     return (
       <BotWorkspace
         className="npm-publish-panel max-w-190"
-        header={<header className="bot-page-header"><strong>NPM 发布</strong></header>}
+        header={
+          <RobotPanelHeader
+            icon={<Package className="size-4" />}
+            title="NPM 发布"
+            description="检查包信息、发布状态与登录凭据"
+          />
+        }
       >
         <section className="grid min-h-32 place-items-center gap-3 rounded-xl border border-rose-200 bg-rose-50 p-5 text-sm text-rose-700 dark:border-rose-900 dark:bg-rose-950/30 dark:text-rose-300">
           <p className="m-0">无法读取 npm 发布状态。</p>
@@ -215,59 +228,57 @@ export function NpmPublishPanel({ root, busy, onRun }: Props) {
   return (
     <BotWorkspace
       className="npm-publish-panel max-w-190"
-      header={<header className="bot-page-header flex flex-wrap items-center justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-3">
-          <span className="bot-page-header-icon">
-            <Package className="size-4" />
-          </span>
-          <div className="bot-page-header-meta">
-            <strong>{status.name || '未命名包'}</strong>
-            <small>npm 发布 · 管理标签、预览与发布状态</small>
-          </div>
-        </div>
-        <div className="flex flex-wrap items-end justify-end gap-2">
-          <label className="grid gap-1 text-[11px] font-semibold text-slate-500">
-            <select
-              className="h-9 rounded-lg border border-slate-200 bg-white px-2 text-xs font-semibold text-slate-700 outline-none focus:border-brand-600 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-200"
-              value={tag}
-              onChange={event => {
-                setTag(event.target.value)
-                setConfirming(false)
-              }}
-            >
-              <option value="latest">latest</option>
-              <option value="beta">beta</option>
-              <option value="next">next</option>
-            </select>
-          </label>
-          {confirming && (
-            <button
-              className="inline-flex size-9 items-center justify-center rounded-lg border border-slate-200 text-slate-500 dark:border-slate-600 dark:text-slate-300"
-              onClick={() => setConfirming(false)}
-              aria-label="取消发布"
-              title="取消"
-            >
-              <X className="size-4" />
-            </button>
-          )}
-          <button
-            className="inline-flex size-9 items-center justify-center rounded-lg border border-slate-200 text-slate-500 disabled:opacity-40 dark:border-slate-600 dark:text-slate-300"
-            disabled={busy}
-            onClick={() => void refresh()}
-            aria-label="刷新发布状态"
-            title="刷新"
-          >
-            <RefreshCw className="size-4" />
-          </button>
-          <button
-            className="inline-flex min-h-9 items-center justify-center rounded-lg bg-brand-600 px-3 text-xs font-semibold text-white hover:bg-brand-700 disabled:opacity-50"
-            disabled={busy || !canPublish}
-            onClick={() => void publish()}
-          >
-            {confirming ? '确认发布' : '发布到 npm'}
-          </button>
-        </div>
-      </header>}
+      header={
+        <RobotPanelHeader
+          icon={<Package className="size-4" />}
+          title={status.name || '未命名包'}
+          description="npm 发布 · 管理标签、预览与发布状态"
+          actions={
+            <div className="flex flex-wrap items-end justify-end gap-2">
+              <label className="grid gap-1 text-[11px] font-semibold text-slate-500">
+                <select
+                  className="h-9 rounded-lg border border-slate-200 bg-white px-2 text-xs font-semibold text-slate-700 outline-none focus:border-brand-600 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-200"
+                  value={tag}
+                  onChange={event => {
+                    setTag(event.target.value)
+                    setConfirming(false)
+                  }}
+                >
+                  <option value="latest">latest</option>
+                  <option value="beta">beta</option>
+                  <option value="next">next</option>
+                </select>
+              </label>
+              {confirming && (
+                <button
+                  className="inline-flex size-9 items-center justify-center rounded-lg border border-slate-200 text-slate-500 dark:border-slate-600 dark:text-slate-300"
+                  onClick={() => setConfirming(false)}
+                  aria-label="取消发布"
+                  title="取消"
+                >
+                  <X className="size-4" />
+                </button>
+              )}
+              <button
+                className="inline-flex size-9 items-center justify-center rounded-lg border border-slate-200 text-slate-500 disabled:opacity-40 dark:border-slate-600 dark:text-slate-300"
+                disabled={busy}
+                onClick={() => void refresh()}
+                aria-label="刷新发布状态"
+                title="刷新"
+              >
+                <RefreshCw className="size-4" />
+              </button>
+              <button
+                className="inline-flex min-h-9 items-center justify-center rounded-lg bg-brand-600 px-3 text-xs font-semibold text-white hover:bg-brand-700 disabled:opacity-50"
+                disabled={busy || !canPublish}
+                onClick={() => void publish()}
+              >
+                {confirming ? '确认发布' : '发布到 npm'}
+              </button>
+            </div>
+          }
+        />
+      }
     >
       <section
         className="flex flex-wrap items-center divide-x divide-slate-200 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500 dark:divide-slate-700 dark:border-slate-700 dark:bg-slate-800"

@@ -21,7 +21,7 @@ import { GuideHome } from './features/guide/GuideHome'
 import { EnvironmentCheckPanel } from './features/guide/EnvironmentCheckPanel'
 import { guideIcons as icons } from './features/guide/icons'
 import { recommendReleaseAssets } from './features/guide/releaseAssets'
-import { Home, Terminal } from 'lucide-react'
+import { Activity, GitBranch, Home, Monitor, ShieldCheck, Terminal } from 'lucide-react'
 import type {
   Check,
   Creation,
@@ -38,6 +38,26 @@ const capabilityLabels: Record<string, string> = {
   discord: 'Discord',
   onebot: 'OneBot',
   qqbot: 'QQ Bot'
+}
+
+type DockWindowState = { open: boolean; minimized: boolean }
+type DockWindows = {
+  terminal: DockWindowState
+  git: DockWindowState
+  app: DockWindowState
+  pm2Logs: DockWindowState
+  pm2Status: DockWindowState
+  ops: DockWindowState
+}
+
+const closedDockWindow: DockWindowState = { open: false, minimized: false }
+const emptyDockWindows: DockWindows = {
+  terminal: closedDockWindow,
+  git: closedDockWindow,
+  app: closedDockWindow,
+  pm2Logs: closedDockWindow,
+  pm2Status: closedDockWindow,
+  ops: closedDockWindow
 }
 
 export default function App() {
@@ -63,10 +83,7 @@ export default function App() {
   const activeID = selectedID ?? 'install'
   const activeGoal = goals.find(goal => goal.id === activeID)
   const [workbenchOffset, setWorkbenchOffset] = useState({ x: 0, y: 0 })
-  const [terminalWindow, setTerminalWindow] = useState({
-    open: false,
-    minimized: false
-  })
+  const [dockWindows, setDockWindows] = useState<DockWindows>(emptyDockWindows)
   const [mainWindowHidden, setMainWindowHidden] = useState(false)
   const dragState = useRef<{
     pointerId: number
@@ -78,7 +95,12 @@ export default function App() {
 
   function beginWorkbenchDrag(event: React.PointerEvent<HTMLDivElement>) {
     const target = event.target as HTMLElement
-    if (!target.closest('.topbar') || target.closest('button, a, input, select, textarea')) return
+    const topbar = target.closest('.topbar')
+    if (
+      !topbar?.closest('.guide-window') ||
+      target.closest('button, a, input, select, textarea')
+    )
+      return
     dragState.current = {
       pointerId: event.pointerId,
       startX: event.clientX,
@@ -115,7 +137,7 @@ export default function App() {
     if (location.pathname === '/') navigate('/guide', { replace: true })
   }, [location.pathname, navigate])
   useEffect(() => {
-    if (guideOpen) setTerminalWindow({ open: false, minimized: false })
+    if (guideOpen) setDockWindows(emptyDockWindows)
     setMainWindowHidden(false)
   }, [guideOpen])
   function openGuide() {
@@ -182,9 +204,24 @@ export default function App() {
           windowLabel={guideOpen ? '引导' : '工作台'}
           windowHidden={mainWindowHidden}
           onToggleWindow={() => setMainWindowHidden(value => !value)}
-          terminalWindow={terminalWindow}
+          windows={dockWindows}
           onTerminal={() =>
             window.dispatchEvent(new CustomEvent('alx:desktop-terminal-toggle'))
+          }
+          onGit={() =>
+            window.dispatchEvent(new CustomEvent('alx:desktop-git-toggle'))
+          }
+          onApp={() =>
+            window.dispatchEvent(new CustomEvent('alx:desktop-app-toggle'))
+          }
+          onPM2Logs={() =>
+            window.dispatchEvent(new CustomEvent('alx:desktop-pm2-logs-toggle'))
+          }
+          onPM2Status={() =>
+            window.dispatchEvent(new CustomEvent('alx:desktop-pm2-status-toggle'))
+          }
+          onOps={() =>
+            window.dispatchEvent(new CustomEvent('alx:desktop-ops-toggle'))
           }
         />
         <div
@@ -262,7 +299,7 @@ export default function App() {
               onOpenGuide={openGuide}
               onCheck={checkEnvironment}
               onFix={setRepairCheck}
-              onWindowStateChange={setTerminalWindow}
+              onWindowStateChange={setDockWindows}
               windowStyle={{
                 transform: `translate3d(${workbenchOffset.x}px, ${workbenchOffset.y}px, 0)`
               }}
@@ -284,18 +321,38 @@ function WorkbenchDock({
   windowLabel,
   windowHidden,
   onToggleWindow,
-  terminalWindow,
-  onTerminal
+  windows,
+  onTerminal,
+  onGit,
+  onApp,
+  onPM2Logs,
+  onPM2Status,
+  onOps
 }: {
   windowLabel: string
   windowHidden: boolean
   onToggleWindow: () => void
-  terminalWindow: { open: boolean; minimized: boolean }
+  windows: DockWindows
   onTerminal: () => void
+  onGit: () => void
+  onApp: () => void
+  onPM2Logs: () => void
+  onPM2Status: () => void
+  onOps: () => void
 }) {
+  const visibleApps = [
+    windows.terminal,
+    windows.git,
+    windows.app,
+    windows.pm2Logs,
+    windows.pm2Status,
+    windows.ops
+  ].filter(
+    item => item.open
+  ).length
   return (
         <aside
-          className={`workbench-dock${terminalWindow.open ? ' workbench-dock-visible' : ''}`}
+          className={`workbench-dock${visibleApps > 0 ? ' workbench-dock-visible' : ''}`}
           aria-label="工作台 Dock"
         >
       <div className="workbench-dock-items">
@@ -307,15 +364,75 @@ function WorkbenchDock({
           <Home className="size-5" />
           <span>{windowLabel}</span>
         </button>
-        {terminalWindow.open && (
+        {windows.terminal.open && (
           <div className="workbench-dock-apps">
             <button
-              className={terminalWindow.minimized ? '' : 'active'}
+              className={windows.terminal.minimized ? '' : 'active'}
               onClick={onTerminal}
-              title={terminalWindow.minimized ? '恢复终端' : '最小化终端'}
+              title={windows.terminal.minimized ? '恢复终端' : '最小化终端'}
             >
               <Terminal className="size-5" />
               <span>终端</span>
+            </button>
+          </div>
+        )}
+        {windows.git.open && (
+          <div className="workbench-dock-apps">
+            <button
+              className={windows.git.minimized ? '' : 'active'}
+              onClick={onGit}
+              title={windows.git.minimized ? '恢复 Git 仓库管理' : '最小化 Git 仓库管理'}
+            >
+              <GitBranch className="size-5" />
+              <span>Git</span>
+            </button>
+          </div>
+        )}
+        {windows.app.open && (
+          <div className="workbench-dock-apps">
+            <button
+              className={windows.app.minimized ? '' : 'active'}
+              onClick={onApp}
+              title={windows.app.minimized ? '恢复应用' : '最小化应用'}
+            >
+              <Monitor className="size-5" />
+              <span>应用</span>
+            </button>
+          </div>
+        )}
+        {windows.pm2Logs.open && (
+          <div className="workbench-dock-apps">
+            <button
+              className={windows.pm2Logs.minimized ? '' : 'active'}
+              onClick={onPM2Logs}
+              title={windows.pm2Logs.minimized ? '恢复 PM2 日志' : '最小化 PM2 日志'}
+            >
+              <Terminal className="size-5" />
+              <span>日志</span>
+            </button>
+          </div>
+        )}
+        {windows.pm2Status.open && (
+          <div className="workbench-dock-apps">
+            <button
+              className={windows.pm2Status.minimized ? '' : 'active'}
+              onClick={onPM2Status}
+              title={windows.pm2Status.minimized ? '恢复 PM2 状态' : '最小化 PM2 状态'}
+            >
+              <Activity className="size-5" />
+              <span>PM2</span>
+            </button>
+          </div>
+        )}
+        {windows.ops.open && (
+          <div className="workbench-dock-apps">
+            <button
+              className={windows.ops.minimized ? '' : 'active'}
+              onClick={onOps}
+              title={windows.ops.minimized ? '恢复运维' : '最小化运维'}
+            >
+              <ShieldCheck className="size-5" />
+              <span>运维</span>
             </button>
           </div>
         )}

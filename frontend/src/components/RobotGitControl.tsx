@@ -1,5 +1,10 @@
 import { useStoreState } from '../store/guideStore'
-import { useEffect, useMemo, useRef } from 'react'
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  type PointerEvent as ReactPointerEvent
+} from 'react'
 import {
   ChevronDown,
   CloudDownload,
@@ -8,6 +13,7 @@ import {
   GitBranch,
   GitCommitHorizontal,
   History,
+  Minus,
   Network,
   Plus,
   RefreshCw,
@@ -170,10 +176,18 @@ function ChangeTree({ nodes }: { nodes: ChangeTreeNode[] }) {
 
 export function RobotGitControl({
   project,
-  onClose
+  onClose,
+  onMinimize,
+  minimized,
+  zIndex,
+  onActivate
 }: {
   project: Project | null
   onClose: () => void
+  onMinimize: () => void
+  minimized: boolean
+  zIndex: number
+  onActivate: () => void
 }) {
   const root = project?.path ?? ''
   const [tab, setTab] = useStoreState<Tab>('commit')
@@ -202,7 +216,72 @@ export function RobotGitControl({
   const [tagMessage, setTagMessage] = useStoreState('')
   const [remoteName, setRemoteName] = useStoreState('origin')
   const [remoteURL, setRemoteURL] = useStoreState('')
+  const [windowRect, setWindowRect] = useStoreState({
+    left: 72,
+    top: 48,
+    width: 920,
+    height: 700
+  })
+  const dragStart = useRef<{
+    x: number
+    y: number
+    left: number
+    top: number
+  } | null>(null)
+  const windowRef = useRef<HTMLElement>(null)
+  useEffect(() => {
+    if (!project) return
+    const clamp = () => {
+      const width = Math.min(920, Math.max(420, window.innerWidth - 48))
+      const height = Math.min(700, Math.max(360, window.innerHeight - 48))
+      setWindowRect(current => ({
+        width,
+        height,
+        left: Math.max(16, Math.min(window.innerWidth - width - 16, current.left)),
+        top: Math.max(16, Math.min(window.innerHeight - height - 16, current.top))
+      }))
+    }
+    clamp()
+    window.addEventListener('resize', clamp)
+    return () => window.removeEventListener('resize', clamp)
+  }, [project, setWindowRect])
   if (!project) return null
+
+  const moveWindow = (event: ReactPointerEvent<HTMLElement>) => {
+    const start = dragStart.current
+    if (!start) return
+    const left = Math.max(
+      16,
+      Math.min(window.innerWidth - windowRect.width - 16, start.left + event.clientX - start.x)
+    )
+    const top = Math.max(
+      16,
+      Math.min(window.innerHeight - windowRect.height - 16, start.top + event.clientY - start.y)
+    )
+    windowRef.current?.style.setProperty(
+      'transform',
+      `translate3d(${left - start.left}px, ${top - start.top}px, 0)`
+    )
+  }
+  const finishWindowMove = (event: ReactPointerEvent<HTMLElement>) => {
+    const start = dragStart.current
+    if (!start) return
+    const left = Math.max(
+      16,
+      Math.min(window.innerWidth - windowRect.width - 16, start.left + event.clientX - start.x)
+    )
+    const top = Math.max(
+      16,
+      Math.min(window.innerHeight - windowRect.height - 16, start.top + event.clientY - start.y)
+    )
+    windowRef.current?.style.removeProperty('transform')
+    setWindowRect(current => ({ ...current, left, top }))
+    dragStart.current = null
+  }
+  const stopDrag = () => {
+    windowRef.current?.style.removeProperty('transform')
+    dragStart.current = null
+  }
 
   const execute = async (request: NonNullable<Pending>) => {
     try {
@@ -629,18 +708,36 @@ export function RobotGitControl({
   return (
     <Modal
       open
-      zIndex={80}
+      zIndex={zIndex}
       className="git-workspace-backdrop"
       ariaLabel={`${project.name} 的 Git 管理`}
     >
       <section
-        className="git-workspace-dialog grid max-h-[min(760px,calc(100vh-32px))] w-full max-w-230 grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_24px_70px_rgb(28_26_23/0.26)]"
+        ref={windowRef}
+        className="git-workspace-dialog grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_24px_70px_rgb(28_26_23/0.26)]"
+        style={{ ...windowRect, display: minimized ? 'none' : undefined }}
         role="dialog"
         aria-modal="true"
         aria-label={`${project.name} 的 Git 管理`}
         aria-busy={isInitialLoading}
+        onPointerDownCapture={onActivate}
       >
-        <header className="flex min-h-14 items-center justify-between gap-4 border-b border-slate-200 px-4">
+        <header
+          className="git-workspace-header flex min-h-14 items-center justify-between gap-4 border-b border-slate-200 px-4"
+          onPointerDown={event => {
+            if ((event.target as HTMLElement).closest('button')) return
+            dragStart.current = {
+              x: event.clientX,
+              y: event.clientY,
+              left: windowRect.left,
+              top: windowRect.top
+            }
+            event.currentTarget.setPointerCapture(event.pointerId)
+          }}
+          onPointerMove={moveWindow}
+          onPointerUp={finishWindowMove}
+          onPointerCancel={stopDrag}
+        >
           <div className="flex min-w-0 items-center gap-2">
             <GitBranch className="size-5 shrink-0 text-brand-600" />
             <span className="grid min-w-0 gap-0.5">
@@ -656,6 +753,14 @@ export function RobotGitControl({
             </span>
           </div>
           <div className="flex items-center gap-2">
+            <button
+              className="icon-button size-8 p-0"
+              onClick={onMinimize}
+              aria-label="最小化 Git 管理"
+              title="最小化"
+            >
+              <Minus className="size-4" />
+            </button>
             <button
               className="icon-button size-8 p-0"
               disabled={isFetching || isLoading}

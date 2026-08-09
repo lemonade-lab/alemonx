@@ -6,6 +6,7 @@ import {
   useWritePackageManifestMutation
 } from '../store/workspaceApi'
 import { BotWorkspace } from './BotWorkspace'
+import { RobotPanelHeader } from './RobotPanelHeader'
 
 type Manifest = {
   name: string
@@ -64,10 +65,11 @@ export function PackageManifestPanel({
   root: string
   onSaveError: (message: string) => void
 }) {
-  const { data, isLoading: isInitialLoading, error } = usePackageManifestQuery(
-    root,
-    { skip: !root }
-  )
+  const {
+    data,
+    isLoading: isInitialLoading,
+    error
+  } = usePackageManifestQuery(root, { skip: !root })
   const [save, { isLoading }] = useWritePackageManifestMutation()
   const [values, setValues] = useStoreState<Manifest>(blank)
   useEffect(() => {
@@ -110,15 +112,12 @@ export function PackageManifestPanel({
   return (
     <BotWorkspace
       className="package-manifest-panel max-w-180"
-      header={<header className="bot-page-header flex items-center justify-between gap-4">
-        <div className="bot-page-header-meta">
-          <strong className="text-sm text-ink-950">包信息</strong>
-          <small>
-            Git 与 npm 发布共用 ·{' '}
-            {isLoading ? '正在自动保存…' : '修改后自动保存'}
-          </small>
-        </div>
-      </header>}
+      header={
+        <RobotPanelHeader
+          title="包信息"
+          description={`Git 与 npm 发布共用 · ${isLoading ? '正在自动保存…' : '修改后自动保存'}`}
+        />
+      }
     >
       <div className="grid grid-cols-2 gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-[0_7px_18px_rgb(28_26_23/0.035)]">
         <label className="grid gap-1 text-xs font-semibold text-slate-600">

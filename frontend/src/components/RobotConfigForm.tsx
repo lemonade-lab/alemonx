@@ -2,6 +2,7 @@ import { useStoreState } from '../store/guideStore'
 import { useEffect, type ReactNode } from 'react'
 import { Settings } from 'lucide-react'
 import { BotWorkspace } from './BotWorkspace'
+import { RobotPanelHeader } from './RobotPanelHeader'
 
 type Props = {
   content: string
@@ -284,18 +285,12 @@ export function RobotConfigForm({ content, toolbar, onChange }: Props) {
     <BotWorkspace
       className="max-w-190"
       header={
-        <header className="bot-page-header flex items-center justify-between gap-4">
-          <div className="flex min-w-0 items-center gap-3">
-            <span className="bot-page-header-icon">
-              <Settings className="size-4" />
-            </span>
-            <div className="bot-page-header-meta">
-              <strong>机器人配置</strong>
-              <small>管理当前机器人的运行与连接参数 · 修改后自动保存</small>
-            </div>
-          </div>
-            {toolbar}
-        </header>
+        <RobotPanelHeader
+          icon={<Settings className="size-4" />}
+          title="机器人配置"
+          description="管理当前机器人的运行与连接参数 · 修改后自动保存"
+          actions={toolbar}
+        />
       }
     >
       {group(

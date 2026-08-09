@@ -5,6 +5,7 @@ import {
   useEffect,
   useMemo,
   useRef,
+  useState,
   type FormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent,
@@ -18,6 +19,7 @@ import cn from 'classnames'
 import Markdown from 'markdown-to-jsx'
 import {
   AlertTriangle,
+  Activity,
   Archive,
   ArrowLeft,
   ArrowRight,
@@ -82,6 +84,7 @@ import { Tabs } from './Tabs'
 import { NpmrcConfigForm } from './NpmrcConfigForm'
 import { EnvConfigForm } from './EnvConfigForm'
 import { BotWorkspace } from './BotWorkspace'
+import { RobotPanelHeader } from './RobotPanelHeader'
 import { OpsCenter } from './OpsCenter'
 import { OpsOverview } from './OpsOverview'
 import { NpmPublishPanel } from './NpmPublishPanel'
@@ -177,6 +180,13 @@ type Page = 'robot' | 'build' | 'plugins' | 'connections'
 type Section = 'backpack' | 'config' | 'npmrc' | 'env' | 'runtime'
 type Project = { id: string; path: string; name: string; pinned?: boolean }
 type SystemFeature = string
+type FloatingWindowID =
+  | 'terminal'
+  | 'git'
+  | 'app'
+  | 'pm2Logs'
+  | 'pm2Status'
+  | 'ops'
 type Props = {
   report: { checks: Check[] } | null
   checking: boolean
@@ -187,7 +197,14 @@ type Props = {
   onCheck: () => void
   onFix: (check: Check) => void
   windowStyle?: CSSProperties
-  onWindowStateChange?: (state: { open: boolean; minimized: boolean }) => void
+  onWindowStateChange?: (state: {
+    terminal: { open: boolean; minimized: boolean }
+    git: { open: boolean; minimized: boolean }
+    app: { open: boolean; minimized: boolean }
+    pm2Logs: { open: boolean; minimized: boolean }
+    pm2Status: { open: boolean; minimized: boolean }
+    ops: { open: boolean; minimized: boolean }
+  }) => void
   goals?: unknown
   goal?: unknown
   onSelect?: (id: string) => void
@@ -886,6 +903,26 @@ export function Dashboard({
   const [appPortBusy, setAppPortBusy] = useStoreState(false)
   const [appLaunching, setAppLaunching] = useStoreState(false)
   const [appContentOpen, setAppContentOpen] = useStoreState(false)
+  const [appMinimized, setAppMinimized] = useStoreState(false)
+  const [gitMinimized, setGitMinimized] = useStoreState(false)
+  const [pm2LogsOpen, setPM2LogsOpen] = useStoreState(false)
+  const [pm2LogsMinimized, setPM2LogsMinimized] = useStoreState(false)
+  const [pm2ProcessesOpen, setPM2ProcessesOpen] = useStoreState(false)
+  const [pm2ProcessesMinimized, setPM2ProcessesMinimized] = useStoreState(false)
+  const [opsOpen, setOpsOpen] = useStoreState(false)
+  const [opsMinimized, setOpsMinimized] = useStoreState(false)
+  const [windowLayers, setWindowLayers] = useStoreState<
+    Record<FloatingWindowID, number>
+  >({
+    terminal: 101,
+    git: 102,
+    app: 103,
+    pm2Logs: 104,
+    pm2Status: 105,
+    ops: 106
+  })
+  const nextWindowLayer = useRef(106)
+  const openAppRef = useRef<() => void>(() => {})
   const [invalidDirectory, setInvalidDirectory] = useStoreState('')
   const [pendingBackpackRemoval, setPendingBackpackRemoval] = useStoreState('')
   const [pendingProjectRemoval, setPendingProjectRemoval] = useStoreState<
@@ -901,11 +938,40 @@ export function Dashboard({
     title: string
   } | null>(null)
   const [renameTitle, setRenameTitle] = useStoreState('')
+  const activateFloatingWindow = useCallback(
+    (id: FloatingWindowID) => {
+      const layer = ++nextWindowLayer.current
+      setWindowLayers(current => ({ ...current, [id]: layer }))
+    },
+    [setWindowLayers]
+  )
   useEffect(() => {
-    onWindowStateChange?.({ open: consoleOpen, minimized: consoleMinimized })
-  }, [consoleMinimized, consoleOpen, onWindowStateChange])
+    onWindowStateChange?.({
+      terminal: { open: consoleOpen, minimized: consoleMinimized },
+      git: { open: Boolean(gitProject), minimized: gitMinimized },
+      app: { open: appContentOpen, minimized: appMinimized },
+      pm2Logs: { open: pm2LogsOpen, minimized: pm2LogsMinimized },
+      pm2Status: { open: pm2ProcessesOpen, minimized: pm2ProcessesMinimized },
+      ops: { open: opsOpen, minimized: opsMinimized }
+    })
+  }, [
+    appContentOpen,
+    appMinimized,
+    consoleMinimized,
+    consoleOpen,
+    gitMinimized,
+    gitProject,
+    onWindowStateChange,
+    opsMinimized,
+    opsOpen,
+    pm2LogsMinimized,
+    pm2LogsOpen,
+    pm2ProcessesMinimized,
+    pm2ProcessesOpen
+  ])
   useEffect(() => {
     const toggleTerminal = () => {
+      activateFloatingWindow('terminal')
       if (!consoleOpen) {
         setConsoleOpen(true)
         setConsoleMinimized(false)
@@ -916,7 +982,12 @@ export function Dashboard({
     window.addEventListener('alx:desktop-terminal-toggle', toggleTerminal)
     return () =>
       window.removeEventListener('alx:desktop-terminal-toggle', toggleTerminal)
-  }, [consoleOpen, setConsoleMinimized, setConsoleOpen])
+  }, [
+    activateFloatingWindow,
+    consoleOpen,
+    setConsoleMinimized,
+    setConsoleOpen
+  ])
   const loadAgentSessions = useCallback(async () => {
     try {
       const response = await fetch('/api/v1/agent/sessions')
@@ -1215,6 +1286,7 @@ export function Dashboard({
       setAppLaunching(false)
     }
   }
+  openAppRef.current = () => void openApp()
   const confirmAppPort = async () => {
     if (!root) return
     const port = Number(appPortValue.trim())
@@ -1244,11 +1316,15 @@ export function Dashboard({
       // another dev/app process (which would conflict with the running one).
       if (await checkAppReachable()) {
         setAppContentOpen(true)
+        setAppMinimized(false)
+        activateFloatingWindow('app')
         return
       }
       const task = await startRobotTask({ root, action: 'dev' }).unwrap()
       await waitForRobotTask(task.id, { appReady: true })
       setAppContentOpen(true)
+      setAppMinimized(false)
+      activateFloatingWindow('app')
     } catch (reason) {
       showOutput(operationErrorMessage(reason, '应用启动失败。'), true)
     }
@@ -1264,6 +1340,81 @@ export function Dashboard({
       return false
     }
   }
+  useEffect(() => {
+    const toggleGit = () => {
+      activateFloatingWindow('git')
+      if (!gitProject && activeProject) {
+        setGitProject(activeProject)
+        setGitMinimized(false)
+        return
+      }
+      if (gitProject) setGitMinimized(value => !value)
+    }
+    const toggleApp = () => {
+      activateFloatingWindow('app')
+      if (appContentOpen) {
+        setAppMinimized(value => !value)
+        return
+      }
+      openAppRef.current()
+    }
+    const togglePM2Logs = () => {
+      activateFloatingWindow('pm2Logs')
+      if (!pm2LogsOpen) {
+        setPM2LogsOpen(true)
+        setPM2LogsMinimized(false)
+        return
+      }
+      setPM2LogsMinimized(value => !value)
+    }
+    const togglePM2Status = () => {
+      activateFloatingWindow('pm2Status')
+      if (!pm2ProcessesOpen) {
+        setPM2ProcessesOpen(true)
+        setPM2ProcessesMinimized(false)
+        return
+      }
+      setPM2ProcessesMinimized(value => !value)
+    }
+    const toggleOps = () => {
+      activateFloatingWindow('ops')
+      if (!opsOpen) {
+        setOpsOpen(true)
+        setOpsMinimized(false)
+        return
+      }
+      setOpsMinimized(value => !value)
+    }
+    window.addEventListener('alx:desktop-git-toggle', toggleGit)
+    window.addEventListener('alx:desktop-app-toggle', toggleApp)
+    window.addEventListener('alx:desktop-pm2-logs-toggle', togglePM2Logs)
+    window.addEventListener('alx:desktop-pm2-status-toggle', togglePM2Status)
+    window.addEventListener('alx:desktop-ops-toggle', toggleOps)
+    return () => {
+      window.removeEventListener('alx:desktop-git-toggle', toggleGit)
+      window.removeEventListener('alx:desktop-app-toggle', toggleApp)
+      window.removeEventListener('alx:desktop-pm2-logs-toggle', togglePM2Logs)
+      window.removeEventListener('alx:desktop-pm2-status-toggle', togglePM2Status)
+      window.removeEventListener('alx:desktop-ops-toggle', toggleOps)
+    }
+  }, [
+    activeProject,
+    activateFloatingWindow,
+    appContentOpen,
+    gitProject,
+    setAppMinimized,
+    setGitMinimized,
+    setGitProject,
+    pm2LogsOpen,
+    pm2ProcessesOpen,
+    setPM2LogsMinimized,
+    setPM2LogsOpen,
+    setPM2ProcessesMinimized,
+    setPM2ProcessesOpen,
+    setOpsMinimized,
+    setOpsOpen,
+    opsOpen
+  ])
   const refreshConfigDraft = async () => {
     if (!root) return
     const result = await readRobotFile(
@@ -1322,7 +1473,11 @@ export function Dashboard({
         else if (envelope.type === 'output' && payload.taskId)
           window.dispatchEvent(
             new CustomEvent('alx:robot-output', {
-              detail: { taskId: payload.taskId, text: payload.text ?? '', truncated: payload.truncated === true }
+              detail: {
+                taskId: payload.taskId,
+                text: payload.text ?? '',
+                truncated: payload.truncated === true
+              }
             })
           )
       } else if (envelope.topic === 'ops') {
@@ -1415,16 +1570,30 @@ export function Dashboard({
     })
     const acquireWebLock = () => {
       if (!webLocks || leader || releaseWebLock) return
-      void navigator.locks.request('alx-events-leader', { ifAvailable: true }, lock => {
-        if (!lock) return
-        leader = true
-        channel?.postMessage({ type: 'leader', id: tabID })
-        connect()
-        return new Promise<void>(resolve => { releaseWebLock = resolve })
-      }).finally(() => { releaseWebLock = null; if (leader) { leader = false; source?.close(); source = null } })
+      void navigator.locks
+        .request('alx-events-leader', { ifAvailable: true }, lock => {
+          if (!lock) return
+          leader = true
+          channel?.postMessage({ type: 'leader', id: tabID })
+          connect()
+          return new Promise<void>(resolve => {
+            releaseWebLock = resolve
+          })
+        })
+        .finally(() => {
+          releaseWebLock = null
+          if (leader) {
+            leader = false
+            source?.close()
+            source = null
+          }
+        })
     }
     const elect = () => {
-      if (webLocks) { acquireWebLock(); return }
+      if (webLocks) {
+        acquireWebLock()
+        return
+      }
       const nextLeader = ownsLease()
       if (nextLeader && !leader) {
         leader = true
@@ -1982,7 +2151,21 @@ export function Dashboard({
             void refetchRuntime()
             void refetchPM2Status()
           }}
-          onOpenConsole={() => setConsoleOpen(true)}
+          onOpenConsole={() => {
+            setConsoleOpen(true)
+            setConsoleMinimized(false)
+            activateFloatingWindow('terminal')
+          }}
+          onOpenPM2Logs={() => {
+            setPM2LogsOpen(true)
+            setPM2LogsMinimized(false)
+            activateFloatingWindow('pm2Logs')
+          }}
+          onOpenPM2Processes={() => {
+            setPM2ProcessesOpen(true)
+            setPM2ProcessesMinimized(false)
+            activateFloatingWindow('pm2Status')
+          }}
           onRun={(action, packageName) =>
             api('POST', {
               root,
@@ -2041,17 +2224,11 @@ export function Dashboard({
       <BotWorkspace
         className="catalog-workspace max-w-190"
         header={
-          <header className="bot-page-header">
-            <div className="flex min-w-0 items-center gap-3">
-              <span className="bot-page-header-icon">
-                <Globe className="size-4" />
-              </span>
-              <div className="bot-page-header-meta">
-                <strong>{currentCatalog?.title || '目录'}</strong>
-                <small>浏览并管理可安装的机器人包</small>
-              </div>
-            </div>
-          </header>
+          <RobotPanelHeader
+            icon={<Globe className="size-4" />}
+            title={currentCatalog?.title || '目录'}
+            description="浏览并管理可安装的机器人包"
+          />
         }
       >
         {catalogLoading && <p className="catalog-state">正在读取目录…</p>}
@@ -2102,8 +2279,6 @@ export function Dashboard({
         onOpen={id => selectSystemFeature(`setup:${id}`)}
         onRefresh={() => void refetchSetupPlugins()}
       />
-    ) : systemFeature === 'ops' ? (
-      <OpsCenter root={root} onBack={() => setSystemFeature(null)} />
     ) : systemFeature === 'accounts' ? (
       <AccountManagementPage />
     ) : systemFeature === 'tasks' ? (
@@ -2492,7 +2667,11 @@ export function Dashboard({
                       setConsoleMinimized(false)
                     }}
                     onOpenAI={openAI}
-                    onOpenOps={() => selectSystemFeature('ops')}
+                    onOpenOps={() => {
+                      setOpsOpen(true)
+                      setOpsMinimized(false)
+                      activateFloatingWindow('ops')
+                    }}
                     appLaunching={appLaunching}
                     onOpenApp={() => void openApp()}
                     onPage={selectPage}
@@ -2505,7 +2684,11 @@ export function Dashboard({
                       setCatalogTitle(title)
                       setCatalogItem(null)
                     }}
-                    onGit={() => setGitProject(activeProject)}
+                    onGit={() => {
+                      setGitProject(activeProject)
+                      setGitMinimized(false)
+                      activateFloatingWindow('git')
+                    }}
                   />
                 )}
             </section>
@@ -2513,12 +2696,24 @@ export function Dashboard({
         </section>
       </main>
       {appContentOpen && (
-        <AppEmbed root={root} onClose={() => setAppContentOpen(false)} />
+        <AppEmbed
+          root={root}
+          minimized={appMinimized}
+          zIndex={windowLayers.app}
+          onActivate={() => activateFloatingWindow('app')}
+          onMinimize={() => setAppMinimized(true)}
+          onClose={() => {
+            setAppContentOpen(false)
+            setAppMinimized(false)
+          }}
+        />
       )}
       {consoleOpen && !consoleMinimized && (
         <ReadonlyConsole
           open
           root={root}
+          zIndex={windowLayers.terminal}
+          onActivate={() => activateFloatingWindow('terminal')}
           onMinimize={() => setConsoleMinimized(true)}
           onClose={() => {
             setConsoleOpen(false)
@@ -2526,9 +2721,54 @@ export function Dashboard({
           }}
         />
       )}
-      <RobotGitControl
-        project={gitProject}
-        onClose={() => setGitProject(null)}
+      {gitProject && (
+        <RobotGitControl
+          project={gitProject}
+          minimized={gitMinimized}
+          zIndex={windowLayers.git}
+          onActivate={() => activateFloatingWindow('git')}
+          onMinimize={() => setGitMinimized(true)}
+          onClose={() => {
+            setGitProject(null)
+            setGitMinimized(false)
+          }}
+        />
+      )}
+      <PM2LogsPanel
+        open={pm2LogsOpen}
+        minimized={pm2LogsMinimized}
+        root={root}
+        zIndex={windowLayers.pm2Logs}
+        onActivate={() => activateFloatingWindow('pm2Logs')}
+        onMinimize={() => setPM2LogsMinimized(true)}
+        onClose={() => {
+          setPM2LogsOpen(false)
+          setPM2LogsMinimized(false)
+        }}
+      />
+      <PM2ProcessesPanel
+        open={pm2ProcessesOpen}
+        minimized={pm2ProcessesMinimized}
+        root={root}
+        zIndex={windowLayers.pm2Status}
+        onActivate={() => activateFloatingWindow('pm2Status')}
+        onMinimize={() => setPM2ProcessesMinimized(true)}
+        onClose={() => {
+          setPM2ProcessesOpen(false)
+          setPM2ProcessesMinimized(false)
+        }}
+      />
+      <OpsWindow
+        open={opsOpen}
+        minimized={opsMinimized}
+        root={root}
+        zIndex={windowLayers.ops}
+        onActivate={() => activateFloatingWindow('ops')}
+        onMinimize={() => setOpsMinimized(true)}
+        onClose={() => {
+          setOpsOpen(false)
+          setOpsMinimized(false)
+        }}
       />
       {invalidDirectory && (
         <InvalidDirectoryDialog
@@ -2620,12 +2860,12 @@ function ProjectRail({
       })
       .then(status => {
         if (active)
-          setCanManageAccounts(
-            Boolean(status?.enabled && status.superAdmin)
-          )
+          setCanManageAccounts(Boolean(status?.enabled && status.superAdmin))
       })
       .catch(() => active && setCanManageAccounts(false))
-    return () => { active = false }
+    return () => {
+      active = false
+    }
   }, [authRevision, setCanManageAccounts])
   const clearLongPress = () => {
     if (longPressTimer.current === null) return
@@ -2670,27 +2910,27 @@ function ProjectRail({
           {coreFeatureCatalog
             .filter(item => item.id !== 'accounts' || canManageAccounts)
             .map(item => (
-            <button
-              className={cn(
-                'flex min-h-8 w-full items-center gap-2 rounded-md px-2 text-left text-xs font-medium transition-colors',
-                feature === item.id
-                  ? 'workspace-nav-active'
-                  : 'text-slate-600 hover:bg-slate-200/40 dark:text-slate-400 dark:hover:bg-slate-700/40'
-              )}
-              key={item.id}
-              onClick={() => onFeature(item.id)}
-            >
-              <i className="inline-flex size-4 items-center justify-center not-italic">
-                {item.icon}
-              </i>
-              <span className="min-w-0 flex-1 truncate">{item.label}</span>
-              {item.status && (
-                <small className="text-[10px] text-slate-400">
-                  {item.status}
-                </small>
-              )}
-            </button>
-          ))}
+              <button
+                className={cn(
+                  'flex min-h-8 w-full items-center gap-2 rounded-md px-2 text-left text-xs font-medium transition-colors',
+                  feature === item.id
+                    ? 'workspace-nav-active'
+                    : 'text-slate-600 hover:bg-slate-200/40 dark:text-slate-400 dark:hover:bg-slate-700/40'
+                )}
+                key={item.id}
+                onClick={() => onFeature(item.id)}
+              >
+                <i className="inline-flex size-4 items-center justify-center not-italic">
+                  {item.icon}
+                </i>
+                <span className="min-w-0 flex-1 truncate">{item.label}</span>
+                {item.status && (
+                  <small className="text-[10px] text-slate-400">
+                    {item.status}
+                  </small>
+                )}
+              </button>
+            ))}
           <button
             className={cn(
               'flex min-h-8 w-full items-center gap-2 rounded-md px-2 text-left text-xs font-medium transition-colors',
@@ -4271,16 +4511,26 @@ function SystemPluginCenter({
     useInstallSetupPluginMutation()
   const [loadReleases] = useLazySetupPluginReleasesQuery()
   const [loadVersions] = useLazySetupPluginVersionsQuery()
-  const [switchVersion, { isLoading: switching }] = useSwitchSetupPluginVersionMutation()
+  const [switchVersion, { isLoading: switching }] =
+    useSwitchSetupPluginVersionMutation()
   const [deleteVersion] = useDeleteSetupPluginVersionMutation()
-  const [cleanupCache, { isLoading: cleaningCache }] = useCleanupSetupPluginCacheMutation()
+  const [cleanupCache, { isLoading: cleaningCache }] =
+    useCleanupSetupPluginCacheMutation()
   const { data: cacheSummary } = useSetupPluginCacheQuery()
-  const [installTarget, setInstallTarget] = useStoreState<SetupPlugin | null>(null)
-  const [versionTarget, setVersionTarget] = useStoreState<SetupPlugin | null>(null)
-  const [versionItems, setVersionItems] = useStoreState<SetupPluginVersion[]>([])
+  const [installTarget, setInstallTarget] = useStoreState<SetupPlugin | null>(
+    null
+  )
+  const [versionTarget, setVersionTarget] = useStoreState<SetupPlugin | null>(
+    null
+  )
+  const [versionItems, setVersionItems] = useStoreState<SetupPluginVersion[]>(
+    []
+  )
   const [selectedVersion, setSelectedVersion] = useStoreState('')
   const [selectedAsset, setSelectedAsset] = useStoreState('')
-  const [releaseOptions, setReleaseOptions] = useStoreState<SetupPluginRelease[]>([])
+  const [releaseOptions, setReleaseOptions] = useStoreState<
+    SetupPluginRelease[]
+  >([])
   const [message, setMessage] = useStoreState('')
   const toggle = async (plugin: SetupPlugin) => {
     try {
@@ -4302,7 +4552,11 @@ function SystemPluginCenter({
       setReleaseOptions(releases)
       const first = releases[0]
       setSelectedVersion(first?.tag ?? '')
-      setSelectedAsset(first?.assets.find(asset => asset.compatible && /\.(zip|tar\.gz|tgz)$/i.test(asset.name))?.name ?? '')
+      setSelectedAsset(
+        first?.assets.find(
+          asset => asset.compatible && /\.(zip|tar\.gz|tgz)$/i.test(asset.name)
+        )?.name ?? ''
+      )
       setInstallTarget(plugin)
     } catch (reason) {
       setMessage(operationErrorMessage(reason, '插件版本读取失败。'))
@@ -4337,9 +4591,18 @@ function SystemPluginCenter({
   }
   const switchCachedVersion = async (item: SetupPluginVersion) => {
     if (!versionTarget || item.active || !item.cached) return
-    if (!window.confirm(`切换到 ${item.tag} 会替换当前插件文件。插件自身管理的外部进程需要先停止，是否继续？`)) return
+    if (
+      !window.confirm(
+        `切换到 ${item.tag} 会替换当前插件文件。插件自身管理的外部进程需要先停止，是否继续？`
+      )
+    )
+      return
     try {
-      await switchVersion({ pluginID: versionTarget.id, version: item.tag, assetName: item.asset }).unwrap()
+      await switchVersion({
+        pluginID: versionTarget.id,
+        version: item.tag,
+        assetName: item.asset
+      }).unwrap()
       await refreshVersions()
       setMessage(`已切换“${versionTarget.name}”到 ${item.tag}。`)
     } catch (reason) {
@@ -4350,15 +4613,23 @@ function SystemPluginCenter({
     if (!versionTarget || item.active || !item.cached) return
     if (!window.confirm(`确定删除已缓存版本 ${item.tag} 吗？`)) return
     try {
-      await deleteVersion({ pluginID: versionTarget.id, tag: item.tag }).unwrap()
+      await deleteVersion({
+        pluginID: versionTarget.id,
+        tag: item.tag
+      }).unwrap()
       await refreshVersions()
       setMessage(`已删除缓存版本 ${item.tag}。`)
     } catch (reason) {
       setMessage(operationErrorMessage(reason, '缓存版本删除失败。'))
     }
   }
-  const currentRelease = releaseOptions.find(item => item.tag === selectedVersion)
-  const archiveAssets = currentRelease?.assets.filter(asset => asset.compatible && /\.(zip|tar\.gz|tgz)$/i.test(asset.name)) ?? []
+  const currentRelease = releaseOptions.find(
+    item => item.tag === selectedVersion
+  )
+  const archiveAssets =
+    currentRelease?.assets.filter(
+      asset => asset.compatible && /\.(zip|tar\.gz|tgz)$/i.test(asset.name)
+    ) ?? []
   return (
     <section className="workspace-content system-feature-page mx-auto max-w-215">
       <header className="system-feature-header">
@@ -4429,7 +4700,9 @@ function SystemPluginCenter({
                     )}
                   </div>
                   <div className="mt-0.5 flex items-center gap-2 text-xs text-slate-400 dark:text-slate-500">
-                    <span className="font-mono">{plugin.installedTag ?? `v${plugin.version}`}</span>
+                    <span className="font-mono">
+                      {plugin.installedTag ?? `v${plugin.version}`}
+                    </span>
                     <span className="size-0.5 rounded-full bg-slate-300 dark:bg-slate-600" />
                     {isOnline ? (
                       <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
@@ -4535,7 +4808,9 @@ function SystemPluginCenter({
           ariaLabel={`安装${installTarget.name}`}
         >
           <div className="grid w-full max-w-md gap-3 rounded-xl bg-white p-5 shadow-xl dark:bg-slate-900">
-            <strong className="text-base text-slate-900 dark:text-slate-100">安装“{installTarget.name}”</strong>
+            <strong className="text-base text-slate-900 dark:text-slate-100">
+              安装“{installTarget.name}”
+            </strong>
             <label className="grid gap-1 text-xs font-semibold text-slate-500">
               版本
               <select
@@ -4545,7 +4820,13 @@ function SystemPluginCenter({
                   const next = event.target.value
                   const release = releaseOptions.find(item => item.tag === next)
                   setSelectedVersion(next)
-                  setSelectedAsset(release?.assets.find(asset => asset.compatible && /\.(zip|tar\.gz|tgz)$/i.test(asset.name))?.name ?? '')
+                  setSelectedAsset(
+                    release?.assets.find(
+                      asset =>
+                        asset.compatible &&
+                        /\.(zip|tar\.gz|tgz)$/i.test(asset.name)
+                    )?.name ?? ''
+                  )
                 }}
               >
                 {releaseOptions.map(item => (
@@ -4565,17 +4846,33 @@ function SystemPluginCenter({
                 <option value="">请选择安装包</option>
                 {archiveAssets.map(asset => (
                   <option key={asset.name} value={asset.name}>
-                    {asset.name} {asset.size ? `(${(asset.size / 1024 / 1024).toFixed(1)} MB)` : ''}
+                    {asset.name}{' '}
+                    {asset.size
+                      ? `(${(asset.size / 1024 / 1024).toFixed(1)} MB)`
+                      : ''}
                   </option>
                 ))}
               </select>
             </label>
             {archiveAssets.length === 0 && (
-              <p className="m-0 text-xs text-amber-600">该版本没有可用的 zip / tar.gz 插件包。</p>
+              <p className="m-0 text-xs text-amber-600">
+                该版本没有可用的 zip / tar.gz 插件包。
+              </p>
             )}
             <div className="flex justify-end gap-2">
-              <Button variant="secondary" size="sm" onClick={() => setInstallTarget(null)}>取消</Button>
-              <Button variant="primary" size="sm" disabled={installing || !selectedAsset} onClick={() => void confirmInstall()}>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => setInstallTarget(null)}
+              >
+                取消
+              </Button>
+              <Button
+                variant="primary"
+                size="sm"
+                disabled={installing || !selectedAsset}
+                onClick={() => void confirmInstall()}
+              >
                 {installing ? '安装中…' : '下载并安装'}
               </Button>
             </div>
@@ -4590,46 +4887,108 @@ function SystemPluginCenter({
         >
           <div className="grid w-full max-w-lg gap-3 rounded-xl bg-white p-5 shadow-xl dark:bg-slate-900">
             <div>
-              <strong className="text-base text-slate-900 dark:text-slate-100">{versionTarget.name} · 版本管理</strong>
+              <strong className="text-base text-slate-900 dark:text-slate-100">
+                {versionTarget.name} · 版本管理
+              </strong>
               <p className="m-0 mt-1 text-xs text-slate-500">
-                缓存 {cacheSummary ? `${(cacheSummary.bytes / 1024 / 1024).toFixed(1)} MB / ${(cacheSummary.limit / 1024 / 1024).toFixed(0)} MB` : '读取中…'}
+                缓存{' '}
+                {cacheSummary
+                  ? `${(cacheSummary.bytes / 1024 / 1024).toFixed(1)} MB / ${(cacheSummary.limit / 1024 / 1024).toFixed(0)} MB`
+                  : '读取中…'}
               </p>
               {cacheSummary && cacheSummary.bytes > cacheSummary.limit && (
-                <p className="m-0 mt-1 text-xs text-amber-600">缓存已超过上限，建议立即清理。</p>
+                <p className="m-0 mt-1 text-xs text-amber-600">
+                  缓存已超过上限，建议立即清理。
+                </p>
               )}
             </div>
             <div className="grid gap-2">
-              {versionItems.length ? versionItems.map(item => (
-                <div key={`${item.tag}:${item.asset}`} className="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 dark:border-slate-700">
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2 text-sm text-slate-800 dark:text-slate-100">
-                      <span className="font-mono">{item.tag}</span>
-                      {item.active && <span className="text-xs text-emerald-600">当前活动</span>}
-                    </div>
-                    <div className="truncate text-xs text-slate-400">
-                      {item.cached ? `${item.asset} · ${(item.size / 1024 / 1024).toFixed(1)} MB` : '当前版本未进入缓存'}
-                    </div>
-                    {item.cached && (
-                      <div className="truncate text-[11px] leading-4 text-slate-400" title={`SHA-256: ${item.archiveSha256 ?? ''}\n指纹: ${item.fingerprint ?? ''}`}>
-                        SHA-256 {item.archiveSha256 ?? '未知'} · 指纹 {item.fingerprint ?? '未知'}
-                        {item.lastUsedAt ? ` · 最近使用 ${new Date(item.lastUsedAt).toLocaleString()}` : ''}
+              {versionItems.length ? (
+                versionItems.map(item => (
+                  <div
+                    key={`${item.tag}:${item.asset}`}
+                    className="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 dark:border-slate-700"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2 text-sm text-slate-800 dark:text-slate-100">
+                        <span className="font-mono">{item.tag}</span>
+                        {item.active && (
+                          <span className="text-xs text-emerald-600">
+                            当前活动
+                          </span>
+                        )}
                       </div>
+                      <div className="truncate text-xs text-slate-400">
+                        {item.cached
+                          ? `${item.asset} · ${(item.size / 1024 / 1024).toFixed(1)} MB`
+                          : '当前版本未进入缓存'}
+                      </div>
+                      {item.cached && (
+                        <div
+                          className="truncate text-[11px] leading-4 text-slate-400"
+                          title={`SHA-256: ${item.archiveSha256 ?? ''}\n指纹: ${item.fingerprint ?? ''}`}
+                        >
+                          SHA-256 {item.archiveSha256 ?? '未知'} · 指纹{' '}
+                          {item.fingerprint ?? '未知'}
+                          {item.lastUsedAt
+                            ? ` · 最近使用 ${new Date(item.lastUsedAt).toLocaleString()}`
+                            : ''}
+                        </div>
+                      )}
+                    </div>
+                    {!item.active && item.cached && (
+                      <>
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          disabled={switching}
+                          onClick={() => void switchCachedVersion(item)}
+                        >
+                          切换
+                        </Button>
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => void removeCachedVersion(item)}
+                        >
+                          删除
+                        </Button>
+                      </>
                     )}
                   </div>
-                  {!item.active && item.cached && (
-                    <>
-                      <Button variant="secondary" size="sm" disabled={switching} onClick={() => void switchCachedVersion(item)}>切换</Button>
-                      <Button variant="secondary" size="sm" onClick={() => void removeCachedVersion(item)}>删除</Button>
-                    </>
-                  )}
-                </div>
-              )) : <p className="m-0 text-xs text-slate-500">暂无已缓存版本。</p>}
+                ))
+              ) : (
+                <p className="m-0 text-xs text-slate-500">暂无已缓存版本。</p>
+              )}
             </div>
-            <p className="m-0 text-xs leading-5 text-amber-600">切换版本会替换当前插件文件；插件自身管理的外部进程需要先停止。</p>
+            <p className="m-0 text-xs leading-5 text-amber-600">
+              切换版本会替换当前插件文件；插件自身管理的外部进程需要先停止。
+            </p>
             <div className="flex flex-wrap justify-end gap-2">
-              <Button variant="secondary" size="sm" onClick={() => void install(versionTarget)}>下载其他 Release</Button>
-              <Button variant="secondary" size="sm" disabled={cleaningCache} onClick={() => void cleanupCache().then(() => refreshVersions())}>清理缓存</Button>
-              <Button variant="secondary" size="sm" onClick={() => setVersionTarget(null)}>关闭</Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => void install(versionTarget)}
+              >
+                下载其他 Release
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={cleaningCache}
+                onClick={() =>
+                  void cleanupCache().then(() => refreshVersions())
+                }
+              >
+                清理缓存
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => setVersionTarget(null)}
+              >
+                关闭
+              </Button>
             </div>
           </div>
         </Modal>
@@ -4741,36 +5100,27 @@ function BackpackPanel({
     <BotWorkspace
       className="backpack-panel max-w-190"
       header={
-        <header className="bot-page-header flex items-center justify-between gap-3">
-          <div className="flex min-w-0 items-center gap-3">
-            <span className="bot-page-header-icon">
-              <Archive className="size-4" />
-            </span>
-            <div className="bot-page-header-meta flex-1">
-              <strong>背包</strong>
-              <small
-                className="text-xs text-slate-500"
-                title={`${root}/packages`}
+        <RobotPanelHeader
+          icon={<Archive className="size-4" />}
+          title="背包"
+          description={<span title={`${root}/packages`}>packages</span>}
+          actions={
+            <>
+              <button className="text-button" onClick={onOpenPlugins}>
+                插件中心
+              </button>
+              <button
+                className="icon-button size-9 shrink-0 p-0"
+                disabled={loading}
+                onClick={onRefresh}
+                aria-label="刷新背包"
+                title="刷新背包"
               >
-                packages
-              </small>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <button className="text-button" onClick={onOpenPlugins}>
-              插件中心
-            </button>
-            <button
-              className="secondary-button"
-              disabled={loading}
-              onClick={onRefresh}
-              aria-label="刷新背包"
-              title="刷新背包"
-            >
-              {loading ? '读取中…' : <RefreshCw />}
-            </button>
-          </div>
-        </header>
+                {loading ? '读取中…' : <RefreshCw className="size-4" />}
+              </button>
+            </>
+          }
+        />
       }
     >
       <div className="bot-page-content">
@@ -4816,12 +5166,13 @@ function BackpackPanel({
                       {item.path}
                     </small>
                   </div>
-                  <ChevronRight
-                    className="size-4 shrink-0 text-slate-400"
-                    aria-hidden="true"
-                  />
                 </button>
-                <div className="flex shrink-0 items-center gap-2 border-t border-slate-100 px-3 py-2">
+                <div className="flex justify-end shrink-0 items-center gap-2 border-t border-slate-100 px-3 py-2">
+                  <span className="text-[11px] text-slate-400">
+                    {enabledApps.has(item.name)
+                      ? '已加入 apps，机器人启动时会加载'
+                      : '未加入 apps'}
+                  </span>
                   {item.valid && (
                     <button
                       className={
@@ -4841,11 +5192,6 @@ function BackpackPanel({
                           : '启动'}
                     </button>
                   )}
-                  <span className="text-[11px] text-slate-400">
-                    {enabledApps.has(item.name)
-                      ? '已加入 apps，机器人启动时会加载'
-                      : '未加入 apps'}
-                  </span>
                 </div>
               </article>
             ))}
@@ -4946,51 +5292,42 @@ function BackpackPackageManager({
     <BotWorkspace
       className="backpack-manager max-w-190"
       header={
-        <header className="bot-page-header flex flex-wrap items-start justify-between gap-3">
-          <div className="flex min-w-0 items-start gap-3">
-            <span className="bot-page-header-icon">
-              <Package className="size-4" />
-            </span>
-            <div className="bot-page-header-meta min-w-0 flex-1">
-              <button
-                className="text-button justify-self-start"
-                onClick={onBack}
-              >
+        <RobotPanelHeader
+          icon={<Package className="size-4" />}
+
+          title={
+            <>
+              {item.name}
+              {item.version && (
+                <em className="ml-2 not-italic text-xs text-slate-400">
+                  v{item.version}
+                </em>
+              )}
+            </>
+          }
+          description={<span title={item.path}>{item.path}</span>}
+          actions={
+            <>
+              <button className="text-button" onClick={onBack}>
                 ‹ 返回背包
               </button>
-              <h2 className="m-0 break-all text-lg font-semibold text-ink-950">
-                {item.name}
-                {item.version && (
-                  <em className="ml-2 not-italic text-xs text-slate-400">
-                    v{item.version}
-                  </em>
-                )}
-              </h2>
-              <small
-                className="truncate text-xs text-slate-500"
-                title={item.path}
+              <button
+                className="icon-button size-9 p-0"
+                onClick={onRefresh}
+                title="刷新背包"
               >
-                {item.path}
-              </small>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              className="icon-button size-9 p-0"
-              onClick={onRefresh}
-              title="刷新背包"
-            >
-              <RefreshCw className="size-4" />
-            </button>
-            <button
-              className="inline-flex min-h-8 items-center justify-center rounded-md border border-red-200 px-3 text-xs font-semibold text-red-700 transition hover:bg-red-50"
-              disabled={busy}
-              onClick={() => void onRemove(item.name)}
-            >
-              卸载
-            </button>
-          </div>
-        </header>
+                <RefreshCw className="size-4" />
+              </button>
+              <button
+                className="inline-flex min-h-8 items-center justify-center rounded-md border border-red-200 px-3 text-xs font-semibold text-red-700 transition hover:bg-red-50"
+                disabled={busy}
+                onClick={() => void onRemove(item.name)}
+              >
+                卸载
+              </button>
+            </>
+          }
+        />
       }
     >
       <Tabs
@@ -5194,19 +5531,18 @@ function CatalogDetail({
     <BotWorkspace
       className="catalog-detail max-w-190"
       header={
-        <header className="bot-page-header flex items-center gap-3">
-          <div className="flex min-w-0 items-center gap-3">
-            <span className="bot-page-header-icon">
-              <Globe className="size-4" />
-            </span>
-            <button className="text-button" onClick={onBack}>
-              ‹ 返回目录
-            </button>
-            <span className="text-xs font-semibold text-slate-400">
-              {group}
-            </span>
-          </div>
-        </header>
+        <RobotPanelHeader
+          icon={<Globe className="size-4" />}
+          title={group}
+          description="查看版本、安装与配置"
+          actions={
+            <>
+              <button className="text-button" onClick={onBack}>
+                ‹ 返回目录
+              </button>
+            </>
+          }
+        />
       }
     >
       <section className="catalog-control flex flex-wrap items-start justify-between gap-4 rounded-xl border border-slate-200 bg-white p-4">
@@ -5566,6 +5902,8 @@ function RuntimePanel({
   onRefresh,
   onRefreshOverview,
   onOpenConsole,
+  onOpenPM2Logs,
+  onOpenPM2Processes,
   onRun,
   onSaveLogin,
   onSavePackageConfig,
@@ -5585,6 +5923,8 @@ function RuntimePanel({
   onRefresh: () => void
   onRefreshOverview: () => Promise<RuntimeOverview | undefined>
   onOpenConsole: () => void
+  onOpenPM2Logs: () => void
+  onOpenPM2Processes: () => void
   onRun: (action: string, packageName?: string) => Promise<boolean>
   onSaveLogin: (login: string, packageName?: string) => Promise<boolean>
   onSavePackageConfig: (
@@ -5627,8 +5967,6 @@ function RuntimePanel({
   >({})
   const [loginDialogError, setLoginDialogError] = useStoreState('')
   const [loginDialogBusy, setLoginDialogBusy] = useStoreState(false)
-  const [pm2LogsOpen, setPM2LogsOpen] = useStoreState(false)
-  const [pm2ProcessesOpen, setPM2ProcessesOpen] = useStoreState(false)
   const persistentReady = overview?.pm2Configured && overview.hasStartScript
   const pm2Managed = Boolean(pm2Status?.managed)
   const pm2LocalRunning = pm2Running
@@ -5677,24 +6015,38 @@ function RuntimePanel({
       }
       const apply = async (confirmOverrides: boolean) => {
         try {
-          const result = await applyRuntimeRepair({ root, mode, confirmOverrides }).unwrap()
-          setValidationTitle(result.phase === 'healthy' ? '修复完成' : '修复结果')
+          const result = await applyRuntimeRepair({
+            root,
+            mode,
+            confirmOverrides
+          }).unwrap()
+          setValidationTitle(
+            result.phase === 'healthy' ? '修复完成' : '修复结果'
+          )
           setValidationMessage(result.output || result.diagnostics.join('。'))
           await onRefreshOverview()
         } catch (reason) {
           setValidationTitle('修复未完成')
-          setValidationMessage(operationErrorMessage(reason, '修复失败，已尝试恢复运行配置。'))
+          setValidationMessage(
+            operationErrorMessage(reason, '修复失败，已尝试恢复运行配置。')
+          )
         }
       }
-      const details = [...plan.automatic, ...plan.requiresConfirmation].join('；') || '当前运行配置无需修改。'
+      const details =
+        [...plan.automatic, ...plan.requiresConfirmation].join('；') ||
+        '当前运行配置无需修改。'
       if (plan.requiresConfirmation.length) {
-        ask('确认覆盖自定义运行配置', details, () => { void apply(true) })
+        ask('确认覆盖自定义运行配置', details, () => {
+          void apply(true)
+        })
       } else {
         await apply(false)
       }
     } catch (reason) {
       setValidationTitle('无法读取修复诊断')
-      setValidationMessage(operationErrorMessage(reason, '无法生成运行修复计划。'))
+      setValidationMessage(
+        operationErrorMessage(reason, '无法生成运行修复计划。')
+      )
     }
   }
   const confirm = () => {
@@ -5852,31 +6204,26 @@ function RuntimePanel({
     <BotWorkspace
       className="runtime-overview max-w-190"
       header={
-        <header className="bot-page-header flex items-start justify-between gap-4">
-          <div className="flex min-w-0 items-start gap-3">
-            <span className="bot-page-header-icon">
-              <Play className="size-4" />
-            </span>
-            <div className="bot-page-header-meta min-w-0 flex-1">
-              <p className="m-0 text-xs font-semibold text-slate-500">运行</p>
-              <h1 className="m-0 truncate text-xl font-semibold tracking-tight text-ink-950">
-                {overview?.name || '正在读取项目…'}
-              </h1>
-              <small className="text-xs text-slate-500">
-                {overview
-                  ? `${overview.version || '未设置版本'} · ${overview.packageManager} · ${overview.hasDevScript ? '已配置开发命令' : '未配置 dev 命令'}`
-                  : '读取包信息、平台包与运行状态。'}
-              </small>
-            </div>
-          </div>
-          <button
-            className="icon-button size-9 shrink-0 p-0"
-            disabled={loading}
-            onClick={onRefresh}
-          >
-            <RefreshCw className="size-4" />
-          </button>
-        </header>
+        <RobotPanelHeader
+          icon={<Play className="size-4" />}
+          title={overview?.name || '正在读取项目…'}
+          description={
+            overview
+              ? `${overview.version || '未设置版本'} · ${overview.packageManager} · ${overview.hasDevScript ? '已配置开发命令' : '未配置 dev 命令'}`
+              : '读取包信息、平台包与运行状态。'
+          }
+          actions={
+            <button
+              className="icon-button size-9 shrink-0 p-0"
+              disabled={loading}
+              onClick={onRefresh}
+              aria-label="刷新运行状态"
+              title="刷新运行状态"
+            >
+              <RefreshCw className="size-4" />
+            </button>
+          }
+        />
       }
     >
       <ConfirmDialog
@@ -6229,8 +6576,10 @@ function RuntimePanel({
                     className="secondary-button"
                     disabled={busy}
                     onClick={() =>
-                      ask('修复前台运行', '会补齐前台运行所需的命令。', () =>
-                        void repairRuntime('app')
+                      ask(
+                        '修复前台运行',
+                        '会补齐前台运行所需的命令。',
+                        () => void repairRuntime('app')
                       )
                     }
                   >
@@ -6431,8 +6780,10 @@ function RuntimePanel({
                 className="secondary-button"
                 disabled={busy}
                 onClick={() =>
-                  ask('修复后台运行', '会补齐后台运行所需的设置和依赖。', () =>
-                    void repairRuntime('pm2')
+                  ask(
+                    '修复后台运行',
+                    '会补齐后台运行所需的设置和依赖。',
+                    () => void repairRuntime('pm2')
                   )
                 }
               >
@@ -6443,14 +6794,14 @@ function RuntimePanel({
               <button
                 className="text-button"
                 disabled={busy}
-                onClick={() => setPM2ProcessesOpen(true)}
+                onClick={onOpenPM2Processes}
               >
                 状态
               </button>
               <button
                 className="text-button"
                 disabled={busy}
-                onClick={() => setPM2LogsOpen(true)}
+                onClick={onOpenPM2Logs}
               >
                 日志
               </button>
@@ -6471,16 +6822,6 @@ function RuntimePanel({
           </div>
         </section>
       </section>
-      <PM2LogsPanel
-        open={pm2LogsOpen}
-        root={root}
-        onClose={() => setPM2LogsOpen(false)}
-      />
-      <PM2ProcessesPanel
-        open={pm2ProcessesOpen}
-        root={root}
-        onClose={() => setPM2ProcessesOpen(false)}
-      />
     </BotWorkspace>
   )
 }
@@ -6499,33 +6840,150 @@ function robotAppToken(root: string) {
 // AppEmbed replaces the workspace with an application-sized surface through the
 // reverse proxy. It intentionally mirrors the dashboard window rather than a
 // dialog, so the robot application feels like a destination page.
-function AppEmbed({ root, onClose }: { root: string; onClose: () => void }) {
+function AppEmbed({
+  root,
+  onClose,
+  onMinimize,
+  zIndex,
+  onActivate,
+  minimized
+}: {
+  root: string
+  onClose: () => void
+  onMinimize: () => void
+  zIndex: number
+  onActivate: () => void
+  minimized: boolean
+}) {
   // The robot root travels as a base64url path token (matching the backend's
   // robotAppToken) so every in-app navigation keeps it automatically.
   const src = `/api/v1/robot/app/${robotAppToken(root)}/`
+  const [windowRect, setWindowRect] = useState({
+    left: 56,
+    top: 42,
+    width: 980,
+    height: 680
+  })
+  const dragStart = useRef<{
+    x: number
+    y: number
+    left: number
+    top: number
+  } | null>(null)
+  const windowRef = useRef<HTMLElement>(null)
+  useEffect(() => {
+    const clamp = () => {
+      const width = Math.min(980, Math.max(360, window.innerWidth - 48))
+      const height = Math.min(680, Math.max(320, window.innerHeight - 48))
+      setWindowRect(current => ({
+        width,
+        height,
+        left: Math.max(16, Math.min(window.innerWidth - width - 16, current.left)),
+        top: Math.max(16, Math.min(window.innerHeight - height - 16, current.top))
+      }))
+    }
+    clamp()
+    window.addEventListener('resize', clamp)
+    return () => window.removeEventListener('resize', clamp)
+  }, [root])
+  const moveWindow = (event: ReactPointerEvent<HTMLElement>) => {
+    const start = dragStart.current
+    if (!start) return
+    const left = Math.max(
+      16,
+      Math.min(window.innerWidth - windowRect.width - 16, start.left + event.clientX - start.x)
+    )
+    const top = Math.max(
+      16,
+      Math.min(window.innerHeight - windowRect.height - 16, start.top + event.clientY - start.y)
+    )
+    windowRef.current?.style.setProperty(
+      'transform',
+      `translate3d(${left - start.left}px, ${top - start.top}px, 0)`
+    )
+  }
+  const finishWindowMove = (event: ReactPointerEvent<HTMLElement>) => {
+    const start = dragStart.current
+    if (!start) return
+    const left = Math.max(
+      16,
+      Math.min(window.innerWidth - windowRect.width - 16, start.left + event.clientX - start.x)
+    )
+    const top = Math.max(
+      16,
+      Math.min(window.innerHeight - windowRect.height - 16, start.top + event.clientY - start.y)
+    )
+    windowRef.current?.style.removeProperty('transform')
+    setWindowRect(current => ({ ...current, left, top }))
+    dragStart.current = null
+  }
+  const stopDrag = () => {
+    windowRef.current?.style.removeProperty('transform')
+    dragStart.current = null
+  }
   return (
     <Modal
       open
-      zIndex={200}
+      zIndex={zIndex}
       ariaLabel="机器人应用"
       className="app-embed-backdrop"
     >
-      <section className="app-embed-window grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden">
-        <header className="topbar flex min-h-11 items-center justify-between gap-2 border-b border-slate-200 bg-white/90 px-3 dark:border-slate-700">
+      <section
+        ref={windowRef}
+        className="app-embed-window grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden"
+        style={{ ...windowRect, display: minimized ? 'none' : undefined }}
+        onPointerDownCapture={onActivate}
+      >
+        <header
+          className="topbar app-embed-header flex min-h-11 items-center justify-between gap-2 border-b border-slate-200 bg-white/90 px-3 dark:border-slate-700"
+          onPointerDown={event => {
+            event.stopPropagation()
+            if ((event.target as HTMLElement).closest('button')) return
+            dragStart.current = {
+              x: event.clientX,
+              y: event.clientY,
+              left: windowRect.left,
+              top: windowRect.top
+            }
+            event.currentTarget.setPointerCapture(event.pointerId)
+          }}
+          onPointerMove={event => {
+            event.stopPropagation()
+            moveWindow(event)
+          }}
+          onPointerUp={event => {
+            event.stopPropagation()
+            finishWindowMove(event)
+          }}
+          onPointerCancel={event => {
+            event.stopPropagation()
+            stopDrag()
+          }}
+        >
           <div className="flex min-w-0 items-center gap-2">
             <Monitor className="size-4 shrink-0 text-brand-600 dark:text-brand-200" />
             <strong className="truncate text-sm font-semibold text-slate-900 dark:text-slate-100">
               机器人应用
             </strong>
           </div>
-          <button
-            className="icon-button size-8 p-0"
-            onClick={onClose}
-            aria-label="关闭应用"
-            title="关闭应用"
-          >
-            <X className="size-4" />
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              className="icon-button size-8 p-0"
+              onClick={onMinimize}
+              aria-label="最小化应用"
+              title="最小化"
+            >
+              <Minus className="size-4" />
+            </button>
+            <button
+              className="icon-button size-8 p-0"
+              onClick={onClose}
+              aria-label="关闭应用"
+              title="关闭应用"
+            >
+              <X className="size-4" />
+            </button>
+          </div>
         </header>
         <iframe
           className="h-full w-full border-0"
@@ -6604,8 +7062,9 @@ function ControlCard({
           ? 'runtime'
           : 'config'
       : page
-  const subitems =
-    activePrimary === 'config'
+  const subitems = agentOpen
+    ? []
+    : activePrimary === 'config'
       ? developerMode
         ? [
             { id: 'npmrc', label: 'npm 源' },
@@ -6620,9 +7079,7 @@ function ControlCard({
           ]
         : activePrimary === 'backpack'
           ? []
-          : activePrimary === 'runtime'
-            ? [{ id: 'ops', label: '运维' }]
-            : catalog.map(item => ({ id: item.title, label: item.title }))
+          : catalog.map(item => ({ id: item.title, label: item.title }))
   const activeSecondary =
     activePrimary === 'config'
       ? section
@@ -6644,10 +7101,6 @@ function ControlCard({
     }
     if (activePrimary === 'build') {
       onBuildMode(id as 'manifest' | 'npm' | 'git')
-      return
-    }
-    if (activePrimary === 'runtime' && id === 'ops') {
-      onOpenOps()
       return
     }
     onCatalog(id)
@@ -6732,6 +7185,24 @@ function ControlCard({
                 <span className="min-w-0 flex-1">{item.label}</span>
               </button>
             ))}
+          {project && (
+            <button
+              className={cn(
+                'flex min-h-8 items-center gap-2 rounded-md px-2 text-left text-xs font-medium transition-colors',
+                agentOpen
+                  ? 'workspace-nav-active'
+                  : 'text-slate-600 hover:bg-slate-200/40 dark:text-slate-400 dark:hover:bg-slate-700/40'
+              )}
+              onClick={onOpenAI}
+              aria-label="使用 Agent 协助当前机器人"
+              title="使用 Agent 协助当前机器人"
+            >
+              <i className="inline-flex size-4 items-center justify-center not-italic">
+                <MessageSquare className="size-4" />
+              </i>
+              <span className="min-w-0 flex-1">Code</span>
+            </button>
+          )}
         </div>
         {subitems.length > 0 && (
           <div
@@ -6787,18 +7258,13 @@ function ControlCard({
               <span>应用</span>
             </button>
             <button
-              className={cn(
-                'inline-flex min-h-8 items-center justify-center gap-1 rounded-md px-1 text-[11px] transition-colors hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-700 dark:hover:text-slate-200',
-                agentOpen
-                  ? 'workspace-nav-active'
-                  : 'text-slate-500 dark:text-slate-400'
-              )}
-              onClick={onOpenAI}
-              aria-label="使用 Agent 协助当前机器人"
-              title="使用 Agent 协助当前机器人"
+              className="inline-flex min-h-8 items-center justify-center gap-1 rounded-md px-1 text-[11px] text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-700 dark:hover:text-slate-200"
+              onClick={onOpenOps}
+              aria-label="打开运维"
+              title="打开运维"
             >
-              <MessageSquare className="size-3.5" />
-              <span>Agent</span>
+              <ShieldCheck className="size-3.5" />
+              <span>运维</span>
             </button>
           </footer>
         )}
@@ -6846,18 +7312,23 @@ function ReadonlyConsole({
   open,
   root,
   onClose,
-  onMinimize
+  onMinimize,
+  zIndex,
+  onActivate
 }: {
   open: boolean
   root: string
   onClose: () => void
   onMinimize: () => void
+  zIndex: number
+  onActivate: () => void
 }) {
   type TerminalTab = { id: string; label: string; kind: 'readonly' | 'shell' }
   const [load, { data, error, isFetching }] = useLazyRobotConsoleQuery()
   const outputRef = useRef<HTMLPreElement>(null)
   const shellOutputRef = useRef<HTMLPreElement>(null)
   const shellInputRef = useRef<HTMLInputElement>(null)
+  const windowRef = useRef<HTMLElement>(null)
   const followLatest = useRef(true)
   const [tabs, setTabs] = useStoreState<TerminalTab[]>([])
   const [activeTab, setActiveTab] = useStoreState('runtime')
@@ -6962,8 +7433,14 @@ function ReadonlyConsole({
   useEffect(() => {
     if (!open) return
     const handler = (event: Event) => {
-      const detail = (event as CustomEvent<{ text?: string; truncated?: boolean }>).detail
-      if (detail?.text) setLiveOutput(prev => prev + (detail.truncated ? '…早期输出已省略…\n' : '') + detail.text)
+      const detail = (
+        event as CustomEvent<{ text?: string; truncated?: boolean }>
+      ).detail
+      if (detail?.text)
+        setLiveOutput(
+          prev =>
+            prev + (detail.truncated ? '…早期输出已省略…\n' : '') + detail.text
+        )
     }
     window.addEventListener('alx:robot-output', handler)
     return () => window.removeEventListener('alx:robot-output', handler)
@@ -7123,14 +7600,23 @@ function ReadonlyConsole({
     if (!start) return
     const maxLeft = Math.max(8, window.innerWidth - windowRect.width - 8)
     const maxTop = Math.max(8, window.innerHeight - windowRect.height - 8)
-    setWindowRect(current => ({
-      ...current,
-      left: Math.max(
-        8,
-        Math.min(maxLeft, start.left + event.clientX - start.x)
-      ),
-      top: Math.max(8, Math.min(maxTop, start.top + event.clientY - start.y))
-    }))
+    const left = Math.max(8, Math.min(maxLeft, start.left + event.clientX - start.x))
+    const top = Math.max(8, Math.min(maxTop, start.top + event.clientY - start.y))
+    windowRef.current?.style.setProperty(
+      'transform',
+      `translate3d(${left - start.left}px, ${top - start.top}px, 0)`
+    )
+  }
+  const finishWindowMove = (event: ReactPointerEvent<HTMLElement>) => {
+    const start = dragStart.current
+    if (!start) return
+    const maxLeft = Math.max(8, window.innerWidth - windowRect.width - 8)
+    const maxTop = Math.max(8, window.innerHeight - windowRect.height - 8)
+    const left = Math.max(8, Math.min(maxLeft, start.left + event.clientX - start.x))
+    const top = Math.max(8, Math.min(maxTop, start.top + event.clientY - start.y))
+    windowRef.current?.style.removeProperty('transform')
+    setWindowRect(current => ({ ...current, left, top }))
+    dragStart.current = null
   }
   const resizeWindow = (event: ReactPointerEvent<HTMLElement>) => {
     const start = resizeStart.current
@@ -7154,6 +7640,7 @@ function ReadonlyConsole({
     }))
   }
   const stopInteraction = () => {
+    windowRef.current?.style.removeProperty('transform')
     dragStart.current = null
     resizeStart.current = null
   }
@@ -7161,11 +7648,12 @@ function ReadonlyConsole({
   return (
     <Modal
       open
-      zIndex={40}
+      zIndex={zIndex}
       className="readonly-console-backdrop"
       ariaLabel="运行终端"
     >
       <section
+        ref={windowRef}
         className="readonly-console grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900"
         style={{
           left: windowRect.left,
@@ -7176,6 +7664,7 @@ function ReadonlyConsole({
         role="dialog"
         aria-modal="true"
         aria-label="运行终端"
+        onPointerDownCapture={onActivate}
       >
         <header
           className="readonly-console-header flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-3 dark:border-slate-700"
@@ -7190,7 +7679,7 @@ function ReadonlyConsole({
             event.currentTarget.setPointerCapture(event.pointerId)
           }}
           onPointerMove={moveWindow}
-          onPointerUp={stopInteraction}
+          onPointerUp={finishWindowMove}
           onPointerCancel={stopInteraction}
         >
           <div className="flex min-w-0 items-center gap-2">
@@ -7249,7 +7738,7 @@ function ReadonlyConsole({
               event.currentTarget.setPointerCapture(event.pointerId)
             }}
             onPointerMove={moveWindow}
-            onPointerUp={stopInteraction}
+            onPointerUp={finishWindowMove}
             onPointerCancel={stopInteraction}
           >
             {tabs.map(tab => (
@@ -7342,14 +7831,184 @@ function ReadonlyConsole({
   )
 }
 
+function FloatingWindow({
+  open,
+  minimized,
+  title,
+  subtitle,
+  icon,
+  actions,
+  onClose,
+  onMinimize,
+  zIndex,
+  onActivate,
+  width = 860,
+  height = 620,
+  children
+}: {
+  open: boolean
+  minimized: boolean
+  title: string
+  subtitle?: string
+  icon: ReactNode
+  actions?: ReactNode
+  onClose: () => void
+  onMinimize: () => void
+  zIndex: number
+  onActivate: () => void
+  width?: number
+  height?: number
+  children: ReactNode
+}) {
+  const [windowRect, setWindowRect] = useState({ left: 64, top: 56, width, height })
+  const windowRef = useRef<HTMLElement>(null)
+  const dragStart = useRef<{ x: number; y: number; left: number; top: number } | null>(null)
+  useEffect(() => {
+    if (!open) return
+    const clamp = () => {
+      const nextWidth = Math.min(width, Math.max(360, window.innerWidth - 48))
+      const nextHeight = Math.min(height, Math.max(320, window.innerHeight - 48))
+      setWindowRect(current => ({
+        width: nextWidth,
+        height: nextHeight,
+        left: Math.max(16, Math.min(window.innerWidth - nextWidth - 16, current.left)),
+        top: Math.max(16, Math.min(window.innerHeight - nextHeight - 16, current.top))
+      }))
+    }
+    clamp()
+    window.addEventListener('resize', clamp)
+    return () => window.removeEventListener('resize', clamp)
+  }, [height, open, width])
+  const previewMove = (event: ReactPointerEvent<HTMLElement>) => {
+    const start = dragStart.current
+    if (!start) return
+    const left = Math.max(16, Math.min(window.innerWidth - windowRect.width - 16, start.left + event.clientX - start.x))
+    const top = Math.max(16, Math.min(window.innerHeight - windowRect.height - 16, start.top + event.clientY - start.y))
+    windowRef.current?.style.setProperty('transform', `translate3d(${left - start.left}px, ${top - start.top}px, 0)`)
+  }
+  const commitMove = (event: ReactPointerEvent<HTMLElement>) => {
+    const start = dragStart.current
+    if (!start) return
+    const left = Math.max(16, Math.min(window.innerWidth - windowRect.width - 16, start.left + event.clientX - start.x))
+    const top = Math.max(16, Math.min(window.innerHeight - windowRect.height - 16, start.top + event.clientY - start.y))
+    windowRef.current?.style.removeProperty('transform')
+    setWindowRect(current => ({ ...current, left, top }))
+    dragStart.current = null
+  }
+  const cancelMove = () => {
+    windowRef.current?.style.removeProperty('transform')
+    dragStart.current = null
+  }
+  if (!open) return null
+  return (
+    <Modal open zIndex={zIndex} className="floating-window-backdrop" ariaLabel={title}>
+      <section
+        ref={windowRef}
+        className="floating-window grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900"
+        style={{ ...windowRect, display: minimized ? 'none' : undefined }}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        onPointerDownCapture={onActivate}
+      >
+        <header
+          className="floating-window-header flex min-h-12 items-center justify-between gap-3 border-b border-slate-200 px-4 dark:border-slate-700"
+          onPointerDown={event => {
+            event.stopPropagation()
+            if ((event.target as HTMLElement).closest('button')) return
+            dragStart.current = { x: event.clientX, y: event.clientY, left: windowRect.left, top: windowRect.top }
+            event.currentTarget.setPointerCapture(event.pointerId)
+          }}
+          onPointerMove={event => {
+            event.stopPropagation()
+            previewMove(event)
+          }}
+          onPointerUp={event => {
+            event.stopPropagation()
+            commitMove(event)
+          }}
+          onPointerCancel={event => {
+            event.stopPropagation()
+            cancelMove()
+          }}
+        >
+          <div className="flex min-w-0 items-center gap-2">
+            {icon}
+            <span className="grid min-w-0 gap-0.5">
+              <strong className="truncate text-sm font-semibold text-slate-900 dark:text-slate-100">{title}</strong>
+              {subtitle && <small className="truncate text-xs text-slate-400">{subtitle}</small>}
+            </span>
+          </div>
+          <div className="flex items-center gap-1">
+            {actions}
+            <button className="icon-button size-8 p-0" onClick={onMinimize} aria-label={`最小化${title}`} title="最小化">
+              <Minus className="size-4" />
+            </button>
+            <button className="icon-button size-8 p-0" onClick={onClose} aria-label={`关闭${title}`} title="关闭">
+              <X className="size-4" />
+            </button>
+          </div>
+        </header>
+        {children}
+      </section>
+    </Modal>
+  )
+}
+
+function OpsWindow({
+  open,
+  minimized,
+  root,
+  onClose,
+  onMinimize,
+  zIndex,
+  onActivate
+}: {
+  open: boolean
+  minimized: boolean
+  root: string
+  onClose: () => void
+  onMinimize: () => void
+  zIndex: number
+  onActivate: () => void
+}) {
+  return (
+    <FloatingWindow
+      open={open}
+      minimized={minimized}
+      title="运维"
+      subtitle={root || '当前机器人目录'}
+      icon={<ShieldCheck className="size-4 shrink-0 text-brand-600 dark:text-brand-200" />}
+      onClose={onClose}
+      onMinimize={onMinimize}
+      zIndex={zIndex}
+      onActivate={onActivate}
+      width={1080}
+      height={720}
+    >
+      <div className="min-h-0 overflow-auto">
+        <OpsCenter root={root} />
+      </div>
+    </FloatingWindow>
+  )
+}
+
 function PM2LogsPanel({
   open,
   root,
-  onClose
+  minimized,
+  onClose,
+  onMinimize,
+  zIndex,
+  onActivate
 }: {
   open: boolean
   root: string
+  minimized: boolean
   onClose: () => void
+  onMinimize: () => void
+  zIndex: number
+  onActivate: () => void
 }) {
   const [page, setPage] = useStoreState(1)
   const [data, setData] = useStoreState<{
@@ -7395,48 +8054,29 @@ function PM2LogsPanel({
   }, [load, open, page, root])
   if (!open) return null
   return (
-    <Modal
+    <FloatingWindow
       open
-      zIndex={40}
-      className="readonly-console-backdrop bg-slate-950/35 backdrop-blur-sm"
-      ariaLabel="PM2 日志"
+      minimized={minimized}
+      title="PM2 运行日志"
+      subtitle="默认显示最新一页；每页 120 行，只能查看。"
+      icon={<Terminal className="size-4 shrink-0 text-brand-600 dark:text-brand-200" />}
+      onClose={onClose}
+      onMinimize={onMinimize}
+      zIndex={zIndex}
+      onActivate={onActivate}
+      actions={
+        <button
+          className="icon-button size-8 p-0"
+          disabled={loading}
+          onClick={() => void load(page)}
+          aria-label="刷新 PM2 日志"
+          title="刷新"
+        >
+          <RefreshCw className="size-4" />
+        </button>
+      }
     >
-      <section
-        className="readonly-console pm2-log-panel grid max-h-[min(720px,calc(100vh-32px))] w-[min(860px,100%)] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900"
-        role="dialog"
-        aria-modal="true"
-        aria-label="PM2 日志"
-      >
-        <header className="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-3 dark:border-slate-700">
-          <div className="flex min-w-0 items-center gap-2">
-            <Terminal className="size-4 shrink-0 text-brand-600 dark:text-brand-200" />
-            <strong className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-              PM2 运行日志
-            </strong>
-            <small className="hidden text-xs text-slate-400 sm:inline">
-              默认显示最新一页；每页 120 行，只能查看。
-            </small>
-          </div>
-          <div className="flex items-center gap-1">
-            <button
-              className="inline-flex size-8 items-center justify-center rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-800"
-              disabled={loading}
-              onClick={() => void load(page)}
-              aria-label="刷新 PM2 日志"
-              title="刷新"
-            >
-              <RefreshCw className="size-4" />
-            </button>
-            <button
-              className="inline-flex size-8 items-center justify-center rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-800"
-              onClick={onClose}
-              aria-label="关闭 PM2 日志"
-              title="关闭"
-            >
-              <X className="size-4" />
-            </button>
-          </div>
-        </header>
+      <div className="grid min-h-0 grid-rows-[minmax(0,1fr)_auto]">
         <pre className="m-0 min-h-0 overflow-auto bg-slate-950 p-4 font-mono text-xs leading-5 text-emerald-200">
           {loading && !data
             ? '正在读取最新 PM2 日志…'
@@ -7461,18 +8101,26 @@ function PM2LogsPanel({
             更早
           </button>
         </footer>
-      </section>
-    </Modal>
+      </div>
+    </FloatingWindow>
   )
 }
 function PM2ProcessesPanel({
   open,
   root,
-  onClose
+  minimized,
+  onClose,
+  onMinimize,
+  zIndex,
+  onActivate
 }: {
   open: boolean
   root: string
+  minimized: boolean
   onClose: () => void
+  onMinimize: () => void
+  zIndex: number
+  onActivate: () => void
 }) {
   const { data, isFetching, isError, error, refetch } =
     useRobotPM2ProcessesQuery(root, {
@@ -7506,19 +8154,32 @@ function PM2ProcessesPanel({
         ? 'bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300'
         : 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400'
   return (
-    <Modal
+    <FloatingWindow
       open
-      zIndex={40}
-      className="readonly-console-backdrop bg-slate-950/35 backdrop-blur-sm"
-      ariaLabel="PM2 进程"
+      minimized={minimized}
+      title="PM2 进程"
+      subtitle="当前机器人的 PM2 守护进程管理的全部服务"
+      icon={<Activity className="size-4 shrink-0 text-brand-600 dark:text-brand-200" />}
+      onClose={onClose}
+      onMinimize={onMinimize}
+      zIndex={zIndex}
+      onActivate={onActivate}
+      actions={
+        <button
+          className="icon-button size-8 p-0"
+          disabled={isFetching}
+          onClick={() => void refetch()}
+          aria-label="刷新 PM2 进程"
+          title="刷新"
+        >
+          <RefreshCw className="size-4" />
+        </button>
+      }
     >
       <section
-        className="grid max-h-[min(720px,calc(100vh-32px))] w-[min(860px,100%)] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900"
-        role="dialog"
-        aria-modal="true"
-        aria-label="PM2 进程"
+        className="grid min-h-0 grid-rows-[minmax(0,1fr)_auto] overflow-hidden"
       >
-        <header className="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-3 dark:border-slate-700">
+        <header className="hidden">
           <div className="flex min-w-0 items-center gap-2">
             <Terminal className="size-4 shrink-0 text-brand-600 dark:text-brand-200" />
             <strong className="text-sm font-semibold text-slate-900 dark:text-slate-100">
@@ -7628,7 +8289,7 @@ function PM2ProcessesPanel({
           </button>
         </footer>
       </section>
-    </Modal>
+    </FloatingWindow>
   )
 }
 function EditorMode({
@@ -7668,13 +8329,11 @@ function FileEditor({
     <BotWorkspace
       className="file-editor"
       header={
-        <header className="bot-page-header flex items-center justify-between gap-3">
-          <div className="bot-page-header-meta flex-1">
-            <strong>文本编辑</strong>
-            <small>直接编辑当前配置文件内容 · 修改后自动保存</small>
-          </div>
-          {toolbar}
-        </header>
+        <RobotPanelHeader
+          title="文本编辑"
+          description="直接编辑当前配置文件内容 · 修改后自动保存"
+          actions={toolbar}
+        />
       }
     >
       <textarea
@@ -7999,67 +8658,63 @@ function GitReleasePanelNext({
     <BotWorkspace
       className="git-release-panel max-w-230 content-start"
       header={
-        <header className="bot-page-header release-toolbar flex flex-wrap items-center justify-between gap-3">
-          <span className="bot-page-header-icon">
-            <GitBranch className="size-4" />
-          </span>
-          <div className="bot-page-header-meta flex-1">
-            <strong>
-              {status?.packageName
-                ? `${status.packageName}@${status.packageVersion || '未设置版本'}`
-                : 'GIT 发布'}
-            </strong>
-            <small>
-              GIT 发布 ·{' '}
-              {status?.packageManager || '管理分支、构建产物与版本标签'}
-            </small>
-          </div>
-          <div className="release-toolbar-actions flex flex-wrap items-end justify-end gap-2">
-            {(phase === 'artifacts' || phase === 'confirm') && (
+        <RobotPanelHeader
+          className="release-toolbar"
+          icon={<GitBranch className="size-4" />}
+          title={
+            status?.packageName
+              ? `${status.packageName}@${status.packageVersion || '未设置版本'}`
+              : 'GIT 发布'
+          }
+          description={`GIT 发布 · ${status?.packageManager || '管理分支、构建产物与版本标签'}`}
+          actions={
+            <div className="release-toolbar-actions flex flex-wrap items-end justify-end gap-2">
+              {(phase === 'artifacts' || phase === 'confirm') && (
+                <button
+                  className="inline-flex min-h-9 items-center justify-center rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-600 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-300"
+                  onClick={() =>
+                    setPhase(phase === 'confirm' ? 'artifacts' : 'source')
+                  }
+                >
+                  上一步
+                </button>
+              )}
               <button
-                className="inline-flex min-h-9 items-center justify-center rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-600 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-300"
-                onClick={() =>
-                  setPhase(phase === 'confirm' ? 'artifacts' : 'source')
-                }
+                className="inline-flex min-h-9 items-center justify-center rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-600 disabled:opacity-40 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-300"
+                onClick={refresh}
+                disabled={loading || busy}
               >
-                上一步
+                <RefreshCw className="size-4" />
               </button>
-            )}
-            <button
-              className="inline-flex min-h-9 items-center justify-center rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-600 disabled:opacity-40 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-300"
-              onClick={refresh}
-              disabled={loading || busy}
-            >
-              <RefreshCw className="size-4" />
-            </button>
-            <button
-              className="inline-flex min-h-9 items-center justify-center rounded-lg bg-brand-600 px-3 text-xs font-semibold text-white transition hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-50"
-              disabled={
-                busy ||
-                loading ||
-                phase === 'building' ||
-                (phase === 'source' && !ready) ||
-                (phase === 'artifacts' && !artifacts.length)
-              }
-              onClick={() => {
-                if (phase === 'source') void prepareBuild()
-                else if (phase === 'artifacts') setPhase('confirm')
-                else if (phase === 'confirm') void publish()
-                else if (phase === 'published') refresh()
-              }}
-            >
-              {busy || phase === 'building'
-                ? '构建中…'
-                : phase === 'source'
-                  ? '开始构建'
-                  : phase === 'artifacts'
-                    ? '继续确认'
-                    : phase === 'confirm'
-                      ? '确认发布'
-                      : '重新开始'}
-            </button>
-          </div>
-        </header>
+              <button
+                className="inline-flex min-h-9 items-center justify-center rounded-lg bg-brand-600 px-3 text-xs font-semibold text-white transition hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={
+                  busy ||
+                  loading ||
+                  phase === 'building' ||
+                  (phase === 'source' && !ready) ||
+                  (phase === 'artifacts' && !artifacts.length)
+                }
+                onClick={() => {
+                  if (phase === 'source') void prepareBuild()
+                  else if (phase === 'artifacts') setPhase('confirm')
+                  else if (phase === 'confirm') void publish()
+                  else if (phase === 'published') refresh()
+                }}
+              >
+                {busy || phase === 'building'
+                  ? '构建中…'
+                  : phase === 'source'
+                    ? '开始构建'
+                    : phase === 'artifacts'
+                      ? '继续确认'
+                      : phase === 'confirm'
+                        ? '确认发布'
+                        : '重新开始'}
+              </button>
+            </div>
+          }
+        />
       }
     >
       {loading ? (
