@@ -29,6 +29,8 @@ import (
 	"sync"
 	"time"
 
+	"alemonx/internal/system"
+
 	"github.com/fsnotify/fsnotify"
 )
 
@@ -64,12 +66,28 @@ type Plugin struct {
 	Development  *RuntimeSpec      `json:"development,omitempty"`
 	Web          *WebSpec          `json:"web,omitempty"`
 	Services     []ServiceSpec     `json:"services,omitempty"`
+	Permissions  Permissions       `json:"permissions,omitempty"`
 	Runnable     bool              `json:"runnable"`
 	Enabled      bool              `json:"enabled"`
 	Online       bool              `json:"online,omitempty"`
 	Source       string            `json:"source,omitempty"`
 	InstalledTag string            `json:"installedTag,omitempty"`
 	Fingerprint  string            `json:"fingerprint,omitempty"`
+}
+
+// Permissions explicitly opts a plugin into individually elevated actions.
+// The browser never controls elevation: Registry consults this allowlist.
+type Permissions struct {
+	ElevatedActions []string `json:"elevatedActions,omitempty"`
+}
+
+func (p Plugin) RequiresElevation(action string) bool {
+	for _, candidate := range p.Permissions.ElevatedActions {
+		if candidate == action {
+			return true
+		}
+	}
+	return false
 }
 
 type installMetadata struct {
@@ -468,11 +486,20 @@ type request struct {
 	Action   string            `json:"action"`
 	Params   map[string]string `json:"params,omitempty"`
 	Confirm  bool              `json:"confirm"`
+	StateDir string            `json:"stateDir,omitempty"`
 }
 
 type response struct {
-	Output string `json:"output,omitempty"`
-	Error  string `json:"error,omitempty"`
+	Output string          `json:"output,omitempty"`
+	Error  string          `json:"error,omitempty"`
+	Data   json.RawMessage `json:"data,omitempty"`
+}
+
+// ActionResult is the structured response of an alx/v1 plugin action. Output
+// remains for existing plugins and concise human-facing task summaries.
+type ActionResult struct {
+	Output string          `json:"output,omitempty"`
+	Data   json.RawMessage `json:"data,omitempty"`
 }
 
 // Run forwards a web UI request to the plugin executor using the stable JSON
@@ -482,46 +509,67 @@ type response struct {
 // anymore. "confirmed" is accepted for API compatibility but the web UI owns
 // its own confirmation UX.
 func (r *Registry) Run(id, actionID string, params map[string]string, confirmed bool) (string, error) {
-	return r.RunWithProgress(id, actionID, params, confirmed, nil)
+	result, err := r.RunResultWithProgress(id, actionID, params, confirmed, nil)
+	return result.Output, err
 }
 
 // RunWithProgress executes a plugin while forwarding its optional stderr
 // progress frames. Unrecognised stderr remains diagnostic output on failure.
 func (r *Registry) RunWithProgress(id, actionID string, params map[string]string, confirmed bool, progress func(Progress)) (string, error) {
+	result, err := r.RunResultWithProgress(id, actionID, params, confirmed, progress)
+	return result.Output, err
+}
+
+// RunResultWithProgress keeps stdout reserved for the single plugin response
+// while exposing optional structured data to the authenticated web UI.
+func (r *Registry) RunResultWithProgress(id, actionID string, params map[string]string, confirmed bool, progress func(Progress)) (ActionResult, error) {
 	plugin, err := r.Find(id)
 	if err != nil {
-		return "", err
+		return ActionResult{}, err
 	}
 	if plugin.Online {
-		return "", errors.New("在线系统插件尚未安装，不能执行远程代码")
+		return ActionResult{}, errors.New("在线系统插件尚未安装，不能执行远程代码")
 	}
 	if !plugin.Enabled {
-		return "", errors.New("该 Setup 插件已停用")
+		return ActionResult{}, errors.New("该 Setup 插件已停用")
 	}
 	if !plugin.Runnable {
-		return "", errors.New("该 Setup 插件缺少可用的执行器")
+		return ActionResult{}, errors.New("该 Setup 插件缺少可用的执行器")
 	}
 	entry, err := plugin.entryPath()
 	if err != nil {
-		return "", err
+		return ActionResult{}, err
 	}
-	payload, err := json.Marshal(request{Protocol: "alx/v1", Method: "run", Action: actionID, Params: params, Confirm: confirmed})
+	if plugin.RequiresElevation(actionID) && !confirmed {
+		return ActionResult{}, errors.New("此操作需要在界面确认后才会请求系统管理员权限")
+	}
+	requestPayload := request{Protocol: "alx/v1", Method: "run", Action: actionID, Params: params, Confirm: confirmed}
+	if plugin.RequiresElevation(actionID) {
+		if configDir, configErr := os.UserConfigDir(); configErr == nil {
+			requestPayload.StateDir = filepath.Join(configDir, "alx-network")
+		}
+	}
+	payload, err := json.Marshal(requestPayload)
 	if err != nil {
-		return "", err
+		return ActionResult{}, err
+	}
+	if plugin.RequiresElevation(actionID) {
+		output, runErr := system.RunWithPrivilegesInput(plugin.Source, entry.name, entry.args, payload)
+		return parseActionResult(output, runErr)
 	}
 	command := exec.Command(entry.name, entry.args...)
 	command.Dir = plugin.Source
 	command.Stdin = strings.NewReader(string(payload))
 	stdout, err := command.StdoutPipe()
 	if err != nil {
-		return "", err
+		return ActionResult{}, err
 	}
 	stderr, err := command.StderrPipe()
 	if err != nil {
-		return "", err
+		return ActionResult{}, err
 	}
 	if err := command.Start(); err != nil {
-		return "", err
+		return ActionResult{}, err
 	}
 	var stderrText strings.Builder
 	done := make(chan struct{})
@@ -542,7 +590,7 @@ func (r *Registry) RunWithProgress(id, actionID string, params map[string]string
 	err = command.Wait()
 	<-done
 	if readErr != nil {
-		return "", readErr
+		return ActionResult{}, readErr
 	}
 	if err != nil {
 		message := strings.TrimSpace(stderrText.String())
@@ -550,24 +598,35 @@ func (r *Registry) RunWithProgress(id, actionID string, params map[string]string
 			message = strings.TrimSpace(string(output))
 		}
 		if errors.Is(err, exec.ErrNotFound) {
-			return "", fmt.Errorf("插件入口无法启动：未检测到 %s。请先安装插件所需运行环境后重试", entry.name)
+			return ActionResult{}, fmt.Errorf("插件入口无法启动：未检测到 %s。请先安装插件所需运行环境后重试", entry.name)
 		}
 		if message == "" {
 			message = err.Error()
 		}
-		return "", fmt.Errorf("插件执行失败：%s", message)
+		return ActionResult{}, fmt.Errorf("插件执行失败：%s", message)
 	}
+	return parseActionResult(output, nil)
+}
+
+func parseActionResult(output []byte, runErr error) (ActionResult, error) {
 	var result response
 	if err := json.Unmarshal(output, &result); err != nil {
-		return "", errors.New("插件返回格式无效；请使用 alx/v1 JSON 协议")
+		if runErr != nil {
+			return ActionResult{}, runErr
+		}
+		return ActionResult{}, errors.New("插件返回格式无效；请使用 alx/v1 JSON 协议")
 	}
+	action := ActionResult{Output: result.Output, Data: result.Data}
 	if result.Error != "" {
-		return result.Output, errors.New(result.Error)
+		return action, errors.New(result.Error)
 	}
-	if result.Output == "" {
-		result.Output = "插件操作已完成。"
+	if runErr != nil {
+		return action, runErr
 	}
-	return result.Output, nil
+	if action.Output == "" {
+		action.Output = "插件操作已完成。"
+	}
+	return action, nil
 }
 
 func parseProgress(line string) (Progress, bool) {
@@ -729,6 +788,15 @@ func decodeManifest(data []byte, source string) (Plugin, error) {
 		return Plugin{}, errors.New("setup plugin web root must be a directory inside the plugin")
 	}
 	plugin.Web.Root = root
+	seenElevated := map[string]bool{}
+	for index, action := range plugin.Permissions.ElevatedActions {
+		action = strings.TrimSpace(action)
+		if action == "" || len(action) > 96 || seenElevated[action] {
+			return Plugin{}, errors.New("setup plugin elevatedActions must contain unique action names")
+		}
+		plugin.Permissions.ElevatedActions[index] = action
+		seenElevated[action] = true
+	}
 	seenServices := map[string]bool{}
 	for index := range plugin.Services {
 		service := &plugin.Services[index]

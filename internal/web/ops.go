@@ -77,6 +77,12 @@ func (s *server) opsActor(r *http.Request) (string, string) {
 				return "anonymous", "viewer"
 			}
 			if status.Authenticated {
+				// The account/role subsystem is authoritative for authenticated
+				// workbench users. Keep legacy OpsRoleBinding support below for
+				// installations that already configured the older ops-only roles.
+				if status.SuperAdmin || s.auth.Authorize(s.authToken(r), "operations.manage") {
+					return status.Account, "admin"
+				}
 				role := "viewer"
 				if binding, roleErr := s.opsStore.GetRole(status.Account); roleErr == nil && binding.Role != "" {
 					role = binding.Role

@@ -57,16 +57,17 @@ type mirror struct {
 }
 
 type operationTask struct {
-	ID         string     `json:"id"`
-	Root       string     `json:"root"`
-	Path       string     `json:"path,omitempty"`
-	Action     string     `json:"action"`
-	Status     string     `json:"status"`
-	Output     string     `json:"output,omitempty"`
-	Error      string     `json:"error,omitempty"`
-	Progress   int        `json:"progress"`
-	CreatedAt  time.Time  `json:"createdAt"`
-	FinishedAt *time.Time `json:"finishedAt,omitempty"`
+	ID         string          `json:"id"`
+	Root       string          `json:"root"`
+	Path       string          `json:"path,omitempty"`
+	Action     string          `json:"action"`
+	Status     string          `json:"status"`
+	Output     string          `json:"output,omitempty"`
+	Error      string          `json:"error,omitempty"`
+	Data       json.RawMessage `json:"data,omitempty"`
+	Progress   int             `json:"progress"`
+	CreatedAt  time.Time       `json:"createdAt"`
+	FinishedAt *time.Time      `json:"finishedAt,omitempty"`
 }
 
 // robotEvent is pushed to subscribed SSE clients whenever a supervised task
@@ -781,6 +782,11 @@ func NewServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	mux.HandleFunc("/api/v1/auth/setup", s.authSetupHandler)
 	mux.HandleFunc("/api/v1/auth/login", s.authLoginHandler)
 	mux.HandleFunc("/api/v1/auth/logout", s.authLogoutHandler)
+	mux.HandleFunc("/api/v1/auth/management", s.authManagementHandler)
+	mux.HandleFunc("/api/v1/auth/accounts/", s.authAccountHandler)
+	mux.HandleFunc("/api/v1/auth/accounts", s.authAccountsHandler)
+	mux.HandleFunc("/api/v1/auth/roles/", s.authRoleHandler)
+	mux.HandleFunc("/api/v1/auth/roles", s.authRolesHandler)
 	mux.HandleFunc("/api/v1/goals", s.listGoals)
 	mux.HandleFunc("/api/v1/checks", s.checksHandler)
 	mux.HandleFunc("/api/v1/projects", s.projectsHandler)
@@ -956,8 +962,163 @@ func (s *server) authLogoutHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"authenticated": false})
 }
 
+// authManagementHandler returns the complete account-management view. It is
+// intentionally separate from /status so ordinary users never receive other
+// accounts or the editable permission catalogue.
+func (s *server) authManagementHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
+		return
+	}
+	if !s.requireSuperAdmin(w, r) {
+		return
+	}
+	accounts, err := s.auth.ListAccounts()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	roles, err := s.auth.ListRoles()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	status, err := s.auth.Status(s.authToken(r))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"current": status, "accounts": accounts, "roles": roles, "permissions": access.Permissions})
+}
+
+func (s *server) authAccountsHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
+		return
+	}
+	if !s.requireSuperAdmin(w, r) {
+		return
+	}
+	var input struct {
+		Account      string   `json:"account"`
+		Password     string   `json:"password"`
+		Confirmation string   `json:"confirmation"`
+		Roles        []string `json:"roles"`
+	}
+	if json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&input) != nil {
+		writeError(w, http.StatusBadRequest, "账户配置无效。")
+		return
+	}
+	created, err := s.auth.CreateAccount(input.Account, input.Password, input.Confirmation, input.Roles)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, created)
+}
+
+func (s *server) authAccountHandler(w http.ResponseWriter, r *http.Request) {
+	if !s.requireSuperAdmin(w, r) {
+		return
+	}
+	account, err := url.PathUnescape(strings.TrimPrefix(r.URL.Path, "/api/v1/auth/accounts/"))
+	if err != nil || strings.TrimSpace(account) == "" || strings.Contains(account, "/") {
+		writeError(w, http.StatusBadRequest, "账户标识无效。")
+		return
+	}
+	switch r.Method {
+	case http.MethodPatch:
+		var input struct {
+			Roles        []string `json:"roles"`
+			Password     *string  `json:"password"`
+			Confirmation *string  `json:"confirmation"`
+		}
+		if json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&input) != nil {
+			writeError(w, http.StatusBadRequest, "账户配置无效。")
+			return
+		}
+		updated, updateErr := s.auth.UpdateAccount(account, input.Roles, input.Password, input.Confirmation)
+		if updateErr != nil {
+			writeError(w, http.StatusBadRequest, updateErr.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, updated)
+	case http.MethodDelete:
+		if err := s.auth.DeleteAccount(account); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]bool{"deleted": true})
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
+	}
+}
+
+func (s *server) authRolesHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
+		return
+	}
+	if !s.requireSuperAdmin(w, r) {
+		return
+	}
+	var role access.Role
+	if json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&role) != nil {
+		writeError(w, http.StatusBadRequest, "角色配置无效。")
+		return
+	}
+	created, err := s.auth.CreateRole(role)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, created)
+}
+
+func (s *server) authRoleHandler(w http.ResponseWriter, r *http.Request) {
+	if !s.requireSuperAdmin(w, r) {
+		return
+	}
+	id, err := url.PathUnescape(strings.TrimPrefix(r.URL.Path, "/api/v1/auth/roles/"))
+	if err != nil || strings.TrimSpace(id) == "" || strings.Contains(id, "/") {
+		writeError(w, http.StatusBadRequest, "角色标识无效。")
+		return
+	}
+	switch r.Method {
+	case http.MethodPut:
+		var role access.Role
+		if json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&role) != nil || role.ID != id {
+			writeError(w, http.StatusBadRequest, "角色配置无效。")
+			return
+		}
+		updated, updateErr := s.auth.SaveRole(role)
+		if updateErr != nil {
+			writeError(w, http.StatusBadRequest, updateErr.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, updated)
+	case http.MethodDelete:
+		if err := s.auth.DeleteRole(id); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]bool{"deleted": true})
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
+	}
+}
+
 func (s *server) setAuthCookie(w http.ResponseWriter, token string) {
 	http.SetCookie(w, &http.Cookie{Name: authCookieName, Value: token, Path: "/", MaxAge: int((12 * time.Hour).Seconds()), HttpOnly: true, SameSite: http.SameSiteStrictMode})
+}
+
+func (s *server) requireSuperAdmin(w http.ResponseWriter, r *http.Request) bool {
+	status, err := s.auth.Status(s.authToken(r))
+	if err != nil || !status.Authenticated || !status.SuperAdmin {
+		writeError(w, http.StatusForbidden, "仅超级管理员可以管理账户与角色。")
+		return false
+	}
+	return true
 }
 
 func (s *server) npmPublishStatusHandler(w http.ResponseWriter, r *http.Request) {
@@ -1414,14 +1575,14 @@ func (s *server) setupPluginActionHandler(w http.ResponseWriter, r *http.Request
 	}
 	s.mu.Unlock()
 	go func() {
-		output, err := s.plugins.RunWithProgress(parts[0], input.Action, input.Params, input.Confirm, func(event setupplugin.Progress) {
+		result, err := s.plugins.RunResultWithProgress(parts[0], input.Action, input.Params, input.Confirm, func(event setupplugin.Progress) {
 			s.updateOperation(created.ID, event.Percent, event.Message, "", false)
 		})
 		if err != nil {
-			s.updateOperation(created.ID, 100, output, err.Error(), true)
+			s.updateOperationData(created.ID, 100, result.Output, err.Error(), result.Data, true)
 			return
 		}
-		s.updateOperation(created.ID, 100, output, "", true)
+		s.updateOperationData(created.ID, 100, result.Output, "", result.Data, true)
 	}()
 	writeJSON(w, http.StatusAccepted, created)
 }
@@ -4495,6 +4656,10 @@ func (s *server) robotGitCloneHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) updateOperation(id string, progress int, output, failure string, finished bool) {
+	s.updateOperationData(id, progress, output, failure, nil, finished)
+}
+
+func (s *server) updateOperationData(id string, progress int, output, failure string, data json.RawMessage, finished bool) {
 	s.mu.Lock()
 	var snapshot operationTask
 	for index := range s.operations {
@@ -4504,6 +4669,9 @@ func (s *server) updateOperation(id string, progress int, output, failure string
 		s.operations[index].Progress = progress
 		if output != "" {
 			s.operations[index].Output = output
+		}
+		if data != nil {
+			s.operations[index].Data = data
 		}
 		if finished {
 			now := time.Now()
@@ -4641,7 +4809,7 @@ func (s *server) ginHeaders() gin.HandlerFunc {
 		origin := c.GetHeader("Origin")
 		if origin == "http://localhost:5173" || origin == "http://127.0.0.1:5173" {
 			c.Header("Access-Control-Allow-Origin", origin)
-			c.Header("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
+			c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 			c.Header("Access-Control-Allow-Headers", "Content-Type")
 			if c.Request.Method == http.MethodOptions {
 				c.AbortWithStatus(http.StatusNoContent)
@@ -4677,13 +4845,50 @@ func (s *server) ginAccess() gin.HandlerFunc {
 			c.Abort()
 			return
 		}
-		if !status.Enabled || s.auth.Authenticate(s.authToken(c.Request)) {
+		if !status.Enabled {
 			c.Next()
 			return
 		}
-		writeError(c.Writer, http.StatusUnauthorized, "请先登录身份认证账户。")
-		c.Abort()
+		token := s.authToken(c.Request)
+		if !s.auth.Authenticate(token) {
+			writeError(c.Writer, http.StatusUnauthorized, "请先登录身份认证账户。")
+			c.Abort()
+			return
+		}
+		if permission := requiredPermissionForRequest(c.Request); permission != "" && !s.auth.Authorize(token, permission) {
+			writeError(c.Writer, http.StatusForbidden, "当前账户没有此操作权限。")
+			c.Abort()
+			return
+		}
+		c.Next()
 	}
+}
+
+// requiredPermissionForRequest gives every authenticated management endpoint
+// a server-enforced baseline. Fine-grained operations retain their local
+// checks (for example /ops), while this mapping ensures a viewer cannot turn
+// a read-only workbench into a write-capable one through a handcrafted call.
+func requiredPermissionForRequest(r *http.Request) string {
+	path := r.URL.Path
+	if !strings.HasPrefix(path, "/api/v1/") || strings.HasPrefix(path, "/api/v1/auth/status") || strings.HasPrefix(path, "/api/v1/auth/setup") || strings.HasPrefix(path, "/api/v1/auth/login") || strings.HasPrefix(path, "/api/v1/auth/logout") || strings.HasPrefix(path, "/api/v1/robot/webview/") || strings.HasPrefix(path, "/api/v1/robot/app/") {
+		return ""
+	}
+	if strings.HasPrefix(path, "/api/v1/auth/") {
+		return ""
+	}
+	if strings.HasPrefix(path, "/api/v1/ops") {
+		if r.Method == http.MethodGet || r.Method == http.MethodHead {
+			return "operations.view"
+		}
+		return "operations.manage"
+	}
+	if strings.HasPrefix(path, "/api/v1/update") || strings.HasPrefix(path, "/api/v1/system/") || strings.HasPrefix(path, "/api/v1/setup/plugins") {
+		return "system.manage"
+	}
+	if r.Method == http.MethodGet || r.Method == http.MethodHead {
+		return "workbench.view"
+	}
+	return "workbench.manage"
 }
 
 func (s *server) ginRequestLog() gin.HandlerFunc {

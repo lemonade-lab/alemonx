@@ -470,6 +470,70 @@ func TestIdentityProtectionRequiresLoginAfterEnable(t *testing.T) {
 	}
 }
 
+func TestAccountRolesControlManagementAndWorkbenchAccess(t *testing.T) {
+	identity, err := access.NewAt(filepath.Join(t.TempDir(), "auth.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := identity.Enable("root", "secret", "secret"); err != nil {
+		t.Fatal(err)
+	}
+	handler := NewServerWithAuth("test", fstest.MapFS{"dist/index.html": &fstest.MapFile{Data: []byte("<!doctype html>")}}, identity)
+
+	login := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewBufferString(`{"account":"root","password":"secret"}`))
+	handler.ServeHTTP(login, request)
+	if login.Code != http.StatusOK || len(login.Result().Cookies()) != 1 {
+		t.Fatalf("super login = %d %s", login.Code, login.Body.String())
+	}
+	superCookie := login.Result().Cookies()[0]
+
+	createRole := httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/auth/roles", bytes.NewBufferString(`{"id":"reader","name":"只读","permissions":["workbench.view"]}`))
+	request.AddCookie(superCookie)
+	handler.ServeHTTP(createRole, request)
+	if createRole.Code != http.StatusCreated {
+		t.Fatalf("create role = %d %s", createRole.Code, createRole.Body.String())
+	}
+	createAccount := httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/auth/accounts", bytes.NewBufferString(`{"account":"alice","password":"password","confirmation":"password","roles":["reader"]}`))
+	request.AddCookie(superCookie)
+	handler.ServeHTTP(createAccount, request)
+	if createAccount.Code != http.StatusCreated {
+		t.Fatalf("create account = %d %s", createAccount.Code, createAccount.Body.String())
+	}
+
+	aliceLogin := httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewBufferString(`{"account":"alice","password":"password"}`))
+	handler.ServeHTTP(aliceLogin, request)
+	if aliceLogin.Code != http.StatusOK || len(aliceLogin.Result().Cookies()) != 1 {
+		t.Fatalf("ordinary login = %d %s", aliceLogin.Code, aliceLogin.Body.String())
+	}
+	aliceCookie := aliceLogin.Result().Cookies()[0]
+
+	readOnly := httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodGet, "/api/v1/goals", nil)
+	request.AddCookie(aliceCookie)
+	handler.ServeHTTP(readOnly, request)
+	if readOnly.Code != http.StatusOK {
+		t.Fatalf("reader GET = %d %s", readOnly.Code, readOnly.Body.String())
+	}
+	blockedWrite := httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/checks", bytes.NewBufferString(`{"goalId":"desktop"}`))
+	request.AddCookie(aliceCookie)
+	handler.ServeHTTP(blockedWrite, request)
+	if blockedWrite.Code != http.StatusForbidden {
+		t.Fatalf("reader write = %d %s", blockedWrite.Code, blockedWrite.Body.String())
+	}
+	blockedManagement := httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodGet, "/api/v1/auth/management", nil)
+	request.AddCookie(aliceCookie)
+	handler.ServeHTTP(blockedManagement, request)
+	if blockedManagement.Code != http.StatusForbidden {
+		t.Fatalf("reader management = %d %s", blockedManagement.Code, blockedManagement.Body.String())
+	}
+}
+
 func TestRobotWebViewUsesItsOwnFramePolicyAndBypassesManagementLogin(t *testing.T) {
 	identity, err := access.NewAt(filepath.Join(t.TempDir(), "auth.json"))
 	if err != nil {

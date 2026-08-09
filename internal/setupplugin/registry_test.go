@@ -66,6 +66,43 @@ func TestDecodeManifestAcceptsValidWebRoot(t *testing.T) {
 	}
 }
 
+func TestDecodeManifestKeepsElevatedActionAllowlist(t *testing.T) {
+	plugin, err := decodeManifest([]byte(`{"id":"demo","name":"Demo","version":"1.0.0","web":{"root":"web"},"permissions":{"elevatedActions":["apply-plan"]}}`), "/plugins/demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !plugin.RequiresElevation("apply-plan") || plugin.RequiresElevation("snapshot") {
+		t.Fatalf("unexpected elevation allowlist: %#v", plugin.Permissions)
+	}
+}
+
+func TestDecodeManifestRejectsDuplicateElevatedAction(t *testing.T) {
+	_, err := decodeManifest([]byte(`{"id":"demo","name":"Demo","version":"1.0.0","web":{"root":"web"},"permissions":{"elevatedActions":["apply-plan","apply-plan"]}}`), "/plugins/demo")
+	if err == nil {
+		t.Fatal("duplicate elevated action must be rejected")
+	}
+}
+
+func TestRegistryRejectsUnconfirmedElevatedAction(t *testing.T) {
+	root := t.TempDir()
+	directory := filepath.Join(root, "fixture")
+	if err := os.MkdirAll(filepath.Join(directory, "web"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	key := runtime.GOOS + "-" + runtime.GOARCH
+	manifest := `{"id":"fixture","name":"Fixture","version":"1.0.0","entry":{"` + key + `":"runner"},"web":{"root":"web"},"permissions":{"elevatedActions":["apply-plan"]}}`
+	if err := os.WriteFile(filepath.Join(directory, manifestName), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "runner"), []byte("ignored"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, err := NewRegistry(root).RunResultWithProgress("fixture", "apply-plan", nil, false, nil)
+	if err == nil || !strings.Contains(err.Error(), "确认") {
+		t.Fatalf("unconfirmed elevated action = %v", err)
+	}
+}
+
 func TestDecodeManifestRejectsUnsafeWebRoot(t *testing.T) {
 	for _, root := range []string{"/etc", "../escape", "a/../b", "", "  "} {
 		if _, err := decodeManifest([]byte(`{"id":"demo","name":"Demo","version":"1.0.0","web":{"root":"`+root+`"}}`), "/plugins/demo"); err == nil {
@@ -133,6 +170,29 @@ printf '{"output":"完成"}'
 	}
 	if len(received) != 1 || received[0] != (Progress{Stage: "download", Percent: 25, Message: "正在下载"}) {
 		t.Fatalf("progress = %#v", received)
+	}
+}
+
+func TestRegistryReturnsStructuredActionData(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture is Unix-only")
+	}
+	root := t.TempDir()
+	directory := filepath.Join(root, "fixture")
+	if err := os.MkdirAll(filepath.Join(directory, "web"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	key := runtime.GOOS + "-" + runtime.GOARCH
+	manifest := `{"id":"fixture","name":"Fixture","version":"1.0.0","entry":{"` + key + `":"runner"},"web":{"root":"web"}}`
+	if err := os.WriteFile(filepath.Join(directory, manifestName), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "runner"), []byte("#!/bin/sh\ncat >/dev/null\nprintf '{\\\"output\\\":\\\"完成\\\",\\\"data\\\":{\\\"ready\\\":true}}'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	result, err := NewRegistry(root).RunResultWithProgress("fixture", "status", nil, false, nil)
+	if err != nil || result.Output != "完成" || string(result.Data) != `{"ready":true}` {
+		t.Fatalf("result = %#v, %v", result, err)
 	}
 }
 

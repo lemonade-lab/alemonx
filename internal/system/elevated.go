@@ -45,6 +45,109 @@ func RunWithPrivileges(directory string, values map[string]string, name string, 
 	return text, nil
 }
 
+// RunWithPrivilegesInput executes one fixed program through the native
+// administrator prompt while preserving the plugin's stdin/stdout JSON
+// contract. The caller creates neither a shell command nor arbitrary args.
+func RunWithPrivilegesInput(directory, name string, args []string, input []byte) ([]byte, error) {
+	inputFile, err := os.CreateTemp("", "alx-elevated-input-*.json")
+	if err != nil {
+		return nil, fmt.Errorf("无法准备权限操作：%w", err)
+	}
+	inputPath := inputFile.Name()
+	defer os.Remove(inputPath)
+	if _, err := inputFile.Write(input); err != nil {
+		_ = inputFile.Close()
+		return nil, fmt.Errorf("无法准备权限操作：%w", err)
+	}
+	if err := inputFile.Close(); err != nil {
+		return nil, fmt.Errorf("无法准备权限操作：%w", err)
+	}
+	outputFile, err := os.CreateTemp("", "alx-elevated-output-*.json")
+	if err != nil {
+		return nil, fmt.Errorf("无法准备权限操作：%w", err)
+	}
+	outputPath := outputFile.Name()
+	if err := outputFile.Close(); err != nil {
+		return nil, fmt.Errorf("无法准备权限操作：%w", err)
+	}
+	defer os.Remove(outputPath)
+	errorFile, err := os.CreateTemp("", "alx-elevated-error-*.txt")
+	if err != nil {
+		return nil, fmt.Errorf("无法准备权限操作：%w", err)
+	}
+	errorPath := errorFile.Name()
+	if err := errorFile.Close(); err != nil {
+		return nil, fmt.Errorf("无法准备权限操作：%w", err)
+	}
+	defer os.Remove(errorPath)
+
+	var runErr error
+	switch runtime.GOOS {
+	case "darwin":
+		script := privilegedIOScript(directory, name, args, inputPath, outputPath, errorPath)
+		statement := "do shell script " + strconv.Quote(script) + " with administrator privileges"
+		_, runErr = exec.Command("osascript", "-e", statement).CombinedOutput()
+	case "linux":
+		script := privilegedIOScript(directory, name, args, inputPath, outputPath, errorPath)
+		_, runErr = exec.Command("pkexec", "/bin/sh", "-lc", script).CombinedOutput()
+	case "windows":
+		runErr = runWindowsElevatedIO(directory, name, args, inputPath, outputPath, errorPath)
+	default:
+		return nil, fmt.Errorf("当前系统不支持权限提升：%s", runtime.GOOS)
+	}
+	output, readErr := os.ReadFile(outputPath)
+	if readErr != nil {
+		return nil, fmt.Errorf("无法读取权限操作结果：%w", readErr)
+	}
+	if runErr != nil {
+		diagnostics, _ := os.ReadFile(errorPath)
+		message := strings.TrimSpace(string(diagnostics))
+		if message == "" {
+			message = "用户取消了系统权限授权，或系统拒绝了本次提升。"
+		}
+		return output, fmt.Errorf("需要管理员权限才能完成此操作：%s", message)
+	}
+	return output, nil
+}
+
+func privilegedIOScript(directory, name string, args []string, inputPath, outputPath, errorPath string) string {
+	parts := []string{"cd -- " + shellQuote(directory), "exec", shellQuote(name)}
+	for _, arg := range args {
+		parts = append(parts, shellQuote(arg))
+	}
+	return strings.Join(parts, " ") + " < " + shellQuote(inputPath) + " > " + shellQuote(outputPath) + " 2> " + shellQuote(errorPath)
+}
+
+func runWindowsElevatedIO(directory, name string, args []string, inputPath, outputPath, errorPath string) error {
+	scriptFile, err := os.CreateTemp("", "alx-elevated-plugin-*.ps1")
+	if err != nil {
+		return err
+	}
+	scriptPath := scriptFile.Name()
+	defer os.Remove(scriptPath)
+	arguments := make([]string, len(args))
+	for index, arg := range args {
+		arguments[index] = powershellQuote(arg)
+	}
+	lines := []string{"$ErrorActionPreference = 'Stop'"}
+	if directory != "" {
+		lines = append(lines, "Set-Location -LiteralPath "+powershellQuote(directory))
+	}
+	lines = append(lines,
+		"Get-Content -Raw -LiteralPath "+powershellQuote(inputPath)+" | & "+powershellQuote(name)+" @( "+strings.Join(arguments, ",")+" ) 1> "+powershellQuote(outputPath)+" 2> "+powershellQuote(errorPath),
+		"exit $LASTEXITCODE",
+	)
+	if _, err := scriptFile.WriteString(strings.Join(lines, "\r\n")); err != nil {
+		_ = scriptFile.Close()
+		return err
+	}
+	if err := scriptFile.Close(); err != nil {
+		return err
+	}
+	launcher := "$p = Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File'," + powershellQuote(scriptPath) + ") -Verb RunAs -Wait -PassThru; exit $p.ExitCode"
+	return exec.Command("powershell.exe", "-NoProfile", "-Command", launcher).Run()
+}
+
 func runWindowsElevated(directory string, values map[string]string, name string, args ...string) (string, error) {
 	outputFile, err := os.CreateTemp("", "alx-elevated-output-*.txt")
 	if err != nil {

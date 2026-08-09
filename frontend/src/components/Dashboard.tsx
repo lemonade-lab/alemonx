@@ -68,6 +68,7 @@ import {
   ShieldCheck,
   Terminal,
   Trash2,
+  UsersRound,
   Waypoints,
   Wifi,
   X,
@@ -91,6 +92,7 @@ import { ErrorNotice } from './ErrorNotice'
 import { ConfirmDialog } from './ConfirmDialog'
 import { Modal } from './Modal'
 import { AuthControl } from './AuthControl'
+import { AccountManagementPage } from './AccountManagement'
 import { RobotGitControl } from './RobotGitControl'
 import { SSHControl } from './SSHControl'
 import {
@@ -198,7 +200,8 @@ const coreFeatureCatalog: Array<{
   status?: string
 }> = [
   { id: 'plugins', label: '插件', icon: <Plug /> },
-  { id: 'ops-overview', label: '运维', icon: <ShieldCheck /> }
+  { id: 'ops-overview', label: '运维', icon: <ShieldCheck /> },
+  { id: 'accounts', label: '账户', icon: <UsersRound /> }
 ]
 const directoryActions: Array<{
   id: Section | Page
@@ -2101,6 +2104,8 @@ export function Dashboard({
       />
     ) : systemFeature === 'ops' ? (
       <OpsCenter root={root} onBack={() => setSystemFeature(null)} />
+    ) : systemFeature === 'accounts' ? (
+      <AccountManagementPage />
     ) : systemFeature === 'tasks' ? (
       <OperationTasksPage root={root} />
     ) : systemFeature === 'environment' ? (
@@ -2596,6 +2601,32 @@ function ProjectRail({
   const activePlugins = setupPlugins.filter(
     item => item.enabled && !item.online
   )
+  const [canManageAccounts, setCanManageAccounts] = useStoreState(false)
+  const [authRevision, setAuthRevision] = useStoreState(0)
+  useEffect(() => {
+    const refreshAuth = () => setAuthRevision(value => value + 1)
+    window.addEventListener('alx:auth-changed', refreshAuth)
+    return () => window.removeEventListener('alx:auth-changed', refreshAuth)
+  }, [setAuthRevision])
+  useEffect(() => {
+    let active = true
+    void fetch('/api/v1/auth/status', { credentials: 'same-origin' })
+      .then(async response => {
+        if (!response.ok) return null
+        return (await response.json()) as {
+          enabled?: boolean
+          superAdmin?: boolean
+        }
+      })
+      .then(status => {
+        if (active)
+          setCanManageAccounts(
+            Boolean(status?.enabled && status.superAdmin)
+          )
+      })
+      .catch(() => active && setCanManageAccounts(false))
+    return () => { active = false }
+  }, [authRevision, setCanManageAccounts])
   const clearLongPress = () => {
     if (longPressTimer.current === null) return
     window.clearTimeout(longPressTimer.current)
@@ -2636,7 +2667,9 @@ function ProjectRail({
           系统
         </header>
         <nav className="grid gap-0.5">
-          {coreFeatureCatalog.map(item => (
+          {coreFeatureCatalog
+            .filter(item => item.id !== 'accounts' || canManageAccounts)
+            .map(item => (
             <button
               className={cn(
                 'flex min-h-8 w-full items-center gap-2 rounded-md px-2 text-left text-xs font-medium transition-colors',

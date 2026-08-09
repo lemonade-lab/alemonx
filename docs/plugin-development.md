@@ -55,6 +55,7 @@ plugins/
 | `entry` | 是* | 执行器映射。键为 `GOOS-GOARCH`（例如 `linux-amd64`），也可仅用 `GOOS` 作为回退。 |
 | `development` | 否 | 开发回退执行器，结构与 `runtime`/`entry` 相同。 |
 | `web` | **是** | 插件的 Web 界面目录（如 `web`），不能是绝对路径或含 `..`。无 `web` 的插件不可用。 |
+| `permissions.elevatedActions` | 否 | 需要系统管理员权限的 action 白名单。宿主只会对该列表中的已确认操作请求原生授权。 |
 
 `entry` 路径必须是插件目录内的普通文件，不能使用绝对路径、`..` 越界路径或符号链接。`node` 会以 `node <entry>` 启动；`binary` 直接执行该文件；`go` 只读取 `entry.go`，并以 `go run <entry.go>` 启动。`Runnable = web 存在且 (entry 或 development 存在)`。
 
@@ -95,10 +96,10 @@ Content-Type: application/json
 }
 ```
 
-响应：
+响应（`data` 可选，供 Web UI 使用结构化结果；旧插件只返回 `output` 仍兼容）：
 
 ```json
-{ "output": "✓ 已检查 3 个网卡。" }
+{ "output": "✓ 已检查 3 个网卡。", "data": { "interfaces": [] } }
 ```
 
 操作失败时仍应正常输出 JSON，并设置 `error`：
