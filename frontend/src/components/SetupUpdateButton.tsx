@@ -9,7 +9,7 @@ import {
   Upload,
   X
 } from 'lucide-react'
-import { useEffect, useId } from 'react'
+import { useCallback, useEffect, useId } from 'react'
 import { ConfirmDialog } from './ConfirmDialog'
 import { Tabs } from './Tabs'
 import {
@@ -25,6 +25,9 @@ type Release = {
   assets: Array<{ name: string; url: string }>
 }
 
+const UPDATE_CHECK_CACHE_KEY = 'alx:update-check-at'
+const UPDATE_CHECK_INTERVAL = 12 * 60 * 60 * 1000
+
 export function SetupUpdateButton() {
   const [check, { data, isFetching, error }] = useLazySetupUpdateQuery()
   const [open, setOpen] = useStoreState(false)
@@ -35,6 +38,26 @@ export function SetupUpdateButton() {
   const [message, setMessage] = useStoreState('')
   const [confirmRestart, setConfirmRestart] = useStoreState(false)
   const updateAvailable = Boolean(data?.available)
+  const checkUpdate = useCallback(async (force = false) => {
+    let lastChecked = 0
+    try {
+      lastChecked = Number(localStorage.getItem(UPDATE_CHECK_CACHE_KEY) || 0)
+    } catch {
+      // Storage may be unavailable in private browsing; check normally.
+    }
+    if (!force && lastChecked > 0 && Date.now() - lastChecked < UPDATE_CHECK_INTERVAL)
+      return
+    try {
+      await check().unwrap()
+      try {
+        localStorage.setItem(UPDATE_CHECK_CACHE_KEY, String(Date.now()))
+      } catch {
+        // A failed cache write should not affect update discovery.
+      }
+    } catch {
+      // Keep the existing query error state visible without retrying on every mount.
+    }
+  }, [check])
   useEffect(() => {
     const closeWhenAnotherToolOpens = (event: Event) => {
       if ((event as CustomEvent<string>).detail !== 'update') setOpen(false)
@@ -53,10 +76,10 @@ export function SetupUpdateButton() {
   // Only version discovery is automatic. Downloading and replacing the
   // executable still require an explicit user confirmation.
   useEffect(() => {
-    void check()
-    const interval = window.setInterval(() => void check(), 6 * 60 * 60 * 1000)
+    void checkUpdate()
+    const interval = window.setInterval(() => void checkUpdate(), UPDATE_CHECK_INTERVAL)
     return () => window.clearInterval(interval)
-  }, [check])
+  }, [checkUpdate])
 
   const api = async (path: string, options: RequestInit) => {
     const response = await fetch(path, options)
@@ -95,7 +118,7 @@ export function SetupUpdateButton() {
     try {
       const result = await api('/api/v1/update/download', { method: 'POST' })
       setMessage(result.output || '更新包已下载完成。')
-      await check()
+      await checkUpdate(true)
       setConfirmRestart(true)
     } catch (reason) {
       setMessage(reason instanceof Error ? reason.message : '下载更新失败。')
@@ -150,7 +173,7 @@ export function SetupUpdateButton() {
     setMode('now')
     setMessage('')
     setConfirmRestart(false)
-    void check()
+    void checkUpdate()
   }
 
   return (

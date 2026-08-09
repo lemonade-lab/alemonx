@@ -23,9 +23,11 @@ type OpsRepository interface {
 	SaveIncident(Incident) error
 	GetIncident(string) (Incident, error)
 	ListIncidents() ([]Incident, error)
+	DeleteIncident(string) error
 	SaveTodo(OpsTodo) error
 	GetTodo(string) (OpsTodo, error)
 	ListTodos() ([]OpsTodo, error)
+	DeleteTodo(string) error
 	SaveMaintenance(MaintenanceRun) error
 	GetMaintenance(string) (MaintenanceRun, error)
 	ListMaintenance() ([]MaintenanceRun, error)
@@ -50,8 +52,14 @@ type OpsRepository interface {
 	SaveAlert(AlertRecord) error
 	GetAlert(string) (AlertRecord, error)
 	ListAlerts() ([]AlertRecord, error)
+	Enqueue(AlertDelivery) error
+	ClaimDue(context.Context, int) ([]AlertDelivery, error)
+	Ack(string) error
+	Fail(string, time.Time, string) error
 	AcquireOpsLease(string, string, time.Duration) (func(), error)
 	RenewOpsLease(string, string, time.Duration) error
+	GetLease(string) (OpsLease, error)
+	ListLeases() ([]OpsLease, error)
 	SaveScore(string, MaintenanceScore) error
 	SaveRole(OpsRoleBinding) error
 	GetRole(string) (OpsRoleBinding, error)
@@ -67,6 +75,14 @@ type LeaseManager interface {
 	Release(ctx context.Context, key, owner string) error
 }
 
+// FencingLeaseManager is an optional extension for write paths that need to
+// prove their lease is still current. LeaseManager remains compatible for
+// read-only integrations.
+type FencingLeaseManager interface {
+	LeaseManager
+	Token(context.Context, string, string) (uint64, error)
+}
+
 // JSONOpsRepository is the development/fallback implementation. Keeping the
 // alias explicit makes dependency injection and a future SQLite/PostgreSQL
 // adapter source-compatible.
@@ -77,11 +93,12 @@ type JSONOpsRepository = OpsStore
 func (s *OpsStore) Close() error { return nil }
 
 type OpsLease struct {
-	Key       string    `json:"key"`
-	OwnerID   string    `json:"ownerId"`
-	CreatedAt time.Time `json:"createdAt"`
-	RenewedAt time.Time `json:"renewedAt"`
-	ExpiresAt time.Time `json:"expiresAt"`
+	Key          string    `json:"key"`
+	OwnerID      string    `json:"ownerId"`
+	FencingToken uint64    `json:"fencingToken"`
+	CreatedAt    time.Time `json:"createdAt"`
+	RenewedAt    time.Time `json:"renewedAt"`
+	ExpiresAt    time.Time `json:"expiresAt"`
 }
 
 type OpsRoleBinding struct {
@@ -117,6 +134,9 @@ type AlertRecord struct {
 	Status        string    `json:"status"` // open/acked/silenced/resolved
 	Acknowledged  string    `json:"acknowledgedBy,omitempty"`
 	SilencedUntil time.Time `json:"silencedUntil,omitempty"`
+	RetryCount    int       `json:"retryCount,omitempty"`
+	NextAttempt   time.Time `json:"nextAttempt,omitempty"`
+	LastError     string    `json:"lastError,omitempty"`
 	Updated       time.Time `json:"updated"`
 }
 
@@ -231,6 +251,16 @@ func (s *OpsStore) AcquireOpsLease(key, owner string, ttl time.Duration) (func()
 		return nil, errors.New("运维执行租约已被其他实例持有")
 	}
 	item := OpsLease{Key: key, OwnerID: owner, CreatedAt: now, RenewedAt: now, ExpiresAt: now.Add(ttl)}
+	if current.OwnerID == owner && current.FencingToken > 0 {
+		item.FencingToken = current.FencingToken + 1
+	} else if current.FencingToken > 0 {
+		item.FencingToken = current.FencingToken + 1
+	} else {
+		item.FencingToken = 1
+	}
+	if !current.CreatedAt.IsZero() && current.OwnerID == owner {
+		item.CreatedAt = current.CreatedAt
+	}
 	if err := atomicJSONFile(path, item); err != nil {
 		return nil, err
 	}
@@ -239,7 +269,9 @@ func (s *OpsStore) AcquireOpsLease(key, owner string, ttl time.Duration) (func()
 		defer leaseMu.Unlock()
 		var latest OpsLease
 		if readJSONFile(path, &latest) == nil && latest.OwnerID == owner {
-			_ = os.Remove(path)
+			latest.ExpiresAt = time.Now().Add(-time.Second)
+			latest.RenewedAt = time.Now()
+			_ = atomicJSONFile(path, latest)
 		}
 	}, nil
 }
@@ -255,6 +287,34 @@ func (s *OpsStore) RenewOpsLease(key, owner string, ttl time.Duration) error {
 	current.ExpiresAt = time.Now().Add(ttl)
 	current.RenewedAt = time.Now()
 	return atomicJSONFile(path, current)
+}
+
+func (s *OpsStore) GetLease(key string) (OpsLease, error) {
+	var lease OpsLease
+	err := readJSONFile(filepath.Join(s.dir, "lease-"+sha256Hex(key)+".json"), &lease)
+	return lease, err
+}
+
+func (s *OpsStore) ListLeases() ([]OpsLease, error) {
+	entries, err := os.ReadDir(s.dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return []OpsLease{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var out []OpsLease
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasPrefix(entry.Name(), "lease-") || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		var lease OpsLease
+		if readJSONFile(filepath.Join(s.dir, entry.Name()), &lease) == nil {
+			out = append(out, lease)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].ExpiresAt.Before(out[j].ExpiresAt) })
+	return out, nil
 }
 
 func sha256Hex(value string) string {

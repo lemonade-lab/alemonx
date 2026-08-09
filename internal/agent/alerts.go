@@ -30,6 +30,28 @@ type AlertSink interface {
 	Send(context.Context, Alert) error
 }
 
+type AlertRecordStore interface {
+	SaveAlert(AlertRecord) error
+	ListAlerts() ([]AlertRecord, error)
+}
+
+type AlertDelivery struct {
+	ID          string    `json:"id"`
+	Alert       Alert     `json:"alert"`
+	Attempts    int       `json:"attempts"`
+	NextAttempt time.Time `json:"nextAttempt"`
+	LastError   string    `json:"lastError,omitempty"`
+	Status      string    `json:"status"` // pending/sending/acked/failed
+	Updated     time.Time `json:"updated"`
+}
+
+type AlertQueue interface {
+	Enqueue(AlertDelivery) error
+	ClaimDue(context.Context, int) ([]AlertDelivery, error)
+	Ack(string) error
+	Fail(string, time.Time, string) error
+}
+
 type WebhookAlertSink struct {
 	URL    string
 	Client *http.Client
@@ -78,6 +100,77 @@ type AlertManager struct {
 	mu                sync.Mutex
 	lastSent          map[string]time.Time
 	OnDeliveryFailure func(Alert, error)
+	RetryStore        AlertRecordStore
+	Queue             AlertQueue
+}
+
+// RetryPending replays delivery failures persisted by the repository. It is
+// deliberately best-effort: a sink outage must never block incident or task
+// execution, and the failure remains durable for the next poll.
+func (m *AlertManager) RetryPending(ctx context.Context) {
+	if m == nil || m.RetryStore == nil {
+		return
+	}
+	records, err := m.RetryStore.ListAlerts()
+	if err != nil {
+		return
+	}
+	now := time.Now()
+	for _, record := range records {
+		if record.Status != "delivery_failed" || record.NextAttempt.After(now) {
+			continue
+		}
+		policy := m.Policies[record.Severity]
+		maxRetries := policy.MaxRetries
+		if maxRetries <= 0 {
+			maxRetries = 3
+		}
+		if record.RetryCount >= maxRetries {
+			continue
+		}
+		_ = m.RetryStore.SaveAlert(func() AlertRecord {
+			record.Status = "open"
+			record.Updated = now
+			return record
+		}())
+		key := record.Fingerprint
+		if key == "" {
+			key = record.Kind + "\x00" + record.ProjectRoot + "\x00" + record.Message
+		}
+		m.mu.Lock()
+		if m.lastSent != nil {
+			delete(m.lastSent, key)
+		}
+		m.mu.Unlock()
+		m.Notify(ctx, record.Alert)
+	}
+}
+
+// RetryQueue drains durable deliveries independently from the incident path.
+// It is safe to call from a periodic worker and can be interrupted by ctx.
+func (m *AlertManager) RetryQueue(ctx context.Context) {
+	if m == nil || m.Queue == nil {
+		return
+	}
+	items, err := m.Queue.ClaimDue(ctx, 50)
+	if err != nil {
+		return
+	}
+	for _, item := range items {
+		delivered := true
+		for _, sink := range m.Sinks {
+			if sink == nil {
+				continue
+			}
+			if err := sink.Send(ctx, item.Alert); err != nil {
+				delivered = false
+				_ = m.Queue.Fail(item.ID, time.Now().Add(time.Minute), err.Error())
+			}
+		}
+		if delivered {
+			_ = m.Queue.Ack(item.ID)
+		}
+	}
 }
 
 func (m *AlertManager) Notify(ctx context.Context, alert Alert) {
@@ -125,8 +218,13 @@ func (m *AlertManager) Notify(ctx context.Context, alert Alert) {
 			for attempt := 0; attempt <= policy.MaxRetries; attempt++ {
 				if err := sink.Send(ctx, alert); err == nil {
 					return
-				} else if attempt == policy.MaxRetries && m.OnDeliveryFailure != nil {
-					m.OnDeliveryFailure(alert, err)
+				} else if attempt == policy.MaxRetries {
+					if m.OnDeliveryFailure != nil {
+						m.OnDeliveryFailure(alert, err)
+					}
+					if m.Queue != nil {
+						_ = m.Queue.Enqueue(AlertDelivery{ID: "delivery-" + alert.ID, Alert: alert, Attempts: attempt + 1, NextAttempt: time.Now().Add(policy.RetryBackoff), LastError: err.Error(), Status: "failed", Updated: time.Now()})
+					}
 				}
 				select {
 				case <-ctx.Done():

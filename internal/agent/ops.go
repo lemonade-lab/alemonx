@@ -60,6 +60,10 @@ type LogCursor struct {
 	Inode       uint64    `json:"inode,omitempty"`
 	Offset      int64     `json:"offset"`
 	WindowHash  string    `json:"windowHash"`
+	BytesRead   int64     `json:"bytesRead,omitempty"`
+	Rotations   int64     `json:"rotations,omitempty"`
+	Mode        string    `json:"mode,omitempty"` // batch/fallback/error
+	LastError   string    `json:"lastError,omitempty"`
 	Updated     time.Time `json:"updated"`
 }
 
@@ -386,6 +390,22 @@ func (s *OpsStore) ListIncidents() ([]Incident, error) {
 	defer s.mu.Unlock()
 	return listOpsJSON[Incident](s.dir, "incident-")
 }
+func (s *OpsStore) DeleteIncident(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	path := s.incidentPath(id)
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		return errors.New("事件不存在")
+	}
+	if err := os.Remove(path); err != nil {
+		return err
+	}
+	// Clean up the incident's raw event log as well; it may never have existed.
+	if err := os.Remove(filepath.Join(s.dir, "events", id+".jsonl")); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
+}
 func (s *OpsStore) SaveTodo(item OpsTodo) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -405,6 +425,15 @@ func (s *OpsStore) ListTodos() ([]OpsTodo, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return listOpsJSON[OpsTodo](s.dir, "todo-")
+}
+func (s *OpsStore) DeleteTodo(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	path := s.todoPath(id)
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		return errors.New("待办不存在")
+	}
+	return os.Remove(path)
 }
 func (s *OpsStore) SaveMaintenance(item MaintenanceRun) error {
 	s.mu.Lock()
@@ -581,6 +610,12 @@ func (s *OpsStore) Metrics() (OpsMetrics, error) {
 		if incident.Status == IncidentResolved {
 			metrics.Resolved++
 		}
+		if incident.Occurrences > 1 {
+			metrics.IncidentDeduplicated += incident.Occurrences - 1
+		}
+		if incident.Decision != "" {
+			metrics.AIWakeups++
+		}
 	}
 	for _, run := range runs {
 		if run.RollbackPerformed {
@@ -593,6 +628,12 @@ func (s *OpsStore) Metrics() (OpsMetrics, error) {
 			metrics.PM2Failures++
 			metrics.MaintenanceFailures++
 		}
+		if strings.Contains(strings.ToLower(run.Error), "pm2") {
+			metrics.PM2ActionFailures++
+		}
+		if run.Status == "recovery_required" {
+			metrics.RecoveryConflicts++
+		}
 		if run.Finished != nil {
 			recoveryTotal += run.Finished.Sub(run.Created)
 		}
@@ -604,7 +645,39 @@ func (s *OpsStore) Metrics() (OpsMetrics, error) {
 	if readJSONFile(s.seenPath(), &seen) == nil {
 		metrics.SeenEventFingerprints = len(seen)
 	}
+	if alerts, alertErr := s.ListAlerts(); alertErr == nil {
+		metrics.AlertDeliveryTotal = len(alerts)
+		for _, alert := range alerts {
+			if alert.Status == "delivery_failed" {
+				metrics.AlertDeliveryFailures++
+			}
+		}
+	}
+	if leases, leaseErr := s.ListLeases(); leaseErr == nil {
+		for _, lease := range leases {
+			if lease.FencingToken > 1 {
+				metrics.LeaseTakeovers++
+			}
+		}
+	}
+	if snapshot, snapshotErr := s.Snapshot(""); snapshotErr == nil {
+		metrics.IncidentDeduplicated = maxInt(metrics.IncidentDeduplicated, snapshot.IncidentDeduplicated)
+		metrics.AIWakeups = maxInt(metrics.AIWakeups, snapshot.AIWakeups)
+		metrics.MaintenanceFailures = maxInt(metrics.MaintenanceFailures, snapshot.MaintenanceFailures)
+		metrics.Rollbacks = maxInt(metrics.Rollbacks, snapshot.Rollbacks)
+		metrics.PM2ActionFailures = maxInt(metrics.PM2ActionFailures, snapshot.PM2ActionFailures)
+		metrics.BudgetExhausted = maxInt(metrics.BudgetExhausted, snapshot.BudgetExhausted)
+		metrics.AlertDeliveryTotal = maxInt(metrics.AlertDeliveryTotal, snapshot.AlertDeliveryTotal)
+		metrics.AlertDeliveryFailures = maxInt(metrics.AlertDeliveryFailures, snapshot.AlertDeliveryFailures)
+	}
 	return metrics, nil
+}
+
+func maxInt(a, b int) int {
+	if b > a {
+		return b
+	}
+	return a
 }
 
 func listOpsJSON[T any](dir, prefix string) ([]T, error) {
@@ -686,6 +759,7 @@ func (a *IncidentAggregator) Ingest(event ErrorEvent) (Incident, bool, error) {
 				return Incident{}, false, err
 			}
 			_ = a.store.AppendEvent(item.ID, event)
+			recordMetric(a.store, "incident_deduplicated_total", event.ProjectRoot, event.Fingerprint, 1)
 			return item, false, nil
 		}
 	}
@@ -695,6 +769,7 @@ func (a *IncidentAggregator) Ingest(event ErrorEvent) (Incident, bool, error) {
 		return Incident{}, false, err
 	}
 	_ = a.store.AppendEvent(item.ID, event)
+	recordMetric(a.store, "incident_total", event.ProjectRoot, event.Fingerprint, 1)
 	return item, true, nil
 }
 

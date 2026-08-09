@@ -17,6 +17,20 @@ type RepositoryLeaseManager struct {
 	held map[string]func()
 }
 
+func (m *RepositoryLeaseManager) Token(ctx context.Context, key, owner string) (uint64, error) {
+	if err := contextErr(ctx); err != nil {
+		return 0, err
+	}
+	lease, err := m.repo.GetLease(key)
+	if err != nil {
+		return 0, err
+	}
+	if lease.OwnerID != owner || lease.ExpiresAt.Before(time.Now()) {
+		return 0, errors.New("租约已失效")
+	}
+	return lease.FencingToken, nil
+}
+
 func NewLeaseManager(repo OpsRepository) *RepositoryLeaseManager {
 	return &RepositoryLeaseManager{repo: repo, held: make(map[string]func())}
 }

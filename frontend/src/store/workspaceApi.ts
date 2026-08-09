@@ -141,6 +141,31 @@ export type SetupPlugin = {
   runnable: boolean
   enabled: boolean
   online?: boolean
+  installedTag?: string
+  fingerprint?: string
+}
+export type SetupPluginRelease = {
+  tag: string
+  name: string
+  url: string
+  publishedAt: string
+  assets: Array<{ name: string; url: string; size: number; sha256?: string; compatible: boolean }>
+}
+export type SetupPluginVersion = {
+  tag: string
+  asset: string
+  size: number
+  archiveSha256?: string
+  fingerprint?: string
+  active: boolean
+  cached: boolean
+  lastUsedAt?: string
+}
+export type SetupPluginCacheSummary = {
+  bytes: number
+  limit: number
+  entries: number
+  maxPerPlugin: number
 }
 
 export const workspaceApi = createApi({
@@ -192,6 +217,17 @@ export const workspaceApi = createApi({
       query: () => 'setup/plugins',
       providesTags: ['SetupPlugins']
     }),
+    setupPluginReleases: build.query<SetupPluginRelease[], string>({
+      query: pluginID => `setup/plugins/releases/${encodeURIComponent(pluginID)}`
+    }),
+    setupPluginVersions: build.query<SetupPluginVersion[], string>({
+      query: pluginID => `setup/plugins/${encodeURIComponent(pluginID)}/versions`,
+      providesTags: ['SetupPlugins']
+    }),
+    setupPluginCache: build.query<SetupPluginCacheSummary, void>({
+      query: () => 'setup/plugins/cache',
+      providesTags: ['SetupPlugins']
+    }),
     setSetupPluginEnabled: build.mutation<
       { id: string; enabled: boolean },
       { pluginID: string; enabled: boolean }
@@ -205,12 +241,38 @@ export const workspaceApi = createApi({
     }),
     installSetupPlugin: build.mutation<
       { id: string; installed: boolean },
-      { pluginID: string }
+      { pluginID: string; version: string; assetName: string }
     >({
-      query: ({ pluginID }) => ({
+      query: ({ pluginID, ...body }) => ({
         url: `setup/plugins/${encodeURIComponent(pluginID)}/install`,
-        method: 'POST'
+        method: 'POST',
+        body
       }),
+      invalidatesTags: ['SetupPlugins']
+    }),
+    switchSetupPluginVersion: build.mutation<
+      { id: string; tag?: string; switched: boolean },
+      { pluginID: string; version: string; assetName: string }
+    >({
+      query: ({ pluginID, ...body }) => ({
+        url: `setup/plugins/${encodeURIComponent(pluginID)}/switch`,
+        method: 'POST',
+        body
+      }),
+      invalidatesTags: ['SetupPlugins']
+    }),
+    deleteSetupPluginVersion: build.mutation<
+      { id: string; tag: string; deleted: boolean },
+      { pluginID: string; tag: string }
+    >({
+      query: ({ pluginID, tag }) => ({
+        url: `setup/plugins/${encodeURIComponent(pluginID)}/versions/${encodeURIComponent(tag)}`,
+        method: 'DELETE'
+      }),
+      invalidatesTags: ['SetupPlugins']
+    }),
+    cleanupSetupPluginCache: build.mutation<SetupPluginCacheSummary, void>({
+      query: () => ({ url: 'setup/plugins/cache', method: 'POST' }),
       invalidatesTags: ['SetupPlugins']
     }),
     systemMcp: build.query<{ running: boolean }, void>({
@@ -499,8 +561,16 @@ export const {
   useReleasesQuery,
   useLazySetupUpdateQuery,
   useSetupPluginsQuery,
+  useSetupPluginReleasesQuery,
+  useLazySetupPluginReleasesQuery,
+  useSetupPluginVersionsQuery,
+  useLazySetupPluginVersionsQuery,
+  useSetupPluginCacheQuery,
   useSetSetupPluginEnabledMutation,
   useInstallSetupPluginMutation,
+  useSwitchSetupPluginVersionMutation,
+  useDeleteSetupPluginVersionMutation,
+  useCleanupSetupPluginCacheMutation,
   useSystemMcpQuery,
   useStartSetupPluginTaskMutation,
   useCatalogQuery,

@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"net/http"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -53,6 +54,42 @@ func TestAlertManagerHonorsRetryPolicyAndFailureCallback(t *testing.T) {
 	time.Sleep(30 * time.Millisecond)
 	if attempts.Load() != 2 || failures.Load() != 1 {
 		t.Fatalf("attempts=%d failures=%d", attempts.Load(), failures.Load())
+	}
+}
+
+func TestAlertQueuePersistsAndClaimsDueDelivery(t *testing.T) {
+	queue := NewOpsStoreAt(t.TempDir())
+	delivery := AlertDelivery{ID: "delivery-1", Alert: Alert{ID: "a1", Message: "boom"}, Status: "failed", NextAttempt: time.Now().Add(-time.Second)}
+	if err := queue.Enqueue(delivery); err != nil {
+		t.Fatal(err)
+	}
+	items, err := queue.ClaimDue(context.Background(), 10)
+	if err != nil || len(items) != 1 || items[0].Status != "sending" {
+		t.Fatalf("items=%+v err=%v", items, err)
+	}
+	if err := queue.Fail("delivery-1", time.Now().Add(time.Minute), "temporary"); err != nil {
+		t.Fatal(err)
+	}
+	if err := queue.Ack("delivery-1"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSQLiteAlertQueuePersistsDelivery(t *testing.T) {
+	repo, err := NewSQLiteOpsRepository(filepath.Join(t.TempDir(), "ops.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+	if err := repo.Enqueue(AlertDelivery{ID: "sqlite-delivery", Alert: Alert{ID: "a2", Message: "boom"}, NextAttempt: time.Now().Add(-time.Second)}); err != nil {
+		t.Fatal(err)
+	}
+	items, err := repo.ClaimDue(context.Background(), 1)
+	if err != nil || len(items) != 1 {
+		t.Fatalf("items=%+v err=%v", items, err)
+	}
+	if err := repo.Ack(items[0].ID); err != nil {
+		t.Fatal(err)
 	}
 }
 

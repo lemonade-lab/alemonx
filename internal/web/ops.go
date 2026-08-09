@@ -18,12 +18,19 @@ import (
 
 func (s *server) opsActor(r *http.Request) (string, string) {
 	if s != nil && s.auth != nil {
-		if status, err := s.auth.Status(s.authToken(r)); err == nil && status.Authenticated {
-			role := "admin"
-			if binding, roleErr := s.opsStore.GetRole(status.Account); roleErr == nil && binding.Role != "" {
-				role = binding.Role
+		if status, err := s.auth.Status(s.authToken(r)); err == nil {
+			if status.Enabled && !status.Authenticated {
+				// Once local authentication is enabled, compatibility headers
+				// must never be allowed to forge an operator identity.
+				return "anonymous", "viewer"
 			}
-			return status.Account, role
+			if status.Authenticated {
+				role := "admin"
+				if binding, roleErr := s.opsStore.GetRole(status.Account); roleErr == nil && binding.Role != "" {
+					role = binding.Role
+				}
+				return status.Account, role
+			}
 		}
 	}
 	actor, role := strings.TrimSpace(r.Header.Get("X-Operator")), strings.ToLower(strings.TrimSpace(r.Header.Get("X-Role")))
@@ -62,6 +69,14 @@ func opsRoleLevel(role string) int {
 
 func (s *server) requireOpsRole(w http.ResponseWriter, r *http.Request, required, action, resource string) bool {
 	actor, role := s.opsActor(r)
+	highRisk := strings.HasPrefix(action, "incident.approve") || strings.HasPrefix(action, "incident.rollback") || strings.HasPrefix(action, "maintenance.rollback") || strings.HasPrefix(action, "maintenance.takeover") || strings.HasPrefix(action, "monitor.emergency-stop") || action == "policy.update" || action == "roles.update"
+	if highRisk && s.auth != nil {
+		if status, statusErr := s.auth.Status(s.authToken(r)); statusErr == nil && status.Enabled && strings.TrimSpace(r.Header.Get("X-Operation-Reason")) == "" && strings.TrimSpace(r.URL.Query().Get("reason")) == "" {
+			_ = s.opsStore.AppendAudit(agent.AuditEntry{Actor: actor, Role: role, Action: action, Resource: resource, Result: "denied", Reason: "高风险操作必须提供理由", Created: time.Now()})
+			writeError(w, http.StatusBadRequest, "高风险操作必须填写理由")
+			return false
+		}
+	}
 	if opsRoleLevel(role) < opsRoleLevel(required) {
 		_ = s.opsStore.AppendAudit(agent.AuditEntry{Actor: actor, Role: role, Action: action, Resource: resource, Result: "denied", Reason: "权限不足", Created: time.Now()})
 		writeError(w, http.StatusForbidden, "运维权限不足")
@@ -71,15 +86,47 @@ func (s *server) requireOpsRole(w http.ResponseWriter, r *http.Request, required
 	return true
 }
 
+// monitorableRoots returns the directory roots that are actual robot
+// projects. Browse roots (home, mounts, ALEMONJS_SETUP_ROOTS) are not managed
+// robots themselves; a root without a valid robot project cannot produce a
+// real runtime incident and must never be health-checked or log-read.
+func (s *server) monitorableRoots() []string {
+	out := make([]string, 0, len(s.directoryRoots))
+	for _, root := range s.directoryRoots {
+		if _, err := s.robots.Validate(root); err == nil {
+			out = append(out, root)
+		}
+	}
+	return out
+}
+
 func (s *server) newOpsMonitor() *agent.OpsMonitor {
 	aggregator := agent.NewIncidentAggregator(s.opsStore)
 	return &agent.OpsMonitor{
 		Aggregator:  aggregator,
 		CursorStore: s.opsStore,
-		Lease:       agent.NewLeaseManager(s.opsStore),
-		LeaseKey:    "ops-monitor",
-		LeaseOwner:  s.nodeID,
-		LeaseTTL:    45 * time.Second,
+		BatchSource: robot.PM2LogBatchSource{Robots: s.robots},
+		BatchRoots:  s.monitorableRoots(),
+		BatchProcess: func(root string) []string {
+			items, err := s.robots.PM2Processes(root)
+			if err != nil || len(items) == 0 {
+				return []string{"pm2"}
+			}
+			out := make([]string, 0, len(items))
+			for _, item := range items {
+				if item.Name != "" {
+					out = append(out, item.Name)
+				}
+			}
+			if len(out) == 0 {
+				return []string{"pm2"}
+			}
+			return out
+		},
+		Lease:      agent.NewLeaseManager(s.opsStore),
+		LeaseKey:   "ops-monitor",
+		LeaseOwner: s.nodeID,
+		LeaseTTL:   45 * time.Second,
 		AcquireLease: func() (func(), error) {
 			return s.opsStore.AcquireOpsLease("ops-monitor", s.nodeID, 45*time.Second)
 		},
@@ -89,7 +136,7 @@ func (s *server) newOpsMonitor() *agent.OpsMonitor {
 		Interval: 60 * time.Second,
 		Stream: func(ctx context.Context, emit func(agent.ErrorEvent)) error {
 			var group sync.WaitGroup
-			for _, root := range s.directoryRoots {
+			for _, root := range s.monitorableRoots() {
 				root := root
 				group.Add(1)
 				go func() {
@@ -138,7 +185,7 @@ func (s *server) newOpsMonitor() *agent.OpsMonitor {
 		},
 		Signals: func(ctx context.Context) ([]agent.OpsSignal, error) {
 			var signals []agent.OpsSignal
-			for _, root := range s.directoryRoots {
+			for _, root := range s.monitorableRoots() {
 				select {
 				case <-ctx.Done():
 					return signals, ctx.Err()
@@ -156,6 +203,12 @@ func (s *server) newOpsMonitor() *agent.OpsMonitor {
 			return signals, nil
 		},
 		OnSignal: func(signal agent.OpsSignal) {
+			// A signal from a root that is not a valid robot project is
+			// browse-root noise (for example a home directory without
+			// package.json). Never turn it into an alert or an incident.
+			if _, err := s.robots.Validate(signal.ProjectRoot); err != nil {
+				return
+			}
 			s.publishOpsEvent(opsEvent{Type: "signal.changed", Root: signal.ProjectRoot})
 			_ = s.opsStore.AppendSignal(signal)
 			if signal.Kind == "process_exit" || signal.Status == "error" {
@@ -214,6 +267,8 @@ func (s *server) newOpsMonitor() *agent.OpsMonitor {
 			_ = s.opsStore.SaveIncident(incident)
 		},
 		OnPoll: func() {
+			s.alerts.RetryQueue(context.Background())
+			s.alerts.RetryPending(context.Background())
 			if s.opsOrchestrator == nil {
 				return
 			}
@@ -305,6 +360,27 @@ func (s *server) opsHandler(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, metrics)
 		return
 	}
+	if path == "metrics/query" && r.Method == http.MethodGet {
+		repo, ok := s.opsStore.(agent.MetricsRepository)
+		if !ok {
+			writeError(w, http.StatusNotImplemented, "当前存储不支持指标查询")
+			return
+		}
+		var from, to time.Time
+		if raw := strings.TrimSpace(r.URL.Query().Get("from")); raw != "" {
+			from, _ = time.Parse(time.RFC3339, raw)
+		}
+		if raw := strings.TrimSpace(r.URL.Query().Get("to")); raw != "" {
+			to, _ = time.Parse(time.RFC3339, raw)
+		}
+		items, err := repo.Query(r.URL.Query().Get("root"), from, to)
+		if err != nil {
+			writeError(w, 500, err.Error())
+			return
+		}
+		writeJSON(w, 200, items)
+		return
+	}
 	if path == "overview" && r.Method == http.MethodGet {
 		metrics, err := s.opsStore.Metrics()
 		if err != nil {
@@ -313,6 +389,18 @@ func (s *server) opsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		policies, _ := s.opsStore.ListPolicies()
 		writeJSON(w, http.StatusOK, map[string]any{"metrics": metrics, "policies": policies, "paused": s.opsPaused, "nodeId": s.nodeID})
+		return
+	}
+	if path == "leases" && r.Method == http.MethodGet {
+		if !s.requireOpsRole(w, r, "viewer", "leases.read", "ops") {
+			return
+		}
+		items, err := s.opsStore.ListLeases()
+		if err != nil {
+			writeError(w, 500, err.Error())
+			return
+		}
+		writeJSON(w, 200, items)
 		return
 	}
 	if path == "metrics/prometheus" && r.Method == http.MethodGet {
@@ -606,6 +694,17 @@ func (s *server) opsHandler(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, 200, incident)
 			return
 		}
+		if len(parts) == 2 && r.Method == http.MethodDelete {
+			if !s.requireOpsRole(w, r, "operator", "incident.delete", incident.ID) {
+				return
+			}
+			if err := s.opsStore.DeleteIncident(incident.ID); err != nil {
+				writeError(w, 500, err.Error())
+				return
+			}
+			writeJSON(w, 200, map[string]any{"deleted": incident.ID})
+			return
+		}
 		if len(parts) == 3 && parts[2] == "events" && r.Method == http.MethodGet {
 			events, eventsErr := s.opsStore.ListEvents(incident.ID)
 			if eventsErr != nil {
@@ -744,6 +843,17 @@ func (s *server) opsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		if len(parts) == 2 && r.Method == http.MethodGet {
 			writeJSON(w, 200, todo)
+			return
+		}
+		if len(parts) == 2 && r.Method == http.MethodDelete {
+			if !s.requireOpsRole(w, r, "operator", "todo.delete", todo.ID) {
+				return
+			}
+			if err := s.opsStore.DeleteTodo(todo.ID); err != nil {
+				writeError(w, 500, err.Error())
+				return
+			}
+			writeJSON(w, 200, map[string]any{"deleted": todo.ID})
 			return
 		}
 		if len(parts) == 2 && r.Method == http.MethodPatch {

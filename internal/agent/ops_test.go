@@ -83,6 +83,27 @@ func TestOpsOrchestratorCreatesTodoForObservePolicy(t *testing.T) {
 	}
 }
 
+func TestOpsOrchestratorDoesNotDuplicateActiveMaintenance(t *testing.T) {
+	store := NewOpsStoreAt(t.TempDir())
+	incident := Incident{ID: "inc-active", ProjectRoot: "/tmp/project", ProcessName: "app", Sample: "TypeError", File: "src/app.ts", Line: 1, Status: IncidentDetected, Severity: "medium", Updated: time.Now()}
+	if err := store.SaveIncident(incident); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveMaintenance(MaintenanceRun{ID: "maint-existing", IncidentID: incident.ID, Status: "fixing", Created: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	started := 0
+	o := &OpsOrchestrator{Store: store, Policy: func(string) (OpsPolicy, error) {
+		return OpsPolicy{Mode: "auto", AutoAllowed: true, AllowCodeChanges: true, VerificationCommand: "go test ./..."}, nil
+	}, StartFix: func(Incident, AutoFixDecision) (string, error) { started++; return "task-new", nil }}
+	if _, _, err := o.Analyze(incident.ID); err == nil {
+		t.Fatal("active maintenance should reject duplicate execution")
+	}
+	if started != 0 {
+		t.Fatal("duplicate maintenance must not start a second task")
+	}
+}
+
 func TestOpsMonitorPersistsEventDeduplication(t *testing.T) {
 	dir := t.TempDir()
 	store := NewOpsStoreAt(dir)
@@ -106,5 +127,25 @@ func TestOpsMonitorPersistsEventDeduplication(t *testing.T) {
 	_ = m2.Stop()
 	if seen != 0 {
 		t.Fatalf("persisted duplicate should not wake AI, got %d", seen)
+	}
+}
+
+type testLogBatchSource struct{}
+
+func (testLogBatchSource) ReadBatch(context.Context, string, string, LogCursor) (LogBatch, error) {
+	return LogBatch{LogPath: "/tmp/app.log", Device: 1, Inode: 2, Offset: 42, Lines: []string{"Error: failed at src/app.ts:1"}}, nil
+}
+
+func TestOpsMonitorLogBatchPersistsFileCursor(t *testing.T) {
+	store := NewOpsStoreAt(t.TempDir())
+	monitor := &OpsMonitor{Aggregator: NewIncidentAggregator(store), CursorStore: store, BatchSource: testLogBatchSource{}, BatchRoots: []string{"/project"}, BatchProcess: func(string) []string { return []string{"app"} }, Interval: time.Hour}
+	if err := monitor.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(10 * time.Millisecond)
+	_ = monitor.Stop()
+	cursor, err := store.GetLogCursor("/project", "app")
+	if err != nil || cursor.Offset != 42 || cursor.LogPath != "/tmp/app.log" || cursor.Inode != 2 {
+		t.Fatalf("cursor=%+v err=%v", cursor, err)
 	}
 }

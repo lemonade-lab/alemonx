@@ -6,7 +6,12 @@
 package setupplugin
 
 import (
+	"archive/tar"
+	"archive/zip"
+	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,6 +32,7 @@ import (
 )
 
 const manifestName = "alx.json"
+const installMetadataName = ".alx-install.json"
 const maxManifestSize = 64 * 1024
 const onlineIndexURL = "https://raw.githubusercontent.com/lemonade-lab/alemonjs.dev/main/docs/apps-x.md"
 const installTimeout = 3 * time.Minute
@@ -46,20 +52,33 @@ type Navigation struct {
 // no file from its directory is executed during discovery. A plugin is usable
 // only when it declares a web root (its UI) and has an executor.
 type Plugin struct {
-	ID          string            `json:"id"`
-	Name        string            `json:"name"`
-	Version     string            `json:"version"`
-	Description string            `json:"description,omitempty"`
-	Platforms   []string          `json:"platforms,omitempty"`
-	Navigation  Navigation        `json:"navigation"`
-	Runtime     string            `json:"runtime,omitempty"`
-	Entry       map[string]string `json:"entry,omitempty"`
-	Development *RuntimeSpec      `json:"development,omitempty"`
-	Web         *WebSpec          `json:"web,omitempty"`
-	Runnable    bool              `json:"runnable"`
-	Enabled     bool              `json:"enabled"`
-	Online      bool              `json:"online,omitempty"`
-	Source      string            `json:"source,omitempty"`
+	ID           string            `json:"id"`
+	Name         string            `json:"name"`
+	Version      string            `json:"version"`
+	Description  string            `json:"description,omitempty"`
+	Platforms    []string          `json:"platforms,omitempty"`
+	Navigation   Navigation        `json:"navigation"`
+	Runtime      string            `json:"runtime,omitempty"`
+	Entry        map[string]string `json:"entry,omitempty"`
+	Development  *RuntimeSpec      `json:"development,omitempty"`
+	Web          *WebSpec          `json:"web,omitempty"`
+	Runnable     bool              `json:"runnable"`
+	Enabled      bool              `json:"enabled"`
+	Online       bool              `json:"online,omitempty"`
+	Source       string            `json:"source,omitempty"`
+	InstalledTag string            `json:"installedTag,omitempty"`
+	Fingerprint  string            `json:"fingerprint,omitempty"`
+}
+
+type installMetadata struct {
+	ID            string `json:"id"`
+	Tag           string `json:"tag"`
+	Asset         string `json:"asset"`
+	ArchiveSHA256 string `json:"archiveSha256"`
+	Fingerprint   string `json:"fingerprint"`
+	CachePath     string `json:"cachePath,omitempty"`
+	InstalledAt   string `json:"installedAt"`
+	LastUsedAt    string `json:"lastUsedAt,omitempty"`
 }
 
 // RuntimeSpec is an optional development fallback. Release plugins should use
@@ -85,10 +104,11 @@ type Registry struct {
 	mu                sync.RWMutex
 	roots             []string
 	statePath         string
+	cacheRoot         string
 	onlineIndexURL    string
 	httpClient        *http.Client
 	onlineManifestURL func(string) string
-	cloneURL          func(string) string
+	releaseURL        func(string) string
 	cached            []Plugin
 	revision          uint64
 	loaded            bool
@@ -124,10 +144,11 @@ func NewRegistry(roots ...string) *Registry {
 		return &Registry{
 			roots:             uniqueRoots(roots),
 			statePath:         defaultStatePath(),
+			cacheRoot:         defaultCacheRoot(),
 			onlineIndexURL:    onlineIndexURL,
 			httpClient:        &http.Client{Timeout: 5 * time.Second},
 			onlineManifestURL: defaultOnlineManifestURL,
-			cloneURL:          defaultCloneURL,
+			releaseURL:        defaultReleaseURL,
 		}
 	}
 	return &Registry{roots: uniqueRoots(roots)}
@@ -150,6 +171,13 @@ func defaultRoots() []string {
 func defaultStatePath() string {
 	if config, err := os.UserConfigDir(); err == nil {
 		return filepath.Join(config, "alx", "setup-plugins.json")
+	}
+	return ""
+}
+
+func defaultCacheRoot() string {
+	if config, err := os.UserConfigDir(); err == nil {
+		return filepath.Join(config, "alx", "plugin-cache")
 	}
 	return ""
 }
@@ -262,7 +290,7 @@ func pluginSetsEqual(a, b []Plugin) bool {
 func pluginsEqual(a, b Plugin) bool {
 	return a.ID == b.ID && a.Name == b.Name && a.Version == b.Version &&
 		a.Description == b.Description && a.Runnable == b.Runnable &&
-		a.Enabled == b.Enabled && a.Online == b.Online &&
+		a.Enabled == b.Enabled && a.Online == b.Online && a.InstalledTag == b.InstalledTag && a.Fingerprint == b.Fingerprint &&
 		strings.Join(a.Platforms, ",") == strings.Join(b.Platforms, ",") &&
 		a.Navigation.Label == b.Navigation.Label && a.Navigation.Icon == b.Navigation.Icon &&
 		a.Navigation.Order == b.Navigation.Order && webRootEqual(a.Web, b.Web) &&
@@ -562,7 +590,30 @@ func load(directory string) (Plugin, error) {
 	if err != nil {
 		return Plugin{}, err
 	}
-	return decodeManifest(data, directory)
+	plugin, err := decodeManifest(data, directory)
+	if err != nil {
+		return Plugin{}, err
+	}
+	metadataPath := filepath.Join(directory, installMetadataName)
+	metadataInfo, metadataErr := os.Lstat(metadataPath)
+	if metadataErr == nil && metadataInfo.Mode().IsRegular() && metadataInfo.Size() <= maxManifestSize {
+		metadataBytes, readErr := os.ReadFile(metadataPath)
+		var metadata installMetadata
+		if readErr == nil && json.Unmarshal(metadataBytes, &metadata) == nil && metadata.ID == plugin.ID && validReleaseTag(metadata.Tag) && len(metadata.ArchiveSHA256) == 64 && metadata.Fingerprint == installFingerprint(metadata.ID, metadata.Tag, metadata.Asset, metadata.ArchiveSHA256) {
+			plugin.Version = strings.TrimPrefix(metadata.Tag, "v")
+			plugin.InstalledTag = metadata.Tag
+			plugin.Fingerprint = metadata.Fingerprint
+		}
+	}
+	return plugin, nil
+}
+
+func validReleaseTag(tag string) bool {
+	tag = strings.TrimSpace(tag)
+	if strings.HasPrefix(tag, "v") {
+		tag = strings.TrimPrefix(tag, "v")
+	}
+	return tag != "" && !strings.ContainsAny(tag, "\\/\t\r\n")
 }
 
 func decodeManifest(data []byte, source string) (Plugin, error) {
@@ -615,11 +666,6 @@ func defaultOnlineManifestURL(repository string) string {
 	return "https://raw.githubusercontent.com/lemonade-lab/" + name + "/main/" + manifestName
 }
 
-func defaultCloneURL(repository string) string {
-	name := strings.TrimPrefix(repository, "https://github.com/lemonade-lab/")
-	return "https://github.com/lemonade-lab/" + name + ".git"
-}
-
 // onlinePlugins reads the curated Apps-X index. Only repositories owned by
 // lemonade-lab are accepted, so a documentation edit cannot turn discovery
 // into an arbitrary URL fetch. Online manifests are deliberately read-only:
@@ -652,61 +698,524 @@ func (r *Registry) onlinePlugins() []Plugin {
 	return items
 }
 
-// Install clones an online plugin's repository into a plugin root and rescans,
-// turning the read-only online entry into a local, loaded plugin. Only
-// lemonade-lab repositories discovered from the Apps-X index are accepted. The
-// clone is shallow and bounded by installTimeout; a partial clone is removed on
-// failure so a retry starts clean.
-func (r *Registry) Install(id string) (Plugin, error) {
+type ReleaseAsset struct {
+	Name       string `json:"name"`
+	URL        string `json:"url"`
+	Size       int64  `json:"size"`
+	SHA256     string `json:"sha256,omitempty"`
+	Compatible bool   `json:"compatible"`
+}
+
+type Release struct {
+	Tag         string         `json:"tag"`
+	Name        string         `json:"name"`
+	URL         string         `json:"url"`
+	PublishedAt string         `json:"publishedAt"`
+	Assets      []ReleaseAsset `json:"assets"`
+}
+
+// Releases returns formal GitHub releases for an online plugin. Source trees
+// and branches are intentionally not exposed as install options.
+func (r *Registry) Releases(id string) ([]Release, error) {
+	online := r.onlinePlugin(id)
+	if online == nil || !onlineSource.MatchString(online.Source) {
+		return nil, errors.New("未找到可安装的在线 Setup 插件")
+	}
+	url := r.releaseURL
+	if url == nil {
+		url = defaultReleaseURL
+	}
+	request, err := http.NewRequest(http.MethodGet, url(online.Source), nil)
+	if err != nil {
+		return nil, errors.New("插件版本地址无效")
+	}
+	response, err := r.httpClient.Do(request)
+	if err != nil {
+		return nil, errors.New("无法获取插件版本，请检查网络后重试")
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return nil, errors.New("插件版本暂时无法获取")
+	}
+	var data []struct {
+		TagName     string    `json:"tag_name"`
+		Name        string    `json:"name"`
+		HTMLURL     string    `json:"html_url"`
+		Draft       bool      `json:"draft"`
+		Prerelease  bool      `json:"prerelease"`
+		PublishedAt time.Time `json:"published_at"`
+		Assets      []struct {
+			Name string `json:"name"`
+			URL  string `json:"browser_download_url"`
+			Size int64  `json:"size"`
+		} `json:"assets"`
+	}
+	if err := json.NewDecoder(io.LimitReader(response.Body, 4<<20)).Decode(&data); err != nil {
+		return nil, errors.New("插件版本内容无法识别")
+	}
+	result := make([]Release, 0, len(data))
+	for _, item := range data {
+		if item.Draft || item.Prerelease || item.TagName == "" {
+			continue
+		}
+		release := Release{Tag: item.TagName, Name: item.Name, URL: item.HTMLURL, PublishedAt: item.PublishedAt.Format(time.RFC3339)}
+		for _, asset := range item.Assets {
+			release.Assets = append(release.Assets, ReleaseAsset{Name: asset.Name, URL: asset.URL, Size: asset.Size, Compatible: compatibleAsset(asset.Name)})
+		}
+		for index := range release.Assets {
+			if checksum := checksumAsset(release.Assets, release.Assets[index].Name); checksum != "" {
+				release.Assets[index].SHA256 = checksum
+			}
+		}
+		result = append(result, release)
+	}
+	if len(result) == 0 {
+		return nil, errors.New("暂未找到可用的插件正式版本")
+	}
+	return result, nil
+}
+
+// Install downloads or reuses a selected formal release asset and activates it.
+// It never checks out source code.
+func (r *Registry) Install(id, version, assetName string) (Plugin, error) {
 	if !validID.MatchString(id) {
 		return Plugin{}, errors.New("无效的 Setup 插件标识")
 	}
-	online := r.onlinePlugin(id)
-	if online == nil {
-		return Plugin{}, errors.New("未找到可安装的在线 Setup 插件")
+	name := id
+	local, localErr := r.Find(id)
+	if localErr == nil && !local.Online {
+		name = filepath.Base(local.Source)
+	} else {
+		online := r.onlinePlugin(id)
+		if online == nil {
+			return Plugin{}, errors.New("未找到可安装的在线 Setup 插件")
+		}
+		if online.Source == "" || !onlineSource.MatchString(online.Source) {
+			return Plugin{}, errors.New("在线插件仓库来源不受支持")
+		}
+		name = strings.TrimPrefix(online.Source, "https://github.com/lemonade-lab/")
 	}
-	if online.Source == "" || !onlineSource.MatchString(online.Source) {
-		return Plugin{}, errors.New("在线插件仓库来源不受支持")
+	if !validID.MatchString(name) {
+		return Plugin{}, errors.New("在线插件仓库名无效")
+	}
+	cached, err := r.ensureCached(id, version, assetName)
+	if err != nil {
+		return Plugin{}, err
 	}
 	root, err := r.installRoot()
 	if err != nil {
 		return Plugin{}, err
 	}
-	name := strings.TrimPrefix(online.Source, "https://github.com/lemonade-lab/")
-	if !validID.MatchString(name) {
-		return Plugin{}, errors.New("在线插件仓库名无效")
+	if err := r.activateCached(root, name, cached); err != nil {
+		return Plugin{}, err
 	}
-	target := filepath.Join(root, name)
-	if _, err := os.Lstat(target); err == nil {
-		return Plugin{}, errors.New("该插件已经安装")
-	}
-	if err := os.MkdirAll(root, 0o755); err != nil {
-		return Plugin{}, errors.New("无法创建插件安装目录：" + err.Error())
-	}
-	clone := r.cloneURL
-	if clone == nil {
-		clone = defaultCloneURL
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), installTimeout)
-	defer cancel()
-	command := exec.CommandContext(ctx, "git", "clone", "--depth", "1", "-q", clone(online.Source), target)
-	if output, err := command.CombinedOutput(); err != nil {
-		_ = os.RemoveAll(target)
-		message := strings.TrimSpace(string(output))
-		if errors.Is(err, exec.ErrNotFound) {
-			return Plugin{}, errors.New("未检测到 git，无法在线安装插件")
-		}
-		if message == "" {
-			message = err.Error()
-		}
-		return Plugin{}, fmt.Errorf("在线安装插件失败：%s", message)
-	}
+	_, _ = r.cleanupCache()
 	r.Rescan()
 	installed, err := r.Find(id)
 	if err != nil {
-		return Plugin{}, errors.New("插件已下载，但加载失败；请检查插件目录 " + target)
+		return Plugin{}, errors.New("插件已安装，但加载失败；请检查插件目录 " + filepath.Join(root, name))
 	}
 	return installed, nil
+}
+
+func (r *Registry) selectedAsset(id, version, assetName string) (ReleaseAsset, error) {
+	releases, err := r.Releases(id)
+	if err != nil {
+		return ReleaseAsset{}, err
+	}
+	for _, release := range releases {
+		if release.Tag != version {
+			continue
+		}
+		for _, asset := range release.Assets {
+			if asset.Name == assetName && asset.Compatible && isArchiveName(asset.Name) && strings.HasPrefix(asset.URL, "https://github.com/") {
+				return asset, nil
+			}
+		}
+		return ReleaseAsset{}, errors.New("所选插件安装包无效")
+	}
+	return ReleaseAsset{}, errors.New("未找到所选插件版本")
+}
+
+func (r *Registry) ensureCached(id, version, assetName string) (cacheVersion, error) {
+	directory := r.cacheDirectory(id, version, assetName)
+	packagePath := filepath.Join(directory, "package"+archiveSuffix(assetName))
+	extractedPath := filepath.Join(directory, "extracted")
+	if item, readErr := readCacheVersion(directory); readErr == nil && item.ArchiveSHA256 != "" {
+		if _, packageErr := os.Stat(item.Package); packageErr == nil {
+			if checksum, checksumErr := fileSHA256(item.Package); checksumErr == nil && strings.EqualFold(checksum, item.ArchiveSHA256) {
+				if _, extractedErr := os.Stat(item.Extracted); extractedErr == nil && validExtractedPlugin(item.Extracted, id) {
+					item.LastUsedAt = time.Now().UTC().Format(time.RFC3339Nano)
+					_ = writeCacheVersion(item)
+					return item, nil
+				}
+			}
+		}
+		_ = os.RemoveAll(directory)
+	}
+	// A verified local cache is sufficient for switching back to a downloaded
+	// version; do not require the GitHub API to be reachable in that case.
+	asset, err := r.selectedAsset(id, version, assetName)
+	if err != nil {
+		return cacheVersion{}, err
+	}
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		return cacheVersion{}, errors.New("无法创建插件缓存目录：" + err.Error())
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), installTimeout)
+	defer cancel()
+	temporaryArchive, archiveSHA256, err := r.downloadAsset(ctx, asset)
+	if err != nil {
+		return cacheVersion{}, err
+	}
+	defer os.Remove(temporaryArchive)
+	if err := os.Rename(temporaryArchive, packagePath); err != nil {
+		return cacheVersion{}, errors.New("保存插件缓存失败：" + err.Error())
+	}
+	staging, err := os.MkdirTemp(directory, ".extract-")
+	if err != nil {
+		return cacheVersion{}, err
+	}
+	defer os.RemoveAll(staging)
+	if err := extractArchive(packagePath, staging); err != nil {
+		return cacheVersion{}, err
+	}
+	source, err := locatePluginRoot(staging)
+	if err != nil {
+		return cacheVersion{}, err
+	}
+	if err := os.Rename(source, extractedPath); err != nil {
+		return cacheVersion{}, errors.New("保存插件解压缓存失败：" + err.Error())
+	}
+	if !validExtractedPlugin(extractedPath, id) {
+		return cacheVersion{}, errors.New("插件缓存缺少有效的 alx.json、Web 或执行器")
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	item := cacheVersion{ID: id, Tag: version, Asset: asset.Name, ArchiveSHA256: archiveSHA256, Fingerprint: installFingerprint(id, version, asset.Name, archiveSHA256), Size: archiveSize(packagePath), Package: packagePath, Extracted: extractedPath, CreatedAt: now, LastUsedAt: now}
+	if err := writeCacheVersion(item); err != nil {
+		return cacheVersion{}, err
+	}
+	return item, nil
+}
+
+func archiveSuffix(name string) string {
+	lower := strings.ToLower(name)
+	if strings.HasSuffix(lower, ".tar.gz") {
+		return ".tar.gz"
+	}
+	if strings.HasSuffix(lower, ".tgz") {
+		return ".tgz"
+	}
+	return ".zip"
+}
+
+func archiveSize(path string) int64 {
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0
+	}
+	return info.Size()
+}
+
+func validExtractedPlugin(directory, id string) bool {
+	plugin, err := load(directory)
+	if err != nil || plugin.ID != id {
+		return false
+	}
+	if _, err := plugin.WebRoot(); err != nil {
+		return false
+	}
+	_, err = plugin.entryPath()
+	return err == nil
+}
+
+func (r *Registry) activateCached(root, name string, cached cacheVersion) error {
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return errors.New("无法创建插件安装目录：" + err.Error())
+	}
+	staging, err := os.MkdirTemp(root, ".plugin-switch-")
+	if err != nil {
+		return errors.New("无法创建插件切换目录：" + err.Error())
+	}
+	defer os.RemoveAll(staging)
+	if err := copyTree(cached.Extracted, staging); err != nil {
+		return errors.New("准备插件版本失败：" + err.Error())
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	metadata := installMetadata{ID: cached.ID, Tag: cached.Tag, Asset: cached.Asset, ArchiveSHA256: cached.ArchiveSHA256, Fingerprint: cached.Fingerprint, CachePath: filepath.Dir(cached.Package), InstalledAt: now, LastUsedAt: now}
+	data, err := json.MarshalIndent(metadata, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(staging, installMetadataName), append(data, '\n'), 0o600); err != nil {
+		return err
+	}
+	target := filepath.Join(root, name)
+	backup := filepath.Join(root, ".plugin-backup-"+safeCacheComponent(name))
+	_ = os.RemoveAll(backup)
+	hadTarget := false
+	if _, err := os.Lstat(target); err == nil {
+		hadTarget = true
+		if err := os.Rename(target, backup); err != nil {
+			return errors.New("无法备份当前插件版本：" + err.Error())
+		}
+	}
+	if err := os.Rename(staging, target); err != nil {
+		if hadTarget {
+			_ = os.Rename(backup, target)
+		}
+		return errors.New("切换插件版本失败：" + err.Error())
+	}
+	if hadTarget {
+		_ = os.RemoveAll(backup)
+	}
+	return nil
+}
+
+func (r *Registry) downloadAsset(ctx context.Context, asset ReleaseAsset) (string, string, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, asset.URL, nil)
+	if err != nil {
+		return "", "", errors.New("插件安装包地址无效")
+	}
+	response, err := r.httpClient.Do(request)
+	if err != nil {
+		return "", "", errors.New("下载插件安装包失败：" + err.Error())
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return "", "", errors.New("下载插件安装包失败")
+	}
+	file, err := os.CreateTemp("", "alx-plugin-*."+filepath.Ext(asset.Name))
+	if err != nil {
+		return "", "", err
+	}
+	path := file.Name()
+	defer func() { _ = file.Close() }()
+	hash := sha256.New()
+	limit := io.LimitReader(io.TeeReader(response.Body, hash), 300<<20)
+	count, copyErr := io.Copy(file, limit)
+	if copyErr != nil || count > 300<<20 {
+		_ = os.Remove(path)
+		return "", "", errors.New("插件安装包过大或下载失败")
+	}
+	if err := file.Close(); err != nil {
+		_ = os.Remove(path)
+		return "", "", err
+	}
+	if asset.SHA256 != "" {
+		got := hex.EncodeToString(hash.Sum(nil))
+		if !strings.EqualFold(got, asset.SHA256) {
+			_ = os.Remove(path)
+			return "", "", errors.New("插件安装包校验失败")
+		}
+	}
+	return path, hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+func installFingerprint(id, tag, asset, archiveSHA256 string) string {
+	hash := sha256.Sum256([]byte(id + "\x00" + tag + "\x00" + asset + "\x00" + archiveSHA256))
+	return hex.EncodeToString(hash[:])
+}
+
+func compatibleAsset(name string) bool {
+	tokens := map[string]bool{}
+	for _, token := range strings.FieldsFunc(strings.ToLower(name), func(r rune) bool {
+		return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '_')
+	}) {
+		tokens[token] = true
+	}
+	system := (runtime.GOOS == "darwin" && (tokens["darwin"] || tokens["macos"] || tokens["mac"])) ||
+		(runtime.GOOS == "windows" && (tokens["windows"] || tokens["win32"])) ||
+		(runtime.GOOS == "linux" && tokens["linux"])
+	architecture := (runtime.GOARCH == "arm64" && (tokens["arm64"] || tokens["aarch64"])) ||
+		(runtime.GOARCH == "amd64" && (tokens["amd64"] || tokens["x64"] || tokens["x86_64"]))
+	return system && architecture
+}
+
+func defaultReleaseURL(repository string) string {
+	name := strings.TrimPrefix(repository, "https://github.com/lemonade-lab/")
+	return "https://api.github.com/repos/lemonade-lab/" + name + "/releases?per_page=30"
+}
+
+func isArchiveName(name string) bool {
+	lower := strings.ToLower(name)
+	return strings.HasSuffix(lower, ".zip") || strings.HasSuffix(lower, ".tar.gz") || strings.HasSuffix(lower, ".tgz")
+}
+
+func checksumAsset(assets []ReleaseAsset, name string) string {
+	for _, asset := range assets {
+		upper := strings.ToUpper(asset.Name)
+		if upper != "SHA256SUMS" && upper != "SHA256SUMS.TXT" && upper != "CHECKSUMS.TXT" {
+			continue
+		}
+		// Checksums are fetched by Releases' caller only when a release exposes
+		// them. The manifest response itself remains bounded and read-only.
+		request, err := http.NewRequest(http.MethodGet, asset.URL, nil)
+		if err != nil {
+			continue
+		}
+		response, err := http.DefaultClient.Do(request)
+		if err != nil {
+			continue
+		}
+		data, readErr := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+		response.Body.Close()
+		if readErr != nil || response.StatusCode != http.StatusOK {
+			continue
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 && strings.EqualFold(strings.TrimPrefix(fields[1], "*"), name) && len(fields[0]) == 64 {
+				return strings.ToLower(fields[0])
+			}
+		}
+	}
+	return ""
+}
+
+const maxExtractedPluginSize int64 = 500 << 20
+
+func extractArchive(source, destination string) error {
+	lower := strings.ToLower(source)
+	if strings.HasSuffix(lower, ".zip") {
+		return extractZip(source, destination)
+	}
+	return extractTarGz(source, destination)
+}
+
+func safeArchivePath(root, name string) (string, error) {
+	name = filepath.Clean(filepath.FromSlash(name))
+	if name == "." || filepath.IsAbs(name) || name == ".." || strings.HasPrefix(name, ".."+string(filepath.Separator)) {
+		return "", errors.New("插件安装包包含非法路径")
+	}
+	target := filepath.Join(root, name)
+	rel, err := filepath.Rel(root, target)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", errors.New("插件安装包路径越界")
+	}
+	return target, nil
+}
+
+func extractZip(source, destination string) error {
+	archive, err := zip.OpenReader(source)
+	if err != nil {
+		return errors.New("插件压缩包无法读取")
+	}
+	defer archive.Close()
+	var total int64
+	for _, entry := range archive.File {
+		target, err := safeArchivePath(destination, entry.Name)
+		if err != nil {
+			return err
+		}
+		if entry.Mode()&os.ModeSymlink != 0 {
+			return errors.New("插件安装包不允许包含符号链接")
+		}
+		if entry.FileInfo().IsDir() {
+			if err := os.MkdirAll(target, 0755); err != nil {
+				return err
+			}
+			continue
+		}
+		if !entry.FileInfo().Mode().IsRegular() {
+			return errors.New("插件安装包包含不支持的文件类型")
+		}
+		total += int64(entry.UncompressedSize64)
+		if total > maxExtractedPluginSize {
+			return errors.New("插件解压内容过大")
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+			return err
+		}
+		input, err := entry.Open()
+		if err != nil {
+			return err
+		}
+		output, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, entry.Mode().Perm()|0600)
+		if err == nil {
+			_, err = io.Copy(output, io.LimitReader(input, maxExtractedPluginSize+1))
+			_ = output.Close()
+		}
+		_ = input.Close()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func extractTarGz(source, destination string) error {
+	input, err := os.Open(source)
+	if err != nil {
+		return errors.New("插件压缩包无法读取")
+	}
+	defer input.Close()
+	gzipReader, err := gzip.NewReader(input)
+	if err != nil {
+		return errors.New("插件压缩包无法读取")
+	}
+	defer gzipReader.Close()
+	reader := tar.NewReader(gzipReader)
+	var total int64
+	for {
+		header, err := reader.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return errors.New("插件压缩包无法读取")
+		}
+		target, err := safeArchivePath(destination, header.Name)
+		if err != nil {
+			return err
+		}
+		switch header.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(target, 0755); err != nil {
+				return err
+			}
+		case tar.TypeReg, tar.TypeRegA:
+			if header.Size < 0 {
+				return errors.New("插件安装包包含非法文件")
+			}
+			total += header.Size
+			if total > maxExtractedPluginSize {
+				return errors.New("插件解压内容过大")
+			}
+			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+				return err
+			}
+			output, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(header.Mode)&0777|0600)
+			if err != nil {
+				return err
+			}
+			_, copyErr := io.Copy(output, io.LimitReader(reader, maxExtractedPluginSize+1))
+			_ = output.Close()
+			if copyErr != nil {
+				return copyErr
+			}
+		default:
+			return errors.New("插件安装包不允许包含链接或特殊文件")
+		}
+	}
+	return nil
+}
+
+func locatePluginRoot(staging string) (string, error) {
+	if _, err := os.Stat(filepath.Join(staging, manifestName)); err == nil {
+		return staging, nil
+	}
+	entries, err := os.ReadDir(staging)
+	if err != nil {
+		return "", err
+	}
+	if len(entries) == 1 && entries[0].IsDir() {
+		candidate := filepath.Join(staging, entries[0].Name())
+		if _, err := os.Stat(filepath.Join(candidate, manifestName)); err == nil {
+			return candidate, nil
+		}
+	}
+	return "", errors.New("插件安装包中未找到根目录 alx.json")
 }
 
 // onlinePlugin returns one currently discoverable online-only plugin, falling
@@ -717,10 +1226,18 @@ func (r *Registry) onlinePlugin(id string) *Plugin {
 			return &plugin
 		}
 	}
+	// Once a plugin is installed, the local entry hides the online catalogue
+	// entry during compute(). Refresh the catalogue on demand so versions and
+	// switching remain available for installed plugins too.
+	for _, plugin := range r.onlinePlugins() {
+		if plugin.ID == id {
+			return &plugin
+		}
+	}
 	return nil
 }
 
-// installRoot picks where an online plugin is cloned. The user-level root (where
+// installRoot picks where an online plugin release is unpacked. The user-level root (where
 // enable state is stored) is preferred when it is one of the scan roots, so an
 // install lands in a directory alx owns; otherwise the first root a directory
 // can be created in is used.

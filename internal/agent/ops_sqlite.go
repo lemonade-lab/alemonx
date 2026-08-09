@@ -50,6 +50,8 @@ CREATE TABLE IF NOT EXISTS todos(id TEXT PRIMARY KEY, payload TEXT NOT NULL, upd
 CREATE TABLE IF NOT EXISTS maintenance_runs(id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS policies(project_root TEXT PRIMARY KEY, payload TEXT NOT NULL, updated TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS alerts(id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS alert_deliveries(id TEXT PRIMARY KEY, payload TEXT NOT NULL, status TEXT NOT NULL, next_attempt TEXT NOT NULL, updated TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS ops_metrics(metric_name TEXT NOT NULL, project_root TEXT NOT NULL, fingerprint TEXT NOT NULL, value REAL NOT NULL, window_start TEXT NOT NULL, window_end TEXT NOT NULL, updated TEXT NOT NULL, PRIMARY KEY(metric_name,project_root,fingerprint));
 CREATE TABLE IF NOT EXISTS audit_entries(id TEXT PRIMARY KEY, payload TEXT NOT NULL, created TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS ops_events(id TEXT PRIMARY KEY, incident_id TEXT, payload TEXT NOT NULL, created TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS log_cursors(cursor_key TEXT PRIMARY KEY, payload TEXT NOT NULL, updated TEXT NOT NULL);
@@ -92,7 +94,17 @@ func (s *SQLiteOpsRepository) save(kind, id string, value any) error {
 		table, keyColumn = "alerts", "id"
 	}
 	if table != "" {
-		if _, err = tx.Exec("INSERT OR REPLACE INTO "+table+"("+keyColumn+",payload,updated) VALUES(?,?,?)", id, string(payload), updated); err != nil {
+		if kind == "incident" {
+			var incident Incident
+			if json.Unmarshal(payload, &incident) != nil {
+				_ = tx.Rollback()
+				return errors.New("事件数据序列化失败")
+			}
+			_, err = tx.Exec("INSERT OR REPLACE INTO incidents(id,fingerprint,payload,updated) VALUES(?,?,?,?)", id, incident.Fingerprint, string(payload), updated)
+		} else {
+			_, err = tx.Exec("INSERT OR REPLACE INTO "+table+"("+keyColumn+",payload,updated) VALUES(?,?,?)", id, string(payload), updated)
+		}
+		if err != nil {
 			_ = tx.Rollback()
 			return err
 		}
@@ -102,7 +114,16 @@ func (s *SQLiteOpsRepository) save(kind, id string, value any) error {
 
 func (s *SQLiteOpsRepository) load(kind, id string, dst any) error {
 	var payload string
-	err := s.db.QueryRow(`SELECT payload FROM records WHERE kind=? AND id=?`, kind, id).Scan(&payload)
+	table, key := sqliteBusinessTable(kind)
+	var err error
+	if table != "" {
+		err = s.db.QueryRow("SELECT payload FROM "+table+" WHERE "+key+"=?", id).Scan(&payload)
+		if errors.Is(err, sql.ErrNoRows) {
+			err = s.db.QueryRow(`SELECT payload FROM records WHERE kind=? AND id=?`, kind, id).Scan(&payload)
+		}
+	} else {
+		err = s.db.QueryRow(`SELECT payload FROM records WHERE kind=? AND id=?`, kind, id).Scan(&payload)
+	}
 	if err != nil {
 		return err
 	}
@@ -110,7 +131,14 @@ func (s *SQLiteOpsRepository) load(kind, id string, dst any) error {
 }
 
 func (s *SQLiteOpsRepository) query(kind string) ([]string, error) {
-	rows, err := s.db.Query(`SELECT payload FROM records WHERE kind=? ORDER BY updated DESC`, kind)
+	table, _ := sqliteBusinessTable(kind)
+	var rows *sql.Rows
+	var err error
+	if table != "" {
+		rows, err = s.db.Query("SELECT payload FROM " + table + " ORDER BY updated DESC, rowid DESC")
+	} else {
+		rows, err = s.db.Query(`SELECT payload FROM records WHERE kind=? ORDER BY updated DESC, id DESC`, kind)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -124,6 +152,24 @@ func (s *SQLiteOpsRepository) query(kind string) ([]string, error) {
 		out = append(out, payload)
 	}
 	return out, rows.Err()
+}
+
+func sqliteBusinessTable(kind string) (table, key string) {
+	switch kind {
+	case "incident":
+		return "incidents", "id"
+	case "todo":
+		return "todos", "id"
+	case "maintenance":
+		return "maintenance_runs", "id"
+	case "policy":
+		return "policies", "project_root"
+	case "alert":
+		return "alerts", "id"
+	case "cursor":
+		return "log_cursors", "cursor_key"
+	}
+	return "", ""
 }
 
 func (s *SQLiteOpsRepository) SaveIncident(v Incident) error {
@@ -150,6 +196,28 @@ func (s *SQLiteOpsRepository) ListIncidents() ([]Incident, error) {
 	}
 	return out, err
 }
+func (s *SQLiteOpsRepository) DeleteIncident(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	res, err := tx.Exec(`DELETE FROM records WHERE kind='incident' AND id=?`, id)
+	if err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if affected, _ := res.RowsAffected(); affected == 0 {
+		_ = tx.Rollback()
+		return errors.New("事件不存在")
+	}
+	if _, err = tx.Exec(`DELETE FROM ops_events WHERE incident_id=?`, id); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	return tx.Commit()
+}
 func (s *SQLiteOpsRepository) SaveTodo(v OpsTodo) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -173,6 +241,18 @@ func (s *SQLiteOpsRepository) ListTodos() ([]OpsTodo, error) {
 		}
 	}
 	return out, err
+}
+func (s *SQLiteOpsRepository) DeleteTodo(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	res, err := s.db.Exec(`DELETE FROM records WHERE kind='todo' AND id=?`, id)
+	if err != nil {
+		return err
+	}
+	if affected, _ := res.RowsAffected(); affected == 0 {
+		return errors.New("待办不存在")
+	}
+	return nil
 }
 func (s *SQLiteOpsRepository) SaveMaintenance(v MaintenanceRun) error {
 	s.mu.Lock()
@@ -311,7 +391,11 @@ func (s *SQLiteOpsRepository) SaveLogCursor(cursor LogCursor) error {
 	if cursor.Updated.IsZero() {
 		cursor.Updated = time.Now()
 	}
-	return s.save("cursor", filepath.Clean(cursor.ProjectRoot)+"\x00"+cursor.ProcessName, cursor)
+	payload, err := json.Marshal(cursor)
+	if err != nil {
+		return err
+	}
+	return s.rawSave("cursor", filepath.Clean(cursor.ProjectRoot)+"\x00"+cursor.ProcessName, string(payload))
 }
 
 func (s *SQLiteOpsRepository) GetLogCursor(projectRoot, processName string) (LogCursor, error) {
@@ -390,7 +474,15 @@ func (s *SQLiteOpsRepository) ConsumeBudget(root string, tokens, pm2, retries in
 	if err := s.save("policy", filepath.Clean(root), p); err != nil {
 		return OpsBudget{}, err
 	}
-	return OpsBudget{TokenLimit: p.TokenBudget, UsedTokens: p.UsedTokens, MaxRetries: p.FailureCircuitBreak, RetryCount: p.RetryCount, MaxPM2Actions: p.MaxPM2Actions, UsedPM2Actions: p.UsedPM2Actions, MaxChangedFiles: p.MaxModifiedFiles}, nil
+	budget := OpsBudget{TokenLimit: p.TokenBudget, UsedTokens: p.UsedTokens, MaxRetries: p.FailureCircuitBreak, RetryCount: p.RetryCount, MaxPM2Actions: p.MaxPM2Actions, UsedPM2Actions: p.UsedPM2Actions, MaxChangedFiles: p.MaxModifiedFiles}
+	payload, marshalErr := json.Marshal(budget)
+	if marshalErr != nil {
+		return OpsBudget{}, marshalErr
+	}
+	if _, execErr := s.db.Exec(`INSERT OR REPLACE INTO budgets(project_root,payload,updated) VALUES(?,?,?)`, filepath.Clean(root), string(payload), time.Now().UTC().Format(time.RFC3339Nano)); execErr != nil {
+		return OpsBudget{}, execErr
+	}
+	return budget, nil
 }
 func (s *SQLiteOpsRepository) ResetBudget(root string) error {
 	s.mu.Lock()
@@ -400,7 +492,16 @@ func (s *SQLiteOpsRepository) ResetBudget(root string) error {
 		return err
 	}
 	p.UsedTokens, p.UsedPM2Actions, p.RetryCount = 0, 0, 0
-	return s.save("policy", filepath.Clean(root), p)
+	if err := s.save("policy", filepath.Clean(root), p); err != nil {
+		return err
+	}
+	budget := OpsBudget{TokenLimit: p.TokenBudget, UsedTokens: p.UsedTokens, MaxRetries: p.FailureCircuitBreak, RetryCount: p.RetryCount, MaxPM2Actions: p.MaxPM2Actions, UsedPM2Actions: p.UsedPM2Actions, MaxChangedFiles: p.MaxModifiedFiles}
+	payload, err := json.Marshal(budget)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec(`INSERT OR REPLACE INTO budgets(project_root,payload,updated) VALUES(?,?,?)`, filepath.Clean(root), string(payload), time.Now().UTC().Format(time.RFC3339Nano))
+	return err
 }
 func (s *SQLiteOpsRepository) UpdateMaintenanceByTask(taskID, status, lastError string) error {
 	runs, err := s.ListMaintenance()
@@ -455,6 +556,12 @@ func (s *SQLiteOpsRepository) Metrics() (OpsMetrics, error) {
 		if i.Status == IncidentResolved {
 			m.Resolved++
 		}
+		if i.Occurrences > 1 {
+			m.IncidentDeduplicated += i.Occurrences - 1
+		}
+		if i.Decision != "" {
+			m.AIWakeups++
+		}
 	}
 	for _, r := range runs {
 		if r.RollbackPerformed {
@@ -466,6 +573,37 @@ func (s *SQLiteOpsRepository) Metrics() (OpsMetrics, error) {
 		if r.Status == "failed" {
 			m.MaintenanceFailures++
 		}
+		if strings.Contains(strings.ToLower(r.Error), "pm2") {
+			m.PM2ActionFailures++
+		}
+		if r.Status == "recovery_required" {
+			m.RecoveryConflicts++
+		}
+	}
+	if alerts, alertErr := s.ListAlerts(); alertErr == nil {
+		m.AlertDeliveryTotal = len(alerts)
+		for _, alert := range alerts {
+			if alert.Status == "delivery_failed" {
+				m.AlertDeliveryFailures++
+			}
+		}
+	}
+	if leases, leaseErr := s.ListLeases(); leaseErr == nil {
+		for _, lease := range leases {
+			if lease.FencingToken > 1 {
+				m.LeaseTakeovers++
+			}
+		}
+	}
+	if snapshot, snapshotErr := s.Snapshot(""); snapshotErr == nil {
+		m.IncidentDeduplicated = maxInt(m.IncidentDeduplicated, snapshot.IncidentDeduplicated)
+		m.AIWakeups = maxInt(m.AIWakeups, snapshot.AIWakeups)
+		m.MaintenanceFailures = maxInt(m.MaintenanceFailures, snapshot.MaintenanceFailures)
+		m.Rollbacks = maxInt(m.Rollbacks, snapshot.Rollbacks)
+		m.PM2ActionFailures = maxInt(m.PM2ActionFailures, snapshot.PM2ActionFailures)
+		m.BudgetExhausted = maxInt(m.BudgetExhausted, snapshot.BudgetExhausted)
+		m.AlertDeliveryTotal = maxInt(m.AlertDeliveryTotal, snapshot.AlertDeliveryTotal)
+		m.AlertDeliveryFailures = maxInt(m.AlertDeliveryFailures, snapshot.AlertDeliveryFailures)
 	}
 	return m, nil
 }
@@ -499,41 +637,147 @@ func (s *SQLiteOpsRepository) ListRoles() ([]OpsRoleBinding, error) {
 	return out, err
 }
 
-func (s *SQLiteOpsRepository) leasePath(key string) string {
-	return filepath.Join(filepath.Dir(s.path), "sqlite-lease-"+sha256Hex(key)+".json")
-}
 func (s *SQLiteOpsRepository) AcquireOpsLease(key, owner string, ttl time.Duration) (func(), error) {
-	leaseMu.Lock()
-	defer leaseMu.Unlock()
-	path := s.leasePath(key)
-	now := time.Now()
-	var cur OpsLease
-	if readJSONFile(path, &cur) == nil && cur.ExpiresAt.After(now) && cur.OwnerID != owner {
-		return nil, errors.New("运维执行租约已被其他实例持有")
+	if strings.TrimSpace(key) == "" || strings.TrimSpace(owner) == "" || ttl <= 0 {
+		return nil, errors.New("租约参数无效")
 	}
-	if err := atomicJSONFile(path, OpsLease{Key: key, OwnerID: owner, CreatedAt: now, RenewedAt: now, ExpiresAt: now.Add(ttl)}); err != nil {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now()
+	lease := OpsLease{Key: key, OwnerID: owner, CreatedAt: now, RenewedAt: now, ExpiresAt: now.Add(ttl)}
+	var previous OpsLease
+	var previousPayload string
+	if err := s.db.QueryRow(`SELECT payload FROM leases WHERE lease_key=?`, key).Scan(&previousPayload); err == nil {
+		if json.Unmarshal([]byte(previousPayload), &previous) == nil {
+			lease.FencingToken = previous.FencingToken + 1
+			if previous.OwnerID == owner && !previous.CreatedAt.IsZero() {
+				lease.CreatedAt = previous.CreatedAt
+			}
+		}
+	}
+	if lease.FencingToken == 0 {
+		lease.FencingToken = 1
+	}
+	b, err := json.Marshal(lease)
+	if err != nil {
+		return nil, err
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	// Update is conditional on expiry or ownership. This prevents a second
+	// instance from overwriting a live lease between SELECT and INSERT.
+	res, err := tx.Exec(`UPDATE leases SET payload=?, expires_at=? WHERE lease_key=? AND (expires_at<=? OR json_extract(payload,'$.ownerId')=?)`, string(b), lease.ExpiresAt.Format(time.RFC3339Nano), key, now.Format(time.RFC3339Nano), owner)
+	if err != nil {
+		_ = tx.Rollback()
+		return nil, err
+	}
+	if affected, _ := res.RowsAffected(); affected == 0 {
+		var existing string
+		queryErr := tx.QueryRow(`SELECT payload FROM leases WHERE lease_key=?`, key).Scan(&existing)
+		if queryErr == nil {
+			_ = tx.Rollback()
+			return nil, errors.New("运维执行租约已被其他实例持有")
+		}
+		if !errors.Is(queryErr, sql.ErrNoRows) {
+			_ = tx.Rollback()
+			return nil, queryErr
+		}
+		if _, err = tx.Exec(`INSERT INTO leases(lease_key,payload,expires_at) VALUES(?,?,?)`, key, string(b), lease.ExpiresAt.Format(time.RFC3339Nano)); err != nil {
+			_ = tx.Rollback()
+			return nil, errors.New("运维执行租约竞争失败")
+		}
+	}
+	if err = tx.Commit(); err != nil {
 		return nil, err
 	}
 	return func() {
-		leaseMu.Lock()
-		defer leaseMu.Unlock()
-		var latest OpsLease
-		if readJSONFile(path, &latest) == nil && latest.OwnerID == owner {
-			_ = os.Remove(path)
-		}
+		_ = s.releaseSQLiteLease(key, owner)
 	}, nil
 }
 func (s *SQLiteOpsRepository) RenewOpsLease(key, owner string, ttl time.Duration) error {
-	leaseMu.Lock()
-	defer leaseMu.Unlock()
-	path := s.leasePath(key)
+	if ttl <= 0 {
+		return errors.New("租约时长无效")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	var cur OpsLease
-	if err := readJSONFile(path, &cur); err != nil || cur.OwnerID != owner {
+	var payload string
+	if err := s.db.QueryRow(`SELECT payload FROM leases WHERE lease_key=?`, key).Scan(&payload); err != nil || json.Unmarshal([]byte(payload), &cur) != nil || cur.OwnerID != owner {
 		return errors.New("运维租约不存在或不属于当前实例")
 	}
-	cur.ExpiresAt = time.Now().Add(ttl)
-	cur.RenewedAt = time.Now()
-	return atomicJSONFile(path, cur)
+	now := time.Now()
+	cur.ExpiresAt = now.Add(ttl)
+	cur.RenewedAt = now
+	b, err := json.Marshal(cur)
+	if err != nil {
+		return err
+	}
+	result, err := s.db.Exec(`UPDATE leases SET payload=?, expires_at=? WHERE lease_key=? AND expires_at>? AND json_extract(payload,'$.ownerId')=?`, string(b), cur.ExpiresAt.Format(time.RFC3339Nano), key, now.Format(time.RFC3339Nano), owner)
+	if err == nil {
+		if affected, _ := result.RowsAffected(); affected == 0 {
+			err = errors.New("运维租约已过期")
+		}
+	}
+	return err
+}
+
+func (s *SQLiteOpsRepository) releaseSQLiteLease(key, owner string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var payload string
+	if err := s.db.QueryRow(`SELECT payload FROM leases WHERE lease_key=? AND json_extract(payload,'$.ownerId')=?`, key, owner).Scan(&payload); err != nil {
+		return err
+	}
+	var lease OpsLease
+	if err := json.Unmarshal([]byte(payload), &lease); err != nil {
+		return err
+	}
+	lease.ExpiresAt = time.Now().Add(-time.Second)
+	lease.RenewedAt = time.Now()
+	b, err := json.Marshal(lease)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec(`UPDATE leases SET payload=?, expires_at=? WHERE lease_key=? AND json_extract(payload,'$.ownerId')=?`, string(b), lease.ExpiresAt.Format(time.RFC3339Nano), key, owner)
+	return err
+}
+
+func (s *SQLiteOpsRepository) GetLease(key string) (OpsLease, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var payload string
+	if err := s.db.QueryRow(`SELECT payload FROM leases WHERE lease_key=?`, key).Scan(&payload); err != nil {
+		return OpsLease{}, err
+	}
+	var lease OpsLease
+	if err := json.Unmarshal([]byte(payload), &lease); err != nil {
+		return OpsLease{}, err
+	}
+	return lease, nil
+}
+
+func (s *SQLiteOpsRepository) ListLeases() ([]OpsLease, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rows, err := s.db.Query(`SELECT payload FROM leases ORDER BY expires_at ASC, lease_key ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []OpsLease
+	for rows.Next() {
+		var payload string
+		if err := rows.Scan(&payload); err != nil {
+			return nil, err
+		}
+		var lease OpsLease
+		if json.Unmarshal([]byte(payload), &lease) == nil {
+			out = append(out, lease)
+		}
+	}
+	return out, rows.Err()
 }
 
 var _ OpsRepository = (*SQLiteOpsRepository)(nil)

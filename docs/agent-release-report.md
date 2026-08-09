@@ -67,6 +67,11 @@ git diff --check
 - 真实供应商不参与自动化测试，集成测试应使用 fake provider。
 - PM2 健康信号当前基于受控 `jlist/logs` 轮询，不是 PM2 daemon 原生事件流。
 - 首期 Webhook 是通用 JSON 适配，不包含具体厂商的值班升级策略。
+- PM2 批采集已通过 `robot.PM2LogBatchSource` 使用真实文件 device/inode/offset，并在批读取失败时才启动流式回退；无法取得 PM2 日志路径时仍会退回 PM2 流式接口。
+- SQLite 业务表目前保存完整 JSON payload，字段级查询和历史版本迁移仍待后续版本完成。
+- 告警重试队列已持久化状态，但仍由 OpsMonitor 轮询触发，尚未拆分为独立可扩展 worker。
+- 指标查询已支持时间范围过滤；当前存储按指标/项目/fingerprint 聚合，尚未按固定时间桶自动归档，长期高基数项目需要后续增加保留策略。
+- 多实例租约具备事务竞争保护和 fencing token；旧实例在 token 变化、租约过期或紧急停止后不能继续执行 PM2 写操作。生产仍建议先采用单主实例灰度。
 
 ## 下一阶段生产可靠性增量
 
@@ -79,6 +84,17 @@ git diff --check
 - SQLite 适配器提供 schema 元数据、索引和显式关闭；任务支持 `Idempotency-Key`，避免请求重试创建重复任务；PM2 项目/进程游标持久化，监控可从最近采集位置继续。
 - OpsMonitor、GoalScheduler 和自动写任务使用统一 LeaseManager；租约包含创建、续期和过期时间，续期失败会停止后续执行。告警重试次数和退避间隔可按 severity 策略配置。
 - SQLite 核心实体已事务性双写到明确业务表与兼容 records 表；项目写任务、GoalScheduler、OpsMonitor 均纳入租约边界。
+- 本轮将 SQLite 业务实体切换为主读取路径，并为 Incident、Todo、Maintenance、Policy、Alert、LogCursor 增加稳定倒序查询；兼容 records 表仅作为迁移/回退来源。
+- SQLite 租约已改为 `leases` 表内的条件事务更新，支持过期接管、续期失败检测和 owner 校验，不再生成 sqlite lease sidecar 文件。
+- 自动维护按 Incident 检查 queued/running/fixing/verifying/observing 记录，重复分析不会再次启动同一 Incident 的写任务。
+- 告警投递失败会保存 `delivery_failed`、重试次数、下次尝试时间和错误原因；OpsMonitor 轮询时会恢复到达重试时间的记录。
+- SQLite 和 JSON 均提供 `AlertQueue`，失败投递可领取、确认或重新排队；SQLite 队列使用 `alert_deliveries` 表事务更新。
+- 租约现在暴露 `GetLease/ListLeases` 和 fencing token；项目写任务会在续期时校验 token 变化并主动暂停。
+- 新增 `LogBatch/LogBatchSource` 兼容扩展，可由带文件元数据的日志源提供真实路径、device、inode、offset；旧 PM2 流式接口继续作为回退。
+- `robot.PM2LogBatchSource` 已从 PM2 jlist 暴露 error log 路径，并处理文件轮转、截断、inode/device 和 offset；OpsMonitor 优先使用批读取，失败时回退旧流式源。
+- 自动 restart/reload 已通过 `GuardedPM2Executor` 校验项目 fencing token、紧急停止状态和 PM2 预算。
+- 新增 JSON/SQLite `MetricsRepository` 和 `ops_metrics` 表，事件指标通过原子累计并由 JSON/Prometheus 共用 Snapshot。
+- 新增 `/api/v1/ops/metrics/query` 查询入口；GuardedPM2Executor 统一保护 restart/reload，并写入审计记录和 PM2 失败结果。
 
 SQLite 启用方式：设置 `ALX_OPS_STORAGE=sqlite`，并可用 `ALX_OPS_SQLITE_PATH` 指定数据库文件。服务启动时会使用纯 Go 迁移器将 JSON 记录导入 SQLite；迁移失败保持 JSON 模式且不启动自动写任务。
 

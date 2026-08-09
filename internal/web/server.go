@@ -72,11 +72,12 @@ type operationTask struct {
 // changes state or a running process emits output. Type is "task" (full task
 // snapshot), "output" (incremental text), "app-ready", or "app-failed".
 type robotEvent struct {
-	ID     int64          `json:"id,omitempty"`
-	Type   string         `json:"type"`
-	TaskID string         `json:"taskId,omitempty"`
-	Task   *operationTask `json:"task,omitempty"`
-	Text   string         `json:"text,omitempty"`
+	ID        int64          `json:"id,omitempty"`
+	Type      string         `json:"type"`
+	TaskID    string         `json:"taskId,omitempty"`
+	Task      *operationTask `json:"task,omitempty"`
+	Text      string         `json:"text,omitempty"`
+	Truncated bool           `json:"truncated,omitempty"`
 }
 
 // robotEventHub fans events out to open SSE subscribers. A dropped channel is
@@ -298,6 +299,7 @@ type server struct {
 	goalSchedulerMu   sync.Mutex
 	goalRunning       map[string]bool
 	opsStore          agent.OpsRepository
+	pm2Guard          *GuardedPM2Executor
 	opsOrchestrator   *agent.OpsOrchestrator
 	alerts            agent.AlertManager
 	opsPaused         bool
@@ -309,6 +311,7 @@ type server struct {
 	webviewRuntimes   map[string]*webViewRuntime
 	stopping          map[string]bool
 	consoleCache      map[string]consoleSnapshot
+	outputBuffers     map[string]*operationOutputBuffer
 	// pm2Status lets tests substitute a fake PM2 state. The default read runs a
 	// real `npx pm2 jlist` behind a short timeout so a missing pm2 never blocks
 	// a local start request for the full package-manager timeout.
@@ -491,10 +494,26 @@ func NewServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 		}
 	}
 	operationEvents := newOperationEventStore(filepath.Join(filepath.Dir(taskStore.TasksDir()), "operations", "events.db"))
-	s := &server{version: version, assets: assets, static: http.FileServer(http.FS(assets)), checker: system.NewChecker(), plugins: setupplugin.NewRegistry(), auth: identity, ai: aiManager, agentSessions: sessionStore, agentTaskStore: taskStore, agentTasks: tasks, taskService: &agent.TaskService{Manager: tasks}, goalStore: goalStore, opsStore: opsStore, goalSchedulerStop: make(chan struct{}), goalRunning: map[string]bool{}, agentConfirms: newAgentConfirmManager(), development: map[string]developmentProcess{}, webviewRuntimes: map[string]*webViewRuntime{}, stopping: map[string]bool{}, consoleCache: map[string]consoleSnapshot{}, directoryRoots: managedDirectoryRoots(), events: newRobotEventHub(), eventGateway: newEventGateway(), operationEvents: operationEvents, operations: operationEvents.snapshot(), opsEvents: newOpsEventHub(), mcpEvents: newMCPEventHub(), mcpMonitorStop: make(chan struct{}), pluginEventsStop: make(chan struct{}), nodeID: fmt.Sprintf("%s-%d", hostname(), os.Getpid())}
+	s := &server{version: version, assets: assets, static: http.FileServer(http.FS(assets)), checker: system.NewChecker(), plugins: setupplugin.NewRegistry(), auth: identity, ai: aiManager, agentSessions: sessionStore, agentTaskStore: taskStore, agentTasks: tasks, taskService: &agent.TaskService{Manager: tasks}, goalStore: goalStore, opsStore: opsStore, goalSchedulerStop: make(chan struct{}), goalRunning: map[string]bool{}, agentConfirms: newAgentConfirmManager(), development: map[string]developmentProcess{}, webviewRuntimes: map[string]*webViewRuntime{}, stopping: map[string]bool{}, consoleCache: map[string]consoleSnapshot{}, outputBuffers: map[string]*operationOutputBuffer{}, directoryRoots: managedDirectoryRoots(), events: newRobotEventHub(), eventGateway: newEventGateway(), operationEvents: operationEvents, operations: operationEvents.snapshot(), opsEvents: newOpsEventHub(), mcpEvents: newMCPEventHub(), mcpMonitorStop: make(chan struct{}), pluginEventsStop: make(chan struct{}), nodeID: fmt.Sprintf("%s-%d", hostname(), os.Getpid())}
 	s.alerts.Record = func(alert agent.Alert) error {
 		return opsStore.SaveAlert(agent.AlertRecord{Alert: alert, Status: "open", Updated: time.Now()})
 	}
+	s.alerts.OnDeliveryFailure = func(alert agent.Alert, deliveryErr error) {
+		record, err := opsStore.GetAlert(alert.ID)
+		if err != nil {
+			record = agent.AlertRecord{Alert: alert}
+		}
+		record.Status = "delivery_failed"
+		record.RetryCount++
+		record.LastError = deliveryErr.Error()
+		record.NextAttempt = time.Now().Add(5 * time.Minute)
+		record.Updated = time.Now()
+		_ = opsStore.SaveAlert(record)
+	}
+	s.alerts.RetryStore = opsStore
+	s.alerts.Queue = opsStore
+	pm2Guard := GuardedPM2Executor{Robots: s.robots, Leases: agent.NewLeaseManager(opsStore), Store: opsStore, Emergency: func() bool { return s.opsPaused }}
+	s.pm2Guard = &pm2Guard
 	s.opsOrchestrator = &agent.OpsOrchestrator{
 		Store:  opsStore,
 		Policy: func(root string) (agent.OpsPolicy, error) { return opsStore.GetPolicy(root) },
@@ -526,6 +545,9 @@ func NewServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 			result, err := s.robots.Run(root, action, "", "", "", "", "", true)
 			return result.Output, err
 		},
+		PM2Guarded: func(root, action, owner string) (string, error) {
+			return pm2Guard.Run(context.Background(), root, action, owner)
+		},
 		StartFix: func(incident agent.Incident, _ agent.AutoFixDecision) (string, error) {
 			if s.opsPaused {
 				return "", errors.New("全局 AI 运维已暂停")
@@ -553,10 +575,6 @@ func NewServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	_ = s.agentTasks.ReconcileStartup()
 	_ = s.goalStore.ReconcileRuns(s.agentTasks.List())
 	_ = s.opsStore.ReconcileMaintenance(s.agentTasks.List())
-	s.startGoalScheduler()
-	if s.opsMonitor != nil {
-		_ = s.opsMonitor.Start(context.Background())
-	}
 	s.agentTasks.SetObserver(func(previous, current agent.AgentTask) {
 		if previous.Status != current.Status && s.opsStore != nil {
 			status := string(current.Status)
@@ -623,6 +641,13 @@ func NewServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 			_ = s.goalStore.UpdateRunByTask(current.ID, status, current.LastError)
 		}
 	})
+	// Register observers before starting background loops so startup
+	// reconciliation and the first scheduled/monitor event cannot bypass
+	// GoalRun or MaintenanceRun state synchronization.
+	s.startGoalScheduler()
+	if s.opsMonitor != nil {
+		_ = s.opsMonitor.Start(context.Background())
+	}
 	// Kill any previously supervised robot process that survived a restart so a
 	// stray node cannot keep the app port occupied.
 	cleanupStaleProcesses()
@@ -686,6 +711,8 @@ func NewServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	mux.HandleFunc("/api/v1/setup/plugins", s.setupPluginsHandler)
 	mux.HandleFunc("/api/v1/setup/plugins/revision", s.setupPluginRevisionHandler)
 	mux.HandleFunc("/api/v1/setup/plugins/events", s.setupPluginEventsHandler)
+	mux.HandleFunc("/api/v1/setup/plugins/cache", s.setupPluginCacheHandler)
+	mux.HandleFunc("/api/v1/setup/plugins/releases/", s.setupPluginReleasesHandler)
 	mux.HandleFunc("/api/v1/setup/plugins/", s.setupPluginActionHandler)
 	mux.HandleFunc("/api/v1/setup/plugins/web/", s.setupPluginWebHandler)
 	mux.HandleFunc("/api/v1/robot", s.robotHandler)
@@ -1017,6 +1044,45 @@ func (s *server) setupPluginRevisionHandler(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, map[string]any{"revision": s.plugins.Revision()})
 }
 
+func (s *server) setupPluginReleasesHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
+		return
+	}
+	id := strings.TrimPrefix(r.URL.Path, "/api/v1/setup/plugins/releases/")
+	if id == "" || strings.Contains(id, "/") {
+		writeError(w, http.StatusBadRequest, "插件标识无效。")
+		return
+	}
+	items, err := s.plugins.Releases(id)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, items)
+}
+
+func (s *server) setupPluginCacheHandler(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		summary, err := s.plugins.CacheSummary()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, summary)
+	case http.MethodPost:
+		summary, err := s.plugins.CleanupCache()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, summary)
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
+	}
+}
+
 // setupPluginEventsHandler streams a "plugins changed" event over SSE whenever
 // the plugin registry revision bumps, so the UI can refresh the plugin list
 // without polling it. The event carries no payload; the client refetches
@@ -1074,11 +1140,33 @@ func (s *server) startPluginEventBridge() {
 }
 
 func (s *server) setupPluginActionHandler(w http.ResponseWriter, r *http.Request) {
+	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/v1/setup/plugins/"), "/")
+	if len(parts) == 2 && parts[1] == "versions" && r.Method == http.MethodGet {
+		versions, err := s.plugins.Versions(parts[0])
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, versions)
+		return
+	}
+	if len(parts) == 3 && parts[1] == "versions" && r.Method == http.MethodDelete {
+		tag, err := url.PathUnescape(parts[2])
+		if err != nil || tag == "" {
+			writeError(w, http.StatusBadRequest, "插件版本无效。")
+			return
+		}
+		if err := s.plugins.DeleteVersion(parts[0], tag); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"id": parts[0], "tag": tag, "deleted": true})
+		return
+	}
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
 		return
 	}
-	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/v1/setup/plugins/"), "/")
 	if len(parts) != 2 || parts[0] == "" {
 		writeError(w, http.StatusNotFound, "未找到 Setup 插件操作。")
 		return
@@ -1099,12 +1187,37 @@ func (s *server) setupPluginActionHandler(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if parts[1] == "install" {
-		installed, err := s.plugins.Install(parts[0])
+		var input struct {
+			Version   string `json:"version"`
+			AssetName string `json:"assetName"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&input); err != nil || input.Version == "" || input.AssetName == "" {
+			writeError(w, http.StatusBadRequest, "请选择插件版本和安装包。")
+			return
+		}
+		installed, err := s.plugins.Install(parts[0], input.Version, input.AssetName)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"id": installed.ID, "installed": true})
+		return
+	}
+	if parts[1] == "switch" {
+		var input struct {
+			Version   string `json:"version"`
+			AssetName string `json:"assetName"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&input); err != nil || input.Version == "" || input.AssetName == "" {
+			writeError(w, http.StatusBadRequest, "请选择插件版本和安装包。")
+			return
+		}
+		installed, err := s.plugins.Install(parts[0], input.Version, input.AssetName)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"id": installed.ID, "tag": installed.InstalledTag, "switched": true})
 		return
 	}
 	if parts[1] != "actions" {
@@ -2445,7 +2558,15 @@ func (s *server) robotTasksHandler(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[ROBOT %s] 开始 action=%s root=%q", created.ID, created.Action, created.Root)
 	s.addOperation(created)
 	go func() {
-		result, err := s.robots.Run(input.Root, input.Action, input.Message, input.Package, input.Version, input.Tag, input.Token, input.Confirm == "true")
+		var result robot.Result
+		var err error
+		if input.Action == "pm2-reload" && s.pm2Guard != nil {
+			var output string
+			output, err = s.pm2Guard.Run(context.Background(), input.Root, input.Action, created.ID)
+			result = robot.Result{Path: input.Root, Output: output}
+		} else {
+			result, err = s.robots.Run(input.Root, input.Action, input.Message, input.Package, input.Version, input.Tag, input.Token, input.Confirm == "true")
+		}
 		finished := time.Now()
 		s.mu.Lock()
 		var snapshot operationTask
@@ -2783,29 +2904,79 @@ func (s *server) stopDevelopment(root, mode string) bool {
 	return true
 }
 
+type operationOutputBuffer struct {
+	text      strings.Builder
+	timer     *time.Timer
+	truncated bool
+}
+
+// appendOperationOutput coalesces process output into one durable SSE event per
+// task per 100ms. This keeps fast stdout/stderr from turning into many SQLite
+// transactions while preserving terminal ordering.
 func (s *server) appendOperationOutput(id, output string) {
 	if output == "" {
 		return
 	}
-	const maxOutput = 256 * 1024
+	const maxBatch = 32 * 1024
 	s.mu.Lock()
+	if s.outputBuffers == nil {
+		s.outputBuffers = map[string]*operationOutputBuffer{}
+	}
+	buffer := s.outputBuffers[id]
+	if buffer == nil {
+		buffer = &operationOutputBuffer{}
+		s.outputBuffers[id] = buffer
+	}
+	if buffer.text.Len()+len(output) > maxBatch && buffer.text.Len() > 0 {
+		s.mu.Unlock()
+		s.flushOperationOutput(id)
+		s.appendOperationOutput(id, output)
+		return
+	}
+	if len(output) > maxBatch {
+		output = output[len(output)-maxBatch:]
+		buffer.truncated = true
+	}
+	buffer.text.WriteString(output)
+	if buffer.timer == nil {
+		buffer.timer = time.AfterFunc(100*time.Millisecond, func() { s.flushOperationOutput(id) })
+	}
+	legacy := s.eventGateway == nil
+	s.mu.Unlock()
+	if legacy {
+		s.flushOperationOutput(id)
+	}
+}
+
+func (s *server) flushOperationOutput(id string) {
+	s.mu.Lock()
+	buffer := s.outputBuffers[id]
+	if buffer == nil || buffer.text.Len() == 0 {
+		s.mu.Unlock()
+		return
+	}
+	text, truncated := buffer.text.String(), buffer.truncated
+	if buffer.timer != nil {
+		buffer.timer.Stop()
+	}
+	delete(s.outputBuffers, id)
+	const maxOutput = 256 * 1024
 	updated := false
 	for index := range s.operations {
 		if s.operations[index].ID != id {
 			continue
 		}
-		s.operations[index].Output += output
+		s.operations[index].Output += text
 		if len(s.operations[index].Output) > maxOutput {
 			s.operations[index].Output = "…前面的输出已省略…\n" + s.operations[index].Output[len(s.operations[index].Output)-maxOutput:]
+			truncated = true
 		}
 		updated = true
 		break
 	}
 	s.mu.Unlock()
 	if updated {
-		// Fan out the incremental text outside the lock so SSE clients stream
-		// the terminal output without a polling loop.
-		s.publishRobotEvent(robotEvent{Type: "output", TaskID: id, Text: output})
+		s.publishRobotEvent(robotEvent{Type: "output", TaskID: id, Text: text, Truncated: truncated})
 	}
 }
 
@@ -2842,6 +3013,7 @@ func (w *operationWriter) Write(data []byte) (int, error) {
 
 func (s *server) watchDevelopmentTask(id, root, action string, command *exec.Cmd) {
 	err := command.Wait()
+	s.flushOperationOutput(id)
 
 	finished := time.Now()
 	s.mu.Lock()

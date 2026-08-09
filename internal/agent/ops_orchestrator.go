@@ -12,12 +12,13 @@ import (
 // web layer supplies guarded PM2/task callbacks, keeping this package safe to
 // test without spawning processes or calling an AI provider.
 type OpsOrchestrator struct {
-	Store    OpsRepository
-	Policy   func(string) (OpsPolicy, error)
-	StartFix func(Incident, AutoFixDecision) (string, error)
-	PM2      func(string, string) (string, error)
-	AI       func(Incident, OpsPolicy) (AutoFixDecision, error)
-	Now      func() time.Time
+	Store      OpsRepository
+	Policy     func(string) (OpsPolicy, error)
+	StartFix   func(Incident, AutoFixDecision) (string, error)
+	PM2        func(string, string) (string, error)
+	PM2Guarded func(string, string, string) (string, error)
+	AI         func(Incident, OpsPolicy) (AutoFixDecision, error)
+	Now        func() time.Time
 }
 
 func (o *OpsOrchestrator) now() time.Time {
@@ -58,30 +59,46 @@ func (o *OpsOrchestrator) Analyze(id string) (Incident, AutoFixDecision, error) 
 	if err := o.Store.SaveIncident(incident); err != nil {
 		return incident, decision, err
 	}
+	recordMetric(o.Store, "ai_wakeup_total", incident.ProjectRoot, incident.Fingerprint, 1)
 	if decision.Action == "create_todo" {
 		_ = o.createTodo(incident, decision)
 		return incident, decision, nil
 	}
 	if decision.Action == "restart_process" {
+		if existing, ok := o.activeRunForIncident(incident.ID); ok {
+			return incident, decision, fmt.Errorf("事件已有进行中的维护任务：%s", existing.ID)
+		}
 		run := MaintenanceRun{ID: fmt.Sprintf("maint-%d", o.now().UnixNano()), IncidentID: incident.ID, Decision: decision, Status: "running", Created: o.now()}
 		if o.PM2 == nil {
 			run.Status, run.Error = "failed", "PM2 控制未配置"
 		} else {
-			if _, budgetErr := o.Store.ConsumeBudget(incident.ProjectRoot, 0, 1, 0); budgetErr != nil {
-				run.Status, run.Error = "failed", budgetErr.Error()
-				_ = o.createTodo(incident, decision)
-				incident.Status = IncidentTodo
-				_ = o.Store.SaveMaintenance(run)
-				_ = o.Store.SaveIncident(incident)
-				return incident, decision, nil
+			if o.PM2Guarded == nil {
+				if _, budgetErr := o.Store.ConsumeBudget(incident.ProjectRoot, 0, 1, 0); budgetErr != nil {
+					run.Status, run.Error = "failed", budgetErr.Error()
+					_ = o.createTodo(incident, decision)
+					incident.Status = IncidentTodo
+					_ = o.Store.SaveMaintenance(run)
+					_ = o.Store.SaveIncident(incident)
+					return incident, decision, nil
+				}
 			}
-			output, actionErr := o.PM2(incident.ProjectRoot, "pm2-restart")
+			var output string
+			var actionErr error
+			if o.PM2Guarded != nil {
+				output, actionErr = o.PM2Guarded(incident.ProjectRoot, "pm2-restart", incident.ID)
+			} else if o.PM2 != nil {
+				output, actionErr = o.PM2(incident.ProjectRoot, "pm2-restart")
+			} else {
+				actionErr = errors.New("PM2 控制未配置")
+			}
 			run.PM2Actions = []string{"pm2-restart"}
 			run.PM2ActionCount = 1
 			if actionErr != nil {
 				run.Status, run.Error = "failed", actionErr.Error()
+				recordMetric(o.Store, "maintenance_failure_total", incident.ProjectRoot, incident.Fingerprint, 1)
 			} else {
 				run.Status, run.VerificationOutput = "observing", output
+				recordMetric(o.Store, "maintenance_success_total", incident.ProjectRoot, incident.Fingerprint, 1)
 				run.ObservationStarted = o.now()
 				run.ObservationUntil = run.ObservationStarted.Add(time.Duration(policy.ObservationMinutes) * time.Minute)
 				incident.Status = IncidentObserving
@@ -92,6 +109,9 @@ func (o *OpsOrchestrator) Analyze(id string) (Incident, AutoFixDecision, error) 
 		return incident, decision, nil
 	}
 	if decision.Action == "auto_fix" && o.StartFix != nil {
+		if existing, ok := o.activeRunForIncident(incident.ID); ok {
+			return incident, decision, fmt.Errorf("事件已有进行中的维护任务：%s", existing.ID)
+		}
 		run := MaintenanceRun{ID: fmt.Sprintf("maint-%d", o.now().UnixNano()), IncidentID: incident.ID, Decision: decision, Status: "queued", Created: o.now()}
 		if _, budgetErr := o.Store.ConsumeBudget(incident.ProjectRoot, 1000, 0, 0); budgetErr != nil {
 			run.Status, run.Error = "failed", budgetErr.Error()
@@ -113,6 +133,25 @@ func (o *OpsOrchestrator) Analyze(id string) (Incident, AutoFixDecision, error) 
 		_ = o.Store.SaveIncident(incident)
 	}
 	return incident, decision, nil
+}
+
+func (o *OpsOrchestrator) activeRunForIncident(incidentID string) (MaintenanceRun, bool) {
+	if o == nil || o.Store == nil {
+		return MaintenanceRun{}, false
+	}
+	runs, err := o.Store.ListMaintenance()
+	if err != nil {
+		return MaintenanceRun{}, false
+	}
+	for _, run := range runs {
+		switch run.Status {
+		case "queued", "running", "fixing", "verifying", "observing":
+			if run.IncidentID == incidentID {
+				return run, true
+			}
+		}
+	}
+	return MaintenanceRun{}, false
 }
 
 func opsDecisionCanNarrow(base, candidate string) bool {
@@ -199,6 +238,9 @@ func (o *OpsOrchestrator) Approve(id string) (Incident, error) {
 	}
 	if o.StartFix == nil {
 		return incident, errors.New("自动修复执行器未配置")
+	}
+	if existing, ok := o.activeRunForIncident(incident.ID); ok {
+		return incident, fmt.Errorf("事件已有进行中的维护任务：%s", existing.ID)
 	}
 	taskID, err := o.StartFix(incident, decision)
 	if err != nil {

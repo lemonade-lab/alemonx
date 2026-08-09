@@ -1,0 +1,203 @@
+package agent
+
+import (
+	"errors"
+	"os"
+	"path/filepath"
+	"sync"
+	"time"
+)
+
+type MetricsRepository interface {
+	Increment(name, root, fingerprint string, value int64) error
+	Observe(name, root string, value float64) error
+	Snapshot(root string) (OpsMetrics, error)
+	Query(root string, from, to time.Time) ([]MetricPoint, error)
+}
+
+type MetricPoint struct {
+	Name        string    `json:"name"`
+	Root        string    `json:"root"`
+	Fingerprint string    `json:"fingerprint,omitempty"`
+	Value       float64   `json:"value"`
+	Updated     time.Time `json:"updated"`
+}
+
+type metricValue struct {
+	Name    string    `json:"name"`
+	Root    string    `json:"root"`
+	FP      string    `json:"fingerprint"`
+	Value   float64   `json:"value"`
+	Updated time.Time `json:"updated"`
+}
+
+var metricsMu sync.Mutex
+
+func (s *OpsStore) Increment(name, root, fingerprint string, value int64) error {
+	return s.updateMetric(name, root, fingerprint, float64(value))
+}
+
+func (s *OpsStore) Observe(name, root string, value float64) error {
+	return s.updateMetric(name, root, "", value)
+}
+
+func (s *OpsStore) updateMetric(name, root, fingerprint string, value float64) error {
+	metricsMu.Lock()
+	defer metricsMu.Unlock()
+	path := filepath.Join(s.dir, "metrics.json")
+	var items []metricValue
+	if err := readJSONFile(path, &items); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	found := false
+	for i := range items {
+		if items[i].Name == name && items[i].Root == root && items[i].FP == fingerprint {
+			items[i].Value += value
+			items[i].Updated = time.Now()
+			found = true
+			break
+		}
+	}
+	if !found {
+		items = append(items, metricValue{Name: name, Root: root, FP: fingerprint, Value: value, Updated: time.Now()})
+	}
+	return atomicJSONFile(path, items)
+}
+
+func (s *OpsStore) Snapshot(root string) (OpsMetrics, error) {
+	var items []metricValue
+	if err := readJSONFile(filepath.Join(s.dir, "metrics.json"), &items); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return OpsMetrics{}, err
+	}
+	return snapshotMetrics(items, root), nil
+}
+
+func (s *OpsStore) Query(root string, from, to time.Time) ([]MetricPoint, error) {
+	var items []metricValue
+	if err := readJSONFile(filepath.Join(s.dir, "metrics.json"), &items); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	out := make([]MetricPoint, 0, len(items))
+	for _, item := range items {
+		if root != "" && item.Root != root || !from.IsZero() && item.Updated.Before(from) || !to.IsZero() && item.Updated.After(to) {
+			continue
+		}
+		out = append(out, MetricPoint{Name: item.Name, Root: item.Root, Fingerprint: item.FP, Value: item.Value, Updated: item.Updated})
+	}
+	return out, nil
+}
+
+func snapshotMetrics(items []metricValue, root string) OpsMetrics {
+	var out OpsMetrics
+	for _, item := range items {
+		if root != "" && item.Root != root {
+			continue
+		}
+		n := item.Name
+		switch n {
+		case "incident_total":
+			out.Incidents += int(item.Value)
+		case "incident_deduplicated_total":
+			out.IncidentDeduplicated += int(item.Value)
+		case "ai_wakeup_total":
+			out.AIWakeups += int(item.Value)
+		case "maintenance_success_total":
+			out.AutoFixSuccess += int(item.Value)
+		case "maintenance_failure_total":
+			out.MaintenanceFailures += int(item.Value)
+		case "maintenance_rollback_total":
+			out.Rollbacks += int(item.Value)
+		case "pm2_action_failure_total":
+			out.PM2ActionFailures += int(item.Value)
+		case "budget_exhausted_total":
+			out.BudgetExhausted += int(item.Value)
+		case "lease_takeover_total":
+			out.LeaseTakeovers += int(item.Value)
+		case "recovery_conflict_total":
+			out.RecoveryConflicts += int(item.Value)
+		case "alert_delivery_total":
+			out.AlertDeliveryTotal += int(item.Value)
+		case "alert_delivery_failure_total":
+			out.AlertDeliveryFailures += int(item.Value)
+		case "incident_mttr_seconds":
+			out.AverageRecoverySecs += item.Value
+		}
+	}
+	return out
+}
+
+func (s *SQLiteOpsRepository) Increment(name, root, fingerprint string, value int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.db.Exec(`INSERT INTO ops_metrics(metric_name,project_root,fingerprint,value,window_start,window_end,updated) VALUES(?,?,?,?,?,?,?) ON CONFLICT(metric_name,project_root,fingerprint) DO UPDATE SET value=value+excluded.value,updated=excluded.updated`, name, root, fingerprint, value, time.Now().UTC(), time.Now().UTC(), time.Now().UTC())
+	return err
+}
+
+func (s *SQLiteOpsRepository) Observe(name, root string, value float64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now().UTC()
+	_, err := s.db.Exec(`INSERT INTO ops_metrics(metric_name,project_root,fingerprint,value,window_start,window_end,updated) VALUES(?,?,?,?,?,?,?) ON CONFLICT(metric_name,project_root,fingerprint) DO UPDATE SET value=value+excluded.value,updated=excluded.updated`, name, root, "", value, now, now, now)
+	return err
+}
+
+func (s *SQLiteOpsRepository) Snapshot(root string) (OpsMetrics, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rows, err := s.db.Query(`SELECT metric_name,value FROM ops_metrics WHERE project_root=? OR ?=''`, root, root)
+	if err != nil {
+		return OpsMetrics{}, err
+	}
+	defer rows.Close()
+	var items []metricValue
+	for rows.Next() {
+		var name string
+		var value float64
+		if err := rows.Scan(&name, &value); err != nil {
+			return OpsMetrics{}, err
+		}
+		items = append(items, metricValue{Name: name, Root: root, Value: value})
+	}
+	return snapshotMetrics(items, root), rows.Err()
+}
+
+func (s *SQLiteOpsRepository) Query(root string, from, to time.Time) ([]MetricPoint, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	query := `SELECT metric_name,project_root,fingerprint,value,updated FROM ops_metrics WHERE (project_root=? OR ?='')`
+	args := []any{root, root}
+	if !from.IsZero() {
+		query += ` AND updated>=?`
+		args = append(args, from.UTC())
+	}
+	if !to.IsZero() {
+		query += ` AND updated<=?`
+		args = append(args, to.UTC())
+	}
+	query += ` ORDER BY updated DESC, metric_name ASC`
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []MetricPoint
+	for rows.Next() {
+		var item MetricPoint
+		var updated string
+		if err := rows.Scan(&item.Name, &item.Root, &item.Fingerprint, &item.Value, &updated); err != nil {
+			return nil, err
+		}
+		item.Updated, _ = time.Parse(time.RFC3339Nano, updated)
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func recordMetric(store OpsRepository, name, root, fingerprint string, value int64) {
+	if repo, ok := store.(MetricsRepository); ok {
+		_ = repo.Increment(name, root, fingerprint, value)
+	}
+}
+
+var _ MetricsRepository = (*OpsStore)(nil)
+var _ MetricsRepository = (*SQLiteOpsRepository)(nil)

@@ -120,6 +120,12 @@ import {
   useSaveRobotLoginMutation,
   useSetSetupPluginEnabledMutation,
   useInstallSetupPluginMutation,
+  useLazySetupPluginReleasesQuery,
+  useLazySetupPluginVersionsQuery,
+  useSetupPluginCacheQuery,
+  useSwitchSetupPluginVersionMutation,
+  useDeleteSetupPluginVersionMutation,
+  useCleanupSetupPluginCacheMutation,
   useSystemMcpQuery,
   useSetupPluginsQuery,
   useStartRobotTaskMutation,
@@ -128,7 +134,9 @@ import {
   type RuntimeOverview,
   type PM2Status,
   type RuntimePreflight,
-  type SetupPlugin
+  type SetupPlugin,
+  type SetupPluginRelease,
+  type SetupPluginVersion
 } from '../store/workspaceApi'
 import {
   addProjects,
@@ -182,7 +190,10 @@ const coreFeatureCatalog: Array<{
   label: string
   icon: ReactNode
   status?: string
-}> = [{ id: 'ops-overview', label: '运维总览', icon: <ShieldCheck /> }, { id: 'plugins', label: '插件', icon: <Plug /> }]
+}> = [
+  { id: 'plugins', label: '插件', icon: <Plug /> },
+  { id: 'ops-overview', label: '运维', icon: <ShieldCheck /> }
+]
 const directoryActions: Array<{
   id: Section | Page
   label: string
@@ -341,8 +352,15 @@ export function DirectoryPicker({
     const controller = new AbortController()
     const parameters = new URLSearchParams(
       path
-        ? { path, hidden: String(hidden), files: String(includeFiles || selectionMode !== 'directory') }
-        : { hidden: String(hidden), files: String(includeFiles || selectionMode !== 'directory') }
+        ? {
+            path,
+            hidden: String(hidden),
+            files: String(includeFiles || selectionMode !== 'directory')
+          }
+        : {
+            hidden: String(hidden),
+            files: String(includeFiles || selectionMode !== 'directory')
+          }
     )
     void fetch(`/api/v1/directories?${parameters}`, {
       signal: controller.signal
@@ -377,20 +395,40 @@ export function DirectoryPicker({
         }
       })
     return () => controller.abort()
-  }, [directoryReload, hidden, includeFiles, open, path, selectionMode, setData, setDirectoryError, setHistory, setHistoryIndex, setPath])
+  }, [
+    directoryReload,
+    hidden,
+    includeFiles,
+    open,
+    path,
+    selectionMode,
+    setData,
+    setDirectoryError,
+    setHistory,
+    setHistoryIndex,
+    setPath
+  ])
   if (!open) return null
   const suffixes = extensions
     .split(/[,，\s]+/)
     .map(item => item.replace(/^\./, '').toLowerCase())
     .filter(Boolean)
   const items = [
-    ...(data?.directories ?? []).map(item => ({ ...item, kind: 'directory' as const })),
+    ...(data?.directories ?? []).map(item => ({
+      ...item,
+      kind: 'directory' as const
+    })),
     ...(includeFiles || selectionMode !== 'directory'
       ? (data?.files ?? []).map(item => ({ ...item, kind: 'file' as const }))
       : [])
   ].filter(item => {
     if (!item.name.toLowerCase().includes(query.toLowerCase())) return false
-    return item.kind !== 'file' || selectionMode !== 'extension' || suffixes.length === 0 || suffixes.some(suffix => item.name.toLowerCase().endsWith(`.${suffix}`))
+    return (
+      item.kind !== 'file' ||
+      selectionMode !== 'extension' ||
+      suffixes.length === 0 ||
+      suffixes.some(suffix => item.name.toLowerCase().endsWith(`.${suffix}`))
+    )
   })
   const selectDirectory = (
     itemPath: string,
@@ -460,7 +498,10 @@ export function DirectoryPicker({
       >
         <header className="finder-header grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-4 border-b border-slate-200 px-4 py-3">
           <div className="finder-header-navigation flex flex-row items-center gap-2">
-            <nav className="finder-navigation flex items-center gap-1" aria-label="目录导航">
+            <nav
+              className="finder-navigation flex items-center gap-1"
+              aria-label="目录导航"
+            >
               <button
                 className="icon-button size-8 p-0"
                 disabled={historyIndex <= 0 && !data?.parent}
@@ -504,14 +545,25 @@ export function DirectoryPicker({
           </strong>
           <div className="finder-context-tools flex items-center justify-end gap-2">
             {onModeChange && (
-              <div className="flex rounded-md border border-slate-200 bg-slate-50 p-0.5" role="tablist" aria-label="选择方式">
-                {([
-                  ['directory', '目录'],
-                  ['file', '文件'],
-                  ['extension', '指定格式']
-                ] as const).map(([mode, label]) => (
+              <div
+                className="flex rounded-md border border-slate-200 bg-slate-50 p-0.5"
+                role="tablist"
+                aria-label="选择方式"
+              >
+                {(
+                  [
+                    ['directory', '目录'],
+                    ['file', '文件'],
+                    ['extension', '指定格式']
+                  ] as const
+                ).map(([mode, label]) => (
                   <button
-                    className={cn('rounded px-2 py-1 text-[11px] font-medium', selectionMode === mode ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700')}
+                    className={cn(
+                      'rounded px-2 py-1 text-[11px] font-medium',
+                      selectionMode === mode
+                        ? 'bg-white text-slate-800 shadow-sm'
+                        : 'text-slate-500 hover:text-slate-700'
+                    )}
                     key={mode}
                     onClick={() => onModeChange(mode)}
                     role="tab"
@@ -615,12 +667,14 @@ export function DirectoryPicker({
                     selected.includes(item.path)
                       ? 'bg-slate-200 text-slate-900'
                       : 'text-slate-700 hover:bg-slate-100',
-                    selectionMode === 'directory' && item.kind === 'file' &&
+                    selectionMode === 'directory' &&
+                      item.kind === 'file' &&
                       'cursor-default opacity-55 hover:bg-transparent'
                   )}
                   key={item.path}
                   onClick={event => {
-                    if (selectionMode === 'directory' && item.kind === 'file') return
+                    if (selectionMode === 'directory' && item.kind === 'file')
+                      return
                     if (selectionMode === 'file' && item.kind === 'directory') {
                       visit(item.path)
                       return
@@ -628,12 +682,14 @@ export function DirectoryPicker({
                     // 指定格式以当前目录为范围；点击匹配文件只是快捷地选中它所在目录。
                     selectDirectory(
                       selectionMode === 'extension' && item.kind === 'file'
-                        ? data?.path ?? item.path
+                        ? (data?.path ?? item.path)
                         : item.path,
                       event
                     )
                   }}
-                  onDoubleClick={() => item.kind === 'directory' && visit(item.path)}
+                  onDoubleClick={() =>
+                    item.kind === 'directory' && visit(item.path)
+                  }
                   onContextMenu={event => {
                     if (item.kind !== 'directory') return
                     event.preventDefault()
@@ -678,7 +734,11 @@ export function DirectoryPicker({
               disabled={!selected.length}
               onClick={() => onSelect(selected)}
             >
-              {multiple ? '添加' : selectionMode === 'file' ? '选择文件' : '选择'}
+              {multiple
+                ? '添加'
+                : selectionMode === 'file'
+                  ? '选择文件'
+                  : '选择'}
             </button>
           </div>
         </footer>
@@ -779,7 +839,7 @@ export function Dashboard({
   onCheck,
   onFix
 }: Props) {
-	const dispatch = useDispatch()
+  const dispatch = useDispatch()
   const [page, setPage] = useStoreState<Page>('robot')
   const [sidebarCollapsed, setSidebarCollapsed] = useStoreState(false)
   const [robotNavigationHidden, setRobotNavigationHidden] = useStoreState(false)
@@ -1004,7 +1064,10 @@ export function Dashboard({
         },
         options.appReady ? 35_000 : 30 * 60 * 1000
       )
-      const finish = (reason?: Error, task?: Parameters<NonNullable<typeof options.onTask>>[0]) => {
+      const finish = (
+        reason?: Error,
+        task?: Parameters<NonNullable<typeof options.onTask>>[0]
+      ) => {
         window.clearTimeout(timeout)
         window.removeEventListener('alx:unified-event', onEvent)
         if (reason) reject(reason)
@@ -1012,7 +1075,9 @@ export function Dashboard({
       }
       const onEvent = (event: Event) => {
         try {
-          const envelope = (event as CustomEvent<{ topic?: string; data?: unknown }>).detail
+          const envelope = (
+            event as CustomEvent<{ topic?: string; data?: unknown }>
+          ).detail
           if (envelope?.topic !== 'robot') return
           const payload = envelope.data as {
             type?: string
@@ -1197,86 +1262,161 @@ export function Dashboard({
     let heartbeat: number | null = null
     let lastEventID = 0
     const tabID = crypto.randomUUID()
-    const channel = typeof BroadcastChannel === 'undefined' ? null : new BroadcastChannel('alx-events')
+    const channel =
+      typeof BroadcastChannel === 'undefined'
+        ? null
+        : new BroadcastChannel('alx-events')
     const leaseKey = 'alx-events-leader'
     let leader = false
+    let releaseWebLock: (() => void) | null = null
+    const webLocks = typeof navigator !== 'undefined' && 'locks' in navigator
     const dispatchEnvelope = (envelope: {
       id?: number
       topic?: string
       type?: string
-      data?: { taskId?: string; text?: string; running?: boolean; task?: unknown }
+      data?: {
+        taskId?: string
+        text?: string
+        truncated?: boolean
+        running?: boolean
+        task?: unknown
+      }
     }) => {
-      if (typeof envelope.id === 'number') lastEventID = Math.max(lastEventID, envelope.id)
+      if (typeof envelope.id === 'number')
+        lastEventID = Math.max(lastEventID, envelope.id)
       const payload = envelope.data ?? {}
-      window.dispatchEvent(new CustomEvent('alx:unified-event', { detail: envelope }))
+      window.dispatchEvent(
+        new CustomEvent('alx:unified-event', { detail: envelope })
+      )
       if (envelope.topic === 'robot') {
-        if (envelope.type === 'task') dispatch(workspaceApi.util.invalidateTags(['OperationTasks']))
-        else if (envelope.type === 'output' && payload.taskId) window.dispatchEvent(new CustomEvent('alx:robot-output', { detail: { taskId: payload.taskId, text: payload.text ?? '' } }))
+        if (envelope.type === 'task')
+          dispatch(workspaceApi.util.invalidateTags(['OperationTasks']))
+        else if (envelope.type === 'output' && payload.taskId)
+          window.dispatchEvent(
+            new CustomEvent('alx:robot-output', {
+              detail: { taskId: payload.taskId, text: payload.text ?? '', truncated: payload.truncated === true }
+            })
+          )
       } else if (envelope.topic === 'ops') {
-        if (opsRefreshTimer.current === null) opsRefreshTimer.current = window.setTimeout(() => { opsRefreshTimer.current = null; window.dispatchEvent(new CustomEvent('alx:ops-changed')) }, 100)
-      } else if (envelope.topic === 'plugins') dispatch(workspaceApi.util.invalidateTags(['SetupPlugins']))
+        if (opsRefreshTimer.current === null)
+          opsRefreshTimer.current = window.setTimeout(() => {
+            opsRefreshTimer.current = null
+            window.dispatchEvent(new CustomEvent('alx:ops-changed'))
+          }, 100)
+      } else if (envelope.topic === 'plugins')
+        dispatch(workspaceApi.util.invalidateTags(['SetupPlugins']))
       if (envelope.type === 'system.cursor-expired') {
-        dispatch(workspaceApi.util.invalidateTags(['OperationTasks', 'SetupPlugins']))
+        dispatch(
+          workspaceApi.util.invalidateTags(['OperationTasks', 'SetupPlugins'])
+        )
         window.dispatchEvent(new CustomEvent('alx:ops-changed'))
       }
     }
     const ownsLease = () => {
       if (!channel) return true
       try {
-        const current = JSON.parse(localStorage.getItem(leaseKey) || '{}') as { id?: string; expires?: number }
+        const current = JSON.parse(localStorage.getItem(leaseKey) || '{}') as {
+          id?: string
+          expires?: number
+        }
         const now = Date.now()
-        if (current.id && current.id !== tabID && (current.expires ?? 0) > now) return false
-        localStorage.setItem(leaseKey, JSON.stringify({ id: tabID, expires: now + 3500 }))
+        if (current.id && current.id !== tabID && (current.expires ?? 0) > now)
+          return false
+        localStorage.setItem(
+          leaseKey,
+          JSON.stringify({ id: tabID, expires: now + 3500 })
+        )
         return true
-      } catch { return true }
+      } catch {
+        return true
+      }
     }
     const connect = () => {
       if (!leader) return
-      source = new EventSource(`/api/v1/events?${new URLSearchParams({ topics: 'robot,ops,system,plugins', lastEventId: String(lastEventID) })}`)
+      source = new EventSource(
+        `/api/v1/events?${new URLSearchParams({ topics: 'robot,ops,system,plugins', lastEventId: String(lastEventID) })}`
+      )
       eventsRef.current = source
       source.onmessage = event => {
-      try {
-        const envelope = JSON.parse(event.data) as {
-          id?: number
-          topic?: string
-          type?: string
-          data?: {
-            taskId?: string
-            text?: string
-            running?: boolean
-            task?: unknown
+        try {
+          const envelope = JSON.parse(event.data) as {
+            id?: number
+            topic?: string
+            type?: string
+            data?: {
+              taskId?: string
+              text?: string
+              running?: boolean
+              task?: unknown
+            }
           }
+          dispatchEnvelope(envelope)
+          channel?.postMessage({ type: 'event', envelope })
+        } catch {
+          // Ignore malformed frames; reconnect remains cursor-based.
         }
-        dispatchEnvelope(envelope)
-        channel?.postMessage({ type: 'event', envelope })
-      } catch {
-        // Ignore malformed frames; reconnect remains cursor-based.
       }
-    }
       source.onerror = () => {
         source?.close()
-        if (retry === null) retry = window.setTimeout(() => { retry = null; connect() }, 1000)
+        if (retry === null)
+          retry = window.setTimeout(() => {
+            retry = null
+            connect()
+          }, 1000)
       }
     }
     channel?.addEventListener('message', event => {
-      const message = event.data as { type?: string; envelope?: Parameters<typeof dispatchEnvelope>[0] }
-      if (message.type === 'event' && message.envelope) dispatchEnvelope(message.envelope)
+      const message = event.data as {
+        type?: string
+        envelope?: Parameters<typeof dispatchEnvelope>[0]
+      }
+      if (message.type === 'event' && message.envelope)
+        dispatchEnvelope(message.envelope)
     })
+    const acquireWebLock = () => {
+      if (!webLocks || leader || releaseWebLock) return
+      void navigator.locks.request('alx-events-leader', { ifAvailable: true }, lock => {
+        if (!lock) return
+        leader = true
+        channel?.postMessage({ type: 'leader', id: tabID })
+        connect()
+        return new Promise<void>(resolve => { releaseWebLock = resolve })
+      }).finally(() => { releaseWebLock = null; if (leader) { leader = false; source?.close(); source = null } })
+    }
     const elect = () => {
+      if (webLocks) { acquireWebLock(); return }
       const nextLeader = ownsLease()
-      if (nextLeader && !leader) { leader = true; connect() }
-      if (!nextLeader && leader) { leader = false; source?.close(); source = null }
+      if (nextLeader && !leader) {
+        leader = true
+        connect()
+      }
+      if (!nextLeader && leader) {
+        leader = false
+        source?.close()
+        source = null
+      }
     }
     elect()
     heartbeat = window.setInterval(elect, 1000)
+    const releaseForPageLifecycle = () => {
+      if (document.visibilityState === 'hidden') releaseWebLock?.()
+    }
+    document.addEventListener('visibilitychange', releaseForPageLifecycle)
+    window.addEventListener('pagehide', releaseForPageLifecycle)
     return () => {
       source?.close()
       eventsRef.current = null
       if (retry !== null) window.clearTimeout(retry)
       if (heartbeat !== null) window.clearInterval(heartbeat)
-      if (leader) localStorage.removeItem(leaseKey)
+      releaseWebLock?.()
+      if (leader && !webLocks) localStorage.removeItem(leaseKey)
       channel?.close()
-      if (opsRefreshTimer.current !== null) { window.clearTimeout(opsRefreshTimer.current); opsRefreshTimer.current = null }
+      document.removeEventListener('visibilitychange', releaseForPageLifecycle)
+      window.removeEventListener('pagehide', releaseForPageLifecycle)
+      if (opsRefreshTimer.current !== null) {
+        window.clearTimeout(opsRefreshTimer.current)
+        opsRefreshTimer.current = null
+      }
     }
   }, [dispatch])
 
@@ -1386,7 +1526,9 @@ export function Dashboard({
       }
       showOutput('操作已开始，正在等待完成…')
       const current = await waitForRobotTask(task.id)
-      dispatch(workspaceApi.util.invalidateTags([{ type: 'Runtime', id: root }]))
+      dispatch(
+        workspaceApi.util.invalidateTags([{ type: 'Runtime', id: root }])
+      )
       if (
         [
           'install-package',
@@ -1905,7 +2047,15 @@ export function Dashboard({
   )
   const workspace =
     systemFeature === 'ops-overview' ? (
-      <OpsOverview projects={projects} onOpenProject={id => { dispatch(selectProject(id)); setSystemFeature(null); setPage('robot'); setSection('runtime') }} />
+      <OpsOverview
+        projects={projects}
+        onOpenProject={id => {
+          dispatch(selectProject(id))
+          setSystemFeature(null)
+          setPage('robot')
+          setSection('runtime')
+        }}
+      />
     ) : systemFeature === 'plugins' ? (
       <SystemPluginCenter
         plugins={setupPlugins}
@@ -2034,7 +2184,6 @@ export function Dashboard({
               )}
             </div>
             <div className="ml-auto flex min-w-0 items-center gap-1">
-
               {developerMode && <McpControl />}
               <Button
                 variant="secondary"
@@ -2060,11 +2209,15 @@ export function Dashboard({
                 variant="icon"
                 onClick={() => setRobotNavigationHidden(value => !value)}
                 aria-label={
-                  robotNavigationHidden ? '显示机器人功能导航' : '隐藏机器人功能导航'
+                  robotNavigationHidden
+                    ? '显示机器人功能导航'
+                    : '隐藏机器人功能导航'
                 }
                 aria-pressed={!robotNavigationHidden}
                 title={
-                  robotNavigationHidden ? '显示机器人功能导航' : '隐藏机器人功能导航'
+                  robotNavigationHidden
+                    ? '显示机器人功能导航'
+                    : '隐藏机器人功能导航'
                 }
               >
                 {robotNavigationHidden ? (
@@ -2283,32 +2436,32 @@ export function Dashboard({
                 !systemFeature &&
                 activeProject &&
                 !invalidProject && (
-                <ControlCard
-                  page={page}
-                  section={section}
-                  project={activeProject}
-                  buildMode={buildMode}
-                  catalog={catalog}
-                  catalogTitle={catalogTitle}
-                  developerMode={developerMode}
-                  agentOpen={aiOpen}
-                  onOpenConsole={() => setConsoleOpen(true)}
-                  onOpenAI={openAI}
-                  onOpenOps={() => selectSystemFeature('ops')}
-                  appLaunching={appLaunching}
-                  onOpenApp={() => void openApp()}
-                  onPage={selectPage}
-                  onSection={openSection}
-                  onBuildMode={mode => {
-                    setBuildMode(mode)
-                    setOutput('')
-                  }}
-                  onCatalog={title => {
-                    setCatalogTitle(title)
-                    setCatalogItem(null)
-                  }}
-                  onGit={() => setGitProject(activeProject)}
-                />
+                  <ControlCard
+                    page={page}
+                    section={section}
+                    project={activeProject}
+                    buildMode={buildMode}
+                    catalog={catalog}
+                    catalogTitle={catalogTitle}
+                    developerMode={developerMode}
+                    agentOpen={aiOpen}
+                    onOpenConsole={() => setConsoleOpen(true)}
+                    onOpenAI={openAI}
+                    onOpenOps={() => selectSystemFeature('ops')}
+                    appLaunching={appLaunching}
+                    onOpenApp={() => void openApp()}
+                    onPage={selectPage}
+                    onSection={openSection}
+                    onBuildMode={mode => {
+                      setBuildMode(mode)
+                      setOutput('')
+                    }}
+                    onCatalog={title => {
+                      setCatalogTitle(title)
+                      setCatalogItem(null)
+                    }}
+                    onGit={() => setGitProject(activeProject)}
+                  />
                 )}
             </section>
           </section>
@@ -2657,7 +2810,20 @@ function GitCloneDialog({
       setTarget(null)
       setTargetError('')
     }
-  }, [open, setBranch, setBranches, setBranchesLoading, setConnection, setDepth, setMirror, setName, setRepository, setSSHKeys, setTarget, setTargetError])
+  }, [
+    open,
+    setBranch,
+    setBranches,
+    setBranchesLoading,
+    setConnection,
+    setDepth,
+    setMirror,
+    setName,
+    setRepository,
+    setSSHKeys,
+    setTarget,
+    setTargetError
+  ])
   useEffect(() => {
     if (!open) return
     let active = true
@@ -2796,9 +2962,7 @@ function GitCloneDialog({
           </button>
         </header>
         <div className="grid gap-3 overflow-auto p-4">
-          <section
-            aria-label="仓库连接方式"
-          >
+          <section aria-label="仓库连接方式">
             <header className="flex items-center justify-between gap-2">
               <small className="text-[11px] text-slate-500">
                 {sshLoading
@@ -3275,7 +3439,10 @@ function ProjectItem({
             <MoreVertical className="size-3.5" />
           </button>
           {moreOpen && (
-            <div className="workspace-context-menu absolute right-0 top-7 z-20" role="menu">
+            <div
+              className="workspace-context-menu absolute right-0 top-7 z-20"
+              role="menu"
+            >
               <button
                 className="flex min-h-8 items-center gap-2 rounded px-2 text-left text-xs text-slate-600 transition hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700"
                 onClick={() => {
@@ -3444,10 +3611,16 @@ function McpControl() {
   useEffect(() => {
     const onSystemEvent = (event: Event) => {
       try {
-        const envelope = (event as CustomEvent<{ topic?: string; data?: unknown }>).detail
+        const envelope = (
+          event as CustomEvent<{ topic?: string; data?: unknown }>
+        ).detail
         if (envelope?.topic !== 'system') return
         const payload = envelope.data as { type?: string; running?: boolean }
-        if (payload.type === 'mcp.changed' && typeof payload.running === 'boolean') void refetchMCP()
+        if (
+          payload.type === 'mcp.changed' &&
+          typeof payload.running === 'boolean'
+        )
+          void refetchMCP()
       } catch {
         // A malformed application event does not affect the last known state.
       }
@@ -4017,6 +4190,18 @@ function SystemPluginCenter({
   const [setEnabled, { isLoading }] = useSetSetupPluginEnabledMutation()
   const [installPlugin, { isLoading: installing }] =
     useInstallSetupPluginMutation()
+  const [loadReleases] = useLazySetupPluginReleasesQuery()
+  const [loadVersions] = useLazySetupPluginVersionsQuery()
+  const [switchVersion, { isLoading: switching }] = useSwitchSetupPluginVersionMutation()
+  const [deleteVersion] = useDeleteSetupPluginVersionMutation()
+  const [cleanupCache, { isLoading: cleaningCache }] = useCleanupSetupPluginCacheMutation()
+  const { data: cacheSummary } = useSetupPluginCacheQuery()
+  const [installTarget, setInstallTarget] = useStoreState<SetupPlugin | null>(null)
+  const [versionTarget, setVersionTarget] = useStoreState<SetupPlugin | null>(null)
+  const [versionItems, setVersionItems] = useStoreState<SetupPluginVersion[]>([])
+  const [selectedVersion, setSelectedVersion] = useStoreState('')
+  const [selectedAsset, setSelectedAsset] = useStoreState('')
+  const [releaseOptions, setReleaseOptions] = useStoreState<SetupPluginRelease[]>([])
   const [message, setMessage] = useStoreState('')
   const toggle = async (plugin: SetupPlugin) => {
     try {
@@ -4032,13 +4217,69 @@ function SystemPluginCenter({
     }
   }
   const install = async (plugin: SetupPlugin) => {
+    setVersionTarget(null)
     try {
-      await installPlugin({ pluginID: plugin.id }).unwrap()
-      setMessage(`已安装“${plugin.name}”。`)
+      const releases = await loadReleases(plugin.id).unwrap()
+      setReleaseOptions(releases)
+      const first = releases[0]
+      setSelectedVersion(first?.tag ?? '')
+      setSelectedAsset(first?.assets.find(asset => asset.compatible && /\.(zip|tar\.gz|tgz)$/i.test(asset.name))?.name ?? '')
+      setInstallTarget(plugin)
+    } catch (reason) {
+      setMessage(operationErrorMessage(reason, '插件版本读取失败。'))
+    }
+  }
+  const confirmInstall = async () => {
+    if (!installTarget || !selectedVersion || !selectedAsset) return
+    try {
+      await installPlugin({
+        pluginID: installTarget.id,
+        version: selectedVersion,
+        assetName: selectedAsset
+      }).unwrap()
+      setInstallTarget(null)
+      setMessage(`已安装“${installTarget.name}”。`)
     } catch (reason) {
       setMessage(operationErrorMessage(reason, '插件安装未完成。'))
     }
   }
+  const manageVersions = async (plugin: SetupPlugin) => {
+    try {
+      const versions = await loadVersions(plugin.id).unwrap()
+      setVersionItems(versions)
+      setVersionTarget(plugin)
+    } catch (reason) {
+      setMessage(operationErrorMessage(reason, '插件版本读取失败。'))
+    }
+  }
+  const refreshVersions = async () => {
+    if (!versionTarget) return
+    setVersionItems(await loadVersions(versionTarget.id).unwrap())
+  }
+  const switchCachedVersion = async (item: SetupPluginVersion) => {
+    if (!versionTarget || item.active || !item.cached) return
+    if (!window.confirm(`切换到 ${item.tag} 会替换当前插件文件。插件自身管理的外部进程需要先停止，是否继续？`)) return
+    try {
+      await switchVersion({ pluginID: versionTarget.id, version: item.tag, assetName: item.asset }).unwrap()
+      await refreshVersions()
+      setMessage(`已切换“${versionTarget.name}”到 ${item.tag}。`)
+    } catch (reason) {
+      setMessage(operationErrorMessage(reason, '插件版本切换失败。'))
+    }
+  }
+  const removeCachedVersion = async (item: SetupPluginVersion) => {
+    if (!versionTarget || item.active || !item.cached) return
+    if (!window.confirm(`确定删除已缓存版本 ${item.tag} 吗？`)) return
+    try {
+      await deleteVersion({ pluginID: versionTarget.id, tag: item.tag }).unwrap()
+      await refreshVersions()
+      setMessage(`已删除缓存版本 ${item.tag}。`)
+    } catch (reason) {
+      setMessage(operationErrorMessage(reason, '缓存版本删除失败。'))
+    }
+  }
+  const currentRelease = releaseOptions.find(item => item.tag === selectedVersion)
+  const archiveAssets = currentRelease?.assets.filter(asset => asset.compatible && /\.(zip|tar\.gz|tgz)$/i.test(asset.name)) ?? []
   return (
     <section className="workspace-content system-feature-page mx-auto max-w-215">
       <header className="system-feature-header">
@@ -4109,7 +4350,7 @@ function SystemPluginCenter({
                     )}
                   </div>
                   <div className="mt-0.5 flex items-center gap-2 text-xs text-slate-400 dark:text-slate-500">
-                    <span className="font-mono">v{plugin.version}</span>
+                    <span className="font-mono">{plugin.installedTag ?? `v${plugin.version}`}</span>
                     <span className="size-0.5 rounded-full bg-slate-300 dark:bg-slate-600" />
                     {isOnline ? (
                       <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
@@ -4157,20 +4398,30 @@ function SystemPluginCenter({
                     )}
                   </Button>
                 ) : (
-                  <Button
-                    variant={isEnabled ? 'secondary' : 'primary'}
-                    size="sm"
-                    disabled={isLoading}
-                    onClick={() => void toggle(plugin)}
-                    className={cn(
-                      'h-7 shrink-0 rounded-md px-3 text-xs font-medium',
-                      isEnabled
-                        ? 'border-slate-200 text-slate-600 hover:border-red-200 hover:bg-red-50 hover:text-red-600 dark:border-slate-700 dark:text-slate-400 dark:hover:border-red-800 dark:hover:bg-red-900/20 dark:hover:text-red-400'
-                        : ''
-                    )}
-                  >
-                    {isEnabled ? '卸载' : '启用'}
-                  </Button>
+                  <div className="flex shrink-0 gap-1.5">
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => void manageVersions(plugin)}
+                      className="h-7 rounded-md px-2.5 text-xs font-medium"
+                    >
+                      版本管理
+                    </Button>
+                    <Button
+                      variant={isEnabled ? 'secondary' : 'primary'}
+                      size="sm"
+                      disabled={isLoading}
+                      onClick={() => void toggle(plugin)}
+                      className={cn(
+                        'h-7 rounded-md px-2.5 text-xs font-medium',
+                        isEnabled
+                          ? 'border-slate-200 text-slate-600 hover:border-red-200 hover:bg-red-50 hover:text-red-600 dark:border-slate-700 dark:text-slate-400 dark:hover:border-red-800 dark:hover:bg-red-900/20 dark:hover:text-red-400'
+                          : ''
+                      )}
+                    >
+                      {isEnabled ? '卸载' : '启用'}
+                    </Button>
+                  </div>
                 )}
               </article>
             )
@@ -4197,6 +4448,112 @@ function SystemPluginCenter({
           <CheckCircle2 className="size-4 shrink-0" />
           <span>{message}</span>
         </div>
+      )}
+      {installTarget && (
+        <Modal
+          open
+          onClose={() => setInstallTarget(null)}
+          ariaLabel={`安装${installTarget.name}`}
+        >
+          <div className="grid w-full max-w-md gap-3 rounded-xl bg-white p-5 shadow-xl dark:bg-slate-900">
+            <strong className="text-base text-slate-900 dark:text-slate-100">安装“{installTarget.name}”</strong>
+            <label className="grid gap-1 text-xs font-semibold text-slate-500">
+              版本
+              <select
+                className="rounded-md border border-slate-200 bg-white px-2 py-2 text-sm font-normal dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                value={selectedVersion}
+                onChange={event => {
+                  const next = event.target.value
+                  const release = releaseOptions.find(item => item.tag === next)
+                  setSelectedVersion(next)
+                  setSelectedAsset(release?.assets.find(asset => asset.compatible && /\.(zip|tar\.gz|tgz)$/i.test(asset.name))?.name ?? '')
+                }}
+              >
+                {releaseOptions.map(item => (
+                  <option key={item.tag} value={item.tag}>
+                    {item.name || item.tag} ({item.tag})
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="grid gap-1 text-xs font-semibold text-slate-500">
+              当前系统安装包
+              <select
+                className="rounded-md border border-slate-200 bg-white px-2 py-2 text-sm font-normal dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                value={selectedAsset}
+                onChange={event => setSelectedAsset(event.target.value)}
+              >
+                <option value="">请选择安装包</option>
+                {archiveAssets.map(asset => (
+                  <option key={asset.name} value={asset.name}>
+                    {asset.name} {asset.size ? `(${(asset.size / 1024 / 1024).toFixed(1)} MB)` : ''}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {archiveAssets.length === 0 && (
+              <p className="m-0 text-xs text-amber-600">该版本没有可用的 zip / tar.gz 插件包。</p>
+            )}
+            <div className="flex justify-end gap-2">
+              <Button variant="secondary" size="sm" onClick={() => setInstallTarget(null)}>取消</Button>
+              <Button variant="primary" size="sm" disabled={installing || !selectedAsset} onClick={() => void confirmInstall()}>
+                {installing ? '安装中…' : '下载并安装'}
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
+      {versionTarget && (
+        <Modal
+          open
+          onClose={() => setVersionTarget(null)}
+          ariaLabel={`${versionTarget.name}版本管理`}
+        >
+          <div className="grid w-full max-w-lg gap-3 rounded-xl bg-white p-5 shadow-xl dark:bg-slate-900">
+            <div>
+              <strong className="text-base text-slate-900 dark:text-slate-100">{versionTarget.name} · 版本管理</strong>
+              <p className="m-0 mt-1 text-xs text-slate-500">
+                缓存 {cacheSummary ? `${(cacheSummary.bytes / 1024 / 1024).toFixed(1)} MB / ${(cacheSummary.limit / 1024 / 1024).toFixed(0)} MB` : '读取中…'}
+              </p>
+              {cacheSummary && cacheSummary.bytes > cacheSummary.limit && (
+                <p className="m-0 mt-1 text-xs text-amber-600">缓存已超过上限，建议立即清理。</p>
+              )}
+            </div>
+            <div className="grid gap-2">
+              {versionItems.length ? versionItems.map(item => (
+                <div key={`${item.tag}:${item.asset}`} className="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 dark:border-slate-700">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 text-sm text-slate-800 dark:text-slate-100">
+                      <span className="font-mono">{item.tag}</span>
+                      {item.active && <span className="text-xs text-emerald-600">当前活动</span>}
+                    </div>
+                    <div className="truncate text-xs text-slate-400">
+                      {item.cached ? `${item.asset} · ${(item.size / 1024 / 1024).toFixed(1)} MB` : '当前版本未进入缓存'}
+                    </div>
+                    {item.cached && (
+                      <div className="truncate text-[11px] leading-4 text-slate-400" title={`SHA-256: ${item.archiveSha256 ?? ''}\n指纹: ${item.fingerprint ?? ''}`}>
+                        SHA-256 {item.archiveSha256 ?? '未知'} · 指纹 {item.fingerprint ?? '未知'}
+                        {item.lastUsedAt ? ` · 最近使用 ${new Date(item.lastUsedAt).toLocaleString()}` : ''}
+                      </div>
+                    )}
+                  </div>
+                  {!item.active && item.cached && (
+                    <>
+                      <Button variant="secondary" size="sm" disabled={switching} onClick={() => void switchCachedVersion(item)}>切换</Button>
+                      <Button variant="secondary" size="sm" onClick={() => void removeCachedVersion(item)}>删除</Button>
+                    </>
+                  )}
+                </div>
+              )) : <p className="m-0 text-xs text-slate-500">暂无已缓存版本。</p>}
+            </div>
+            <p className="m-0 text-xs leading-5 text-amber-600">切换版本会替换当前插件文件；插件自身管理的外部进程需要先停止。</p>
+            <div className="flex flex-wrap justify-end gap-2">
+              <Button variant="secondary" size="sm" onClick={() => void install(versionTarget)}>下载其他 Release</Button>
+              <Button variant="secondary" size="sm" disabled={cleaningCache} onClick={() => void cleanupCache().then(() => refreshVersions())}>清理缓存</Button>
+              <Button variant="secondary" size="sm" onClick={() => setVersionTarget(null)}>关闭</Button>
+            </div>
+          </div>
+        </Modal>
       )}
     </section>
   )
@@ -4464,10 +4821,11 @@ function BackpackPackageManager({
 }) {
   const [tab, setTab] = useStoreState<'readme' | 'config' | 'version'>('readme')
   const [version, setVersion] = useStoreState('')
-  const { data, isLoading: isConfigLoading, error } = usePackageConfigQuery(
-    { root, package: item.name },
-    { skip: !item.valid }
-  )
+  const {
+    data,
+    isLoading: isConfigLoading,
+    error
+  } = usePackageConfigQuery({ root, package: item.name }, { skip: !item.valid })
   const {
     data: readme,
     isFetching: isReadmeFetching,
@@ -5732,8 +6090,8 @@ function RuntimePanel({
                     disabled={busy || foregroundStopping}
                     title={
                       developmentRunning || pm2LocalRunning
-                          ? '启动会自动停止当前正在运行的进程。'
-                          : ''
+                        ? '启动会自动停止当前正在运行的进程。'
+                        : ''
                     }
                     onClick={() =>
                       foregroundRunning
@@ -5825,8 +6183,8 @@ function RuntimePanel({
                     disabled={busy || developmentStopping}
                     title={
                       foregroundRunning || pm2LocalRunning
-                          ? '启动会自动停止当前正在运行的进程。'
-                          : ''
+                        ? '启动会自动停止当前正在运行的进程。'
+                        : ''
                     }
                     onClick={() =>
                       developmentRunning
@@ -5902,10 +6260,10 @@ function RuntimePanel({
               disabled={busy || !persistentReady}
               title={
                 localRunning
-                    ? '启动会自动停止当前正在运行的进程。'
-                    : !persistentReady
-                      ? '补齐 start 脚本和 PM2 配置后可使用。'
-                      : ''
+                  ? '启动会自动停止当前正在运行的进程。'
+                  : !persistentReady
+                    ? '补齐 start 脚本和 PM2 配置后可使用。'
+                    : ''
               }
               onClick={() =>
                 void askStart(
@@ -6035,7 +6393,12 @@ function AppEmbed({ root, onClose }: { root: string; onClose: () => void }) {
   // robotAppToken) so every in-app navigation keeps it automatically.
   const src = `/api/v1/robot/app/${robotAppToken(root)}/`
   return (
-    <Modal open zIndex={200} ariaLabel="机器人应用" className="app-embed-backdrop">
+    <Modal
+      open
+      zIndex={200}
+      ariaLabel="机器人应用"
+      className="app-embed-backdrop"
+    >
       <section className="app-embed-window grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden">
         <header className="topbar flex min-h-11 items-center justify-between gap-2 border-b border-slate-200 bg-white/90 px-3 dark:border-slate-700">
           <div className="flex min-w-0 items-center gap-2">
@@ -6144,11 +6507,11 @@ function ControlCard({
             { id: 'git', label: 'GIT 发布' },
             { id: 'npm', label: 'NPM 发布' }
           ]
-      : activePrimary === 'backpack'
+        : activePrimary === 'backpack'
           ? []
           : activePrimary === 'runtime'
             ? [{ id: 'ops', label: '运维' }]
-          : catalog.map(item => ({ id: item.title, label: item.title }))
+            : catalog.map(item => ({ id: item.title, label: item.title }))
   const activeSecondary =
     activePrimary === 'config'
       ? section
@@ -6396,8 +6759,20 @@ function ReadonlyConsole({
     width: 560,
     height: 650
   })
-  const dragStart = useRef<{ x: number; y: number; left: number; top: number } | null>(null)
-  const resizeStart = useRef<{ x: number; y: number; width: number; height: number; left: number; top: number } | null>(null)
+  const dragStart = useRef<{
+    x: number
+    y: number
+    left: number
+    top: number
+  } | null>(null)
+  const resizeStart = useRef<{
+    x: number
+    y: number
+    width: number
+    height: number
+    left: number
+    top: number
+  } | null>(null)
   // liveOutput accumulates incremental output pushed over SSE; the initial
   // load seeds it with the current buffer so the terminal is real-time without
   // polling. The static snapshot still comes from the query.
@@ -6415,7 +6790,14 @@ function ReadonlyConsole({
     setShellOutput('')
     setShellHistory([])
     setShellHistoryIndex(-1)
-  }, [setActiveTab, setShellCommand, setShellHistory, setShellHistoryIndex, setShellOutput, setTabs])
+  }, [
+    setActiveTab,
+    setShellCommand,
+    setShellHistory,
+    setShellHistoryIndex,
+    setShellOutput,
+    setTabs
+  ])
   useEffect(() => {
     if (!open || !root) return
     const width = Math.min(560, Math.max(280, window.innerWidth - 32))
@@ -6439,13 +6821,25 @@ function ReadonlyConsole({
     if (!open) return
     const clampToViewport = () => {
       setWindowRect(current => {
-        const width = Math.min(current.width, Math.max(280, window.innerWidth - 16))
-        const height = Math.min(current.height, Math.max(260, window.innerHeight - 16))
+        const width = Math.min(
+          current.width,
+          Math.max(280, window.innerWidth - 16)
+        )
+        const height = Math.min(
+          current.height,
+          Math.max(260, window.innerHeight - 16)
+        )
         return {
           width,
           height,
-          left: Math.max(8, Math.min(window.innerWidth - width - 8, current.left)),
-          top: Math.max(8, Math.min(window.innerHeight - height - 8, current.top))
+          left: Math.max(
+            8,
+            Math.min(window.innerWidth - width - 8, current.left)
+          ),
+          top: Math.max(
+            8,
+            Math.min(window.innerHeight - height - 8, current.top)
+          )
         }
       })
     }
@@ -6455,8 +6849,8 @@ function ReadonlyConsole({
   useEffect(() => {
     if (!open) return
     const handler = (event: Event) => {
-      const detail = (event as CustomEvent<{ text?: string }>).detail
-      if (detail?.text) setLiveOutput(prev => prev + detail.text)
+      const detail = (event as CustomEvent<{ text?: string; truncated?: boolean }>).detail
+      if (detail?.text) setLiveOutput(prev => prev + (detail.truncated ? '…早期输出已省略…\n' : '') + detail.text)
     }
     window.addEventListener('alx:robot-output', handler)
     return () => window.removeEventListener('alx:robot-output', handler)
@@ -6488,7 +6882,10 @@ function ReadonlyConsole({
   }
   const addTab = () => {
     if (!tabs.some(tab => tab.id === 'runtime')) {
-      setTabs(current => [{ id: 'runtime', label: '前台', kind: 'readonly' }, ...current])
+      setTabs(current => [
+        { id: 'runtime', label: '前台', kind: 'readonly' },
+        ...current
+      ])
       setActiveTab('runtime')
       return
     }
@@ -6508,11 +6905,19 @@ function ReadonlyConsole({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ root, command })
       })
-      const result = (await response.json()) as { output?: string; error?: string }
-      setShellOutput(current => `${current}${current ? '\n' : ''}${response.ok ? result.output ?? '' : `错误：${result.error ?? '命令执行失败。'}`}`)
+      const result = (await response.json()) as {
+        output?: string
+        error?: string
+      }
+      setShellOutput(
+        current =>
+          `${current}${current ? '\n' : ''}${response.ok ? (result.output ?? '') : `错误：${result.error ?? '命令执行失败。'}`}`
+      )
       setShellHistory(current => [...current, command].slice(-50))
     } catch {
-      setShellOutput(current => `${current}${current ? '\n' : ''}错误：无法连接终端服务。`)
+      setShellOutput(
+        current => `${current}${current ? '\n' : ''}错误：无法连接终端服务。`
+      )
     } finally {
       setShellCommand('')
       setShellHistoryIndex(-1)
@@ -6523,7 +6928,24 @@ function ReadonlyConsole({
     const parts = shellCommand.split(/(\s+)/)
     const tokenIndex = parts.length - 1
     const token = parts[tokenIndex] ?? ''
-    const commandNames = ['pwd', 'ls', 'cat', 'head', 'tail', 'find', 'grep', 'git', 'node', 'npm', 'yarn', 'pnpm', 'bun', 'go', 'python', 'python3']
+    const commandNames = [
+      'pwd',
+      'ls',
+      'cat',
+      'head',
+      'tail',
+      'find',
+      'grep',
+      'git',
+      'node',
+      'npm',
+      'yarn',
+      'pnpm',
+      'bun',
+      'go',
+      'python',
+      'python3'
+    ]
     if (!token || parts.length === 1) {
       const matches = commandNames.filter(name => name.startsWith(token))
       if (matches.length === 1) setShellCommand(matches[0] + ' ')
@@ -6534,10 +6956,17 @@ function ReadonlyConsole({
     const prefix = separator >= 0 ? token.slice(separator + 1) : token
     const directory = base ? `${root}/${base}` : root
     try {
-      const response = await fetch(`/api/v1/directories?${new URLSearchParams({ path: directory, files: 'true' })}`)
+      const response = await fetch(
+        `/api/v1/directories?${new URLSearchParams({ path: directory, files: 'true' })}`
+      )
       if (!response.ok) return
-      const result = (await response.json()) as { directories?: Array<{ name: string }>; files?: Array<{ name: string }> }
-      const names = [...(result.directories ?? []), ...(result.files ?? [])].map(item => item.name).filter(name => name.startsWith(prefix))
+      const result = (await response.json()) as {
+        directories?: Array<{ name: string }>
+        files?: Array<{ name: string }>
+      }
+      const names = [...(result.directories ?? []), ...(result.files ?? [])]
+        .map(item => item.name)
+        .filter(name => name.startsWith(prefix))
       if (names.length === 1) {
         parts[tokenIndex] = base + names[0]
         setShellCommand(parts.join(''))
@@ -6554,7 +6983,10 @@ function ReadonlyConsole({
     }
     if (event.key === 'ArrowUp' && shellHistory.length > 0) {
       event.preventDefault()
-      const next = Math.max(0, shellHistoryIndex < 0 ? shellHistory.length - 1 : shellHistoryIndex - 1)
+      const next = Math.max(
+        0,
+        shellHistoryIndex < 0 ? shellHistory.length - 1 : shellHistoryIndex - 1
+      )
       setShellHistoryIndex(next)
       setShellCommand(shellHistory[next] ?? '')
       return
@@ -6563,7 +6995,9 @@ function ReadonlyConsole({
       event.preventDefault()
       const next = shellHistoryIndex + 1
       setShellHistoryIndex(next >= shellHistory.length ? -1 : next)
-      setShellCommand(next >= shellHistory.length ? '' : shellHistory[next] ?? '')
+      setShellCommand(
+        next >= shellHistory.length ? '' : (shellHistory[next] ?? '')
+      )
       return
     }
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'l') {
@@ -6578,7 +7012,10 @@ function ReadonlyConsole({
     const maxTop = Math.max(8, window.innerHeight - windowRect.height - 8)
     setWindowRect(current => ({
       ...current,
-      left: Math.max(8, Math.min(maxLeft, start.left + event.clientX - start.x)),
+      left: Math.max(
+        8,
+        Math.min(maxLeft, start.left + event.clientX - start.x)
+      ),
       top: Math.max(8, Math.min(maxTop, start.top + event.clientY - start.y))
     }))
   }
@@ -6587,8 +7024,20 @@ function ReadonlyConsole({
     if (!start) return
     setWindowRect(current => ({
       ...current,
-      width: Math.max(280, Math.min(window.innerWidth - start.left - 8, start.width + event.clientX - start.x)),
-      height: Math.max(260, Math.min(window.innerHeight - start.top - 8, start.height + event.clientY - start.y))
+      width: Math.max(
+        280,
+        Math.min(
+          window.innerWidth - start.left - 8,
+          start.width + event.clientX - start.x
+        )
+      ),
+      height: Math.max(
+        260,
+        Math.min(
+          window.innerHeight - start.top - 8,
+          start.height + event.clientY - start.y
+        )
+      )
     }))
   }
   const stopInteraction = () => {
@@ -6605,7 +7054,12 @@ function ReadonlyConsole({
     >
       <section
         className="readonly-console grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900"
-        style={{ left: windowRect.left, top: windowRect.top, width: windowRect.width, height: windowRect.height }}
+        style={{
+          left: windowRect.left,
+          top: windowRect.top,
+          width: windowRect.width,
+          height: windowRect.height
+        }}
         role="dialog"
         aria-modal="true"
         aria-label="运行终端"
@@ -6614,7 +7068,12 @@ function ReadonlyConsole({
           className="readonly-console-header flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-3 dark:border-slate-700"
           onPointerDown={event => {
             if ((event.target as HTMLElement).closest('button')) return
-            dragStart.current = { x: event.clientX, y: event.clientY, left: windowRect.left, top: windowRect.top }
+            dragStart.current = {
+              x: event.clientX,
+              y: event.clientY,
+              left: windowRect.left,
+              top: windowRect.top
+            }
             event.currentTarget.setPointerCapture(event.pointerId)
           }}
           onPointerMove={moveWindow}
@@ -6660,7 +7119,12 @@ function ReadonlyConsole({
             aria-label="终端列表"
             onPointerDown={event => {
               if ((event.target as HTMLElement).closest('button')) return
-              dragStart.current = { x: event.clientX, y: event.clientY, left: windowRect.left, top: windowRect.top }
+              dragStart.current = {
+                x: event.clientX,
+                y: event.clientY,
+                left: windowRect.left,
+                top: windowRect.top
+              }
               event.currentTarget.setPointerCapture(event.pointerId)
             }}
             onPointerMove={moveWindow}
@@ -6669,7 +7133,10 @@ function ReadonlyConsole({
           >
             {tabs.map(tab => (
               <button
-                className={cn('readonly-console-tab', activeTab === tab.id && 'active')}
+                className={cn(
+                  'readonly-console-tab',
+                  activeTab === tab.id && 'active'
+                )}
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
               >
@@ -6691,7 +7158,11 @@ function ReadonlyConsole({
             >
               <Plus className="size-4" />
             </button>
-            {tabs.length === 0 && <span className="readonly-console-empty">没有打开的终端，点击右上角 + 添加</span>}
+            {tabs.length === 0 && (
+              <span className="readonly-console-empty">
+                没有打开的终端，点击右上角 + 添加
+              </span>
+            )}
           </nav>
           {activeTerminal?.kind === 'shell' ? (
             <div className="readonly-console-shell">
@@ -6729,7 +7200,14 @@ function ReadonlyConsole({
           className="readonly-console-resize"
           onPointerDown={event => {
             event.preventDefault()
-            resizeStart.current = { x: event.clientX, y: event.clientY, width: windowRect.width, height: windowRect.height, left: windowRect.left, top: windowRect.top }
+            resizeStart.current = {
+              x: event.clientX,
+              y: event.clientY,
+              width: windowRect.width,
+              height: windowRect.height,
+              left: windowRect.left,
+              top: windowRect.top
+            }
             event.currentTarget.setPointerCapture(event.pointerId)
           }}
           onPointerMove={resizeWindow}
@@ -7240,7 +7718,15 @@ function GitReleasePanelNext({
       setSourceBranch(status?.branch || branches[0]?.name || '')
     if (!commits.some(item => item.sha === sourceCommit))
       setSourceCommit(commits[0]?.sha ?? '')
-  }, [branches, commits, sourceBranch, sourceCommit, status?.branch, setSourceBranch, setSourceCommit])
+  }, [
+    branches,
+    commits,
+    sourceBranch,
+    sourceCommit,
+    status?.branch,
+    setSourceBranch,
+    setSourceCommit
+  ])
   const issues = status?.issues ?? []
   const blockingIssues = issues
   const ready = !loading && blockingIssues.length === 0 && !!sourceCommit
@@ -7391,67 +7877,69 @@ function GitReleasePanelNext({
   return (
     <BotWorkspace
       className="git-release-panel max-w-230 content-start"
-      header={<header className="bot-page-header release-toolbar flex flex-wrap items-center justify-between gap-3">
-        <span className="bot-page-header-icon">
-          <GitBranch className="size-4" />
-        </span>
-        <div className="bot-page-header-meta flex-1">
-          <strong>
-            {status?.packageName
-              ? `${status.packageName}@${status.packageVersion || '未设置版本'}`
-              : 'GIT 发布'}
-          </strong>
-          <small>
-            GIT 发布 ·{' '}
-            {status?.packageManager || '管理分支、构建产物与版本标签'}
-          </small>
-        </div>
-        <div className="release-toolbar-actions flex flex-wrap items-end justify-end gap-2">
-          {(phase === 'artifacts' || phase === 'confirm') && (
+      header={
+        <header className="bot-page-header release-toolbar flex flex-wrap items-center justify-between gap-3">
+          <span className="bot-page-header-icon">
+            <GitBranch className="size-4" />
+          </span>
+          <div className="bot-page-header-meta flex-1">
+            <strong>
+              {status?.packageName
+                ? `${status.packageName}@${status.packageVersion || '未设置版本'}`
+                : 'GIT 发布'}
+            </strong>
+            <small>
+              GIT 发布 ·{' '}
+              {status?.packageManager || '管理分支、构建产物与版本标签'}
+            </small>
+          </div>
+          <div className="release-toolbar-actions flex flex-wrap items-end justify-end gap-2">
+            {(phase === 'artifacts' || phase === 'confirm') && (
+              <button
+                className="inline-flex min-h-9 items-center justify-center rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-600 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-300"
+                onClick={() =>
+                  setPhase(phase === 'confirm' ? 'artifacts' : 'source')
+                }
+              >
+                上一步
+              </button>
+            )}
             <button
-              className="inline-flex min-h-9 items-center justify-center rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-600 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-300"
-              onClick={() =>
-                setPhase(phase === 'confirm' ? 'artifacts' : 'source')
-              }
+              className="inline-flex min-h-9 items-center justify-center rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-600 disabled:opacity-40 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-300"
+              onClick={refresh}
+              disabled={loading || busy}
             >
-              上一步
+              <RefreshCw className="size-4" />
             </button>
-          )}
-          <button
-            className="inline-flex min-h-9 items-center justify-center rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-600 disabled:opacity-40 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-300"
-            onClick={refresh}
-            disabled={loading || busy}
-          >
-            <RefreshCw className="size-4" />
-          </button>
-          <button
-            className="inline-flex min-h-9 items-center justify-center rounded-lg bg-brand-600 px-3 text-xs font-semibold text-white transition hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-50"
-            disabled={
-              busy ||
-              loading ||
-              phase === 'building' ||
-              (phase === 'source' && !ready) ||
-              (phase === 'artifacts' && !artifacts.length)
-            }
-            onClick={() => {
-              if (phase === 'source') void prepareBuild()
-              else if (phase === 'artifacts') setPhase('confirm')
-              else if (phase === 'confirm') void publish()
-              else if (phase === 'published') refresh()
-            }}
-          >
-            {busy || phase === 'building'
-              ? '构建中…'
-              : phase === 'source'
-                ? '开始构建'
-                : phase === 'artifacts'
-                  ? '继续确认'
-                  : phase === 'confirm'
-                    ? '确认发布'
-                    : '重新开始'}
-          </button>
-        </div>
-      </header>}
+            <button
+              className="inline-flex min-h-9 items-center justify-center rounded-lg bg-brand-600 px-3 text-xs font-semibold text-white transition hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={
+                busy ||
+                loading ||
+                phase === 'building' ||
+                (phase === 'source' && !ready) ||
+                (phase === 'artifacts' && !artifacts.length)
+              }
+              onClick={() => {
+                if (phase === 'source') void prepareBuild()
+                else if (phase === 'artifacts') setPhase('confirm')
+                else if (phase === 'confirm') void publish()
+                else if (phase === 'published') refresh()
+              }}
+            >
+              {busy || phase === 'building'
+                ? '构建中…'
+                : phase === 'source'
+                  ? '开始构建'
+                  : phase === 'artifacts'
+                    ? '继续确认'
+                    : phase === 'confirm'
+                      ? '确认发布'
+                      : '重新开始'}
+            </button>
+          </div>
+        </header>
+      }
     >
       {loading ? (
         <p className="m-0 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500 dark:bg-slate-800 dark:text-slate-400">

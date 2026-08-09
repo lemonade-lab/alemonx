@@ -353,7 +353,11 @@ func pluginCommand(arguments []string, confirmed bool) {
 		return
 	}
 	if len(arguments) == 2 && arguments[0] == "install" {
-		plugin, err := registry.Install(arguments[1])
+		fmt.Printf("请先查看版本：alx plugin versions %s\n", arguments[1])
+		return
+	}
+	if len(arguments) == 4 && arguments[0] == "install" {
+		plugin, err := registry.Install(arguments[1], arguments[2], arguments[3])
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -369,6 +373,19 @@ func pluginCommand(arguments []string, confirmed bool) {
 			log.Fatal(err)
 		}
 		fmt.Printf("已卸载 Setup 插件：%s；可用 alx plugin enable %s 恢复。\n", arguments[1], arguments[1])
+		return
+	}
+	if len(arguments) == 2 && arguments[0] == "versions" {
+		items, err := registry.Releases(arguments[1])
+		if err != nil {
+			log.Fatal(err)
+		}
+		for _, release := range items {
+			fmt.Printf("%s\t%s\n", release.Tag, release.Name)
+			for _, asset := range release.Assets {
+				fmt.Printf("  %s\n", asset.Name)
+			}
+		}
 		return
 	}
 	usage()
@@ -433,7 +450,8 @@ func usage() {
   alx start | stop | restart         管理后台服务
   alx uninstall --yes                移除后台服务
   alx plugin list                     查看已发现的 Setup 插件
-  alx plugin install <id>             在线安装一个 Setup 插件
+  alx plugin versions <id>            查看 Setup 插件 Release 版本与安装包
+  alx plugin install <id> <version> <asset>  下载并安装指定 Release 安装包
   alx plugin disable <id> --yes       卸载（停用）一个 Setup 插件
   alx plugin enable <id>              重新启用一个 Setup 插件
 

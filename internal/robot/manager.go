@@ -842,6 +842,8 @@ type PM2Process struct {
 	Uptime    int64   `json:"uptime"`
 	Restarts  int     `json:"restarts"`
 	Script    string  `json:"script"`
+	ErrorLog  string  `json:"errorLog,omitempty"`
+	OutputLog string  `json:"outputLog,omitempty"`
 }
 
 // PM2Processes lists every process managed by the local PM2 daemon. Unlike
@@ -910,6 +912,8 @@ func parsePM2Processes(output string) ([]PM2Process, error) {
 			Script    string `json:"script"`
 			Namespace string `json:"namespace"`
 			Uptime    int64  `json:"pm_uptime"`
+			ErrorLog  string `json:"pm_err_log_path"`
+			OutputLog string `json:"pm_out_log_path"`
 		} `json:"pm2_env"`
 		Monit struct {
 			Memory int64   `json:"memory"`
@@ -932,6 +936,8 @@ func parsePM2Processes(output string) ([]PM2Process, error) {
 			Uptime:    p.PM2Env.Uptime,
 			Restarts:  p.Restarts,
 			Script:    p.PM2Env.Script,
+			ErrorLog:  p.PM2Env.ErrorLog,
+			OutputLog: p.PM2Env.OutputLog,
 		})
 	}
 	return processes, nil

@@ -1,13 +1,16 @@
 package setupplugin
 
 import (
+	"archive/zip"
+	"bytes"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
@@ -256,49 +259,39 @@ func TestRegistrySubscribeSignalsChange(t *testing.T) {
 	}
 }
 
-func requireGit(t *testing.T) string {
+func makePluginArchive(t *testing.T) []byte {
 	t.Helper()
-	git, err := exec.LookPath("git")
-	if err != nil {
-		t.Skip("git is required for online plugin installation tests")
-	}
-	return git
-}
-
-// makeGitPluginRepo commits a plugin manifest to a throwaway local repository so
-// Install can clone it without network access.
-func makeGitPluginRepo(t *testing.T) string {
-	t.Helper()
-	git := requireGit(t)
-	remote := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(remote, "web"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	manifest := `{"id":"alemonx-network","name":"网络","version":"1.0.0","web":{"root":"web"}}`
-	if err := os.WriteFile(filepath.Join(remote, manifestName), []byte(manifest), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	run := func(args ...string) {
-		command := exec.Command(git, args...)
-		command.Dir = remote
-		if output, err := command.CombinedOutput(); err != nil {
-			t.Fatalf("git %v failed: %v\n%s", args, err, output)
+	var buffer bytes.Buffer
+	archive := zip.NewWriter(&buffer)
+	manifest := fmt.Sprintf(`{"id":"alemonx-network","name":"网络","version":"1.0.0","entry":{"%s":"runner"},"web":{"root":"web"}}`, runtime.GOOS+"-"+runtime.GOARCH)
+	for name, content := range map[string]string{manifestName: manifest, "web/index.html": "<h1>network</h1>", "runner": "#!/bin/sh\nprintf '{\"output\":\"ok\"}'\n"} {
+		file, err := archive.Create(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := file.Write([]byte(content)); err != nil {
+			t.Fatal(err)
 		}
 	}
-	run("init", "-q", "-b", "main")
-	run("add", ".")
-	run("-c", "user.email=test@example.com", "-c", "user.name=test", "commit", "-q", "-m", "init")
-	return remote
+	if err := archive.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buffer.Bytes()
 }
 
 func TestRegistryInstallsOnlinePluginLocally(t *testing.T) {
-	remote := makeGitPluginRepo(t)
+	archive := makePluginArchive(t)
+	assetName := "alemonx-network-" + runtime.GOOS + "-" + runtime.GOARCH + ".zip"
 	server := newTestHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/apps-x.md":
 			_, _ = w.Write([]byte("[network]: https://github.com/lemonade-lab/alemonx-network\n"))
 		case "/alx.json":
 			_, _ = w.Write([]byte(`{"id":"alemonx-network","name":"网络","version":"1.0.0","web":{"root":"web"}}`))
+		case "/releases":
+			_, _ = w.Write([]byte(fmt.Sprintf(`[{"tag_name":"v1.0.0","name":"v1.0.0","html_url":"https://github.com/lemonade-lab/alemonx-network/releases/tag/v1.0.0","published_at":"2025-01-01T00:00:00Z","assets":[{"name":"%s","browser_download_url":"https://github.com/lemonade-lab/alemonx-network/releases/download/v1.0.0/%s","size":128}]}]`, assetName, assetName)))
+		case "/lemonade-lab/alemonx-network/releases/download/v1.0.0/" + assetName:
+			_, _ = w.Write(archive)
 		default:
 			http.NotFound(w, r)
 		}
@@ -310,9 +303,9 @@ func TestRegistryInstallsOnlinePluginLocally(t *testing.T) {
 		onlineIndexURL:    server.URL + "/apps-x.md",
 		httpClient:        server.Client(),
 		onlineManifestURL: func(string) string { return server.URL + "/alx.json" },
-		cloneURL:          func(string) string { return remote },
+		releaseURL:        func(string) string { return server.URL + "/releases" },
 	}
-	installed, err := registry.Install("alemonx-network")
+	installed, err := registry.Install("alemonx-network", "v1.0.0", assetName)
 	if err != nil {
 		t.Fatalf("install failed: %v", err)
 	}
@@ -322,18 +315,82 @@ func TestRegistryInstallsOnlinePluginLocally(t *testing.T) {
 	if !installed.Enabled {
 		t.Fatal("installed plugin must be enabled")
 	}
+	if installed.Version != "1.0.0" || installed.InstalledTag != "v1.0.0" || len(installed.Fingerprint) != 64 {
+		t.Fatalf("installed plugin version must come from release metadata: %#v", installed)
+	}
+	if _, err := os.Stat(filepath.Join(root, "alemonx-network", installMetadataName)); err != nil {
+		t.Fatalf("install metadata missing: %v", err)
+	}
+	summary, err := registry.CacheSummary()
+	if err != nil || summary.Entries != 1 || summary.Bytes == 0 {
+		t.Fatalf("installed release should be cached: %#v, %v", summary, err)
+	}
+	versions, err := registry.Versions("alemonx-network")
+	if err != nil || len(versions) != 1 || !versions[0].Active || !versions[0].Cached {
+		t.Fatalf("cached active version missing: %#v, %v", versions, err)
+	}
+	if err := registry.DeleteVersion("alemonx-network", "v1.0.0"); err == nil {
+		t.Fatal("active cached version must not be deletable")
+	}
+	registry.httpClient = nil
 	all := registry.All()
 	if len(all) != 1 || all[0].ID != "alemonx-network" || all[0].Online || all[0].Source != filepath.Join(root, "alemonx-network") {
 		t.Fatalf("installed plugin should be the sole local entry: %#v", all)
 	}
-	if _, err := registry.Install("alemonx-network"); err == nil {
-		t.Fatal("duplicate install must be rejected")
+	if _, err := registry.Install("alemonx-network", "v1.0.0", assetName); err != nil {
+		t.Fatalf("reinstalling a cached version should not fail: %v", err)
 	}
 }
 
 func TestRegistryInstallRejectsUnknownPlugin(t *testing.T) {
 	registry := Registry{roots: []string{t.TempDir()}}
-	if _, err := registry.Install("nope"); err == nil {
+	if _, err := registry.Install("nope", "v1.0.0", "x.zip"); err == nil {
 		t.Fatal("unknown plugin id must be rejected")
+	}
+}
+
+func TestRegistrySwitchesBetweenCachedReleaseVersionsOffline(t *testing.T) {
+	archive := makePluginArchive(t)
+	assetName := "alemonx-network-" + runtime.GOOS + "-" + runtime.GOARCH + ".zip"
+	downloads := 0
+	server := newTestHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/apps-x.md":
+			_, _ = w.Write([]byte("[network]: https://github.com/lemonade-lab/alemonx-network\n"))
+		case "/alx.json":
+			_, _ = w.Write([]byte(`{"id":"alemonx-network","name":"网络","version":"1.0.0","web":{"root":"web"}}`))
+		case "/releases":
+			_, _ = w.Write([]byte(fmt.Sprintf(`[{"tag_name":"v2.0.0","assets":[{"name":"%s","browser_download_url":"https://github.com/lemonade-lab/alemonx-network/releases/download/v2.0.0/%s"}]},{"tag_name":"v1.0.0","assets":[{"name":"%s","browser_download_url":"https://github.com/lemonade-lab/alemonx-network/releases/download/v1.0.0/%s"}]}]`, assetName, assetName, assetName, assetName)))
+		default:
+			if strings.Contains(r.URL.Path, "/releases/download/") {
+				downloads++
+				_, _ = w.Write(archive)
+				return
+			}
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	root := t.TempDir()
+	registry := Registry{roots: []string{root}, onlineIndexURL: server.URL + "/apps-x.md", httpClient: server.Client(), onlineManifestURL: func(string) string { return server.URL + "/alx.json" }, releaseURL: func(string) string { return server.URL + "/releases" }}
+	if _, err := registry.Install("alemonx-network", "v1.0.0", assetName); err != nil {
+		t.Fatalf("install v1 failed: %v", err)
+	}
+	if _, err := registry.Install("alemonx-network", "v2.0.0", assetName); err != nil {
+		t.Fatalf("switch to v2 failed: %v", err)
+	}
+	if downloads != 2 {
+		t.Fatalf("expected one download per release, got %d", downloads)
+	}
+	registry.httpClient = nil
+	if _, err := registry.Install("alemonx-network", "v1.0.0", assetName); err != nil {
+		t.Fatalf("switch back to cached v1 failed offline: %v", err)
+	}
+	if downloads != 2 {
+		t.Fatalf("cached switch unexpectedly downloaded another archive: %d", downloads)
+	}
+	versions, err := registry.Versions("alemonx-network")
+	if err != nil || len(versions) != 2 || !versions[1].Active {
+		t.Fatalf("expected two versions with v1 active: %#v, %v", versions, err)
 	}
 }

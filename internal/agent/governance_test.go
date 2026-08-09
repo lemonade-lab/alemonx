@@ -66,6 +66,28 @@ func TestSQLiteOpsRepositoryRoundTrip(t *testing.T) {
 	if err != nil || cursor.Offset != 12 || cursor.WindowHash != "h" {
 		t.Fatalf("cursor=%+v err=%v", cursor, err)
 	}
+	release, err := repo.AcquireOpsLease("worker", "one", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.AcquireOpsLease("worker", "two", time.Minute); err == nil {
+		t.Fatal("sqlite lease should reject a second owner")
+	}
+	if err := repo.RenewOpsLease("worker", "one", time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	lease, err := repo.GetLease("worker")
+	if err != nil || lease.FencingToken == 0 || lease.OwnerID != "one" {
+		t.Fatalf("lease metadata = %+v err=%v", lease, err)
+	}
+	release()
+	if _, err := repo.AcquireOpsLease("worker", "two", time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	lease, err = repo.GetLease("worker")
+	if err != nil || lease.FencingToken < 2 {
+		t.Fatalf("fencing token did not advance: %+v err=%v", lease, err)
+	}
 	if err := repo.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -90,6 +112,39 @@ func TestRepositoryLeaseManagerHonorsContextAndOwnership(t *testing.T) {
 	}
 	if err := manager.Acquire(context.Background(), "worker", "two", time.Minute); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestMetricsRepositoryAtomicSnapshot(t *testing.T) {
+	store := NewOpsStoreAt(t.TempDir())
+	for i := 0; i < 3; i++ {
+		if err := store.Increment("incident_total", "/p", "fp", 1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	metrics, err := store.Snapshot("/p")
+	if err != nil || metrics.Incidents != 3 {
+		t.Fatalf("metrics=%+v err=%v", metrics, err)
+	}
+	points, err := store.Query("/p", time.Now().Add(-time.Minute), time.Now().Add(time.Minute))
+	if err != nil || len(points) == 0 {
+		t.Fatalf("metric query=%+v err=%v", points, err)
+	}
+	repo, err := NewSQLiteOpsRepository(filepath.Join(t.TempDir(), "ops.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+	if err := repo.Increment("incident_total", "/p", "fp", 2); err != nil {
+		t.Fatal(err)
+	}
+	metrics, err = repo.Snapshot("/p")
+	if err != nil || metrics.Incidents != 2 {
+		t.Fatalf("sqlite metrics=%+v err=%v", metrics, err)
+	}
+	points, err = repo.Query("/p", time.Now().Add(-time.Minute), time.Now().Add(time.Minute))
+	if err != nil || len(points) == 0 {
+		t.Fatalf("sqlite metric query=%+v err=%v", points, err)
 	}
 }
 

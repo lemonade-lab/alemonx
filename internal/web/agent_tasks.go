@@ -218,6 +218,15 @@ func (s *server) makeAgentTaskRunner(cfg ai.Resolved, checkpoint agent.AgentChec
 			if err := projectLease.Acquire(ctx, leaseKey, task.ID, 30*time.Minute); err != nil {
 				return "", errors.New("项目写租约获取失败：" + err.Error())
 			}
+			fencingToken := uint64(0)
+			if fenced, ok := projectLease.(agent.FencingLeaseManager); ok {
+				var tokenErr error
+				fencingToken, tokenErr = fenced.Token(ctx, leaseKey, task.ID)
+				if tokenErr != nil {
+					_ = projectLease.Release(context.Background(), leaseKey, task.ID)
+					return "", tokenErr
+				}
+			}
 			leaseCtx, stopLease := context.WithCancel(ctx)
 			ctx = leaseCtx
 			defer stopLease()
@@ -233,6 +242,14 @@ func (s *server) makeAgentTaskRunner(cfg ai.Resolved, checkpoint agent.AgentChec
 							emit(agent.Event{Type: "error", Text: "项目写租约续期失败，任务将暂停：" + err.Error()})
 							stopLease()
 							return
+						}
+						if fenced, ok := projectLease.(agent.FencingLeaseManager); ok && fencingToken > 0 {
+							current, tokenErr := fenced.Token(leaseCtx, leaseKey, task.ID)
+							if tokenErr != nil || current != fencingToken {
+								emit(agent.Event{Type: "error", Text: "项目写租约 fencing token 已变化，任务将暂停"})
+								stopLease()
+								return
+							}
 						}
 					}
 				}
