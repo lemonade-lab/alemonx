@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -170,7 +171,11 @@ func checksumForAsset(assets []Asset, name string) (string, error) {
 		}
 		response, err := (&http.Client{Timeout: 8 * time.Second}).Get(asset.URL)
 		if err != nil {
-			return "", err
+			// Keep the underlying error (timeout, DNS, TLS, …) in the console
+			// log for diagnosis; the caller must not surface it to the user,
+			// who only needs to know the network call failed.
+			log.Printf("[releases] 读取发布校验文件失败 %s: %v", asset.URL, err)
+			return "", fmt.Errorf("无法读取发布校验文件，请检查网络后重试")
 		}
 		body, readErr := io.ReadAll(io.LimitReader(response.Body, 1<<20))
 		response.Body.Close()

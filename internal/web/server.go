@@ -2618,7 +2618,7 @@ func (s *server) downloadUpdateHandler(w http.ResponseWriter, r *http.Request) {
 	if !update.PlatformMatched || !update.IntegrityReady {
 		if update.PlatformMatched {
 			if update.IntegrityError != "" {
-				writeError(w, http.StatusBadGateway, "无法读取发布校验文件，请检查网络后重试："+update.IntegrityError)
+				writeError(w, http.StatusBadGateway, update.IntegrityError)
 				return
 			}
 			writeError(w, http.StatusBadRequest, "该版本未提供校验文件，无法安全地自动更新，请使用手动安装。")
@@ -2766,28 +2766,13 @@ func (s *server) loadUpdateHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "无法读取更新包。")
 		return
 	}
-	transaction := system.UpdateTransaction{Phase: system.UpdatePhaseApplying, PreviousVersion: s.version, Port: updateRequestPort(r)}
-	_ = system.SaveUpdateTransaction(transaction)
-	applied, err := system.ApplyUpdateFile(path)
-	if err != nil {
-		transaction.Phase, transaction.Error = system.UpdatePhaseFailed, err.Error()
-		_ = system.SaveUpdateTransaction(transaction)
+	// Upload only stages the archive; the operator confirms installation via
+	// /api/v1/update/apply, which reuses the verified apply+restart path.
+	if _, err := system.StageUploadedUpdate(path, header.Filename); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	transaction.Executable, transaction.BackupPath = applied.Executable, applied.BackupPath
-	transaction.Phase, transaction.Error = system.UpdatePhaseRestarting, ""
-	_ = system.SaveUpdateTransaction(transaction)
-	if err := system.ScheduleRestart(); err != nil {
-		if rollbackErr := system.RollbackAppliedUpdate(transaction, err); rollbackErr != nil {
-			writeError(w, http.StatusInternalServerError, "更新已完成，但无法自动重启且回滚失败："+rollbackErr.Error())
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "无法安排自动重启，已恢复旧版本："+err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]string{"output": applied.Message + " 正在重启应用。"})
-	s.requestGracefulUpdateShutdown()
+	writeJSON(w, http.StatusOK, map[string]string{"staged": "true", "filename": filepath.Base(header.Filename), "output": "更新包已上传，确认后才会安装并重启。"})
 }
 
 func isSupportedUpdateArchive(name string) bool {
@@ -5269,14 +5254,45 @@ func (s *server) ginRequestLog() gin.HandlerFunc {
 		if body := s.loggableRequestBody(c); body != "" {
 			log.Printf("[GIN %06d] 请求 %s", id, body)
 		}
+		// Capture the response body so a failed request's error is visible in
+		// the console, not only pasted back to the browser. Only failed
+		// responses are logged, and only their body.
+		captured := &captureWriter{ResponseWriter: c.Writer}
+		c.Writer = captured
 		c.Next()
 		status := c.Writer.Status()
 		label := "完成"
 		if status >= http.StatusBadRequest {
 			label = "失败"
+			if msg := captured.message(); msg != "" {
+				log.Printf("[GIN %06d] 响应 %s", id, msg)
+			}
 		}
 		log.Printf("[GIN %06d] %s status=%d duration=%s response=%dB", id, label, status, time.Since(started).Round(time.Millisecond), c.Writer.Size())
 	}
+}
+
+// captureWriter buffers the response body so request logging can surface the
+// error message of a failed call. Buffering is bounded to keep large payloads
+// (files, logs) out of the console.
+type captureWriter struct {
+	gin.ResponseWriter
+	body bytes.Buffer
+}
+
+func (w *captureWriter) Write(data []byte) (int, error) {
+	if w.body.Len() < 4096 {
+		w.body.Write(data)
+	}
+	return w.ResponseWriter.Write(data)
+}
+
+func (w *captureWriter) message() string {
+	text := strings.TrimSpace(w.body.String())
+	if len(text) > 300 {
+		return text[:300] + "…"
+	}
+	return text
 }
 
 // loggableRequestBody reads a bounded JSON body for logging and restores the
@@ -5286,7 +5302,16 @@ func (s *server) loggableRequestBody(c *gin.Context) string {
 	if c.Request.Body == nil || c.Request.Body == http.NoBody {
 		return ""
 	}
-	raw, err := io.ReadAll(io.LimitReader(c.Request.Body, 16*1024))
+	// Only consume the body for small requests. Reading a large upload into
+	// memory here (and restoring it) is pointless for logging and risks
+	// truncating the stream that the handler still needs: a previous version
+	// capped the read at 16 KiB and then replaced the body with just those
+	// bytes, which silently broke every upload larger than 16 KiB.
+	// ContentLength is -1 for chunked bodies, which we cannot bound cheaply.
+	if c.Request.ContentLength < 0 || c.Request.ContentLength > 16*1024 {
+		return ""
+	}
+	raw, err := io.ReadAll(c.Request.Body)
 	if err != nil {
 		return ""
 	}

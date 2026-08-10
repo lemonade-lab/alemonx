@@ -68,6 +68,47 @@ func TestReadyPendingUpdateRejectsTamperedArchive(t *testing.T) {
 	}
 }
 
+func TestStageUploadedUpdateRecordsPendingAndReady(t *testing.T) {
+	t.Setenv("ALX_TEST_CACHE_DIR", t.TempDir())
+	source := filepath.Join(t.TempDir(), "uploaded.zip")
+	if err := os.WriteFile(source, []byte("uploaded-archive"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	path, err := StageUploadedUpdate(source, "alx-linux-amd64.zip")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(path)
+	if err != nil || string(body) != "uploaded-archive" {
+		t.Fatalf("staged archive = %q, %v", body, err)
+	}
+	update, archive, ready, err := ReadyPendingUpdate()
+	if err != nil || !ready {
+		t.Fatalf("staged update must be ready: ready=%v err=%v", ready, err)
+	}
+	if update.AssetName != "alx-linux-amd64.zip" || len(update.SHA256) != 64 {
+		t.Fatalf("pending update = %#v", update)
+	}
+	if archive != path {
+		t.Fatalf("ready archive = %q, want %q", archive, path)
+	}
+}
+
+func TestStageUploadedUpdateRejectsPathTraversalFilename(t *testing.T) {
+	t.Setenv("ALX_TEST_CACHE_DIR", t.TempDir())
+	source := filepath.Join(t.TempDir(), "pkg.zip")
+	if err := os.WriteFile(source, []byte("data"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	path, err := StageUploadedUpdate(source, "../../evil.zip")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Base(path) != "evil.zip" || strings.Contains(path, "..") {
+		t.Fatalf("staged path must be confined to the cache dir, got %q", path)
+	}
+}
+
 func TestUpdateTransactionPersistsAndConfirmsMatchingVersion(t *testing.T) {
 	t.Setenv("ALX_TEST_CACHE_DIR", t.TempDir())
 	transaction := UpdateTransaction{

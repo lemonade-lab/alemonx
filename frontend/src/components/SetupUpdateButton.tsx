@@ -63,6 +63,9 @@ export function SetupUpdateButton() {
   const [mode, setMode] = useStoreState<'now' | 'manual'>('now')
   const [releaseURL, setReleaseURL] = useStoreState('')
   const [file, setFile] = useStoreState<File | null>(null)
+  const [uploadProgress, setUploadProgress] = useStoreState<number | null>(null)
+  const [uploadError, setUploadError] = useStoreState('')
+  const [staged, setStaged] = useStoreState(false)
   const [busy, setBusy] = useStoreState(false)
   const [message, setMessage] = useStoreState('')
   const [confirmRestart, setConfirmRestart] = useStoreState(false)
@@ -210,37 +213,61 @@ export function SetupUpdateButton() {
     }
   }
 
-  const upload = async () => {
-    if (!file) return
-    setBusy(true)
-    setMessage('')
-    try {
+  const uploadUpdateArchive = (
+    candidate: File,
+    onProgress: (percent: number) => void
+  ): Promise<{ staged: boolean }> =>
+    new Promise((resolve, reject) => {
+      const request = new XMLHttpRequest()
+      request.open('POST', '/api/v1/update/load')
+      request.upload.onprogress = event => {
+        if (event.lengthComputable)
+          onProgress(Math.round((event.loaded / event.total) * 100))
+      }
+      request.onload = () => {
+        if (request.status >= 200 && request.status < 300) {
+          resolve({ staged: true })
+          return
+        }
+        try {
+          reject(
+            new Error(JSON.parse(request.responseText).error || '上传失败。')
+          )
+        } catch {
+          reject(new Error('上传失败。'))
+        }
+      }
+      request.onerror = () => reject(new Error('上传失败，请检查网络。'))
       const form = new FormData()
-      form.append('package', file)
+      form.append('package', candidate)
       form.append('confirm', 'true')
-      const result = await api('/api/v1/update/load', {
-        method: 'POST',
-        body: form
-      })
-      setMessage(result.output || '正在重启应用…')
-      reconnectAfterRestart()
-    } catch (reason) {
-      setMessage(reason instanceof Error ? reason.message : '载入更新失败。')
-    } finally {
-      setBusy(false)
-    }
-  }
+      request.send(form)
+    })
 
-  const selectUpdateArchive = (candidate: File | null) => {
+  const selectUpdateArchive = async (candidate: File | null) => {
     if (!candidate) return
     const validationError = updateArchiveValidationError(candidate)
     if (validationError) {
       setFile(null)
-      setMessage(validationError)
+      setUploadProgress(null)
+      setStaged(false)
+      setUploadError(validationError)
       return
     }
     setFile(candidate)
-    setMessage(`已选择 ${candidate.name}，确认部署后才会上传并替换当前版本。`)
+    setUploadError('')
+    setStaged(false)
+    setUploadProgress(0)
+    setMessage('')
+    try {
+      await uploadUpdateArchive(candidate, setUploadProgress)
+      setStaged(true)
+      setUploadProgress(100)
+      setMessage('更新包已上传，点击「确认安装并重启」应用。')
+    } catch (reason) {
+      setUploadProgress(null)
+      setUploadError(reason instanceof Error ? reason.message : '上传失败。')
+    }
   }
 
   const openPanel = () => {
@@ -311,7 +338,12 @@ export function SetupUpdateButton() {
             value={mode}
             onChange={nextMode => {
               setMode(nextMode)
-              if (nextMode === 'now') setFile(null)
+              if (nextMode === 'now') {
+                setFile(null)
+                setUploadProgress(null)
+                setUploadError('')
+                setStaged(false)
+              }
             }}
             variant="segmented"
             className="grid grid-cols-2"
@@ -436,7 +468,8 @@ export function SetupUpdateButton() {
                 onDragOver={event => event.preventDefault()}
                 onDrop={event => {
                   event.preventDefault()
-                  selectUpdateArchive(event.dataTransfer.files[0] ?? null)
+                  if (uploadProgress !== null) return
+                  void selectUpdateArchive(event.dataTransfer.files[0] ?? null)
                 }}
               >
                 <input
@@ -445,37 +478,58 @@ export function SetupUpdateButton() {
                   type="file"
                   accept=".zip,.tgz,.tar.gz"
                   onChange={event => {
-                    selectUpdateArchive(event.target.files?.[0] ?? null)
+                    void selectUpdateArchive(event.target.files?.[0] ?? null)
                     event.currentTarget.value = ''
                   }}
                 />
                 <label
                   htmlFor={uploadInputID}
-                  className="flex cursor-pointer items-center gap-2.5 rounded-lg border border-dashed border-brand-200 bg-brand-50/40 p-3 text-left transition hover:border-brand-600 hover:bg-brand-50"
+                  className={`flex items-center gap-2.5 rounded-lg border border-dashed p-3 text-left transition ${
+                    uploadProgress !== null
+                      ? 'cursor-default border-brand-300 bg-brand-50/60'
+                      : 'cursor-pointer border-brand-200 bg-brand-50/40 hover:border-brand-600 hover:bg-brand-50'
+                  }`}
                 >
                   <i className="inline-flex size-8 shrink-0 items-center justify-center rounded-md bg-brand-50 text-brand-600">
-                    {file ? (
+                    {uploadProgress !== null ? (
+                      <RefreshCw className="size-4 animate-spin" />
+                    ) : file ? (
                       <FileArchive className="size-4" />
                     ) : (
                       <Upload className="size-4" />
                     )}
                   </i>
-                  <span className="grid min-w-0 gap-0.5">
+                  <span className="grid min-w-0 flex-1 gap-1">
                     <strong className="truncate text-xs text-slate-700">
                       {file ? file.name : '选择更新包'}
                     </strong>
                     <small className="text-[11px] leading-4 text-slate-500">
-                      {file
-                        ? '已选择，确认部署后才会上传。'
+                      {uploadProgress !== null
+                        ? staged
+                          ? '已上传，等待确认安装。'
+                          : `正在上传 ${uploadProgress}%…`
                         : '仅支持 .zip、.tgz 或 .tar.gz，也可拖到这里。'}
                     </small>
                   </span>
                 </label>
+                {uploadProgress !== null && (
+                  <div className="h-1.5 overflow-hidden rounded-full bg-slate-200">
+                    <div
+                      className="h-full rounded-full bg-brand-600 transition-[width] duration-200"
+                      style={{ width: `${uploadProgress}%` }}
+                    />
+                  </div>
+                )}
+                {uploadError && (
+                  <small className="rounded-md border border-amber-200 bg-amber-50 p-2 text-[11px] leading-4 text-amber-800">
+                    {uploadError}
+                  </small>
+                )}
                 <Button
-                  disabled={!file || busy}
+                  disabled={!staged || busy}
                   onClick={() => setConfirmRestart(true)}
                 >
-                  {busy ? '正在部署…' : '部署此安装包'}
+                  {busy ? '正在重启…' : '确认安装并重启'}
                 </Button>
                 {message && (
                   <small className="rounded-md bg-slate-50 p-2 text-[11px] leading-4 text-slate-500">
@@ -516,20 +570,19 @@ export function SetupUpdateButton() {
       )}
       <ConfirmDialog
         open={confirmRestart}
-        title={file ? '部署本地安装包并重启' : '立即更新并重启'}
+        title={file && staged ? '确认安装本地更新包' : '立即更新并重启'}
         subtitle={
-          file
-            ? `将上传并校验 ${file.name}，通过后才替换当前应用。`
+          file && staged
+            ? `${file.name} 已上传并通过校验，确认后将替换当前应用。`
             : '已下载的更新包保存在本机应用存储目录中。'
         }
         message="应用会替换为新版本并自动重启；浏览器会在重启后重新连接。"
-        confirmLabel={file ? '确认部署并重启' : '立即更新并重启'}
+        confirmLabel={file && staged ? '确认安装并重启' : '立即更新并重启'}
         busy={busy}
         onCancel={() => setConfirmRestart(false)}
         onConfirm={() => {
           setConfirmRestart(false)
-          if (file) void upload()
-          else void applyAndRestart()
+          void applyAndRestart()
         }}
       />
     </div>

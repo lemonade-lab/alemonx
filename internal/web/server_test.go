@@ -100,6 +100,49 @@ func TestLoggableRequestBodyRedactsSecretsAndRestoresStream(t *testing.T) {
 	}
 }
 
+// Large uploads must not be consumed or truncated by the request logger: a
+// previous implementation capped the read at 16 KiB and then replaced the body
+// with only those bytes, silently breaking every multipart upload bigger than
+// that (ParseMultipartForm would fail on the truncated stream).
+func TestLoggableRequestBodyLeavesLargeBodyUntouched(t *testing.T) {
+	s := newStatefulTestServer()
+	large := bytes.Repeat([]byte("x"), 256*1024)
+	recorder := httptest.NewRecorder()
+	ginCtx, _ := gin.CreateTestContext(recorder)
+	ginCtx.Request = httptest.NewRequest(http.MethodPost, "/api/v1/update/load", bytes.NewBuffer(large))
+	ginCtx.Request.ContentLength = int64(len(large))
+	if logged := s.loggableRequestBody(ginCtx); logged != "" {
+		t.Fatalf("large body should not be logged: %q", logged)
+	}
+	after, err := io.ReadAll(ginCtx.Request.Body)
+	if err != nil || !bytes.Equal(after, large) {
+		t.Fatalf("large body truncated: got %d bytes, want %d (err %v)", len(after), len(large), err)
+	}
+}
+
+func TestCaptureWriterBuffersFailedResponseBody(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	ginCtx, _ := gin.CreateTestContext(recorder)
+	captured := &captureWriter{ResponseWriter: ginCtx.Writer}
+	// Pass through a small error payload and confirm the buffer captures it.
+	if _, err := captured.Write([]byte(`{"error":"无法读取发布校验文件，请检查网络后重试"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if got := captured.message(); !strings.Contains(got, "请检查网络后重试") {
+		t.Fatalf("captured message = %q", got)
+	}
+	// A very large payload must be truncated so the console stays readable.
+	ginCtx2, _ := gin.CreateTestContext(httptest.NewRecorder())
+	captured2 := &captureWriter{ResponseWriter: ginCtx2.Writer}
+	big := bytes.Repeat([]byte("x"), 64*1024)
+	if _, err := captured2.Write(big); err != nil {
+		t.Fatal(err)
+	}
+	if len(captured2.message()) > 400 {
+		t.Fatalf("captured message not bounded: %d bytes", len(captured2.message()))
+	}
+}
+
 func newSudoActionTestServer(t *testing.T, run func(context.Context, []byte) (string, error)) (*server, string) {
 	t.Helper()
 	if err := system.ConfigurePrivilegedMode("127.0.0.1", false); err != nil {

@@ -299,6 +299,69 @@ func ClearPendingUpdate() error {
 	return nil
 }
 
+// StageUploadedUpdate moves a just-uploaded archive into the verified update
+// cache and records it as pending. Applying it later reuses the exact same
+// apply path as an auto-downloaded release.
+func StageUploadedUpdate(source, filename string) (string, error) {
+	filename = filepath.Base(filename)
+	if filename == "." || filename == "" {
+		return "", errors.New("更新包名称无效")
+	}
+	base, err := updateCacheBase()
+	if err != nil {
+		return "", fmt.Errorf("无法定位应用存储目录：%w", err)
+	}
+	directory := filepath.Join(base, "alemonjs", "alx", "updates")
+	if err := os.MkdirAll(directory, 0700); err != nil {
+		return "", fmt.Errorf("无法创建更新存储目录：%w", err)
+	}
+	path := filepath.Join(directory, filename)
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return "", err
+	}
+	input, err := os.Open(source)
+	if err != nil {
+		return "", err
+	}
+	defer input.Close()
+	output, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+	if err != nil {
+		return "", err
+	}
+	_, copyErr := io.Copy(output, io.LimitReader(input, maxUpdateSize+1))
+	closeErr := output.Close()
+	if copyErr != nil || closeErr != nil {
+		_ = os.Remove(path)
+		if copyErr != nil {
+			return "", copyErr
+		}
+		return "", closeErr
+	}
+	sum, err := sha256File(path)
+	if err != nil {
+		_ = os.Remove(path)
+		return "", err
+	}
+	if err := savePendingUpdate(PendingUpdate{AssetName: filename, SHA256: sum, Version: ""}); err != nil {
+		_ = os.Remove(path)
+		return "", err
+	}
+	return path, nil
+}
+
+func sha256File(path string) (string, error) {
+	input, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer input.Close()
+	digest := sha256.New()
+	if _, err := io.Copy(digest, io.LimitReader(input, maxUpdateSize+1)); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x", digest.Sum(nil)), nil
+}
+
 // ReplaceExecutableFile applies a user-selected local release archive. The
 // caller must obtain explicit confirmation before passing local files here.
 func ReplaceExecutableFile(source string) (string, error) {
