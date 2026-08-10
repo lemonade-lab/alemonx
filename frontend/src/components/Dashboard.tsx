@@ -84,8 +84,7 @@ import { Button } from './Button'
 import { Tabs } from './Tabs'
 import { NpmrcConfigForm } from './NpmrcConfigForm'
 import { EnvConfigForm } from './EnvConfigForm'
-import { BotWorkspace } from './BotWorkspace'
-import { RobotPanelHeader } from './RobotPanelHeader'
+import { RobotPanel } from './RobotPanel'
 import { OpsCenter } from './OpsCenter'
 import { OpsOverview } from './OpsOverview'
 import { NpmPublishPanel } from './NpmPublishPanel'
@@ -213,10 +212,7 @@ type Props = {
     pm2Logs: { open: boolean; minimized: boolean }
     pm2Status: { open: boolean; minimized: boolean }
     ops: { open: boolean; minimized: boolean }
-    system: Record<
-      string,
-      { open: boolean; minimized: boolean; label: string }
-    >
+    system: Record<string, { open: boolean; minimized: boolean; label: string }>
   }) => void
   goals?: unknown
   goal?: unknown
@@ -234,14 +230,12 @@ const coreFeatureCatalog: Array<{
   { id: 'accounts', label: '账户', icon: <UsersRound /> }
 ]
 
-function systemFeatureLabel(
-  feature: SystemFeature,
-  plugins: SetupPlugin[]
-) {
+function systemFeatureLabel(feature: SystemFeature, plugins: SetupPlugin[]) {
   return (
     plugins.find(item => feature === `setup:${item.id}`)?.name ??
     coreFeatureCatalog.find(item => item.id === feature)?.label ??
-    ({ tasks: '任务', environment: '环境检查' }[feature] ?? '系统功能')
+    { tasks: '任务', environment: '环境检查' }[feature] ??
+    '系统功能'
   )
 }
 const directoryActions: Array<{
@@ -941,14 +935,16 @@ export function Dashboard({
   const [pm2ProcessesMinimized, setPM2ProcessesMinimized] = useStoreState(false)
   const [opsOpen, setOpsOpen] = useStoreState(false)
   const [opsMinimized, setOpsMinimized] = useStoreState(false)
-  const [windowLayers, setWindowLayers] = useStoreState<Record<string, number>>({
-    terminal: 101,
-    git: 102,
-    app: 103,
-    pm2Logs: 104,
-    pm2Status: 105,
-    ops: 106
-  })
+  const [windowLayers, setWindowLayers] = useStoreState<Record<string, number>>(
+    {
+      terminal: 101,
+      git: 102,
+      app: 103,
+      pm2Logs: 104,
+      pm2Status: 105,
+      ops: 106
+    }
+  )
   const nextWindowLayer = useRef(106)
   const openAppRef = useRef<() => void>(() => {})
   const [invalidDirectory, setInvalidDirectory] = useStoreState('')
@@ -1044,12 +1040,7 @@ export function Dashboard({
     window.addEventListener('alx:desktop-terminal-toggle', toggleTerminal)
     return () =>
       window.removeEventListener('alx:desktop-terminal-toggle', toggleTerminal)
-  }, [
-    activateFloatingWindow,
-    consoleOpen,
-    setConsoleMinimized,
-    setConsoleOpen
-  ])
+  }, [activateFloatingWindow, consoleOpen, setConsoleMinimized, setConsoleOpen])
   const loadAgentSessions = useCallback(async () => {
     try {
       const response = await fetch('/api/v1/agent/sessions')
@@ -1458,7 +1449,10 @@ export function Dashboard({
       window.removeEventListener('alx:desktop-git-toggle', toggleGit)
       window.removeEventListener('alx:desktop-app-toggle', toggleApp)
       window.removeEventListener('alx:desktop-pm2-logs-toggle', togglePM2Logs)
-      window.removeEventListener('alx:desktop-pm2-status-toggle', togglePM2Status)
+      window.removeEventListener(
+        'alx:desktop-pm2-status-toggle',
+        togglePM2Status
+      )
       window.removeEventListener('alx:desktop-ops-toggle', toggleOps)
       window.removeEventListener('alx:desktop-system-toggle', toggleSystem)
     }
@@ -1521,7 +1515,10 @@ export function Dashboard({
       } catch (error) {
         // Web Lock acquisition may resolve after effect cleanup, when this
         // channel has already been closed. That late message is obsolete.
-        if (!(error instanceof DOMException && error.name === 'InvalidStateError')) throw error
+        if (!(
+          error instanceof DOMException && error.name === 'InvalidStateError'
+        ))
+          throw error
       }
     }
     const leaseKey = 'alx-events-leader'
@@ -2317,15 +2314,11 @@ export function Dashboard({
         onSaveConfig={savePackageConfig}
       />
     ) : (
-      <BotWorkspace
+      <RobotPanel
         className="catalog-workspace max-w-190"
-        header={
-          <RobotPanelHeader
-            icon={<Globe className="size-4" />}
-            title={currentCatalog?.title || '目录'}
-            description="浏览并管理可安装的机器人包"
-          />
-        }
+        icon={<Globe className="size-4" />}
+        title={currentCatalog?.title || '目录'}
+        description="浏览并管理可安装的机器人包"
       >
         {catalogLoading && <p className="catalog-state">正在读取目录…</p>}
         {catalogError && <p className="catalog-state">{catalogError}</p>}
@@ -2350,13 +2343,15 @@ export function Dashboard({
             ))}
           </section>
         )}
-      </BotWorkspace>
+      </RobotPanel>
     )
   const workspaceSetupPlugin = setupPlugins.find(
     item => systemFeature === `setup:${item.id}`
   )
   const systemWindowContent = (feature: SystemFeature) => {
-    const setupPlugin = setupPlugins.find(item => feature === `setup:${item.id}`)
+    const setupPlugin = setupPlugins.find(
+      item => feature === `setup:${item.id}`
+    )
     return feature === 'ops-overview' ? (
       <OpsOverview
         projects={projects}
@@ -2898,12 +2893,15 @@ export function Dashboard({
         const offset = (index % 6) * 28
         return (
           <DesktopWindow
+            id={`system:${feature}`}
             key={feature}
             open
             minimized={state.minimized}
             title={systemFeatureLabel(feature, setupPlugins)}
-            subtitle="系统功能"
-            icon={<Settings className="size-4 shrink-0 text-brand-600 dark:text-brand-200" />}
+            subtitle=""
+            icon={
+              <Settings className="size-4 shrink-0 text-brand-600 dark:text-brand-200" />
+            }
             onClose={() => closeSystemWindow(feature)}
             onMinimize={() =>
               setSystemWindows(current => ({
@@ -5178,7 +5176,8 @@ function SetupPluginCenter({ plugin }: { plugin: SetupPlugin }) {
   const webSrc = `/api/v1/setup/plugins/web/${plugin.id}/index.html?theme=${theme}`
   const applyScrollbarTheme = (event: SyntheticEvent<HTMLIFrameElement>) => {
     const document = event.currentTarget.contentDocument
-    if (!document || document.head.querySelector('[data-alx-scrollbar-theme]')) return
+    if (!document || document.head.querySelector('[data-alx-scrollbar-theme]'))
+      return
     const style = document.createElement('style')
     style.dataset.alxScrollbarTheme = 'true'
     style.textContent = `
@@ -5286,33 +5285,29 @@ function BackpackPanel({
       />
     )
   return (
-    <BotWorkspace
-      className="backpack-panel max-w-190"
-      header={
-        <RobotPanelHeader
-          icon={<Archive className="size-4" />}
-          title="背包"
-          description={<span title={`${root}/packages`}>packages</span>}
-          actions={
-            <>
-              <button className="text-button" onClick={onOpenPlugins}>
-                插件中心
-              </button>
-              <button
-                className="icon-button size-9 shrink-0 p-0"
-                disabled={loading}
-                onClick={onRefresh}
-                aria-label="刷新背包"
-                title="刷新背包"
-              >
-                {loading ? '读取中…' : <RefreshCw className="size-4" />}
-              </button>
-            </>
-          }
-        />
+    <RobotPanel
+      className="backpack-panel"
+      icon={<Archive className="size-4" />}
+      title="背包"
+      description={<span title={`${root}/packages`}>packages</span>}
+      actions={
+        <>
+          <button className="text-button" onClick={onOpenPlugins}>
+            插件中心
+          </button>
+          <button
+            className="icon-button size-9 shrink-0 p-0"
+            disabled={loading}
+            onClick={onRefresh}
+            aria-label="刷新背包"
+            title="刷新背包"
+          >
+            {loading ? '读取中…' : <RefreshCw className="size-4" />}
+          </button>
+        </>
       }
     >
-      <div className="bot-page-content">
+      <div className="grid gap-2">
         {loading ? (
           <p className="grid min-h-32 place-items-center text-sm text-slate-500">
             正在读取本地插件包…
@@ -5401,7 +5396,7 @@ function BackpackPanel({
           </section>
         )}
       </div>
-    </BotWorkspace>
+    </RobotPanel>
   )
 }
 
@@ -5478,45 +5473,41 @@ function BackpackPackageManager({
     if (versions?.latest) setVersion(versions.latest)
   }, [versions, setVersion])
   return (
-    <BotWorkspace
-      className="backpack-manager max-w-190"
-      header={
-        <RobotPanelHeader
-          icon={<Package className="size-4" />}
+    <RobotPanel
+      className="backpack-manager"
+      icon={<Package className="size-4" />}
 
-          title={
-            <>
-              {item.name}
-              {item.version && (
-                <em className="ml-2 not-italic text-xs text-slate-400">
-                  v{item.version}
-                </em>
-              )}
-            </>
-          }
-          description={<span title={item.path}>{item.path}</span>}
-          actions={
-            <>
-              <button className="text-button" onClick={onBack}>
-                ‹ 返回背包
-              </button>
-              <button
-                className="icon-button size-9 p-0"
-                onClick={onRefresh}
-                title="刷新背包"
-              >
-                <RefreshCw className="size-4" />
-              </button>
-              <button
-                className="inline-flex min-h-8 items-center justify-center rounded-md border border-red-200 px-3 text-xs font-semibold text-red-700 transition hover:bg-red-50"
-                disabled={busy}
-                onClick={() => void onRemove(item.name)}
-              >
-                卸载
-              </button>
-            </>
-          }
-        />
+      title={
+        <>
+          {item.name}
+          {item.version && (
+            <em className="ml-2 not-italic text-xs text-slate-400">
+              v{item.version}
+            </em>
+          )}
+        </>
+      }
+      description={<span title={item.path}>{item.path}</span>}
+      actions={
+        <>
+          <button className="text-button" onClick={onBack}>
+            ‹ 返回背包
+          </button>
+          <button
+            className="icon-button size-9 p-0"
+            onClick={onRefresh}
+            title="刷新背包"
+          >
+            <RefreshCw className="size-4" />
+          </button>
+          <button
+            className="inline-flex min-h-8 items-center justify-center rounded-md border border-red-200 px-3 text-xs font-semibold text-red-700 transition hover:bg-red-50"
+            disabled={busy}
+            onClick={() => void onRemove(item.name)}
+          >
+            卸载
+          </button>
+        </>
       }
     >
       <Tabs
@@ -5654,7 +5645,7 @@ function BackpackPackageManager({
           </section>
         )}
       </div>
-    </BotWorkspace>
+    </RobotPanel>
   )
 }
 function CatalogDetail({
@@ -5717,21 +5708,17 @@ function CatalogDetail({
   const uninstallAction =
     kind === 'connection' ? 'uninstall-connection' : 'uninstall-package'
   return (
-    <BotWorkspace
+    <RobotPanel
       className="catalog-detail max-w-190"
-      header={
-        <RobotPanelHeader
-          icon={<Globe className="size-4" />}
-          title={group}
-          description="查看版本、安装与配置"
-          actions={
-            <>
-              <button className="text-button" onClick={onBack}>
-                ‹ 返回目录
-              </button>
-            </>
-          }
-        />
+      icon={<Globe className="size-4" />}
+      title={group}
+      description="查看版本、安装与配置"
+      actions={
+        <>
+          <button className="text-button" onClick={onBack}>
+            ‹ 返回目录
+          </button>
+        </>
       }
     >
       <section className="catalog-control flex flex-wrap items-start justify-between gap-4 rounded-xl border border-slate-200 bg-white p-4">
@@ -5849,7 +5836,7 @@ function CatalogDetail({
         )}
         {document && <MarkdownPage markdown={document.markdown} />}
       </section>
-    </BotWorkspace>
+    </RobotPanel>
   )
 }
 function PackageConfigPanel({
@@ -6390,29 +6377,25 @@ function RuntimePanel({
     }
   }
   return (
-    <BotWorkspace
+    <RobotPanel
       className="runtime-overview max-w-190"
-      header={
-        <RobotPanelHeader
-          icon={<Play className="size-4" />}
-          title={overview?.name || '正在读取项目…'}
-          description={
-            overview
-              ? `${overview.version || '未设置版本'} · ${overview.packageManager} · ${overview.hasDevScript ? '已配置开发命令' : '未配置 dev 命令'}`
-              : '读取包信息、平台包与运行状态。'
-          }
-          actions={
-            <button
-              className="icon-button size-9 shrink-0 p-0"
-              disabled={loading}
-              onClick={onRefresh}
-              aria-label="刷新运行状态"
-              title="刷新运行状态"
-            >
-              <RefreshCw className="size-4" />
-            </button>
-          }
-        />
+      icon={<Play className="size-4" />}
+      title={overview?.name || '正在读取项目…'}
+      description={
+        overview
+          ? `${overview.version || '未设置版本'} · ${overview.packageManager} · ${overview.hasDevScript ? '已配置开发命令' : '未配置 dev 命令'}`
+          : '读取包信息、平台包与运行状态。'
+      }
+      actions={
+        <button
+          className="icon-button size-9 shrink-0 p-0"
+          disabled={loading}
+          onClick={onRefresh}
+          aria-label="刷新运行状态"
+          title="刷新运行状态"
+        >
+          <RefreshCw className="size-4" />
+        </button>
       }
     >
       <ConfirmDialog
@@ -6438,210 +6421,208 @@ function RuntimePanel({
         onConfirm={() => setValidationMessage('')}
       />
       {loginChoice && (
-          <Modal
-            open
-            onClose={closeLoginDialog}
-            ariaLabel={loginChoice.label}
-            className="bg-slate-950/25 p-6"
+        <Modal
+          open
+          onClose={closeLoginDialog}
+          ariaLabel={loginChoice.label}
+          className="bg-slate-950/25 p-6"
+        >
+          <section
+            className="grid max-h-[min(720px,calc(100vh-48px))] w-full max-w-2xl grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_20px_58px_rgb(28_26_23/0.22)]"
+            role="dialog"
+            aria-modal="true"
+            aria-label={loginChoice.label}
           >
-            <section
-              className="grid max-h-[min(720px,calc(100vh-48px))] w-full max-w-2xl grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_20px_58px_rgb(28_26_23/0.22)]"
-              role="dialog"
-              aria-modal="true"
-              aria-label={loginChoice.label}
-            >
-              <header className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
-                <div>
-                  <strong className="text-sm text-ink-950">
-                    {loginChoice.label}
+            <header className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
+              <div>
+                <strong className="text-sm text-ink-950">
+                  {loginChoice.label}
+                </strong>
+                <p className="mt-1 text-xs text-slate-500">
+                  {loginChoice.preflight.login
+                    ? `将使用 ${loginChoice.preflight.login} 登录连接启动。`
+                    : '尚未配置 login；可在这里完成连接配置后启动。'}
+                </p>
+              </div>
+              <button
+                className="icon-button"
+                onClick={closeLoginDialog}
+                aria-label="关闭"
+              >
+                <X />
+              </button>
+            </header>
+            <div className="grid min-h-0 gap-4 overflow-auto p-5">
+              {loginDialogError && (
+                <p className="m-0 rounded-md border border-orange-200 bg-orange-50 px-3 py-2 text-xs leading-5 text-orange-800">
+                  {loginDialogError}
+                </p>
+              )}
+              <section className="rounded-lg border border-slate-200">
+                <header className="border-b border-slate-200 bg-slate-50 px-3 py-2">
+                  <strong className="text-xs text-slate-700">
+                    选择登录平台
                   </strong>
-                  <p className="mt-1 text-xs text-slate-500">
-                    {loginChoice.preflight.login
-                      ? `将使用 ${loginChoice.preflight.login} 登录连接启动。`
-                      : '尚未配置 login；可在这里完成连接配置后启动。'}
-                  </p>
+                </header>
+                <div className="grid gap-3 p-3 sm:grid-cols-3">
+                  <label className="grid gap-1 text-xs font-semibold text-slate-600">
+                    已识别平台
+                    <select
+                      value={selectedPlatform}
+                      onChange={event => choosePlatform(event.target.value)}
+                    >
+                      <option value="">不选择，直接输入</option>
+                      {(overview?.platforms ?? []).map(item => (
+                        <option key={item.id} value={item.id}>
+                          {item.label}
+                          {item.installed ? ' · 已安装' : ' · 需安装'}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="grid gap-1 text-xs font-semibold text-slate-600">
+                    登录连接
+                    <input
+                      value={customLogin}
+                      onChange={event => {
+                        setSelectedPlatform('')
+                        setCustomLogin(event.target.value)
+                        scheduleLoginSave({
+                          login: event.target.value,
+                          packageName: customPackage.trim()
+                        })
+                      }}
+                      placeholder="如 onebot"
+                    />
+                  </label>
+                  <label className="grid gap-1 text-xs font-semibold text-slate-600">
+                    连接包（可选）
+                    <input
+                      value={customPackage}
+                      onChange={event => {
+                        setSelectedPlatform('')
+                        setCustomPackage(event.target.value)
+                        setConnectionConfig(null)
+                      }}
+                      placeholder="如 @alemonjs/onebot"
+                    />
+                  </label>
                 </div>
-                <button
-                  className="icon-button"
-                  onClick={closeLoginDialog}
-                  aria-label="关闭"
-                >
-                  <X />
-                </button>
-              </header>
-              <div className="grid min-h-0 gap-4 overflow-auto p-5">
-                {loginDialogError && (
-                  <p className="m-0 rounded-md border border-orange-200 bg-orange-50 px-3 py-2 text-xs leading-5 text-orange-800">
-                    {loginDialogError}
-                  </p>
-                )}
+                {packageTarget &&
+                  (!knownPlatform || !knownPlatform.installed) && (
+                    <footer className="flex items-center justify-between border-t border-slate-200 bg-slate-50 px-3 py-2">
+                      <small className="text-xs text-slate-500">
+                        {packageTarget} 尚未安装；安装后才能读取它的连接配置。
+                      </small>
+                      <button
+                        className="secondary-button"
+                        disabled={loginDialogBusy || busy}
+                        onClick={() => void installSelectedConnection()}
+                      >
+                        安装连接包
+                      </button>
+                    </footer>
+                  )}
+              </section>
+              {connectionConfig?.fields.length ? (
                 <section className="rounded-lg border border-slate-200">
                   <header className="border-b border-slate-200 bg-slate-50 px-3 py-2">
-                    <strong className="text-xs text-slate-700">
-                      选择登录平台
-                    </strong>
+                    <strong className="text-xs text-slate-700">连接配置</strong>
+                    <small className="ml-2 text-[11px] text-slate-400">
+                      保存到 alemon.config.yaml
+                    </small>
                   </header>
-                  <div className="grid gap-3 p-3 sm:grid-cols-3">
-                    <label className="grid gap-1 text-xs font-semibold text-slate-600">
-                      已识别平台
-                      <select
-                        value={selectedPlatform}
-                        onChange={event => choosePlatform(event.target.value)}
+                  <div className="grid gap-3 p-3 sm:grid-cols-2">
+                    {connectionConfig.fields.map(field => (
+                      <label
+                        key={field.name}
+                        className="grid gap-1 text-xs font-semibold text-slate-600"
                       >
-                        <option value="">不选择，直接输入</option>
-                        {(overview?.platforms ?? []).map(item => (
-                          <option key={item.id} value={item.id}>
-                            {item.label}
-                            {item.installed ? ' · 已安装' : ' · 需安装'}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label className="grid gap-1 text-xs font-semibold text-slate-600">
-                      登录连接
-                      <input
-                        value={customLogin}
-                        onChange={event => {
-                          setSelectedPlatform('')
-                          setCustomLogin(event.target.value)
-                          scheduleLoginSave({
-                            login: event.target.value,
-                            packageName: customPackage.trim()
-                          })
-                        }}
-                        placeholder="如 onebot"
-                      />
-                    </label>
-                    <label className="grid gap-1 text-xs font-semibold text-slate-600">
-                      连接包（可选）
-                      <input
-                        value={customPackage}
-                        onChange={event => {
-                          setSelectedPlatform('')
-                          setCustomPackage(event.target.value)
-                          setConnectionConfig(null)
-                        }}
-                        placeholder="如 @alemonjs/onebot"
-                      />
-                    </label>
+                        {field.description || field.name}
+                        {field.required && (
+                          <em className="not-italic text-orange-700">必填</em>
+                        )}
+                        {field.type === 'boolean' || field.type === 'bool' ? (
+                          <select
+                            value={connectionValues[field.name] ?? ''}
+                            onChange={event =>
+                              updateConnectionValue(
+                                field.name,
+                                event.target.value
+                              )
+                            }
+                          >
+                            <option value="">不设置</option>
+                            <option value="true">开启</option>
+                            <option value="false">关闭</option>
+                          </select>
+                        ) : (
+                          <input
+                            type={
+                              field.type === 'number' ||
+                              field.type === 'integer'
+                                ? 'number'
+                                : 'text'
+                            }
+                            value={connectionValues[field.name] ?? ''}
+                            onChange={event =>
+                              updateConnectionValue(
+                                field.name,
+                                event.target.value
+                              )
+                            }
+                            placeholder={field.name}
+                          />
+                        )}
+                      </label>
+                    ))}
                   </div>
-                  {packageTarget &&
-                    (!knownPlatform || !knownPlatform.installed) && (
-                      <footer className="flex items-center justify-between border-t border-slate-200 bg-slate-50 px-3 py-2">
-                        <small className="text-xs text-slate-500">
-                          {packageTarget} 尚未安装；安装后才能读取它的连接配置。
-                        </small>
-                        <button
-                          className="secondary-button"
-                          disabled={loginDialogBusy || busy}
-                          onClick={() => void installSelectedConnection()}
-                        >
-                          安装连接包
-                        </button>
-                      </footer>
-                    )}
                 </section>
-                {connectionConfig?.fields.length ? (
-                  <section className="rounded-lg border border-slate-200">
-                    <header className="border-b border-slate-200 bg-slate-50 px-3 py-2">
-                      <strong className="text-xs text-slate-700">
-                        连接配置
-                      </strong>
-                      <small className="ml-2 text-[11px] text-slate-400">
-                        保存到 alemon.config.yaml
-                      </small>
-                    </header>
-                    <div className="grid gap-3 p-3 sm:grid-cols-2">
-                      {connectionConfig.fields.map(field => (
-                        <label
-                          key={field.name}
-                          className="grid gap-1 text-xs font-semibold text-slate-600"
-                        >
-                          {field.description || field.name}
-                          {field.required && (
-                            <em className="not-italic text-orange-700">必填</em>
-                          )}
-                          {field.type === 'boolean' || field.type === 'bool' ? (
-                            <select
-                              value={connectionValues[field.name] ?? ''}
-                              onChange={event =>
-                                updateConnectionValue(
-                                  field.name,
-                                  event.target.value
-                                )
-                              }
-                            >
-                              <option value="">不设置</option>
-                              <option value="true">开启</option>
-                              <option value="false">关闭</option>
-                            </select>
-                          ) : (
-                            <input
-                              type={
-                                field.type === 'number' ||
-                                field.type === 'integer'
-                                  ? 'number'
-                                  : 'text'
-                              }
-                              value={connectionValues[field.name] ?? ''}
-                              onChange={event =>
-                                updateConnectionValue(
-                                  field.name,
-                                  event.target.value
-                                )
-                              }
-                              placeholder={field.name}
-                            />
-                          )}
-                        </label>
-                      ))}
-                    </div>
-                  </section>
-                ) : packageTarget && knownPlatform?.installed ? (
-                  <p className="m-0 text-xs text-slate-500">
-                    该连接包没有声明可填写的 alemonjs.config，保存 login
-                    后即可启动。
-                  </p>
-                ) : null}
-              </div>
-              <footer className="flex flex-wrap items-center justify-end gap-2 border-t border-slate-200 px-5 py-3">
-                {(() => {
-                  // Whether the user actively chose a login (picked a platform
-                  // or typed one). The configured login is ignored here so the
-                  // button stays enabled when the user makes no choice.
-                  const userLogin = Boolean(
-                    customLogin.trim() || selectedPlatform
+              ) : packageTarget && knownPlatform?.installed ? (
+                <p className="m-0 text-xs text-slate-500">
+                  该连接包没有声明可填写的 alemonjs.config，保存 login
+                  后即可启动。
+                </p>
+              ) : null}
+            </div>
+            <footer className="flex flex-wrap items-center justify-end gap-2 border-t border-slate-200 px-5 py-3">
+              {(() => {
+                // Whether the user actively chose a login (picked a platform
+                // or typed one). The configured login is ignored here so the
+                // button stays enabled when the user makes no choice.
+                const userLogin = Boolean(
+                  customLogin.trim() || selectedPlatform
+                )
+                // Missing required fields only block start when a login is
+                // chosen; without a login the robot starts directly.
+                const missing = (connectionConfig?.fields ?? [])
+                  .filter(
+                    field =>
+                      field.required && !connectionValues[field.name]?.trim()
                   )
-                  // Missing required fields only block start when a login is
-                  // chosen; without a login the robot starts directly.
-                  const missing = (connectionConfig?.fields ?? [])
-                    .filter(
-                      field =>
-                        field.required && !connectionValues[field.name]?.trim()
-                    )
-                    .map(field => field.description || field.name)
-                  const blocked = userLogin && missing.length > 0
-                  return (
-                    <button
-                      className="primary-button"
-                      disabled={loginDialogBusy || busy || blocked}
-                      title={
-                        blocked
-                          ? `请先填写必填项：${missing.join('、')}`
-                          : userLogin
-                            ? '会先保存当前连接配置，再启动机器人。'
-                            : '无 login 启动机器人。'
-                      }
-                      onClick={() => void startFromDialog()}
-                    >
-                      {loginDialogBusy || busy ? '启动中…' : '启动'}
-                    </button>
-                  )
-                })()}
-              </footer>
-            </section>
-          </Modal>
-        )}
+                  .map(field => field.description || field.name)
+                const blocked = userLogin && missing.length > 0
+                return (
+                  <button
+                    className="primary-button"
+                    disabled={loginDialogBusy || busy || blocked}
+                    title={
+                      blocked
+                        ? `请先填写必填项：${missing.join('、')}`
+                        : userLogin
+                          ? '会先保存当前连接配置，再启动机器人。'
+                          : '无 login 启动机器人。'
+                    }
+                    onClick={() => void startFromDialog()}
+                  >
+                    {loginDialogBusy || busy ? '启动中…' : '启动'}
+                  </button>
+                )
+              })()}
+            </footer>
+          </section>
+        </Modal>
+      )}
       <section className="grid gap-3">
         <section className="overflow-hidden rounded-xl border border-slate-200 bg-white">
           <div className="divide-y divide-slate-200">
@@ -7008,10 +6989,10 @@ function RuntimePanel({
                 删除
               </button>
             </div>
-            </div>
-          </section>
+          </div>
         </section>
-    </BotWorkspace>
+      </section>
+    </RobotPanel>
   )
 }
 // robotAppToken base64url-encodes a robot directory path without padding so it
@@ -7045,11 +7026,14 @@ function AppEmbed({
   const src = `/api/v1/robot/app/${robotAppToken(root)}/`
   return (
     <DesktopWindow
+      id="app"
       open
       minimized={minimized}
       title="机器人应用"
       subtitle={root || '当前机器人目录'}
-      icon={<Monitor className="size-4 shrink-0 text-brand-600 dark:text-brand-200" />}
+      icon={
+        <Monitor className="size-4 shrink-0 text-brand-600 dark:text-brand-200" />
+      }
       onClose={onClose}
       onMinimize={onMinimize}
       zIndex={zIndex}
@@ -7145,9 +7129,9 @@ function ControlCard({
             { id: 'git', label: 'GIT 发布' },
             { id: 'npm', label: 'NPM 发布' }
           ]
-        : activePrimary === 'backpack'
-          ? []
-          : catalog.map(item => ({ id: item.title, label: item.title }))
+        : activePrimary === 'plugins' || activePrimary === 'connections'
+          ? catalog.map(item => ({ id: item.title, label: item.title }))
+          : []
   const activeSecondary =
     activePrimary === 'config'
       ? section
@@ -7611,7 +7595,10 @@ function ReadonlyConsole({
     <nav className="readonly-console-tabs" aria-label="终端列表">
       {tabs.map(tab => (
         <button
-          className={cn('readonly-console-tab', activeTab === tab.id && 'active')}
+          className={cn(
+            'readonly-console-tab',
+            activeTab === tab.id && 'active'
+          )}
           key={tab.id}
           onClick={() => setActiveTab(tab.id)}
         >
@@ -7634,13 +7621,16 @@ function ReadonlyConsole({
         <Plus className="size-4" />
       </button>
       {tabs.length === 0 && (
-        <span className="readonly-console-empty">没有打开的终端，点击 + 添加</span>
+        <span className="readonly-console-empty">
+          没有打开的终端，点击 + 添加
+        </span>
       )}
     </nav>
   )
   if (!open) return null
   return (
     <DesktopWindow
+      id="terminal"
       open={open}
       minimized={minimized}
       title="终端"
@@ -7651,7 +7641,9 @@ function ReadonlyConsole({
             ? `${data?.mode ?? '进程'}实时输出 · 只读`
             : '查看最近运行输出 · 只读'
       }
-      icon={<Terminal className="size-4 shrink-0 text-brand-600 dark:text-brand-200" />}
+      icon={
+        <Terminal className="size-4 shrink-0 text-brand-600 dark:text-brand-200" />
+      }
       headerLeft={terminalTabs}
       onClose={onClose}
       onMinimize={onMinimize}
@@ -7673,37 +7665,37 @@ function ReadonlyConsole({
       }
     >
       <div className="readonly-console-body min-h-0">
-          {activeTerminal?.kind === 'shell' ? (
-            <div className="readonly-console-shell">
-              <pre ref={shellOutputRef}>{shellOutput || ''}</pre>
-              <form onSubmit={executeShell}>
-                <span>$</span>
-                <input
-                  ref={shellInputRef}
-                  autoFocus
-                  value={shellCommand}
-                  onChange={event => setShellCommand(event.target.value)}
-                  onKeyDown={handleShellKeyDown}
-                  disabled={shellBusy}
-                  placeholder="输入命令 · Tab 补全 · ↑↓ 历史 · Ctrl/Cmd+L 清屏"
-                  aria-label="机器人目录终端命令"
-                />
-              </form>
-            </div>
-          ) : activeTerminal ? (
-            <pre
-              ref={outputRef}
-              className="readonly-console-output"
-              onScroll={event => {
-                const output = event.currentTarget
-                followLatest.current =
-                  output.scrollHeight - output.scrollTop - output.clientHeight <
-                  24
-              }}
-            >
-              {isFetching && !message ? '正在读取运行输出…' : message}
-            </pre>
-          ) : null}
+        {activeTerminal?.kind === 'shell' ? (
+          <div className="readonly-console-shell">
+            <pre ref={shellOutputRef}>{shellOutput || ''}</pre>
+            <form onSubmit={executeShell}>
+              <span>$</span>
+              <input
+                ref={shellInputRef}
+                autoFocus
+                value={shellCommand}
+                onChange={event => setShellCommand(event.target.value)}
+                onKeyDown={handleShellKeyDown}
+                disabled={shellBusy}
+                placeholder="输入命令 · Tab 补全 · ↑↓ 历史 · Ctrl/Cmd+L 清屏"
+                aria-label="机器人目录终端命令"
+              />
+            </form>
+          </div>
+        ) : activeTerminal ? (
+          <pre
+            ref={outputRef}
+            className="readonly-console-output"
+            onScroll={event => {
+              const output = event.currentTarget
+              followLatest.current =
+                output.scrollHeight - output.scrollTop - output.clientHeight <
+                24
+            }}
+          >
+            {isFetching && !message ? '正在读取运行输出…' : message}
+          </pre>
+        ) : null}
       </div>
     </DesktopWindow>
   )
@@ -7750,7 +7742,12 @@ export function FloatingWindow({
   const [maximized, setMaximized] = useState(false)
   const restoreRect = useRef<typeof windowRect | null>(null)
   const windowRef = useRef<HTMLElement>(null)
-  const dragStart = useRef<{ x: number; y: number; left: number; top: number } | null>(null)
+  const dragStart = useRef<{
+    x: number
+    y: number
+    left: number
+    top: number
+  } | null>(null)
   const resizeStart = useRef<{
     corner: ResizeCorner
     x: number
@@ -7776,14 +7773,24 @@ export function FloatingWindow({
         left: Math.max(
           16,
           Math.min(
-            window.innerWidth - Math.min(Math.max(320, window.innerWidth - 48), Math.max(440, current.width)) - 16,
+            window.innerWidth -
+              Math.min(
+                Math.max(320, window.innerWidth - 48),
+                Math.max(440, current.width)
+              ) -
+              16,
             current.left
           )
         ),
         top: Math.max(
           16,
           Math.min(
-            window.innerHeight - Math.min(Math.max(280, window.innerHeight - 48), Math.max(320, current.height)) - 16,
+            window.innerHeight -
+              Math.min(
+                Math.max(280, window.innerHeight - 48),
+                Math.max(320, current.height)
+              ) -
+              16,
             current.top
           )
         )
@@ -7796,16 +7803,40 @@ export function FloatingWindow({
   const previewMove = (event: ReactPointerEvent<HTMLElement>) => {
     const start = dragStart.current
     if (!start) return
-    const left = Math.max(16, Math.min(window.innerWidth - windowRect.width - 16, start.left + event.clientX - start.x))
-    const top = Math.max(16, Math.min(window.innerHeight - windowRect.height - 16, start.top + event.clientY - start.y))
+    const left = Math.max(
+      16,
+      Math.min(
+        window.innerWidth - windowRect.width - 16,
+        start.left + event.clientX - start.x
+      )
+    )
+    const top = Math.max(
+      16,
+      Math.min(
+        window.innerHeight - windowRect.height - 16,
+        start.top + event.clientY - start.y
+      )
+    )
     windowRef.current?.style.setProperty('left', `${left}px`)
     windowRef.current?.style.setProperty('top', `${top}px`)
   }
   const commitMove = (event: ReactPointerEvent<HTMLElement>) => {
     const start = dragStart.current
     if (!start) return
-    const left = Math.max(16, Math.min(window.innerWidth - windowRect.width - 16, start.left + event.clientX - start.x))
-    const top = Math.max(16, Math.min(window.innerHeight - windowRect.height - 16, start.top + event.clientY - start.y))
+    const left = Math.max(
+      16,
+      Math.min(
+        window.innerWidth - windowRect.width - 16,
+        start.left + event.clientX - start.x
+      )
+    )
+    const top = Math.max(
+      16,
+      Math.min(
+        window.innerHeight - windowRect.height - 16,
+        start.top + event.clientY - start.y
+      )
+    )
     setWindowRect(current => ({ ...current, left, top }))
     dragStart.current = null
   }
@@ -7843,8 +7874,12 @@ export function FloatingWindow({
     return {
       width,
       height,
-      left: start.corner.endsWith('w') ? start.left + start.width - width : start.left,
-      top: start.corner.startsWith('n') ? start.top + start.height - height : start.top
+      left: start.corner.endsWith('w')
+        ? start.left + start.width - width
+        : start.left,
+      top: start.corner.startsWith('n')
+        ? start.top + start.height - height
+        : start.top
     }
   }
   const previewResize = (event: ReactPointerEvent<HTMLElement>) => {
@@ -7885,7 +7920,12 @@ export function FloatingWindow({
   }
   if (!open) return null
   return (
-    <Modal open zIndex={zIndex} className="floating-window-backdrop" ariaLabel={title}>
+    <Modal
+      open
+      zIndex={zIndex}
+      className="floating-window-backdrop"
+      ariaLabel={title}
+    >
       <section
         ref={windowRef}
         className="floating-window grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900"
@@ -7909,7 +7949,12 @@ export function FloatingWindow({
           onPointerDown={event => {
             event.stopPropagation()
             if ((event.target as HTMLElement).closest('button')) return
-            dragStart.current = { x: event.clientX, y: event.clientY, left: windowRect.left, top: windowRect.top }
+            dragStart.current = {
+              x: event.clientX,
+              y: event.clientY,
+              left: windowRect.left,
+              top: windowRect.top
+            }
             event.currentTarget.setPointerCapture(event.pointerId)
           }}
           onPointerMove={event => {
@@ -7928,16 +7973,32 @@ export function FloatingWindow({
           <div className="flex min-w-0 items-center gap-2">
             {icon}
             <span className="grid min-w-0 gap-0.5">
-              <strong className="truncate text-sm font-semibold text-slate-900 dark:text-slate-100">{title}</strong>
-              {subtitle && <small className="truncate text-xs text-slate-400">{subtitle}</small>}
+              <strong className="truncate text-sm font-semibold text-slate-900 dark:text-slate-100">
+                {title}
+              </strong>
+              {subtitle && (
+                <small className="truncate text-xs text-slate-400">
+                  {subtitle}
+                </small>
+              )}
             </span>
           </div>
           <div className="flex items-center gap-1">
             {actions}
-            <button className="icon-button size-8 p-0" onClick={onMinimize} aria-label={`最小化${title}`} title="最小化">
+            <button
+              className="icon-button size-8 p-0"
+              onClick={onMinimize}
+              aria-label={`最小化${title}`}
+              title="最小化"
+            >
               <Minus className="size-4" />
             </button>
-            <button className="icon-button size-8 p-0" onClick={onClose} aria-label={`关闭${title}`} title="关闭">
+            <button
+              className="icon-button size-8 p-0"
+              onClick={onClose}
+              aria-label={`关闭${title}`}
+              title="关闭"
+            >
               <X className="size-4" />
             </button>
           </div>
@@ -7987,11 +8048,14 @@ function OpsWindow({
 }) {
   return (
     <DesktopWindow
+      id="ops"
       open={open}
       minimized={minimized}
       title="运维"
       subtitle={root || '当前机器人目录'}
-      icon={<ShieldCheck className="size-4 shrink-0 text-brand-600 dark:text-brand-200" />}
+      icon={
+        <ShieldCheck className="size-4 shrink-0 text-brand-600 dark:text-brand-200" />
+      }
       onClose={onClose}
       onMinimize={onMinimize}
       zIndex={zIndex}
@@ -8069,11 +8133,14 @@ function PM2LogsPanel({
   if (!open) return null
   return (
     <DesktopWindow
+      id="pm2Logs"
       open
       minimized={minimized}
       title="PM2 运行日志"
       subtitle="默认显示最新一页；每页 120 行，只能查看。"
-      icon={<Terminal className="size-4 shrink-0 text-brand-600 dark:text-brand-200" />}
+      icon={
+        <Terminal className="size-4 shrink-0 text-brand-600 dark:text-brand-200" />
+      }
       onClose={onClose}
       onMinimize={onMinimize}
       zIndex={zIndex}
@@ -8170,11 +8237,14 @@ function PM2ProcessesPanel({
         : 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400'
   return (
     <DesktopWindow
+      id="pm2Status"
       open
       minimized={minimized}
       title="PM2 进程"
       subtitle="当前机器人的 PM2 守护进程管理的全部服务"
-      icon={<Activity className="size-4 shrink-0 text-brand-600 dark:text-brand-200" />}
+      icon={
+        <Activity className="size-4 shrink-0 text-brand-600 dark:text-brand-200" />
+      }
       onClose={onClose}
       onMinimize={onMinimize}
       zIndex={zIndex}
@@ -8192,9 +8262,7 @@ function PM2ProcessesPanel({
         </button>
       }
     >
-      <section
-        className="grid min-h-0 grid-rows-[minmax(0,1fr)_auto] overflow-hidden"
-      >
+      <section className="grid min-h-0 grid-rows-[minmax(0,1fr)_auto] overflow-hidden">
         <header className="hidden">
           <div className="flex min-w-0 items-center gap-2">
             <Terminal className="size-4 shrink-0 text-brand-600 dark:text-brand-200" />
@@ -8342,15 +8410,12 @@ function FileEditor({
   onChange: (value: string) => void
 }) {
   return (
-    <BotWorkspace
+    <RobotPanel
       className="file-editor"
-      header={
-        <RobotPanelHeader
-          title="文本编辑"
-          description="直接编辑当前配置文件内容 · 修改后自动保存"
-          actions={toolbar}
-        />
-      }
+      icon={<Settings className="size-4" />}
+      title="文本编辑"
+      description="直接编辑当前配置文件内容 · 修改后自动保存"
+      actions={toolbar}
     >
       <textarea
         className="min-h-105 w-full resize-y rounded-lg border border-slate-300 bg-white p-3 font-mono text-xs leading-5 text-slate-800 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
@@ -8358,7 +8423,7 @@ function FileEditor({
         onChange={event => onChange(event.target.value)}
         placeholder={placeholder}
       />
-    </BotWorkspace>
+    </RobotPanel>
   )
 }
 function OperationLog({
@@ -8671,66 +8736,62 @@ function GitReleasePanelNext({
     )
   }
   return (
-    <BotWorkspace
+    <RobotPanel
       className="git-release-panel max-w-230 content-start"
-      header={
-        <RobotPanelHeader
-          className="release-toolbar"
-          icon={<GitBranch className="size-4" />}
-          title={
-            status?.packageName
-              ? `${status.packageName}@${status.packageVersion || '未设置版本'}`
-              : 'GIT 发布'
-          }
-          description={`GIT 发布 · ${status?.packageManager || '管理分支、构建产物与版本标签'}`}
-          actions={
-            <div className="release-toolbar-actions flex flex-wrap items-end justify-end gap-2">
-              {(phase === 'artifacts' || phase === 'confirm') && (
-                <button
-                  className="inline-flex min-h-9 items-center justify-center rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-600 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-300"
-                  onClick={() =>
-                    setPhase(phase === 'confirm' ? 'artifacts' : 'source')
-                  }
-                >
-                  上一步
-                </button>
-              )}
-              <button
-                className="inline-flex min-h-9 items-center justify-center rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-600 disabled:opacity-40 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-300"
-                onClick={refresh}
-                disabled={loading || busy}
-              >
-                <RefreshCw className="size-4" />
-              </button>
-              <button
-                className="inline-flex min-h-9 items-center justify-center rounded-lg bg-brand-600 px-3 text-xs font-semibold text-white transition hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-50"
-                disabled={
-                  busy ||
-                  loading ||
-                  phase === 'building' ||
-                  (phase === 'source' && !ready) ||
-                  (phase === 'artifacts' && !artifacts.length)
-                }
-                onClick={() => {
-                  if (phase === 'source') void prepareBuild()
-                  else if (phase === 'artifacts') setPhase('confirm')
-                  else if (phase === 'confirm') void publish()
-                  else if (phase === 'published') refresh()
-                }}
-              >
-                {busy || phase === 'building'
-                  ? '构建中…'
-                  : phase === 'source'
-                    ? '开始构建'
-                    : phase === 'artifacts'
-                      ? '继续确认'
-                      : phase === 'confirm'
-                        ? '确认发布'
-                        : '重新开始'}
-              </button>
-            </div>
-          }
-        />
+      headerClassName="release-toolbar"
+      icon={<GitBranch className="size-4" />}
+      title={
+        status?.packageName
+          ? `${status.packageName}@${status.packageVersion || '未设置版本'}`
+          : 'GIT 发布'
+      }
+      description={`GIT 发布 · ${status?.packageManager || '管理分支、构建产物与版本标签'}`}
+      actions={
+        <div className="release-toolbar-actions flex flex-wrap items-end justify-end gap-2">
+          {(phase === 'artifacts' || phase === 'confirm') && (
+            <button
+              className="inline-flex min-h-9 items-center justify-center rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-600 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-300"
+              onClick={() =>
+                setPhase(phase === 'confirm' ? 'artifacts' : 'source')
+              }
+            >
+              上一步
+            </button>
+          )}
+          <button
+            className="inline-flex min-h-9 items-center justify-center rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-600 disabled:opacity-40 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-300"
+            onClick={refresh}
+            disabled={loading || busy}
+          >
+            <RefreshCw className="size-4" />
+          </button>
+          <button
+            className="inline-flex min-h-9 items-center justify-center rounded-lg bg-brand-600 px-3 text-xs font-semibold text-white transition hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={
+              busy ||
+              loading ||
+              phase === 'building' ||
+              (phase === 'source' && !ready) ||
+              (phase === 'artifacts' && !artifacts.length)
+            }
+            onClick={() => {
+              if (phase === 'source') void prepareBuild()
+              else if (phase === 'artifacts') setPhase('confirm')
+              else if (phase === 'confirm') void publish()
+              else if (phase === 'published') refresh()
+            }}
+          >
+            {busy || phase === 'building'
+              ? '构建中…'
+              : phase === 'source'
+                ? '开始构建'
+                : phase === 'artifacts'
+                  ? '继续确认'
+                  : phase === 'confirm'
+                    ? '确认发布'
+                    : '重新开始'}
+          </button>
+        </div>
       }
     >
       {loading ? (
@@ -8988,6 +9049,6 @@ function GitReleasePanelNext({
           setGitInitOpen(false)
         }}
       />
-    </BotWorkspace>
+    </RobotPanel>
   )
 }

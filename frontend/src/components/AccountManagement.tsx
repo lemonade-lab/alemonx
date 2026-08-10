@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { ShieldCheck, Trash2, UserPlus } from 'lucide-react'
 import { Button } from './Button'
-import { BotWorkspace } from './BotWorkspace'
-import { RobotPanelHeader } from './RobotPanelHeader'
+import { RobotPanel } from './RobotPanel'
 
 type Role = { id: string; name: string; permissions: string[] }
 type Account = {
@@ -77,15 +76,11 @@ export function AccountManagementPage() {
     }
   }
   return (
-    <BotWorkspace
+    <RobotPanel
       className="max-w-250"
-      header={
-        <RobotPanelHeader
-          icon={<ShieldCheck className="size-4" />}
-          title="账户"
-          description="管理登录账户、角色及系统权限"
-        />
-      }
+      icon={<ShieldCheck className="size-4" />}
+      title="账户"
+      description="管理登录账户、角色及系统权限"
     >
       {loading && <p className="text-sm text-slate-500">正在读取账户配置…</p>}
       {error && (
@@ -316,7 +311,7 @@ export function AccountManagementPage() {
           </section>
         </div>
       )}
-    </BotWorkspace>
+    </RobotPanel>
   )
 }
 

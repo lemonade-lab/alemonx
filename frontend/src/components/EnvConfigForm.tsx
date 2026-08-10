@@ -2,8 +2,7 @@ import { useStoreState } from '../store/guideStore'
 import { useEffect } from 'react'
 import { KeyRound, Plus, Trash2 } from 'lucide-react'
 import { Tabs } from './Tabs'
-import { BotWorkspace } from './BotWorkspace'
-import { RobotPanelHeader } from './RobotPanelHeader'
+import { RobotPanel } from './RobotPanel'
 
 type Entry = { key: string; value: string }
 type Props = {
@@ -72,16 +71,12 @@ export function EnvConfigForm({ content, onChange }: Props) {
     'min-h-9 min-w-0 rounded-md border border-slate-300 bg-white px-2.5 font-mono text-sm text-slate-700 outline-none transition focus:border-brand-600 focus:ring-2 focus:ring-brand-100'
   if (mode === 'text')
     return (
-      <BotWorkspace
+      <RobotPanel
         className="max-w-190"
-        header={
-          <RobotPanelHeader
-            icon={<KeyRound className="size-4" />}
-            title="环境变量"
-            description="管理密钥、端口和第三方服务地址 · 修改后自动保存"
-            actions={editor}
-          />
-        }
+        icon={<KeyRound className="size-4" />}
+        title="环境变量"
+        description="管理密钥、端口和第三方服务地址 · 修改后自动保存"
+        actions={editor}
       >
         <textarea
           className="min-h-72 w-full resize-y rounded-xl border border-slate-200 bg-white p-3 font-mono text-sm text-slate-700 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
@@ -89,19 +84,15 @@ export function EnvConfigForm({ content, onChange }: Props) {
           onChange={event => onChange(event.target.value)}
           placeholder={'BOT_TOKEN=\nPORT=17117'}
         />
-      </BotWorkspace>
+      </RobotPanel>
     )
   return (
-    <BotWorkspace
+    <RobotPanel
       className="max-w-190"
-      header={
-        <RobotPanelHeader
-          icon={<KeyRound className="size-4" />}
-          title="环境变量"
-          description="管理密钥、端口和第三方服务地址 · 修改后自动保存"
-          actions={editor}
-        />
-      }
+      icon={<KeyRound className="size-4" />}
+      title="环境变量"
+      description="管理密钥、端口和第三方服务地址 · 修改后自动保存"
+      actions={editor}
     >
       <div className="grid gap-2">
         {entries.map((entry, index) => (
@@ -149,6 +140,6 @@ export function EnvConfigForm({ content, onChange }: Props) {
         <Plus className="size-4" />
         添加环境变量
       </button>
-    </BotWorkspace>
+    </RobotPanel>
   )
 }

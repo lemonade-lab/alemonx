@@ -1,4 +1,6 @@
 import {
+  useCallback,
+  useEffect,
   useLayoutEffect,
   useRef,
   useState,
@@ -7,6 +9,7 @@ import {
 } from 'react'
 import { Minus, X } from 'lucide-react'
 import { Modal } from './Modal'
+import { registerDesktopWindowShortcut } from './desktopWindowShortcuts'
 
 export type ResizeCorner = 'nw' | 'ne' | 'sw' | 'se'
 
@@ -43,6 +46,7 @@ export function WindowResizeHandles({
 }
 
 export function DesktopWindow({
+  id,
   open,
   minimized,
   title,
@@ -59,6 +63,7 @@ export function DesktopWindow({
   height = 620,
   children
 }: {
+  id: string
   open: boolean
   minimized: boolean
   title: string
@@ -194,7 +199,7 @@ export function DesktopWindow({
     windowRef.current?.style.removeProperty('top')
     resizeStart.current = null
   }
-  const toggleMaximize = () => {
+  const toggleMaximize = useCallback(() => {
     if (maximized) {
       if (restoreRect.current) setWindowRect(restoreRect.current)
       setMaximized(false)
@@ -208,7 +213,19 @@ export function DesktopWindow({
       height: Math.max(320, window.innerHeight - 32)
     })
     setMaximized(true)
-  }
+  }, [maximized, windowRect])
+
+  useEffect(() => {
+    if (!open) return
+    return registerDesktopWindowShortcut({
+      id,
+      zIndex,
+      minimized,
+      onClose,
+      onMinimize,
+      onToggleMaximize: toggleMaximize
+    })
+  }, [id, minimized, onClose, onMinimize, open, toggleMaximize, zIndex])
 
   if (!open) return null
   return (

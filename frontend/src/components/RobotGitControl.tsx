@@ -635,6 +635,7 @@ export function RobotGitControl({
             : remotePanel
   return (
     <DesktopWindow
+      id="git"
       open
       minimized={minimized}
       title={`${project.name} · Git`}

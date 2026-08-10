@@ -2,8 +2,7 @@ import { useStoreState } from '../store/guideStore'
 import { useEffect } from 'react'
 import { Package } from 'lucide-react'
 import { Tabs } from './Tabs'
-import { BotWorkspace } from './BotWorkspace'
-import { RobotPanelHeader } from './RobotPanelHeader'
+import { RobotPanel } from './RobotPanel'
 
 type Props = {
   content: string
@@ -60,16 +59,12 @@ export function NpmrcConfigForm({ content, onChange }: Props) {
   const fieldClass =
     'min-h-9 w-full rounded-md border border-slate-300 bg-white px-2.5 text-sm font-normal text-slate-800 outline-none transition focus:border-brand-600 focus:ring-2 focus:ring-brand-100'
   return (
-    <BotWorkspace
-      className="max-w-155"
-      header={
-        <RobotPanelHeader
-          icon={<Package className="size-4" />}
-          title="npm 源"
-          description="配置当前机器人的包下载源 · 修改后自动保存"
-          actions={mode}
-        />
-      }
+    <RobotPanel
+      className="max-w-190"
+      icon={<Package className="size-4" />}
+      title="npm 源"
+      description="配置当前机器人的包下载源 · 修改后自动保存"
+      actions={mode}
     >
       {editor === 'visual' ? (
         <>
@@ -114,6 +109,6 @@ export function NpmrcConfigForm({ content, onChange }: Props) {
           placeholder="npm 配置"
         />
       )}
-    </BotWorkspace>
+    </RobotPanel>
   )
 }

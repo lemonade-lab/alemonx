@@ -9,6 +9,7 @@ import {
   type RootState
 } from './store/guideStore'
 import { Dashboard } from './components/Dashboard'
+import { registerDesktopWindowShortcut } from './components/desktopWindowShortcuts'
 import { EnvironmentFixDialog } from './components/EnvironmentFixDialog'
 import { ErrorNotice } from './components/ErrorNotice'
 import {
@@ -142,6 +143,18 @@ export default function App() {
     left: number
     top: number
   } | null>(null)
+
+  useEffect(
+    () =>
+      registerDesktopWindowShortcut({
+        id: 'workbench',
+        zIndex: workbenchLayer,
+        minimized: mainWindowHidden,
+        onClose: () => setMainWindowHidden(true),
+        onMinimize: () => setMainWindowHidden(true)
+      }),
+    [mainWindowHidden, workbenchLayer]
+  )
 
   function activateWorkbench() {
     const layer = ++nextWindowLayer.current

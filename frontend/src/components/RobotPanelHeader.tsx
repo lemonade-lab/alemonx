@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 
-type Props = {
+export type RobotPanelHeaderProps = {
   /** Optional context shown above the page title, such as a back action. */
   eyebrow?: ReactNode
   /** The page's stable, user-facing name. */
@@ -27,7 +27,7 @@ export function RobotPanelHeader({
   icon,
   actions,
   className = ''
-}: Props) {
+}: RobotPanelHeaderProps) {
   return (
     <header
       className={['bot-page-header', className].filter(Boolean).join(' ')}

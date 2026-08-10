@@ -299,6 +299,12 @@
     animation: content-enter 0.18s ease-out both;
   }
 
+  /* Every robot feature page starts from the Runtime panel's canvas rhythm. */
+  .robot-panel {
+    gap: 16px;
+    max-width: 760px;
+  }
+
   /* Header and article are siblings in a robot workspace. */
   .bot-workspace > .bot-page-header {
     margin-left: 10px;
@@ -2792,8 +2798,7 @@ button {
 
 .backpack-panel {
   display: grid;
-  gap: 18px;
-  max-width: 690px;
+  gap: 16px;
 }
 .backpack-panel > header:not(.bot-page-header) {
   align-items: flex-start;

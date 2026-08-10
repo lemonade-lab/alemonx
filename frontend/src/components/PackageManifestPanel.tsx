@@ -5,8 +5,7 @@ import {
   usePackageManifestQuery,
   useWritePackageManifestMutation
 } from '../store/workspaceApi'
-import { BotWorkspace } from './BotWorkspace'
-import { RobotPanelHeader } from './RobotPanelHeader'
+import { RobotPanel } from './RobotPanel'
 
 type Manifest = {
   name: string
@@ -110,14 +109,10 @@ export function PackageManifestPanel({
       </section>
     )
   return (
-    <BotWorkspace
+    <RobotPanel
       className="package-manifest-panel max-w-180"
-      header={
-        <RobotPanelHeader
-          title="包信息"
-          description={`Git 与 npm 发布共用 · ${isLoading ? '正在自动保存…' : '修改后自动保存'}`}
-        />
-      }
+      title="包信息"
+      description={`Git 与 npm 发布共用 · ${isLoading ? '正在自动保存…' : '修改后自动保存'}`}
     >
       <div className="grid grid-cols-2 gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-[0_7px_18px_rgb(28_26_23/0.035)]">
         <label className="grid gap-1 text-xs font-semibold text-slate-600">
@@ -196,6 +191,6 @@ export function PackageManifestPanel({
           仅本地使用，不发布到 npm
         </label>
       </div>
-    </BotWorkspace>
+    </RobotPanel>
   )
 }
