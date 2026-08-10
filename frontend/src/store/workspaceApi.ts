@@ -154,6 +154,9 @@ export type SetupPlugin = {
   runnable: boolean
   enabled: boolean
   online?: boolean
+  // Filled only for a locally discovered (therefore installed) system plugin.
+  // This is the registry's actual directory, not a guessed cache path.
+  source?: string
   installedTag?: string
   fingerprint?: string
 }

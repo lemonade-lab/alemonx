@@ -1,6 +1,6 @@
 import { AlertTriangle, X } from 'lucide-react'
-import { createPortal } from 'react-dom'
 import { Button } from './Button'
+import { Modal } from './Modal'
 
 type Props = {
   open: boolean
@@ -30,11 +30,12 @@ export function ConfirmDialog({
   onConfirm
 }: Props) {
   if (!open) return null
-  return createPortal(
-    <div
-      className="fixed inset-0 z-95 flex items-center justify-center bg-slate-950/25 p-6"
-      role="presentation"
-      onMouseDown={onCancel}
+  return (
+    <Modal
+      open
+      className="bg-slate-950/25 p-6"
+      onClose={onCancel}
+      ariaLabel={title}
     >
       <section
         className="grid w-full max-w-md gap-4 rounded-xl border border-slate-200 bg-white p-4.5 shadow-[0_20px_58px_rgb(28_26_23/0.22)]"
@@ -71,7 +72,6 @@ export function ConfirmDialog({
           </Button>
         </footer>
       </section>
-    </div>,
-    document.body
+    </Modal>
   )
 }

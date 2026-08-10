@@ -42,7 +42,6 @@ export function EnvironmentFixDialog({ check, onClose }: Props) {
   return (
     <Modal
       open
-      zIndex={200}
       onClose={onClose}
       ariaLabel="环境修复"
     >

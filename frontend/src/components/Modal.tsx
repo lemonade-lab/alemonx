@@ -1,6 +1,11 @@
 import { createPortal } from 'react-dom'
 import type { ReactNode } from 'react'
 
+// Desktop windows and the dock use the lower application layer. Any modal
+// rendered through this component is a system-level interaction barrier and
+// therefore always sits above every application window.
+export const GLOBAL_MODAL_Z_INDEX = 2_147_483_000
+
 type Props = {
   open: boolean
   children: ReactNode
@@ -19,7 +24,7 @@ export function Modal({
   open,
   children,
   className = '',
-  zIndex = 90,
+  zIndex = GLOBAL_MODAL_Z_INDEX,
   onClose,
   onBackdropClick,
   ariaLabel

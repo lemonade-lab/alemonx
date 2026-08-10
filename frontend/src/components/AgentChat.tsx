@@ -1624,7 +1624,6 @@ export function AgentChatPage({
 
       <Modal
         open={settings}
-        zIndex={220}
         ariaLabel="AI 接口配置"
         onClose={() => setSettings(false)}
       >
@@ -1798,14 +1797,14 @@ export function AgentChatPage({
       )}
 
       {goalDraft && (
-        <div className="agent-confirm-overlay"><div className="agent-confirm-dialog" role="dialog" aria-modal="true"><header><strong>{goalDraft.id ? '编辑长期目标' : '新建长期目标'}</strong></header><label>名称<input value={goalDraft.title} onChange={event => setGoalDraft({ ...goalDraft, title: event.target.value })} /></label><label>提示词<textarea value={goalDraft.prompt} onChange={event => setGoalDraft({ ...goalDraft, prompt: event.target.value })} /></label><label>项目目录<input value={goalDraft.root} onChange={event => setGoalDraft({ ...goalDraft, root: event.target.value })} /></label><label>调度分钟数<input type="number" min="0" value={goalDraft.scheduleMinutes} onChange={event => setGoalDraft({ ...goalDraft, scheduleMinutes: Math.max(0, Number(event.target.value) || 0) })} /></label><div><button onClick={() => setGoalDraft(null)}>取消</button><button onClick={() => void saveGoal()}>保存</button></div></div></div>
+        <Modal open ariaLabel="长期目标" className="agent-confirm-overlay"><div className="agent-confirm-dialog" role="dialog" aria-modal="true"><header><strong>{goalDraft.id ? '编辑长期目标' : '新建长期目标'}</strong></header><label>名称<input value={goalDraft.title} onChange={event => setGoalDraft({ ...goalDraft, title: event.target.value })} /></label><label>提示词<textarea value={goalDraft.prompt} onChange={event => setGoalDraft({ ...goalDraft, prompt: event.target.value })} /></label><label>项目目录<input value={goalDraft.root} onChange={event => setGoalDraft({ ...goalDraft, root: event.target.value })} /></label><label>调度分钟数<input type="number" min="0" value={goalDraft.scheduleMinutes} onChange={event => setGoalDraft({ ...goalDraft, scheduleMinutes: Math.max(0, Number(event.target.value) || 0) })} /></label><div><button onClick={() => setGoalDraft(null)}>取消</button><button onClick={() => void saveGoal()}>保存</button></div></div></Modal>
       )}
       {goalRuns.length > 0 && (
-        <div className="agent-confirm-overlay"><div className="agent-confirm-dialog" role="dialog" aria-modal="true"><header><strong>目标运行历史</strong></header>{goalRuns.map(run => <p key={run.id}>{run.status} · {run.taskId}{run.error ? ` · ${run.error}` : ''}</p>)}<button onClick={() => setGoalRuns([])}>关闭</button></div></div>
+        <Modal open ariaLabel="目标运行历史" className="agent-confirm-overlay"><div className="agent-confirm-dialog" role="dialog" aria-modal="true"><header><strong>目标运行历史</strong></header>{goalRuns.map(run => <p key={run.id}>{run.status} · {run.taskId}{run.error ? ` · ${run.error}` : ''}</p>)}<button onClick={() => setGoalRuns([])}>关闭</button></div></Modal>
       )}
-      {planDraft && <div className="agent-confirm-overlay"><div className="agent-confirm-dialog" role="dialog" aria-modal="true"><header><strong>编辑任务计划</strong></header><label>目标<textarea value={planDraft.goal} onChange={event => setPlanDraft({ ...planDraft, goal: event.target.value })} /></label><label>完成条件<textarea value={planDraft.completion} onChange={event => setPlanDraft({ ...planDraft, completion: event.target.value })} /></label>{planDraft.steps.map((step, index) => <label key={step.id}>步骤 {index + 1}<input value={step.title} onChange={event => setPlanDraft({ ...planDraft, steps: planDraft.steps.map((item, itemIndex) => itemIndex === index ? { ...item, title: event.target.value } : item) })} /></label>)}<div><button onClick={() => setPlanDraft(null)}>取消</button><button onClick={() => void savePlan()}>保存计划</button></div></div></div>}
+      {planDraft && <Modal open ariaLabel="任务计划" className="agent-confirm-overlay"><div className="agent-confirm-dialog" role="dialog" aria-modal="true"><header><strong>编辑任务计划</strong></header><label>目标<textarea value={planDraft.goal} onChange={event => setPlanDraft({ ...planDraft, goal: event.target.value })} /></label><label>完成条件<textarea value={planDraft.completion} onChange={event => setPlanDraft({ ...planDraft, completion: event.target.value })} /></label>{planDraft.steps.map((step, index) => <label key={step.id}>步骤 {index + 1}<input value={step.title} onChange={event => setPlanDraft({ ...planDraft, steps: planDraft.steps.map((item, itemIndex) => itemIndex === index ? { ...item, title: event.target.value } : item) })} /></label>)}<div><button onClick={() => setPlanDraft(null)}>取消</button><button onClick={() => void savePlan()}>保存计划</button></div></div></Modal>}
       {pendingConfirm && (
-        <div className="agent-confirm-overlay">
+        <Modal open ariaLabel="确认项目修改" className="agent-confirm-overlay">
           <div
             className="agent-confirm-dialog"
             role="dialog"
@@ -1863,11 +1862,11 @@ export function AgentChatPage({
               </button>
             </footer>
           </div>
-        </div>
+        </Modal>
       )}
 
       {slashDialog && (
-        <div className="agent-confirm-overlay">
+        <Modal open ariaLabel="Agent 操作" className="agent-confirm-overlay">
           <div className="agent-confirm-dialog" role="dialog" aria-modal="true">
             <header>
               <Slash className="size-4" />
@@ -1945,7 +1944,7 @@ export function AgentChatPage({
               )}
             </footer>
           </div>
-        </div>
+        </Modal>
       )}
 
       <DirectoryPicker

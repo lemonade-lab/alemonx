@@ -3,6 +3,7 @@ import { useAutoSave } from '../hooks/useAutoSave'
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -11,9 +12,9 @@ import {
   type MouseEvent,
   type PointerEvent as ReactPointerEvent,
   type CSSProperties,
-  type ReactNode
+  type ReactNode,
+  type SyntheticEvent
 } from 'react'
-import { createPortal } from 'react-dom'
 import { useDispatch, useSelector } from 'react-redux'
 import cn from 'classnames'
 import Markdown from 'markdown-to-jsx'
@@ -93,10 +94,15 @@ import { SetupUpdateButton } from './SetupUpdateButton'
 import { AgentChatPage } from './AgentChat'
 import { ErrorNotice } from './ErrorNotice'
 import { ConfirmDialog } from './ConfirmDialog'
-import { Modal } from './Modal'
+import { GLOBAL_MODAL_Z_INDEX, Modal } from './Modal'
 import { AuthControl } from './AuthControl'
 import { AccountManagementPage } from './AccountManagement'
 import { RobotGitControl } from './RobotGitControl'
+import {
+  DesktopWindow,
+  WindowResizeHandles,
+  type ResizeCorner
+} from './DesktopWindow'
 import { SSHControl } from './SSHControl'
 import {
   workspaceApi,
@@ -180,6 +186,7 @@ type Page = 'robot' | 'build' | 'plugins' | 'connections'
 type Section = 'backpack' | 'config' | 'npmrc' | 'env' | 'runtime'
 type Project = { id: string; path: string; name: string; pinned?: boolean }
 type SystemFeature = string
+type SystemWindowState = { minimized: boolean }
 type FloatingWindowID =
   | 'terminal'
   | 'git'
@@ -187,6 +194,7 @@ type FloatingWindowID =
   | 'pm2Logs'
   | 'pm2Status'
   | 'ops'
+  | `system:${string}`
 type Props = {
   report: { checks: Check[] } | null
   checking: boolean
@@ -197,6 +205,7 @@ type Props = {
   onCheck: () => void
   onFix: (check: Check) => void
   windowStyle?: CSSProperties
+  windowControls?: ReactNode
   onWindowStateChange?: (state: {
     terminal: { open: boolean; minimized: boolean }
     git: { open: boolean; minimized: boolean }
@@ -204,6 +213,10 @@ type Props = {
     pm2Logs: { open: boolean; minimized: boolean }
     pm2Status: { open: boolean; minimized: boolean }
     ops: { open: boolean; minimized: boolean }
+    system: Record<
+      string,
+      { open: boolean; minimized: boolean; label: string }
+    >
   }) => void
   goals?: unknown
   goal?: unknown
@@ -220,6 +233,17 @@ const coreFeatureCatalog: Array<{
   { id: 'ops-overview', label: '运维', icon: <ShieldCheck /> },
   { id: 'accounts', label: '账户', icon: <UsersRound /> }
 ]
+
+function systemFeatureLabel(
+  feature: SystemFeature,
+  plugins: SetupPlugin[]
+) {
+  return (
+    plugins.find(item => feature === `setup:${item.id}`)?.name ??
+    coreFeatureCatalog.find(item => item.id === feature)?.label ??
+    ({ tasks: '任务', environment: '环境检查' }[feature] ?? '系统功能')
+  )
+}
 const directoryActions: Array<{
   id: Section | Page
   label: string
@@ -513,7 +537,7 @@ export function DirectoryPicker({
   return (
     <Modal
       open
-      zIndex={priority ? 200 : 95}
+      zIndex={priority ? GLOBAL_MODAL_Z_INDEX + 1 : undefined}
       onBackdropClick={() => setContextMenu(null)}
       ariaLabel="选择目录"
     >
@@ -799,7 +823,7 @@ export function DirectoryPicker({
         </div>
       )}
       {newFolderName !== '' && (
-        <Modal open zIndex={220} ariaLabel="新建文件夹">
+        <Modal open ariaLabel="新建文件夹">
           <form
             className="grid w-full max-w-sm gap-3 rounded-xl bg-white p-4 shadow-xl"
             onSubmit={event => {
@@ -865,6 +889,7 @@ export function Dashboard({
   onCheck,
   onFix,
   windowStyle,
+  windowControls,
   onWindowStateChange
 }: Props) {
   const dispatch = useDispatch()
@@ -874,6 +899,11 @@ export function Dashboard({
   const [systemFeature, setSystemFeature] = useStoreState<SystemFeature | null>(
     null
   )
+  const [systemWindowFeature, setSystemWindowFeature] =
+    useStoreState<SystemFeature | null>(null)
+  const [systemWindows, setSystemWindows] = useStoreState<
+    Record<SystemFeature, SystemWindowState>
+  >({})
   const [section, setSection] = useStoreState<Section>('runtime')
   const [file, setFile] = useStoreState('.npmrc')
   const [output, setOutput] = useStoreState('')
@@ -911,9 +941,7 @@ export function Dashboard({
   const [pm2ProcessesMinimized, setPM2ProcessesMinimized] = useStoreState(false)
   const [opsOpen, setOpsOpen] = useStoreState(false)
   const [opsMinimized, setOpsMinimized] = useStoreState(false)
-  const [windowLayers, setWindowLayers] = useStoreState<
-    Record<FloatingWindowID, number>
-  >({
+  const [windowLayers, setWindowLayers] = useStoreState<Record<string, number>>({
     terminal: 101,
     git: 102,
     app: 103,
@@ -942,9 +970,31 @@ export function Dashboard({
     (id: FloatingWindowID) => {
       const layer = ++nextWindowLayer.current
       setWindowLayers(current => ({ ...current, [id]: layer }))
+      window.dispatchEvent(
+        new CustomEvent('alx:desktop-window-layer', { detail: layer })
+      )
     },
     [setWindowLayers]
   )
+  useEffect(() => {
+    const syncWindowLayer = (event: Event) => {
+      const layer = (event as CustomEvent<number>).detail
+      if (typeof layer === 'number')
+        nextWindowLayer.current = Math.max(nextWindowLayer.current, layer)
+    }
+    window.addEventListener('alx:desktop-window-layer', syncWindowLayer)
+    return () =>
+      window.removeEventListener('alx:desktop-window-layer', syncWindowLayer)
+  }, [])
+  // Plugin list changes arrive over SSE (setup/plugins/events), so the query
+  // only refetches when the registry actually changes instead of polling.
+  const { data: setupPluginsData, refetch: refetchSetupPlugins } =
+    useSetupPluginsQuery(undefined, {
+      refetchOnMountOrArgChange: true
+    })
+  // The backend serialises an empty plugin registry as JSON null; normalise to
+  // an array so render-time .find/.filter never reads a null value.
+  const setupPlugins = useMemo(() => setupPluginsData ?? [], [setupPluginsData])
   useEffect(() => {
     onWindowStateChange?.({
       terminal: { open: consoleOpen, minimized: consoleMinimized },
@@ -952,7 +1002,17 @@ export function Dashboard({
       app: { open: appContentOpen, minimized: appMinimized },
       pm2Logs: { open: pm2LogsOpen, minimized: pm2LogsMinimized },
       pm2Status: { open: pm2ProcessesOpen, minimized: pm2ProcessesMinimized },
-      ops: { open: opsOpen, minimized: opsMinimized }
+      ops: { open: opsOpen, minimized: opsMinimized },
+      system: Object.fromEntries(
+        Object.entries(systemWindows).map(([feature, state]) => [
+          feature,
+          {
+            open: true,
+            minimized: state.minimized,
+            label: systemFeatureLabel(feature, setupPlugins)
+          }
+        ])
+      )
     })
   }, [
     appContentOpen,
@@ -967,7 +1027,9 @@ export function Dashboard({
     pm2LogsMinimized,
     pm2LogsOpen,
     pm2ProcessesMinimized,
-    pm2ProcessesOpen
+    pm2ProcessesOpen,
+    setupPlugins,
+    systemWindows
   ])
   useEffect(() => {
     const toggleTerminal = () => {
@@ -1122,15 +1184,6 @@ export function Dashboard({
     },
     []
   )
-  // Plugin list changes arrive over SSE (setup/plugins/events), so the query
-  // only refetches when the registry actually changes instead of polling.
-  const { data: setupPluginsData, refetch: refetchSetupPlugins } =
-    useSetupPluginsQuery(undefined, {
-      refetchOnMountOrArgChange: true
-    })
-  // The backend serialises an empty plugin registry as JSON null; normalise to
-  // an array so render-time .find/.filter never reads a null value.
-  const setupPlugins = setupPluginsData ?? []
   const catalogError = catalogQueryError ? '在线目录暂时无法读取。' : ''
   const showOutput = (message: string, failed = false) => {
     setOutput(message)
@@ -1385,17 +1438,29 @@ export function Dashboard({
       }
       setOpsMinimized(value => !value)
     }
+    const toggleSystem = (event: Event) => {
+      const feature = (event as CustomEvent<string>).detail
+      if (!feature || !systemWindows[feature]) return
+      setSystemWindowFeature(feature)
+      activateFloatingWindow(`system:${feature}`)
+      setSystemWindows(current => ({
+        ...current,
+        [feature]: { minimized: !current[feature].minimized }
+      }))
+    }
     window.addEventListener('alx:desktop-git-toggle', toggleGit)
     window.addEventListener('alx:desktop-app-toggle', toggleApp)
     window.addEventListener('alx:desktop-pm2-logs-toggle', togglePM2Logs)
     window.addEventListener('alx:desktop-pm2-status-toggle', togglePM2Status)
     window.addEventListener('alx:desktop-ops-toggle', toggleOps)
+    window.addEventListener('alx:desktop-system-toggle', toggleSystem)
     return () => {
       window.removeEventListener('alx:desktop-git-toggle', toggleGit)
       window.removeEventListener('alx:desktop-app-toggle', toggleApp)
       window.removeEventListener('alx:desktop-pm2-logs-toggle', togglePM2Logs)
       window.removeEventListener('alx:desktop-pm2-status-toggle', togglePM2Status)
       window.removeEventListener('alx:desktop-ops-toggle', toggleOps)
+      window.removeEventListener('alx:desktop-system-toggle', toggleSystem)
     }
   }, [
     activeProject,
@@ -1413,7 +1478,10 @@ export function Dashboard({
     setPM2ProcessesOpen,
     setOpsMinimized,
     setOpsOpen,
-    opsOpen
+    setSystemWindowFeature,
+    opsOpen,
+    setSystemWindows,
+    systemWindows
   ])
   const refreshConfigDraft = async () => {
     if (!root) return
@@ -1445,6 +1513,17 @@ export function Dashboard({
       typeof BroadcastChannel === 'undefined'
         ? null
         : new BroadcastChannel('alx-events')
+    let disposed = false
+    const broadcast = (message: unknown) => {
+      if (!channel || disposed) return
+      try {
+        channel.postMessage(message)
+      } catch (error) {
+        // Web Lock acquisition may resolve after effect cleanup, when this
+        // channel has already been closed. That late message is obsolete.
+        if (!(error instanceof DOMException && error.name === 'InvalidStateError')) throw error
+      }
+    }
     const leaseKey = 'alx-events-leader'
     let leader = false
     let releaseWebLock: (() => void) | null = null
@@ -1546,14 +1625,14 @@ export function Dashboard({
             }
           }
           dispatchEnvelope(envelope)
-          channel?.postMessage({ type: 'event', envelope })
+          broadcast({ type: 'event', envelope })
         } catch {
           // Ignore malformed frames; reconnect remains cursor-based.
         }
       }
       source.onerror = () => {
         source?.close()
-        if (retry === null)
+        if (!disposed && retry === null)
           retry = window.setTimeout(() => {
             retry = null
             connect()
@@ -1572,9 +1651,9 @@ export function Dashboard({
       if (!webLocks || leader || releaseWebLock) return
       void navigator.locks
         .request('alx-events-leader', { ifAvailable: true }, lock => {
-          if (!lock) return
+          if (!lock || disposed) return
           leader = true
-          channel?.postMessage({ type: 'leader', id: tabID })
+          broadcast({ type: 'leader', id: tabID })
           connect()
           return new Promise<void>(resolve => {
             releaseWebLock = resolve
@@ -1613,6 +1692,7 @@ export function Dashboard({
     document.addEventListener('visibilitychange', releaseForPageLifecycle)
     window.addEventListener('pagehide', releaseForPageLifecycle)
     return () => {
+      disposed = true
       source?.close()
       eventsRef.current = null
       if (retry !== null) window.clearTimeout(retry)
@@ -1981,6 +2061,8 @@ export function Dashboard({
   function selectPage(nextPage: Page) {
     closeTemporaryContentPage()
     setSystemFeature(null)
+    setSystemWindowFeature(null)
+    setSystemWindows({})
     setPage(nextPage)
     setCatalogItem(null)
     setOutput('')
@@ -2032,9 +2114,23 @@ export function Dashboard({
       // 重命名失败不阻塞
     }
   }
+  function closeSystemWindow(feature: SystemFeature) {
+    setSystemWindows(current => {
+      const remaining = { ...current }
+      delete remaining[feature]
+      return remaining
+    })
+    setSystemWindowFeature(current => (current === feature ? null : current))
+  }
   function selectSystemFeature(nextFeature: SystemFeature) {
     closeTemporaryContentPage()
-    setSystemFeature(nextFeature)
+    setSystemFeature(null)
+    setSystemWindowFeature(nextFeature)
+    setSystemWindows(current => ({
+      ...current,
+      [nextFeature]: { minimized: false }
+    }))
+    activateFloatingWindow(`system:${nextFeature}`)
     setOutput('')
   }
 
@@ -2256,9 +2352,42 @@ export function Dashboard({
         )}
       </BotWorkspace>
     )
-  const setupPlugin = setupPlugins.find(
+  const workspaceSetupPlugin = setupPlugins.find(
     item => systemFeature === `setup:${item.id}`
   )
+  const systemWindowContent = (feature: SystemFeature) => {
+    const setupPlugin = setupPlugins.find(item => feature === `setup:${item.id}`)
+    return feature === 'ops-overview' ? (
+      <OpsOverview
+        projects={projects}
+        onOpenProject={id => {
+          dispatch(selectProject(id))
+          closeSystemWindow(feature)
+          setPage('robot')
+          setSection('runtime')
+        }}
+      />
+    ) : feature === 'plugins' ? (
+      <SystemPluginCenter
+        plugins={setupPlugins}
+        onOpen={id => selectSystemFeature(`setup:${id}`)}
+        onRefresh={() => void refetchSetupPlugins()}
+      />
+    ) : feature === 'accounts' ? (
+      <AccountManagementPage />
+    ) : feature === 'tasks' ? (
+      <OperationTasksPage root={root} />
+    ) : feature === 'environment' ? (
+      <EnvironmentPage
+        report={report}
+        checking={checking}
+        onRefresh={onCheck}
+        onFix={onFix}
+      />
+    ) : setupPlugin ? (
+      <SetupPluginCenter plugin={setupPlugin} />
+    ) : null
+  }
   const invalidProject = Boolean(
     activeProject && projectValidation && !projectValidation.valid
   )
@@ -2290,8 +2419,8 @@ export function Dashboard({
         onRefresh={onCheck}
         onFix={onFix}
       />
-    ) : setupPlugin ? (
-      <SetupPluginCenter plugin={setupPlugin} />
+    ) : workspaceSetupPlugin ? (
+      <SetupPluginCenter plugin={workspaceSetupPlugin} />
     ) : invalidProject ? (
       <InvalidWorkspace
         project={activeProject!}
@@ -2390,15 +2519,6 @@ export function Dashboard({
                   <PanelLeftClose className="size-4" />
                 )}
               </Button>
-              {activeProject && (
-                <span
-                  className="topbar-project-context"
-                  title={activeProject.path}
-                >
-                  <Bot className="size-3.5" />
-                  {activeProject.name}
-                </span>
-              )}
             </div>
             <div className="ml-auto flex min-w-0 items-center gap-1">
               {developerMode && <McpControl />}
@@ -2490,7 +2610,6 @@ export function Dashboard({
           />
           <Modal
             open={appPortDialog}
-            zIndex={96}
             ariaLabel="设置应用端口"
             // 不点遮罩关闭：端口输入框聚焦/输入时若 backdrop 收到 mousedown 会把
             // 弹窗误关。用户应通过取消或保存来关闭。
@@ -2570,7 +2689,7 @@ export function Dashboard({
             onConfirm={cloneRobotRepository}
           />
           {renameTarget && (
-            <Modal open zIndex={300} className="bg-slate-900/40">
+            <Modal open className="bg-slate-900/40">
               <div className="grid w-full max-w-sm gap-4 rounded-xl bg-white p-5 shadow-2xl">
                 <h3 className="text-base font-semibold text-slate-900">
                   重命名对话
@@ -2617,7 +2736,7 @@ export function Dashboard({
             })}
           >
             <ProjectRail
-              feature={systemFeature}
+              feature={systemWindowFeature}
               setupPlugins={setupPlugins}
               projects={projects}
               activeID={activeProjectID}
@@ -2665,6 +2784,7 @@ export function Dashboard({
                     onOpenConsole={() => {
                       setConsoleOpen(true)
                       setConsoleMinimized(false)
+                      activateFloatingWindow('terminal')
                     }}
                     onOpenAI={openAI}
                     onOpenOps={() => {
@@ -2693,6 +2813,7 @@ export function Dashboard({
                 )}
             </section>
           </section>
+          {windowControls}
         </section>
       </main>
       {appContentOpen && (
@@ -2708,9 +2829,10 @@ export function Dashboard({
           }}
         />
       )}
-      {consoleOpen && !consoleMinimized && (
+      {consoleOpen && (
         <ReadonlyConsole
           open
+          minimized={consoleMinimized}
           root={root}
           zIndex={windowLayers.terminal}
           onActivate={() => activateFloatingWindow('terminal')}
@@ -2770,6 +2892,40 @@ export function Dashboard({
           setOpsMinimized(false)
         }}
       />
+      {Object.entries(systemWindows).map(([feature, state], index) => {
+        const windowID: FloatingWindowID = `system:${feature}`
+        const zIndex = windowLayers[windowID] ?? 107
+        const offset = (index % 6) * 28
+        return (
+          <DesktopWindow
+            key={feature}
+            open
+            minimized={state.minimized}
+            title={systemFeatureLabel(feature, setupPlugins)}
+            subtitle="系统功能"
+            icon={<Settings className="size-4 shrink-0 text-brand-600 dark:text-brand-200" />}
+            onClose={() => closeSystemWindow(feature)}
+            onMinimize={() =>
+              setSystemWindows(current => ({
+                ...current,
+                [feature]: { minimized: true }
+              }))
+            }
+            zIndex={zIndex}
+            onActivate={() => {
+              setSystemWindowFeature(feature)
+              activateFloatingWindow(windowID)
+            }}
+            initialPosition={{ left: 216 + offset, top: 200 + offset }}
+            width={1080}
+            height={720}
+          >
+            <div className="min-h-0 overflow-auto">
+              {systemWindowContent(feature)}
+            </div>
+          </DesktopWindow>
+        )
+      })}
       {invalidDirectory && (
         <InvalidDirectoryDialog
           path={invalidDirectory}
@@ -4461,7 +4617,12 @@ function InvalidDirectoryDialog({
   onCreate: () => void
 }) {
   return (
-    <div className="invalid-directory-backdrop" role="presentation">
+    <Modal
+      open
+      onClose={onClose}
+      ariaLabel="目录不是合法机器人项目"
+      className="bg-slate-950/25 p-6"
+    >
       <section
         className="invalid-directory-dialog"
         role="dialog"
@@ -4495,7 +4656,7 @@ function InvalidDirectoryDialog({
           </button>
         </footer>
       </section>
-    </div>
+    </Modal>
   )
 }
 function SystemPluginCenter({
@@ -4729,6 +4890,18 @@ function SystemPluginCenter({
                       </>
                     )}
                   </div>
+                  {!isOnline && plugin.source && (
+                    <div
+                      className="mt-1 flex min-w-0 items-center gap-1.5 text-xs text-slate-400 dark:text-slate-500"
+                      title={plugin.source}
+                    >
+                      <Folder className="size-3 shrink-0" />
+                      <span className="shrink-0">本机目录</span>
+                      <code className="min-w-0 truncate font-mono text-[11px]">
+                        {plugin.source}
+                      </code>
+                    </div>
+                  )}
                 </button>
 
                 {/* 操作 */}
@@ -5003,6 +5176,21 @@ function SetupPluginCenter({ plugin }: { plugin: SetupPlugin }) {
   const hasWeb = Boolean(plugin.web && plugin.runnable && !plugin.online)
   const theme = document.documentElement.dataset.theme ?? 'light'
   const webSrc = `/api/v1/setup/plugins/web/${plugin.id}/index.html?theme=${theme}`
+  const applyScrollbarTheme = (event: SyntheticEvent<HTMLIFrameElement>) => {
+    const document = event.currentTarget.contentDocument
+    if (!document || document.head.querySelector('[data-alx-scrollbar-theme]')) return
+    const style = document.createElement('style')
+    style.dataset.alxScrollbarTheme = 'true'
+    style.textContent = `
+      html { scrollbar-color: rgb(148 163 184 / 0.55) transparent; scrollbar-width: thin; }
+      ::-webkit-scrollbar { width: 10px; height: 10px; }
+      ::-webkit-scrollbar-track { background: transparent; }
+      ::-webkit-scrollbar-thumb { background: rgb(148 163 184 / 0.42); border: 3px solid transparent; border-radius: 999px; background-clip: padding-box; }
+      ::-webkit-scrollbar-thumb:hover { background-color: rgb(100 116 139 / 0.7); }
+      ::-webkit-scrollbar-corner { background: transparent; }
+    `
+    document.head.append(style)
+  }
 
   return (
     <section className="setup-plugin-webview">
@@ -5011,6 +5199,7 @@ function SetupPluginCenter({ plugin }: { plugin: SetupPlugin }) {
           className="setup-plugin-webview-frame"
           src={webSrc}
           title={`${plugin.name} 界面`}
+          onLoad={applyScrollbarTheme}
         />
       ) : (
         <div className="setup-plugin-web-missing grid gap-2">
@@ -6248,11 +6437,12 @@ function RuntimePanel({
         onCancel={() => setValidationMessage('')}
         onConfirm={() => setValidationMessage('')}
       />
-      {loginChoice &&
-        createPortal(
-          <div
-            className="fixed inset-0 z-96 flex items-center justify-center bg-slate-950/25 p-6"
-            role="presentation"
+      {loginChoice && (
+          <Modal
+            open
+            onClose={closeLoginDialog}
+            ariaLabel={loginChoice.label}
+            className="bg-slate-950/25 p-6"
           >
             <section
               className="grid max-h-[min(720px,calc(100vh-48px))] w-full max-w-2xl grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_20px_58px_rgb(28_26_23/0.22)]"
@@ -6450,8 +6640,7 @@ function RuntimePanel({
                 })()}
               </footer>
             </section>
-          </div>,
-          document.body
+          </Modal>
         )}
       <section className="grid gap-3">
         <section className="overflow-hidden rounded-xl border border-slate-200 bg-white">
@@ -6819,9 +7008,9 @@ function RuntimePanel({
                 删除
               </button>
             </div>
-          </div>
+            </div>
+          </section>
         </section>
-      </section>
     </BotWorkspace>
   )
 }
@@ -6837,9 +7026,7 @@ function robotAppToken(root: string) {
     .replace(/\//g, '_')
     .replace(/=+$/g, '')
 }
-// AppEmbed replaces the workspace with an application-sized surface through the
-// reverse proxy. It intentionally mirrors the dashboard window rather than a
-// dialog, so the robot application feels like a destination page.
+
 function AppEmbed({
   root,
   onClose,
@@ -6855,143 +7042,24 @@ function AppEmbed({
   onActivate: () => void
   minimized: boolean
 }) {
-  // The robot root travels as a base64url path token (matching the backend's
-  // robotAppToken) so every in-app navigation keeps it automatically.
   const src = `/api/v1/robot/app/${robotAppToken(root)}/`
-  const [windowRect, setWindowRect] = useState({
-    left: 56,
-    top: 42,
-    width: 980,
-    height: 680
-  })
-  const dragStart = useRef<{
-    x: number
-    y: number
-    left: number
-    top: number
-  } | null>(null)
-  const windowRef = useRef<HTMLElement>(null)
-  useEffect(() => {
-    const clamp = () => {
-      const width = Math.min(980, Math.max(360, window.innerWidth - 48))
-      const height = Math.min(680, Math.max(320, window.innerHeight - 48))
-      setWindowRect(current => ({
-        width,
-        height,
-        left: Math.max(16, Math.min(window.innerWidth - width - 16, current.left)),
-        top: Math.max(16, Math.min(window.innerHeight - height - 16, current.top))
-      }))
-    }
-    clamp()
-    window.addEventListener('resize', clamp)
-    return () => window.removeEventListener('resize', clamp)
-  }, [root])
-  const moveWindow = (event: ReactPointerEvent<HTMLElement>) => {
-    const start = dragStart.current
-    if (!start) return
-    const left = Math.max(
-      16,
-      Math.min(window.innerWidth - windowRect.width - 16, start.left + event.clientX - start.x)
-    )
-    const top = Math.max(
-      16,
-      Math.min(window.innerHeight - windowRect.height - 16, start.top + event.clientY - start.y)
-    )
-    windowRef.current?.style.setProperty(
-      'transform',
-      `translate3d(${left - start.left}px, ${top - start.top}px, 0)`
-    )
-  }
-  const finishWindowMove = (event: ReactPointerEvent<HTMLElement>) => {
-    const start = dragStart.current
-    if (!start) return
-    const left = Math.max(
-      16,
-      Math.min(window.innerWidth - windowRect.width - 16, start.left + event.clientX - start.x)
-    )
-    const top = Math.max(
-      16,
-      Math.min(window.innerHeight - windowRect.height - 16, start.top + event.clientY - start.y)
-    )
-    windowRef.current?.style.removeProperty('transform')
-    setWindowRect(current => ({ ...current, left, top }))
-    dragStart.current = null
-  }
-  const stopDrag = () => {
-    windowRef.current?.style.removeProperty('transform')
-    dragStart.current = null
-  }
   return (
-    <Modal
+    <DesktopWindow
       open
+      minimized={minimized}
+      title="机器人应用"
+      subtitle={root || '当前机器人目录'}
+      icon={<Monitor className="size-4 shrink-0 text-brand-600 dark:text-brand-200" />}
+      onClose={onClose}
+      onMinimize={onMinimize}
       zIndex={zIndex}
-      ariaLabel="机器人应用"
-      className="app-embed-backdrop"
+      onActivate={onActivate}
+      initialPosition={{ left: 72, top: 56 }}
+      width={980}
+      height={680}
     >
-      <section
-        ref={windowRef}
-        className="app-embed-window grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden"
-        style={{ ...windowRect, display: minimized ? 'none' : undefined }}
-        onPointerDownCapture={onActivate}
-      >
-        <header
-          className="topbar app-embed-header flex min-h-11 items-center justify-between gap-2 border-b border-slate-200 bg-white/90 px-3 dark:border-slate-700"
-          onPointerDown={event => {
-            event.stopPropagation()
-            if ((event.target as HTMLElement).closest('button')) return
-            dragStart.current = {
-              x: event.clientX,
-              y: event.clientY,
-              left: windowRect.left,
-              top: windowRect.top
-            }
-            event.currentTarget.setPointerCapture(event.pointerId)
-          }}
-          onPointerMove={event => {
-            event.stopPropagation()
-            moveWindow(event)
-          }}
-          onPointerUp={event => {
-            event.stopPropagation()
-            finishWindowMove(event)
-          }}
-          onPointerCancel={event => {
-            event.stopPropagation()
-            stopDrag()
-          }}
-        >
-          <div className="flex min-w-0 items-center gap-2">
-            <Monitor className="size-4 shrink-0 text-brand-600 dark:text-brand-200" />
-            <strong className="truncate text-sm font-semibold text-slate-900 dark:text-slate-100">
-              机器人应用
-            </strong>
-          </div>
-          <div className="flex items-center gap-1">
-            <button
-              className="icon-button size-8 p-0"
-              onClick={onMinimize}
-              aria-label="最小化应用"
-              title="最小化"
-            >
-              <Minus className="size-4" />
-            </button>
-            <button
-              className="icon-button size-8 p-0"
-              onClick={onClose}
-              aria-label="关闭应用"
-              title="关闭应用"
-            >
-              <X className="size-4" />
-            </button>
-          </div>
-        </header>
-        <iframe
-          className="h-full w-full border-0"
-          src={src}
-          title="机器人应用"
-        />
-      </section>
-    </Modal>
+      <iframe className="h-full w-full border-0" src={src} title="机器人应用" />
+    </DesktopWindow>
   )
 }
 
@@ -7310,6 +7378,7 @@ function StatusDot({
 }
 function ReadonlyConsole({
   open,
+  minimized,
   root,
   onClose,
   onMinimize,
@@ -7317,6 +7386,7 @@ function ReadonlyConsole({
   onActivate
 }: {
   open: boolean
+  minimized: boolean
   root: string
   onClose: () => void
   onMinimize: () => void
@@ -7328,7 +7398,6 @@ function ReadonlyConsole({
   const outputRef = useRef<HTMLPreElement>(null)
   const shellOutputRef = useRef<HTMLPreElement>(null)
   const shellInputRef = useRef<HTMLInputElement>(null)
-  const windowRef = useRef<HTMLElement>(null)
   const followLatest = useRef(true)
   const [tabs, setTabs] = useStoreState<TerminalTab[]>([])
   const [activeTab, setActiveTab] = useStoreState('runtime')
@@ -7337,26 +7406,6 @@ function ReadonlyConsole({
   const [shellBusy, setShellBusy] = useStoreState(false)
   const [shellHistory, setShellHistory] = useStoreState<string[]>([])
   const [shellHistoryIndex, setShellHistoryIndex] = useStoreState(-1)
-  const [windowRect, setWindowRect] = useStoreState({
-    left: 16,
-    top: 16,
-    width: 560,
-    height: 650
-  })
-  const dragStart = useRef<{
-    x: number
-    y: number
-    left: number
-    top: number
-  } | null>(null)
-  const resizeStart = useRef<{
-    x: number
-    y: number
-    width: number
-    height: number
-    left: number
-    top: number
-  } | null>(null)
   // liveOutput accumulates incremental output pushed over SSE; the initial
   // load seeds it with the current buffer so the terminal is real-time without
   // polling. The static snapshot still comes from the query.
@@ -7384,14 +7433,6 @@ function ReadonlyConsole({
   ])
   useEffect(() => {
     if (!open || !root) return
-    const width = Math.min(560, Math.max(280, window.innerWidth - 32))
-    const height = Math.min(760, Math.max(260, window.innerHeight - 32))
-    setWindowRect({
-      left: Math.max(16, window.innerWidth - width - 16),
-      top: 16,
-      width,
-      height
-    })
     resetTerminals()
     void load({ root }).then(result => {
       if (result.data) {
@@ -7400,36 +7441,7 @@ function ReadonlyConsole({
     })
     // No polling: output streams in via the SSE robot-output event; the manual
     // refresh button re-reads the snapshot.
-  }, [load, open, resetTerminals, root, setLiveOutput, setWindowRect])
-  useEffect(() => {
-    if (!open) return
-    const clampToViewport = () => {
-      setWindowRect(current => {
-        const width = Math.min(
-          current.width,
-          Math.max(280, window.innerWidth - 16)
-        )
-        const height = Math.min(
-          current.height,
-          Math.max(260, window.innerHeight - 16)
-        )
-        return {
-          width,
-          height,
-          left: Math.max(
-            8,
-            Math.min(window.innerWidth - width - 8, current.left)
-          ),
-          top: Math.max(
-            8,
-            Math.min(window.innerHeight - height - 8, current.top)
-          )
-        }
-      })
-    }
-    window.addEventListener('resize', clampToViewport)
-    return () => window.removeEventListener('resize', clampToViewport)
-  }, [open, setWindowRect])
+  }, [load, open, resetTerminals, root, setLiveOutput])
   useEffect(() => {
     if (!open) return
     const handler = (event: Event) => {
@@ -7595,185 +7607,72 @@ function ReadonlyConsole({
       setShellOutput('')
     }
   }
-  const moveWindow = (event: ReactPointerEvent<HTMLElement>) => {
-    const start = dragStart.current
-    if (!start) return
-    const maxLeft = Math.max(8, window.innerWidth - windowRect.width - 8)
-    const maxTop = Math.max(8, window.innerHeight - windowRect.height - 8)
-    const left = Math.max(8, Math.min(maxLeft, start.left + event.clientX - start.x))
-    const top = Math.max(8, Math.min(maxTop, start.top + event.clientY - start.y))
-    windowRef.current?.style.setProperty(
-      'transform',
-      `translate3d(${left - start.left}px, ${top - start.top}px, 0)`
-    )
-  }
-  const finishWindowMove = (event: ReactPointerEvent<HTMLElement>) => {
-    const start = dragStart.current
-    if (!start) return
-    const maxLeft = Math.max(8, window.innerWidth - windowRect.width - 8)
-    const maxTop = Math.max(8, window.innerHeight - windowRect.height - 8)
-    const left = Math.max(8, Math.min(maxLeft, start.left + event.clientX - start.x))
-    const top = Math.max(8, Math.min(maxTop, start.top + event.clientY - start.y))
-    windowRef.current?.style.removeProperty('transform')
-    setWindowRect(current => ({ ...current, left, top }))
-    dragStart.current = null
-  }
-  const resizeWindow = (event: ReactPointerEvent<HTMLElement>) => {
-    const start = resizeStart.current
-    if (!start) return
-    setWindowRect(current => ({
-      ...current,
-      width: Math.max(
-        280,
-        Math.min(
-          window.innerWidth - start.left - 8,
-          start.width + event.clientX - start.x
-        )
-      ),
-      height: Math.max(
-        260,
-        Math.min(
-          window.innerHeight - start.top - 8,
-          start.height + event.clientY - start.y
-        )
-      )
-    }))
-  }
-  const stopInteraction = () => {
-    windowRef.current?.style.removeProperty('transform')
-    dragStart.current = null
-    resizeStart.current = null
-  }
+  const terminalTabs = (
+    <nav className="readonly-console-tabs" aria-label="终端列表">
+      {tabs.map(tab => (
+        <button
+          className={cn('readonly-console-tab', activeTab === tab.id && 'active')}
+          key={tab.id}
+          onClick={() => setActiveTab(tab.id)}
+        >
+          <span>{tab.label}</span>
+          <X
+            className="size-3"
+            onClick={event => {
+              event.stopPropagation()
+              closeTab(tab.id)
+            }}
+          />
+        </button>
+      ))}
+      <button
+        className="readonly-console-tab-add"
+        onClick={addTab}
+        aria-label="添加终端"
+        title="添加终端"
+      >
+        <Plus className="size-4" />
+      </button>
+      {tabs.length === 0 && (
+        <span className="readonly-console-empty">没有打开的终端，点击 + 添加</span>
+      )}
+    </nav>
+  )
   if (!open) return null
   return (
-    <Modal
-      open
+    <DesktopWindow
+      open={open}
+      minimized={minimized}
+      title="终端"
+      subtitle={
+        activeTerminal?.kind === 'shell'
+          ? '仅限当前机器人目录'
+          : running
+            ? `${data?.mode ?? '进程'}实时输出 · 只读`
+            : '查看最近运行输出 · 只读'
+      }
+      icon={<Terminal className="size-4 shrink-0 text-brand-600 dark:text-brand-200" />}
+      headerLeft={terminalTabs}
+      onClose={onClose}
+      onMinimize={onMinimize}
       zIndex={zIndex}
-      className="readonly-console-backdrop"
-      ariaLabel="运行终端"
-    >
-      <section
-        ref={windowRef}
-        className="readonly-console grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900"
-        style={{
-          left: windowRect.left,
-          top: windowRect.top,
-          width: windowRect.width,
-          height: windowRect.height
-        }}
-        role="dialog"
-        aria-modal="true"
-        aria-label="运行终端"
-        onPointerDownCapture={onActivate}
-      >
-        <header
-          className="readonly-console-header flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-3 dark:border-slate-700"
-          onPointerDown={event => {
-            if ((event.target as HTMLElement).closest('button')) return
-            dragStart.current = {
-              x: event.clientX,
-              y: event.clientY,
-              left: windowRect.left,
-              top: windowRect.top
-            }
-            event.currentTarget.setPointerCapture(event.pointerId)
-          }}
-          onPointerMove={moveWindow}
-          onPointerUp={finishWindowMove}
-          onPointerCancel={stopInteraction}
+      onActivate={onActivate}
+      initialPosition={{ left: 16, top: 16 }}
+      width={560}
+      height={650}
+      actions={
+        <button
+          className="icon-button size-8 p-0"
+          disabled={isFetching}
+          onClick={() => void load({ root, refresh: true })}
+          aria-label="刷新运行终端"
+          title="刷新"
         >
-          <div className="flex min-w-0 items-center gap-2">
-            <Terminal className="size-4 shrink-0 text-brand-600 dark:text-brand-200" />
-            <strong className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-              终端
-            </strong>
-            <small className="hidden text-xs text-slate-400 sm:inline">
-              {activeTerminal?.kind === 'shell'
-                ? '仅限当前机器人目录'
-                : running
-                  ? `${data?.mode ?? '进程'}实时输出 · 只读`
-                  : '查看最近运行输出 · 只读'}
-            </small>
-          </div>
-          <div className="flex items-center gap-1">
-            <button
-              className="readonly-console-minimize inline-flex size-8 items-center justify-center rounded-lg  text-slate-500 hover:bg-slate-50  dark:text-slate-300 dark:hover:bg-slate-800"
-              onClick={onMinimize}
-              aria-label="最小化运行终端"
-              title="最小化"
-            >
-              <Minus />
-            </button>
-            <button
-              className="readonly-console-refresh inline-flex size-8 items-center justify-center rounded-lg  text-slate-500 hover:bg-slate-50  dark:text-slate-300 dark:hover:bg-slate-800"
-              disabled={isFetching}
-              onClick={() => void load({ root, refresh: true })}
-              aria-label="刷新运行终端"
-              title="刷新"
-            >
-              <RefreshCw />
-            </button>
-            <button
-              className="readonly-console-window-close inline-flex size-8 items-center justify-center rounded-lg  text-slate-500 hover:bg-slate-50  dark:text-slate-300 dark:hover:bg-slate-800"
-              onClick={onClose}
-              aria-label="关闭运行终端"
-              title="关闭"
-            >
-              <X />
-            </button>
-          </div>
-        </header>
-        <div className="readonly-console-body">
-          <nav
-            className="readonly-console-tabs"
-            aria-label="终端列表"
-            onPointerDown={event => {
-              if ((event.target as HTMLElement).closest('button')) return
-              dragStart.current = {
-                x: event.clientX,
-                y: event.clientY,
-                left: windowRect.left,
-                top: windowRect.top
-              }
-              event.currentTarget.setPointerCapture(event.pointerId)
-            }}
-            onPointerMove={moveWindow}
-            onPointerUp={finishWindowMove}
-            onPointerCancel={stopInteraction}
-          >
-            {tabs.map(tab => (
-              <button
-                className={cn(
-                  'readonly-console-tab',
-                  activeTab === tab.id && 'active'
-                )}
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
-              >
-                <span>{tab.label}</span>
-                <X
-                  className="size-3"
-                  onClick={event => {
-                    event.stopPropagation()
-                    closeTab(tab.id)
-                  }}
-                />
-              </button>
-            ))}
-            <button
-              className="readonly-console-tab-add"
-              onClick={addTab}
-              aria-label="添加终端"
-              title="添加终端"
-            >
-              <Plus className="size-4" />
-            </button>
-            {tabs.length === 0 && (
-              <span className="readonly-console-empty">
-                没有打开的终端，点击右上角 + 添加
-              </span>
-            )}
-          </nav>
+          <RefreshCw className="size-4" />
+        </button>
+      }
+    >
+      <div className="readonly-console-body min-h-0">
           {activeTerminal?.kind === 'shell' ? (
             <div className="readonly-console-shell">
               <pre ref={shellOutputRef}>{shellOutput || ''}</pre>
@@ -7805,33 +7704,13 @@ function ReadonlyConsole({
               {isFetching && !message ? '正在读取运行输出…' : message}
             </pre>
           ) : null}
-        </div>
-        <button
-          className="readonly-console-resize"
-          onPointerDown={event => {
-            event.preventDefault()
-            resizeStart.current = {
-              x: event.clientX,
-              y: event.clientY,
-              width: windowRect.width,
-              height: windowRect.height,
-              left: windowRect.left,
-              top: windowRect.top
-            }
-            event.currentTarget.setPointerCapture(event.pointerId)
-          }}
-          onPointerMove={resizeWindow}
-          onPointerUp={stopInteraction}
-          onPointerCancel={stopInteraction}
-          aria-label="调整终端大小"
-          title="调整终端大小"
-        />
-      </section>
-    </Modal>
+      </div>
+    </DesktopWindow>
   )
 }
 
-function FloatingWindow({
+// Kept as an exported compatibility surface while internal callers use DesktopWindow.
+export function FloatingWindow({
   open,
   minimized,
   title,
@@ -7842,6 +7721,7 @@ function FloatingWindow({
   onMinimize,
   zIndex,
   onActivate,
+  initialPosition,
   width = 860,
   height = 620,
   children
@@ -7856,23 +7736,57 @@ function FloatingWindow({
   onMinimize: () => void
   zIndex: number
   onActivate: () => void
+  initialPosition?: { left: number; top: number }
   width?: number
   height?: number
   children: ReactNode
 }) {
-  const [windowRect, setWindowRect] = useState({ left: 64, top: 56, width, height })
+  const [windowRect, setWindowRect] = useState(() => ({
+    left: initialPosition?.left ?? 64,
+    top: initialPosition?.top ?? 56,
+    width,
+    height
+  }))
+  const [maximized, setMaximized] = useState(false)
+  const restoreRect = useRef<typeof windowRect | null>(null)
   const windowRef = useRef<HTMLElement>(null)
   const dragStart = useRef<{ x: number; y: number; left: number; top: number } | null>(null)
-  useEffect(() => {
+  const resizeStart = useRef<{
+    corner: ResizeCorner
+    x: number
+    y: number
+    width: number
+    height: number
+    left: number
+    top: number
+  } | null>(null)
+  useLayoutEffect(() => {
     if (!open) return
     const clamp = () => {
-      const nextWidth = Math.min(width, Math.max(360, window.innerWidth - 48))
-      const nextHeight = Math.min(height, Math.max(320, window.innerHeight - 48))
       setWindowRect(current => ({
-        width: nextWidth,
-        height: nextHeight,
-        left: Math.max(16, Math.min(window.innerWidth - nextWidth - 16, current.left)),
-        top: Math.max(16, Math.min(window.innerHeight - nextHeight - 16, current.top))
+        ...current,
+        width: Math.min(
+          Math.max(320, window.innerWidth - 48),
+          Math.max(440, current.width)
+        ),
+        height: Math.min(
+          Math.max(280, window.innerHeight - 48),
+          Math.max(320, current.height)
+        ),
+        left: Math.max(
+          16,
+          Math.min(
+            window.innerWidth - Math.min(Math.max(320, window.innerWidth - 48), Math.max(440, current.width)) - 16,
+            current.left
+          )
+        ),
+        top: Math.max(
+          16,
+          Math.min(
+            window.innerHeight - Math.min(Math.max(280, window.innerHeight - 48), Math.max(320, current.height)) - 16,
+            current.top
+          )
+        )
       }))
     }
     clamp()
@@ -7884,20 +7798,90 @@ function FloatingWindow({
     if (!start) return
     const left = Math.max(16, Math.min(window.innerWidth - windowRect.width - 16, start.left + event.clientX - start.x))
     const top = Math.max(16, Math.min(window.innerHeight - windowRect.height - 16, start.top + event.clientY - start.y))
-    windowRef.current?.style.setProperty('transform', `translate3d(${left - start.left}px, ${top - start.top}px, 0)`)
+    windowRef.current?.style.setProperty('left', `${left}px`)
+    windowRef.current?.style.setProperty('top', `${top}px`)
   }
   const commitMove = (event: ReactPointerEvent<HTMLElement>) => {
     const start = dragStart.current
     if (!start) return
     const left = Math.max(16, Math.min(window.innerWidth - windowRect.width - 16, start.left + event.clientX - start.x))
     const top = Math.max(16, Math.min(window.innerHeight - windowRect.height - 16, start.top + event.clientY - start.y))
-    windowRef.current?.style.removeProperty('transform')
     setWindowRect(current => ({ ...current, left, top }))
     dragStart.current = null
   }
   const cancelMove = () => {
-    windowRef.current?.style.removeProperty('transform')
+    const start = dragStart.current
+    if (start) {
+      windowRef.current?.style.setProperty('left', `${start.left}px`)
+      windowRef.current?.style.setProperty('top', `${start.top}px`)
+    }
     dragStart.current = null
+  }
+  const getResizedRect = (event: ReactPointerEvent<HTMLElement>) => {
+    const start = resizeStart.current
+    if (!start) return null
+    const horizontal = start.corner.endsWith('e') ? 1 : -1
+    const vertical = start.corner.startsWith('s') ? 1 : -1
+    const width = Math.max(
+      440,
+      Math.min(
+        start.corner.endsWith('e')
+          ? window.innerWidth - start.left - 16
+          : start.width + start.left - 16,
+        start.width + horizontal * (event.clientX - start.x)
+      )
+    )
+    const height = Math.max(
+      320,
+      Math.min(
+        start.corner.startsWith('s')
+          ? window.innerHeight - start.top - 16
+          : start.height + start.top - 16,
+        start.height + vertical * (event.clientY - start.y)
+      )
+    )
+    return {
+      width,
+      height,
+      left: start.corner.endsWith('w') ? start.left + start.width - width : start.left,
+      top: start.corner.startsWith('n') ? start.top + start.height - height : start.top
+    }
+  }
+  const previewResize = (event: ReactPointerEvent<HTMLElement>) => {
+    const rect = getResizedRect(event)
+    if (!rect) return
+    windowRef.current?.style.setProperty('width', `${rect.width}px`)
+    windowRef.current?.style.setProperty('height', `${rect.height}px`)
+    windowRef.current?.style.setProperty('left', `${rect.left}px`)
+    windowRef.current?.style.setProperty('top', `${rect.top}px`)
+  }
+  const commitResize = (event: ReactPointerEvent<HTMLElement>) => {
+    const rect = getResizedRect(event)
+    if (!rect) return
+    setWindowRect(current => ({ ...current, ...rect }))
+    resizeStart.current = null
+  }
+  const cancelResize = () => {
+    windowRef.current?.style.removeProperty('width')
+    windowRef.current?.style.removeProperty('height')
+    windowRef.current?.style.removeProperty('left')
+    windowRef.current?.style.removeProperty('top')
+    resizeStart.current = null
+  }
+  const toggleMaximize = () => {
+    if (maximized) {
+      if (restoreRect.current) setWindowRect(restoreRect.current)
+      setMaximized(false)
+      return
+    }
+    restoreRect.current = windowRect
+    setWindowRect({
+      left: 16,
+      top: 16,
+      width: Math.max(440, window.innerWidth - 32),
+      height: Math.max(320, window.innerHeight - 32)
+    })
+    setMaximized(true)
   }
   if (!open) return null
   return (
@@ -7910,6 +7894,15 @@ function FloatingWindow({
         aria-modal="true"
         aria-label={title}
         onPointerDownCapture={onActivate}
+        onDoubleClickCapture={event => {
+          const target = event.target as HTMLElement
+          if (
+            !target.closest('.floating-window-header') ||
+            target.closest('button, a, input, select, textarea')
+          )
+            return
+          toggleMaximize()
+        }}
       >
         <header
           className="floating-window-header flex min-h-12 items-center justify-between gap-3 border-b border-slate-200 px-4 dark:border-slate-700"
@@ -7950,6 +7943,26 @@ function FloatingWindow({
           </div>
         </header>
         {children}
+        <WindowResizeHandles
+          label={title}
+          onStart={(corner, event) => {
+            event.preventDefault()
+            event.stopPropagation()
+            resizeStart.current = {
+              corner,
+              x: event.clientX,
+              y: event.clientY,
+              width: windowRect.width,
+              height: windowRect.height,
+              left: windowRect.left,
+              top: windowRect.top
+            }
+            event.currentTarget.setPointerCapture(event.pointerId)
+          }}
+          onMove={previewResize}
+          onEnd={commitResize}
+          onCancel={cancelResize}
+        />
       </section>
     </Modal>
   )
@@ -7973,7 +7986,7 @@ function OpsWindow({
   onActivate: () => void
 }) {
   return (
-    <FloatingWindow
+    <DesktopWindow
       open={open}
       minimized={minimized}
       title="运维"
@@ -7983,13 +7996,14 @@ function OpsWindow({
       onMinimize={onMinimize}
       zIndex={zIndex}
       onActivate={onActivate}
+      initialPosition={{ left: 120, top: 104 }}
       width={1080}
       height={720}
     >
       <div className="min-h-0 overflow-auto">
         <OpsCenter root={root} />
       </div>
-    </FloatingWindow>
+    </DesktopWindow>
   )
 }
 
@@ -8054,7 +8068,7 @@ function PM2LogsPanel({
   }, [load, open, page, root])
   if (!open) return null
   return (
-    <FloatingWindow
+    <DesktopWindow
       open
       minimized={minimized}
       title="PM2 运行日志"
@@ -8064,6 +8078,7 @@ function PM2LogsPanel({
       onMinimize={onMinimize}
       zIndex={zIndex}
       onActivate={onActivate}
+      initialPosition={{ left: 168, top: 152 }}
       actions={
         <button
           className="icon-button size-8 p-0"
@@ -8102,7 +8117,7 @@ function PM2LogsPanel({
           </button>
         </footer>
       </div>
-    </FloatingWindow>
+    </DesktopWindow>
   )
 }
 function PM2ProcessesPanel({
@@ -8154,7 +8169,7 @@ function PM2ProcessesPanel({
         ? 'bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300'
         : 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400'
   return (
-    <FloatingWindow
+    <DesktopWindow
       open
       minimized={minimized}
       title="PM2 进程"
@@ -8164,6 +8179,7 @@ function PM2ProcessesPanel({
       onMinimize={onMinimize}
       zIndex={zIndex}
       onActivate={onActivate}
+      initialPosition={{ left: 216, top: 200 }}
       actions={
         <button
           className="icon-button size-8 p-0"
@@ -8289,7 +8305,7 @@ function PM2ProcessesPanel({
           </button>
         </footer>
       </section>
-    </FloatingWindow>
+    </DesktopWindow>
   )
 }
 function EditorMode({

@@ -1,0 +1,296 @@
+import {
+  useLayoutEffect,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode
+} from 'react'
+import { Minus, X } from 'lucide-react'
+import { Modal } from './Modal'
+
+export type ResizeCorner = 'nw' | 'ne' | 'sw' | 'se'
+
+export function WindowResizeHandles({
+  label,
+  onStart,
+  onMove,
+  onEnd,
+  onCancel
+}: {
+  label: string
+  onStart: (corner: ResizeCorner, event: ReactPointerEvent<HTMLButtonElement>) => void
+  onMove: (event: ReactPointerEvent<HTMLButtonElement>) => void
+  onEnd: (event: ReactPointerEvent<HTMLButtonElement>) => void
+  onCancel: () => void
+}) {
+  const corners: ResizeCorner[] = ['nw', 'ne', 'sw', 'se']
+  return (
+    <>
+      {corners.map(corner => (
+        <button
+          className={`desktop-window-resize desktop-window-resize-${corner}`}
+          onPointerDown={event => onStart(corner, event)}
+          onPointerMove={onMove}
+          onPointerUp={onEnd}
+          onPointerCancel={onCancel}
+          aria-label={`从${corner === 'nw' ? '左上' : corner === 'ne' ? '右上' : corner === 'sw' ? '左下' : '右下'}角调整${label}窗口大小`}
+          title="调整窗口大小"
+          key={corner}
+        />
+      ))}
+    </>
+  )
+}
+
+export function DesktopWindow({
+  open,
+  minimized,
+  title,
+  subtitle,
+  icon,
+  headerLeft,
+  actions,
+  onClose,
+  onMinimize,
+  zIndex,
+  onActivate,
+  initialPosition,
+  width = 860,
+  height = 620,
+  children
+}: {
+  open: boolean
+  minimized: boolean
+  title: string
+  subtitle?: string
+  icon: ReactNode
+  headerLeft?: ReactNode
+  actions?: ReactNode
+  onClose: () => void
+  onMinimize: () => void
+  zIndex: number
+  onActivate: () => void
+  initialPosition?: { left: number; top: number }
+  width?: number
+  height?: number
+  children: ReactNode
+}) {
+  const [windowRect, setWindowRect] = useState(() => ({
+    left: initialPosition?.left ?? 64,
+    top: initialPosition?.top ?? 56,
+    width,
+    height
+  }))
+  const [maximized, setMaximized] = useState(false)
+  const restoreRect = useRef<typeof windowRect | null>(null)
+  const windowRef = useRef<HTMLElement>(null)
+  const dragStart = useRef<{ x: number; y: number; left: number; top: number } | null>(null)
+  const resizeStart = useRef<{
+    corner: ResizeCorner
+    x: number
+    y: number
+    width: number
+    height: number
+    left: number
+    top: number
+  } | null>(null)
+
+  useLayoutEffect(() => {
+    if (!open) return
+    const clamp = () => {
+      setWindowRect(current => ({
+        ...current,
+        width: Math.min(Math.max(320, window.innerWidth - 48), Math.max(440, current.width)),
+        height: Math.min(Math.max(280, window.innerHeight - 48), Math.max(320, current.height)),
+        left: Math.max(
+          16,
+          Math.min(
+            window.innerWidth - Math.min(Math.max(320, window.innerWidth - 48), Math.max(440, current.width)) - 16,
+            current.left
+          )
+        ),
+        top: Math.max(
+          16,
+          Math.min(
+            window.innerHeight - Math.min(Math.max(280, window.innerHeight - 48), Math.max(320, current.height)) - 16,
+            current.top
+          )
+        )
+      }))
+    }
+    clamp()
+    window.addEventListener('resize', clamp)
+    return () => window.removeEventListener('resize', clamp)
+  }, [height, open, width])
+
+  const previewMove = (event: ReactPointerEvent<HTMLElement>) => {
+    const start = dragStart.current
+    if (!start) return
+    const left = Math.max(16, Math.min(window.innerWidth - windowRect.width - 16, start.left + event.clientX - start.x))
+    const top = Math.max(16, Math.min(window.innerHeight - windowRect.height - 16, start.top + event.clientY - start.y))
+    windowRef.current?.style.setProperty('left', `${left}px`)
+    windowRef.current?.style.setProperty('top', `${top}px`)
+  }
+  const commitMove = (event: ReactPointerEvent<HTMLElement>) => {
+    const start = dragStart.current
+    if (!start) return
+    const left = Math.max(16, Math.min(window.innerWidth - windowRect.width - 16, start.left + event.clientX - start.x))
+    const top = Math.max(16, Math.min(window.innerHeight - windowRect.height - 16, start.top + event.clientY - start.y))
+    setWindowRect(current => ({ ...current, left, top }))
+    dragStart.current = null
+  }
+  const cancelMove = () => {
+    const start = dragStart.current
+    if (start) {
+      windowRef.current?.style.setProperty('left', `${start.left}px`)
+      windowRef.current?.style.setProperty('top', `${start.top}px`)
+    }
+    dragStart.current = null
+  }
+  const getResizedRect = (event: ReactPointerEvent<HTMLElement>) => {
+    const start = resizeStart.current
+    if (!start) return null
+    const horizontal = start.corner.endsWith('e') ? 1 : -1
+    const vertical = start.corner.startsWith('s') ? 1 : -1
+    const nextWidth = Math.max(
+      440,
+      Math.min(
+        start.corner.endsWith('e') ? window.innerWidth - start.left - 16 : start.width + start.left - 16,
+        start.width + horizontal * (event.clientX - start.x)
+      )
+    )
+    const nextHeight = Math.max(
+      320,
+      Math.min(
+        start.corner.startsWith('s') ? window.innerHeight - start.top - 16 : start.height + start.top - 16,
+        start.height + vertical * (event.clientY - start.y)
+      )
+    )
+    return {
+      width: nextWidth,
+      height: nextHeight,
+      left: start.corner.endsWith('w') ? start.left + start.width - nextWidth : start.left,
+      top: start.corner.startsWith('n') ? start.top + start.height - nextHeight : start.top
+    }
+  }
+  const previewResize = (event: ReactPointerEvent<HTMLElement>) => {
+    const rect = getResizedRect(event)
+    if (!rect) return
+    windowRef.current?.style.setProperty('width', `${rect.width}px`)
+    windowRef.current?.style.setProperty('height', `${rect.height}px`)
+    windowRef.current?.style.setProperty('left', `${rect.left}px`)
+    windowRef.current?.style.setProperty('top', `${rect.top}px`)
+  }
+  const commitResize = (event: ReactPointerEvent<HTMLElement>) => {
+    const rect = getResizedRect(event)
+    if (!rect) return
+    setWindowRect(current => ({ ...current, ...rect }))
+    resizeStart.current = null
+  }
+  const cancelResize = () => {
+    windowRef.current?.style.removeProperty('width')
+    windowRef.current?.style.removeProperty('height')
+    windowRef.current?.style.removeProperty('left')
+    windowRef.current?.style.removeProperty('top')
+    resizeStart.current = null
+  }
+  const toggleMaximize = () => {
+    if (maximized) {
+      if (restoreRect.current) setWindowRect(restoreRect.current)
+      setMaximized(false)
+      return
+    }
+    restoreRect.current = windowRect
+    setWindowRect({
+      left: 16,
+      top: 16,
+      width: Math.max(440, window.innerWidth - 32),
+      height: Math.max(320, window.innerHeight - 32)
+    })
+    setMaximized(true)
+  }
+
+  if (!open) return null
+  return (
+    <Modal open zIndex={zIndex} className="floating-window-backdrop" ariaLabel={title}>
+      <section
+        ref={windowRef}
+        className="floating-window grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900"
+        style={{ ...windowRect, display: minimized ? 'none' : undefined }}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        onPointerDownCapture={onActivate}
+        onDoubleClickCapture={event => {
+          const target = event.target as HTMLElement
+          if (!target.closest('.floating-window-header') || target.closest('button, a, input, select, textarea')) return
+          toggleMaximize()
+        }}
+      >
+        <header
+          className={`floating-window-header flex min-h-12 items-center justify-between gap-3 border-b border-slate-200 px-4 dark:border-slate-700${headerLeft ? ' floating-window-header-custom' : ''}`}
+          onPointerDown={event => {
+            event.stopPropagation()
+            if ((event.target as HTMLElement).closest('button')) return
+            dragStart.current = { x: event.clientX, y: event.clientY, left: windowRect.left, top: windowRect.top }
+            event.currentTarget.setPointerCapture(event.pointerId)
+          }}
+          onPointerMove={event => {
+            event.stopPropagation()
+            previewMove(event)
+          }}
+          onPointerUp={event => {
+            event.stopPropagation()
+            commitMove(event)
+          }}
+          onPointerCancel={event => {
+            event.stopPropagation()
+            cancelMove()
+          }}
+        >
+          <div className="flex min-w-0 items-center gap-2">
+            {headerLeft ?? (
+              <>
+                {icon}
+                <span className="grid min-w-0 gap-0.5">
+                  <strong className="truncate text-sm font-semibold text-slate-900 dark:text-slate-100">{title}</strong>
+                  {subtitle && <small className="truncate text-xs text-slate-400">{subtitle}</small>}
+                </span>
+              </>
+            )}
+          </div>
+          <div className="flex items-center gap-1">
+            {actions}
+            <button className="icon-button size-8 p-0" onClick={onMinimize} aria-label={`最小化${title}`} title="最小化">
+              <Minus className="size-4" />
+            </button>
+            <button className="icon-button size-8 p-0" onClick={onClose} aria-label={`关闭${title}`} title="关闭">
+              <X className="size-4" />
+            </button>
+          </div>
+        </header>
+        {children}
+        <WindowResizeHandles
+          label={title}
+          onStart={(corner, event) => {
+            event.preventDefault()
+            event.stopPropagation()
+            resizeStart.current = {
+              corner,
+              x: event.clientX,
+              y: event.clientY,
+              width: windowRect.width,
+              height: windowRect.height,
+              left: windowRect.left,
+              top: windowRect.top
+            }
+            event.currentTarget.setPointerCapture(event.pointerId)
+          }}
+          onMove={previewResize}
+          onEnd={commitResize}
+          onCancel={cancelResize}
+        />
+      </section>
+    </Modal>
+  )
+}

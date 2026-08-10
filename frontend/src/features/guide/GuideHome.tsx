@@ -26,6 +26,7 @@ type Props = {
   onCreate: (config: ProjectConfig) => void
   onFix: (check: Check) => void
   windowStyle?: CSSProperties
+  windowControls?: ReactNode
   renderFlow: (registerBack: (handler: () => void) => void) => ReactNode
 }
 
@@ -39,7 +40,8 @@ export function GuideHome({
   onClearError,
   onFix,
   renderFlow,
-  windowStyle
+  windowStyle,
+  windowControls
 }: Props) {
   const backAction = useRef<() => void>(() => {})
   const dispatch = useDispatch()
@@ -99,6 +101,7 @@ export function GuideHome({
             setDirectoryPickerOpen(false)
           }}
         />
+        {windowControls}
       </section>
     </main>
   )

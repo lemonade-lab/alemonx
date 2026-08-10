@@ -1515,6 +1515,129 @@ button {
 .floating-window-header:active {
   cursor: grabbing;
 }
+
+/* A custom header still lives in the shared window chrome. Terminal tabs are
+ * flush with that chrome instead of looking like a second, nested toolbar. */
+.floating-window-header-custom {
+  gap: 8px;
+  min-height: 46px;
+  padding-left: 0;
+}
+
+.floating-window-header-custom > div:first-child {
+  align-self: stretch;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.floating-window-header-custom .readonly-console-tabs {
+  align-items: stretch;
+  align-self: stretch;
+  background: transparent;
+  border-bottom: 0;
+  gap: 0;
+  min-height: 0;
+  padding: 0 0 0 8px;
+  width: 100%;
+}
+
+.floating-window-header-custom .readonly-console-tab {
+  border-radius: 0;
+  height: 100%;
+  padding: 0 11px;
+}
+
+.floating-window-header-custom .readonly-console-tab.active {
+  background: var(--theme-surface-raised);
+  border-color: transparent;
+  box-shadow: inset 0 -2px 0 var(--theme-accent-text);
+}
+
+.floating-window-header-custom .readonly-console-tab-add {
+  height: 100%;
+  margin: 0;
+}
+
+.desktop-window-resize {
+  background: transparent;
+  border: 0;
+  bottom: 0;
+  cursor: nwse-resize;
+  height: 20px;
+  padding: 0;
+  position: absolute;
+  right: 0;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+  width: 20px;
+  z-index: 4;
+}
+
+.desktop-window-resize:hover,
+.desktop-window-resize:focus-visible {
+  opacity: 1;
+}
+
+.desktop-window-resize::after {
+  border-bottom: 2px solid var(--theme-text-faint);
+  border-right: 2px solid var(--theme-text-faint);
+  bottom: 5px;
+  content: '';
+  height: 8px;
+  position: absolute;
+  right: 5px;
+  width: 8px;
+}
+
+.desktop-window-resize-nw {
+  bottom: auto;
+  cursor: nwse-resize;
+  left: 0;
+  right: auto;
+  top: 0;
+}
+
+.desktop-window-resize-nw::after {
+  border-bottom: 0;
+  border-right: 0;
+  border-left: 2px solid var(--theme-text-faint);
+  border-top: 2px solid var(--theme-text-faint);
+  bottom: auto;
+  left: 5px;
+  right: auto;
+  top: 5px;
+}
+
+.desktop-window-resize-ne {
+  bottom: auto;
+  cursor: nesw-resize;
+  top: 0;
+}
+
+.desktop-window-resize-ne::after {
+  border-bottom: 0;
+  border-left: 0;
+  border-right: 2px solid var(--theme-text-faint);
+  border-top: 2px solid var(--theme-text-faint);
+  bottom: auto;
+  top: 5px;
+}
+
+.desktop-window-resize-sw {
+  cursor: nesw-resize;
+  left: 0;
+  right: auto;
+}
+
+.desktop-window-resize-sw::after {
+  border-bottom: 2px solid var(--theme-text-faint);
+  border-left: 2px solid var(--theme-text-faint);
+  border-right: 0;
+  bottom: 5px;
+  left: 5px;
+  right: auto;
+}
 .git-workspace-dialog > header {
   align-items: center;
   border-bottom: 1px solid var(--theme-border-default);
@@ -4094,16 +4217,6 @@ textarea:focus-visible {
   grid-column: 2;
   justify-content: flex-end;
 }
-.invalid-directory-backdrop {
-  align-items: center;
-  background: rgb(28 26 23 / 0.24);
-  display: flex;
-  inset: 0;
-  justify-content: center;
-  padding: 24px;
-  position: fixed;
-  z-index: 95;
-}
 .invalid-directory-dialog {
   background: var(--theme-surface-panel);
   border: 1px solid var(--theme-border-default);
@@ -5339,10 +5452,18 @@ textarea:hover {
 
 .workbench-window-layer {
   height: 100%;
+  position: relative;
 }
 
 .workbench-window-hidden {
-  display: none;
+  /* Keep the React tree mounted. Desktop windows are portaled to document.body,
+   * so hiding only this surface must never tear down or conceal app windows. */
+  display: block;
+}
+
+.workbench-window-hidden > .guide-shell {
+  pointer-events: none;
+  visibility: hidden;
 }
 
 @media (min-width: 1440px) {
@@ -5365,7 +5486,7 @@ textarea:hover {
     position: fixed;
     top: 50%;
     transform: translateY(-50%);
-    z-index: 40;
+    z-index: 10000;
   }
 
   [data-theme='dark'] .workbench-dock {
@@ -5433,7 +5554,13 @@ textarea:hover {
     transition: transform 0.12s ease-out;
   }
 
-  .workbench-stage.workbench-dragging .dashboard-window {
+  .workbench-stage .guide-window {
+    position: relative;
+    transition: transform 0.12s ease-out;
+  }
+
+  .workbench-stage.workbench-dragging .dashboard-window,
+  .workbench-stage.workbench-dragging .guide-window {
     transition: none;
     user-select: none;
   }
@@ -6003,6 +6130,7 @@ button > svg,
   min-height: 0;
   min-width: 0;
   width: 100%;
+  height: 100%;
 }
 .setup-plugin-webview-frame {
   border: 0;
@@ -7302,10 +7430,7 @@ button > svg,
   align-items: center;
   background: var(--theme-surface-overlay);
   display: flex;
-  inset: 0;
   justify-content: center;
-  position: fixed;
-  z-index: 90;
 }
 .agent-confirm-dialog {
   background: var(--theme-surface-panel);
@@ -8945,6 +9070,8 @@ button > svg,
 
 .git-workspace-dialog,
 .app-embed-window {
+  max-height: none;
+  max-width: none;
   pointer-events: auto;
   position: fixed;
 }

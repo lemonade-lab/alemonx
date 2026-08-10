@@ -1,5 +1,5 @@
 import { useStoreState } from './store/guideStore'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useDispatch, useSelector } from 'react-redux'
 import { useLocation, useNavigate } from 'react-router-dom'
 import {
@@ -21,7 +21,7 @@ import { GuideHome } from './features/guide/GuideHome'
 import { EnvironmentCheckPanel } from './features/guide/EnvironmentCheckPanel'
 import { guideIcons as icons } from './features/guide/icons'
 import { recommendReleaseAssets } from './features/guide/releaseAssets'
-import { Activity, GitBranch, Home, Monitor, ShieldCheck, Terminal } from 'lucide-react'
+import { Activity, GitBranch, Home, Monitor, Settings, ShieldCheck, Terminal } from 'lucide-react'
 import type {
   Check,
   Creation,
@@ -41,6 +41,7 @@ const capabilityLabels: Record<string, string> = {
 }
 
 type DockWindowState = { open: boolean; minimized: boolean }
+type SystemDockWindowState = DockWindowState & { label: string }
 type DockWindows = {
   terminal: DockWindowState
   git: DockWindowState
@@ -48,6 +49,33 @@ type DockWindows = {
   pm2Logs: DockWindowState
   pm2Status: DockWindowState
   ops: DockWindowState
+  system: Record<string, SystemDockWindowState>
+}
+type ResizeCorner = 'nw' | 'ne' | 'sw' | 'se'
+type WorkbenchRect = { left: number; top: number; width: number; height: number }
+
+function initialWorkbenchRect(): WorkbenchRect {
+  const width = Math.min(1240, Math.max(640, window.innerWidth - 48))
+  const height = Math.min(760, Math.max(420, window.innerHeight - 56))
+  return {
+    left: Math.max(16, Math.round((window.innerWidth - width) / 2)),
+    top: Math.max(16, Math.round((window.innerHeight - height) / 2)),
+    width,
+    height
+  }
+}
+
+function clampWorkbenchRect(rect: WorkbenchRect): WorkbenchRect {
+  const maxWidth = Math.max(640, window.innerWidth - 32)
+  const maxHeight = Math.max(420, window.innerHeight - 32)
+  const width = Math.min(maxWidth, Math.max(640, rect.width))
+  const height = Math.min(maxHeight, Math.max(420, rect.height))
+  return {
+    width,
+    height,
+    left: Math.max(16, Math.min(window.innerWidth - width - 16, rect.left)),
+    top: Math.max(16, Math.min(window.innerHeight - height - 16, rect.top))
+  }
 }
 
 const closedDockWindow: DockWindowState = { open: false, minimized: false }
@@ -57,7 +85,8 @@ const emptyDockWindows: DockWindows = {
   app: closedDockWindow,
   pm2Logs: closedDockWindow,
   pm2Status: closedDockWindow,
-  ops: closedDockWindow
+  ops: closedDockWindow,
+  system: {}
 }
 
 export default function App() {
@@ -82,19 +111,76 @@ export default function App() {
   const guideOpen = !location.pathname.startsWith('/dashboard')
   const activeID = selectedID ?? 'install'
   const activeGoal = goals.find(goal => goal.id === activeID)
-  const [workbenchOffset, setWorkbenchOffset] = useState({ x: 0, y: 0 })
+  const [workbenchRect, setWorkbenchRect] = useState<WorkbenchRect>(
+    initialWorkbenchRect
+  )
+  const workbenchRectRef = useRef(workbenchRect)
+  const previewRect = useRef<WorkbenchRect | null>(null)
+  const previewFrame = useRef<number | null>(null)
+  const [workbenchMaximized, setWorkbenchMaximized] = useState(false)
+  const [workbenchLayer, setWorkbenchLayer] = useState(100)
   const [dockWindows, setDockWindows] = useState<DockWindows>(emptyDockWindows)
   const [mainWindowHidden, setMainWindowHidden] = useState(false)
+  const nextWindowLayer = useRef(106)
+  const workbenchRestore = useRef<{
+    rect: WorkbenchRect
+  } | null>(null)
   const dragState = useRef<{
     pointerId: number
     startX: number
     startY: number
-    originX: number
-    originY: number
+    originLeft: number
+    originTop: number
   } | null>(null)
+  const resizeState = useRef<{
+    pointerId: number
+    corner: ResizeCorner
+    startX: number
+    startY: number
+    width: number
+    height: number
+    left: number
+    top: number
+  } | null>(null)
+
+  function activateWorkbench() {
+    const layer = ++nextWindowLayer.current
+    setWorkbenchLayer(layer)
+    window.dispatchEvent(
+      new CustomEvent('alx:desktop-window-layer', { detail: layer })
+    )
+  }
+
+  function previewWorkbenchRect(rect: WorkbenchRect) {
+    previewRect.current = rect
+    if (previewFrame.current !== null) return
+    previewFrame.current = window.requestAnimationFrame(() => {
+      previewFrame.current = null
+      const windowElement = document.querySelector<HTMLElement>('.guide-window')
+      const next = previewRect.current
+      if (!windowElement || !next) return
+      windowElement.style.left = `${next.left}px`
+      windowElement.style.top = `${next.top}px`
+      windowElement.style.width = `${next.width}px`
+      windowElement.style.height = `${next.height}px`
+    })
+  }
+
+  function commitWorkbenchPreview() {
+    const rect = previewRect.current ?? workbenchRectRef.current
+    if (previewFrame.current !== null) {
+      window.cancelAnimationFrame(previewFrame.current)
+      previewFrame.current = null
+    }
+    previewRect.current = null
+    workbenchRectRef.current = rect
+    setWorkbenchRect(rect)
+  }
 
   function beginWorkbenchDrag(event: React.PointerEvent<HTMLDivElement>) {
     const target = event.target as HTMLElement
+    if (target.closest('.guide-window') && !hasOpenDesktopWindow)
+      activateWorkbench()
     const topbar = target.closest('.topbar')
     if (
       !topbar?.closest('.guide-window') ||
@@ -102,40 +188,165 @@ export default function App() {
     )
       return
     dragState.current = {
-      pointerId: event.pointerId,
-      startX: event.clientX,
-      startY: event.clientY,
-      originX: workbenchOffset.x,
-      originY: workbenchOffset.y
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+      originLeft: workbenchRectRef.current.left,
+      originTop: workbenchRectRef.current.top
     }
     event.currentTarget.setPointerCapture(event.pointerId)
     event.currentTarget.classList.add('workbench-dragging')
   }
 
   function moveWorkbench(event: React.PointerEvent<HTMLDivElement>) {
+    const resize = resizeState.current
+    if (resize?.pointerId === event.pointerId) {
+      const minWidth = 640
+      const minHeight = 420
+      const maxWidth = Math.max(minWidth, window.innerWidth - 32)
+      const maxHeight = Math.max(minHeight, window.innerHeight - 32)
+      const horizontal = resize.corner.endsWith('e') ? 1 : -1
+      const vertical = resize.corner.startsWith('s') ? 1 : -1
+      const width = Math.max(
+        minWidth,
+        Math.min(maxWidth, resize.width + horizontal * (event.clientX - resize.startX))
+      )
+      const height = Math.max(
+        minHeight,
+        Math.min(maxHeight, resize.height + vertical * (event.clientY - resize.startY))
+      )
+      previewWorkbenchRect({
+        width,
+        height,
+        left: resize.corner.endsWith('w') ? resize.left + resize.width - width : resize.left,
+        top: resize.corner.startsWith('n') ? resize.top + resize.height - height : resize.top
+      })
+      return
+    }
     const drag = dragState.current
     if (!drag || drag.pointerId !== event.pointerId) return
-    const shell = event.currentTarget
-    const windowElement = shell.querySelector<HTMLElement>('.guide-window')
-    if (!windowElement) return
-    const maxX = Math.max(0, (window.innerWidth - windowElement.offsetWidth) / 2 - 24)
-    const maxY = Math.max(0, (window.innerHeight - windowElement.offsetHeight) / 2 - 28)
-    setWorkbenchOffset({
-      x: Math.min(maxX, Math.max(-maxX, drag.originX + event.clientX - drag.startX)),
-      y: Math.min(maxY, Math.max(-maxY, drag.originY + event.clientY - drag.startY))
+    const current = workbenchRectRef.current
+    previewWorkbenchRect({
+      ...current,
+      left: Math.max(
+        16,
+        Math.min(window.innerWidth - current.width - 16, drag.originLeft + event.clientX - drag.startX)
+      ),
+      top: Math.max(
+        16,
+        Math.min(window.innerHeight - current.height - 16, drag.originTop + event.clientY - drag.startY)
+      )
     })
   }
 
   function endWorkbenchDrag(event: React.PointerEvent<HTMLDivElement>) {
+    if (resizeState.current?.pointerId === event.pointerId) {
+      resizeState.current = null
+      commitWorkbenchPreview()
+      event.currentTarget.releasePointerCapture(event.pointerId)
+      event.currentTarget.classList.remove('workbench-dragging')
+      return
+    }
     if (dragState.current?.pointerId !== event.pointerId) return
     dragState.current = null
+    commitWorkbenchPreview()
     event.currentTarget.releasePointerCapture(event.pointerId)
     event.currentTarget.classList.remove('workbench-dragging')
+  }
+
+  function beginWorkbenchResize(
+    corner: ResizeCorner,
+    event: React.PointerEvent<HTMLButtonElement>
+  ) {
+    const windowElement = document.querySelector<HTMLElement>('.guide-window')
+    const stage = event.currentTarget.closest<HTMLDivElement>('.workbench-stage')
+    if (!windowElement || !stage) return
+    const rect = windowElement.getBoundingClientRect()
+    event.preventDefault()
+    event.stopPropagation()
+    if (!hasOpenDesktopWindow) activateWorkbench()
+    resizeState.current = {
+      pointerId: event.pointerId,
+      corner,
+      startX: event.clientX,
+      startY: event.clientY,
+      width: rect.width,
+      height: rect.height,
+      left: rect.left,
+      top: rect.top
+    }
+    workbenchRectRef.current = {
+      left: rect.left,
+      top: rect.top,
+      width: rect.width,
+      height: rect.height
+    }
+    stage.setPointerCapture(event.pointerId)
+    stage.classList.add('workbench-dragging')
+  }
+
+  function toggleWorkbenchMaximize(event: React.MouseEvent<HTMLDivElement>) {
+    const target = event.target as HTMLElement
+    const topbar = target.closest('.topbar')
+    if (
+      !topbar?.closest('.guide-window') ||
+      target.closest('button, a, input, select, textarea')
+    )
+      return
+    if (hasOpenDesktopWindow) return
+    activateWorkbench()
+    if (workbenchMaximized) {
+      const restore = workbenchRestore.current
+      if (restore) {
+        setWorkbenchRect(restore.rect)
+      }
+      setWorkbenchMaximized(false)
+      return
+    }
+    const windowElement = document.querySelector<HTMLElement>('.guide-window')
+    if (!windowElement) return
+    const rect = windowElement.getBoundingClientRect()
+    workbenchRestore.current = {
+      rect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height }
+    }
+    setWorkbenchRect({
+      left: 16,
+      top: 16,
+      width: Math.max(640, window.innerWidth - 48),
+      height: Math.max(420, window.innerHeight - 56)
+    })
+    setWorkbenchMaximized(true)
   }
 
   useEffect(() => {
     if (location.pathname === '/') navigate('/guide', { replace: true })
   }, [location.pathname, navigate])
+  useEffect(() => {
+    const syncWindowLayer = (event: Event) => {
+      const layer = (event as CustomEvent<number>).detail
+      if (typeof layer === 'number')
+        nextWindowLayer.current = Math.max(nextWindowLayer.current, layer)
+    }
+    window.addEventListener('alx:desktop-window-layer', syncWindowLayer)
+    return () =>
+      window.removeEventListener('alx:desktop-window-layer', syncWindowLayer)
+  }, [])
+  useLayoutEffect(() => {
+    const clampWorkbench = () => setWorkbenchRect(clampWorkbenchRect)
+    clampWorkbench()
+    window.addEventListener('resize', clampWorkbench)
+    return () => window.removeEventListener('resize', clampWorkbench)
+  }, [])
+  useLayoutEffect(() => {
+    workbenchRectRef.current = workbenchRect
+  }, [workbenchRect])
+  useEffect(
+    () => () => {
+      if (previewFrame.current !== null)
+        window.cancelAnimationFrame(previewFrame.current)
+    },
+    []
+  )
   useEffect(() => {
     if (guideOpen) setDockWindows(emptyDockWindows)
     setMainWindowHidden(false)
@@ -191,6 +402,55 @@ export default function App() {
     }
   }
 
+  const handleWindowStateChange = useCallback((state: DockWindows) => {
+    setDockWindows(state)
+    if (
+      [
+        state.terminal,
+        state.git,
+        state.app,
+        state.pm2Logs,
+        state.pm2Status,
+        state.ops,
+        ...Object.values(state.system)
+      ].some(item => item.open)
+    )
+      setMainWindowHidden(false)
+  }, [])
+
+  const windowStyle = {
+    position: 'fixed' as const,
+    left: workbenchRect.left,
+    top: workbenchRect.top,
+    width: workbenchRect.width,
+    height: workbenchRect.height,
+    maxWidth: 'none',
+    maxHeight: 'none'
+  }
+  const workbenchWindowControls = workbenchMaximized ? null : (
+    <>
+      {(['nw', 'ne', 'sw', 'se'] as ResizeCorner[]).map(corner => (
+        <button
+          className={`desktop-window-resize desktop-window-resize-${corner}`}
+          onPointerDown={event => beginWorkbenchResize(corner, event)}
+          aria-label="调整工作台窗口大小"
+          title="调整窗口大小"
+          key={corner}
+        />
+      ))}
+    </>
+  )
+  const hasOpenDesktopWindow =
+    [
+      dockWindows.terminal,
+      dockWindows.git,
+      dockWindows.app,
+      dockWindows.pm2Logs,
+      dockWindows.pm2Status,
+      dockWindows.ops,
+      ...Object.values(dockWindows.system)
+    ].some(item => item.open)
+
   return (
     <div className="app-shell">
       <div
@@ -199,11 +459,21 @@ export default function App() {
         onPointerMove={moveWorkbench}
         onPointerUp={endWorkbenchDrag}
         onPointerCancel={endWorkbenchDrag}
+        onDoubleClick={toggleWorkbenchMaximize}
       >
         <WorkbenchDock
           windowLabel={guideOpen ? '引导' : '工作台'}
           windowHidden={mainWindowHidden}
-          onToggleWindow={() => setMainWindowHidden(value => !value)}
+          hasOpenDesktopWindow={hasOpenDesktopWindow}
+          onToggleWindow={() => {
+            // Application windows stay in front of the workbench. Restoring
+            // the workbench must not raise it above them and cover the stack.
+            if (hasOpenDesktopWindow) {
+              setMainWindowHidden(false)
+              return
+            }
+            setMainWindowHidden(value => !value)
+          }}
           windows={dockWindows}
           onTerminal={() =>
             window.dispatchEvent(new CustomEvent('alx:desktop-terminal-toggle'))
@@ -223,9 +493,15 @@ export default function App() {
           onOps={() =>
             window.dispatchEvent(new CustomEvent('alx:desktop-ops-toggle'))
           }
+          onSystem={feature =>
+            window.dispatchEvent(
+              new CustomEvent('alx:desktop-system-toggle', { detail: feature })
+            )
+          }
         />
         <div
           className={`workbench-window-layer${mainWindowHidden ? ' workbench-window-hidden' : ''}`}
+          style={{ zIndex: workbenchLayer }}
         >
       {guideOpen ? (
         <GuideHome
@@ -251,9 +527,8 @@ export default function App() {
           onCheck={checkEnvironment}
           onCreate={createProject}
           onFix={setRepairCheck}
-          windowStyle={{
-            transform: `translate3d(${workbenchOffset.x}px, ${workbenchOffset.y}px, 0)`
-          }}
+          windowStyle={windowStyle}
+          windowControls={workbenchWindowControls}
           renderFlow={registerBack => (
             <FlowView
               loading={loading}
@@ -299,10 +574,9 @@ export default function App() {
               onOpenGuide={openGuide}
               onCheck={checkEnvironment}
               onFix={setRepairCheck}
-              onWindowStateChange={setDockWindows}
-              windowStyle={{
-                transform: `translate3d(${workbenchOffset.x}px, ${workbenchOffset.y}px, 0)`
-              }}
+              onWindowStateChange={handleWindowStateChange}
+              windowStyle={windowStyle}
+              windowControls={workbenchWindowControls}
             />
         )}
         </div>
@@ -320,6 +594,7 @@ export default function App() {
 function WorkbenchDock({
   windowLabel,
   windowHidden,
+  hasOpenDesktopWindow,
   onToggleWindow,
   windows,
   onTerminal,
@@ -327,10 +602,12 @@ function WorkbenchDock({
   onApp,
   onPM2Logs,
   onPM2Status,
-  onOps
+  onOps,
+  onSystem
 }: {
   windowLabel: string
   windowHidden: boolean
+  hasOpenDesktopWindow: boolean
   onToggleWindow: () => void
   windows: DockWindows
   onTerminal: () => void
@@ -339,6 +616,7 @@ function WorkbenchDock({
   onPM2Logs: () => void
   onPM2Status: () => void
   onOps: () => void
+  onSystem: (feature: string) => void
 }) {
   const visibleApps = [
     windows.terminal,
@@ -346,7 +624,8 @@ function WorkbenchDock({
     windows.app,
     windows.pm2Logs,
     windows.pm2Status,
-    windows.ops
+    windows.ops,
+    ...Object.values(windows.system)
   ].filter(
     item => item.open
   ).length
@@ -359,7 +638,13 @@ function WorkbenchDock({
         <button
           className={windowHidden ? '' : 'active'}
           onClick={onToggleWindow}
-          title={windowHidden ? `打开${windowLabel}` : `隐藏${windowLabel}`}
+          title={
+            hasOpenDesktopWindow
+              ? `置顶${windowLabel}`
+              : windowHidden
+                ? `打开${windowLabel}`
+                : `隐藏${windowLabel}`
+          }
         >
           <Home className="size-5" />
           <span>{windowLabel}</span>
@@ -436,6 +721,18 @@ function WorkbenchDock({
             </button>
           </div>
         )}
+        {Object.entries(windows.system).map(([feature, item]) => (
+          <div className="workbench-dock-apps" key={feature}>
+            <button
+              className={item.minimized ? '' : 'active'}
+              onClick={() => onSystem(feature)}
+              title={item.minimized ? `恢复${item.label}` : `最小化${item.label}`}
+            >
+              <Settings className="size-5" />
+              <span>{item.label}</span>
+            </button>
+          </div>
+        ))}
       </div>
     </aside>
   )
