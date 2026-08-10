@@ -6,9 +6,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/mod/semver"
@@ -29,6 +32,27 @@ type Asset struct {
 
 var allowed = map[string]string{"alemondesk": "lemonade-lab/alemondesk", "alemonapp": "lemonade-lab/alemonapp", "alx": "lemonade-lab/alx", "alemonx": "lemonade-lab/alemonx"}
 
+// githubReleasesURL is a package variable so tests can point it at an
+// unreachable host and exercise the offline cache fallback path.
+var githubReleasesURL = "https://api.github.com/repos/%s/releases?per_page=30"
+
+const releaseListCacheTTL = 12 * time.Hour
+
+type cachedReleaseList struct {
+	items     []Item
+	expiresAt time.Time
+}
+
+type persistedReleaseList struct {
+	Items     []Item    `json:"items"`
+	FetchedAt time.Time `json:"fetchedAt"`
+}
+
+var releaseListCache = struct {
+	sync.Mutex
+	items map[string]cachedReleaseList
+}{items: map[string]cachedReleaseList{}}
+
 type Update struct {
 	Current         string `json:"current"`
 	Latest          string `json:"latest,omitempty"`
@@ -37,6 +61,7 @@ type Update struct {
 	DownloadURL     string `json:"downloadUrl,omitempty"`
 	AssetName       string `json:"assetName,omitempty"`
 	SHA256          string `json:"sha256,omitempty"`
+	IntegrityError  string `json:"integrityError,omitempty"`
 	IntegrityReady  bool   `json:"integrityReady"`
 	PlatformMatched bool   `json:"platformMatched"`
 	DownloadReady   bool   `json:"downloadReady"`
@@ -57,7 +82,10 @@ func SetupUpdate(current string) (Update, error) {
 	asset := matchingAsset(latest.Assets)
 	if asset.Name != "" {
 		result.DownloadURL, result.AssetName, result.PlatformMatched = asset.URL, asset.Name, true
-		result.SHA256, _ = checksumForAsset(latest.Assets, asset.Name)
+		result.SHA256, err = checksumForAsset(latest.Assets, asset.Name)
+		if err != nil {
+			result.IntegrityError = err.Error()
+		}
 		result.IntegrityReady = result.SHA256 != ""
 	}
 	return result, nil
@@ -164,13 +192,35 @@ func List(id string) ([]Item, error) {
 	if !ok {
 		return nil, fmt.Errorf("不支持该下载项目")
 	}
+	if items, ok := cachedReleaseItems(id); ok {
+		return items, nil
+	}
+	if items, fetchedAt, ok := readPersistedReleaseItems(id); ok && time.Since(fetchedAt) < releaseListCacheTTL {
+		cacheReleaseItemsUntil(id, items, fetchedAt.Add(releaseListCacheTTL))
+		return items, nil
+	}
 	client := &http.Client{Timeout: 8 * time.Second}
-	response, err := client.Get("https://api.github.com/repos/" + repository + "/releases?per_page=30")
+	request, err := http.NewRequest(http.MethodGet, fmt.Sprintf(githubReleasesURL, repository), nil)
 	if err != nil {
+		return nil, fmt.Errorf("无法创建版本列表请求：%w", err)
+	}
+	request.Header.Set("Accept", "application/vnd.github+json")
+	request.Header.Set("User-Agent", "AlemonX-Update-Checker")
+	response, err := client.Do(request)
+	if err != nil {
+		if items, ok := staleCachedReleaseItems(id); ok {
+			return items, nil
+		}
 		return nil, fmt.Errorf("无法获取版本列表，请检查网络后重试")
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
+		if items, ok := staleCachedReleaseItems(id); ok {
+			return items, nil
+		}
+		if response.StatusCode == http.StatusForbidden && response.Header.Get("X-RateLimit-Remaining") == "0" {
+			return nil, fmt.Errorf("GitHub API 请求次数已用尽，请稍后重试或直接选择本地安装包")
+		}
 		return nil, fmt.Errorf("GitHub 暂时无法提供版本列表")
 	}
 	var data []struct {
@@ -207,5 +257,86 @@ func List(id string) ([]Item, error) {
 	if len(items) == 0 {
 		return nil, fmt.Errorf("暂未找到可用的正式版本")
 	}
+	cacheReleaseItems(id, items)
+	_ = persistReleaseItems(id, items)
 	return items, nil
+}
+
+func cachedReleaseItems(id string) ([]Item, bool) {
+	releaseListCache.Lock()
+	defer releaseListCache.Unlock()
+	entry, ok := releaseListCache.items[id]
+	if !ok || time.Now().After(entry.expiresAt) {
+		return nil, false
+	}
+	return entry.items, true
+}
+
+func cacheReleaseItems(id string, items []Item) {
+	cacheReleaseItemsUntil(id, items, time.Now().Add(releaseListCacheTTL))
+}
+
+func cacheReleaseItemsUntil(id string, items []Item, expiresAt time.Time) {
+	releaseListCache.Lock()
+	defer releaseListCache.Unlock()
+	releaseListCache.items[id] = cachedReleaseList{items: items, expiresAt: expiresAt}
+}
+
+func staleCachedReleaseItems(id string) ([]Item, bool) {
+	releaseListCache.Lock()
+	entry, ok := releaseListCache.items[id]
+	releaseListCache.Unlock()
+	if ok && len(entry.items) > 0 {
+		return entry.items, true
+	}
+	items, _, ok := readPersistedReleaseItems(id)
+	return items, ok
+}
+
+func releaseCachePath(id string) (string, error) {
+	base := os.Getenv("ALX_TEST_CACHE_DIR")
+	if base == "" {
+		var err error
+		base, err = os.UserCacheDir()
+		if err != nil {
+			return "", err
+		}
+	}
+	directory := filepath.Join(base, "alemonjs", "alx", "releases")
+	if err := os.MkdirAll(directory, 0700); err != nil {
+		return "", err
+	}
+	return filepath.Join(directory, id+".json"), nil
+}
+
+func readPersistedReleaseItems(id string) ([]Item, time.Time, bool) {
+	path, err := releaseCachePath(id)
+	if err != nil {
+		return nil, time.Time{}, false
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return nil, time.Time{}, false
+	}
+	var cached persistedReleaseList
+	if json.Unmarshal(body, &cached) != nil || cached.FetchedAt.IsZero() || len(cached.Items) == 0 {
+		return nil, time.Time{}, false
+	}
+	return cached.Items, cached.FetchedAt, true
+}
+
+func persistReleaseItems(id string, items []Item) error {
+	path, err := releaseCachePath(id)
+	if err != nil {
+		return err
+	}
+	body, err := json.Marshal(persistedReleaseList{Items: items, FetchedAt: time.Now().UTC()})
+	if err != nil {
+		return err
+	}
+	temporary := path + ".new"
+	if err := os.WriteFile(temporary, body, 0600); err != nil {
+		return err
+	}
+	return os.Rename(temporary, path)
 }

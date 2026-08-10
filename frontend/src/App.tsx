@@ -9,6 +9,7 @@ import {
   type RootState
 } from './store/guideStore'
 import { Dashboard } from './components/Dashboard'
+import { isWindowHeaderInteractiveTarget } from './components/desktopWindowInteraction'
 import { registerDesktopWindowShortcut } from './components/desktopWindowShortcuts'
 import { EnvironmentFixDialog } from './components/EnvironmentFixDialog'
 import { ErrorNotice } from './components/ErrorNotice'
@@ -197,7 +198,7 @@ export default function App() {
     const topbar = target.closest('.topbar')
     if (
       !topbar?.closest('.guide-window') ||
-      target.closest('button, a, input, select, textarea')
+      isWindowHeaderInteractiveTarget(target)
     )
       return
     dragState.current = {
@@ -303,7 +304,7 @@ export default function App() {
     const topbar = target.closest('.topbar')
     if (
       !topbar?.closest('.guide-window') ||
-      target.closest('button, a, input, select, textarea')
+      isWindowHeaderInteractiveTarget(target)
     )
       return
     if (hasOpenDesktopWindow) return

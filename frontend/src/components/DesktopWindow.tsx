@@ -10,6 +10,7 @@ import {
 import { Minus, X } from 'lucide-react'
 import { Modal } from './Modal'
 import { registerDesktopWindowShortcut } from './desktopWindowShortcuts'
+import { isWindowHeaderInteractiveTarget } from './desktopWindowInteraction'
 
 export type ResizeCorner = 'nw' | 'ne' | 'sw' | 'se'
 
@@ -89,7 +90,13 @@ export function DesktopWindow({
   const [maximized, setMaximized] = useState(false)
   const restoreRect = useRef<typeof windowRect | null>(null)
   const windowRef = useRef<HTMLElement>(null)
-  const dragStart = useRef<{ x: number; y: number; left: number; top: number } | null>(null)
+  const dragStart = useRef<{
+    pointerId: number
+    x: number
+    y: number
+    left: number
+    top: number
+  } | null>(null)
   const resizeStart = useRef<{
     corner: ResizeCorner
     x: number
@@ -128,30 +135,47 @@ export function DesktopWindow({
     return () => window.removeEventListener('resize', clamp)
   }, [height, open, width])
 
-  const previewMove = (event: ReactPointerEvent<HTMLElement>) => {
+  const previewMove = useCallback((event: Pick<PointerEvent, 'clientX' | 'clientY' | 'pointerId'>) => {
     const start = dragStart.current
-    if (!start) return
+    if (!start || start.pointerId !== event.pointerId) return
     const left = Math.max(16, Math.min(window.innerWidth - windowRect.width - 16, start.left + event.clientX - start.x))
     const top = Math.max(16, Math.min(window.innerHeight - windowRect.height - 16, start.top + event.clientY - start.y))
     windowRef.current?.style.setProperty('left', `${left}px`)
     windowRef.current?.style.setProperty('top', `${top}px`)
-  }
-  const commitMove = (event: ReactPointerEvent<HTMLElement>) => {
+  }, [windowRect.height, windowRect.width])
+  const commitMove = useCallback((event: Pick<PointerEvent, 'clientX' | 'clientY' | 'pointerId'>) => {
     const start = dragStart.current
-    if (!start) return
+    if (!start || start.pointerId !== event.pointerId) return
     const left = Math.max(16, Math.min(window.innerWidth - windowRect.width - 16, start.left + event.clientX - start.x))
     const top = Math.max(16, Math.min(window.innerHeight - windowRect.height - 16, start.top + event.clientY - start.y))
     setWindowRect(current => ({ ...current, left, top }))
     dragStart.current = null
-  }
-  const cancelMove = () => {
+  }, [windowRect.height, windowRect.width])
+  const cancelMove = useCallback(() => {
     const start = dragStart.current
     if (start) {
       windowRef.current?.style.setProperty('left', `${start.left}px`)
       windowRef.current?.style.setProperty('top', `${start.top}px`)
     }
     dragStart.current = null
-  }
+  }, [])
+  useEffect(() => {
+    const onPointerMove = (event: PointerEvent) => {
+      if (!dragStart.current || dragStart.current.pointerId !== event.pointerId) return
+      event.preventDefault()
+      previewMove(event)
+    }
+    const onPointerUp = (event: PointerEvent) => commitMove(event)
+    const onPointerCancel = () => cancelMove()
+    window.addEventListener('pointermove', onPointerMove)
+    window.addEventListener('pointerup', onPointerUp)
+    window.addEventListener('pointercancel', onPointerCancel)
+    return () => {
+      window.removeEventListener('pointermove', onPointerMove)
+      window.removeEventListener('pointerup', onPointerUp)
+      window.removeEventListener('pointercancel', onPointerCancel)
+    }
+  }, [cancelMove, commitMove, previewMove])
   const getResizedRect = (event: ReactPointerEvent<HTMLElement>) => {
     const start = resizeStart.current
     if (!start) return null
@@ -240,29 +264,25 @@ export function DesktopWindow({
         onPointerDownCapture={onActivate}
         onDoubleClickCapture={event => {
           const target = event.target as HTMLElement
-          if (!target.closest('.floating-window-header') || target.closest('button, a, input, select, textarea')) return
+          if (
+            !target.closest('.floating-window-header') ||
+            isWindowHeaderInteractiveTarget(target)
+          )
+            return
           toggleMaximize()
         }}
       >
         <header
           className={`floating-window-header flex min-h-12 items-center justify-between gap-3 border-b border-slate-200 px-4 dark:border-slate-700${headerLeft ? ' floating-window-header-custom' : ''}`}
           onPointerDown={event => {
-            event.stopPropagation()
-            if ((event.target as HTMLElement).closest('button')) return
-            dragStart.current = { x: event.clientX, y: event.clientY, left: windowRect.left, top: windowRect.top }
-            event.currentTarget.setPointerCapture(event.pointerId)
-          }}
-          onPointerMove={event => {
-            event.stopPropagation()
-            previewMove(event)
-          }}
-          onPointerUp={event => {
-            event.stopPropagation()
-            commitMove(event)
-          }}
-          onPointerCancel={event => {
-            event.stopPropagation()
-            cancelMove()
+            if (isWindowHeaderInteractiveTarget(event.target)) return
+            dragStart.current = {
+              pointerId: event.pointerId,
+              x: event.clientX,
+              y: event.clientY,
+              left: windowRect.left,
+              top: windowRect.top
+            }
           }}
         >
           <div className="flex min-w-0 items-center gap-2">

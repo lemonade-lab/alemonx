@@ -131,6 +131,7 @@ import {
   useRobotAppsQuery,
   useSetAppEnabledMutation,
   useRobotTasksQuery,
+  useLazyRobotTaskQuery,
   useSaveRobotLoginMutation,
   useSetSetupPluginEnabledMutation,
   useInstallSetupPluginMutation,
@@ -1158,6 +1159,7 @@ export function Dashboard({
     refetchOnMountOrArgChange: true
   })
   const operationTasks = operationTasksData ?? []
+  const [loadRobotTask] = useLazyRobotTaskQuery()
   const [readRobotFile] = useLazyRobotFileQuery()
   const [validateRobot, { data: projectValidation }] =
     useLazyRobotProjectQuery()
@@ -1184,6 +1186,7 @@ export function Dashboard({
     taskID: string,
     options: {
       appReady?: boolean
+      timeoutMs?: number
       onTask?: (task: {
         status?: string
         progress?: number
@@ -1200,21 +1203,38 @@ export function Dashboard({
       output?: string
       error?: string
     }>((resolve, reject) => {
+      let settled = false
       const timeout = window.setTimeout(
         () => {
-          window.removeEventListener('alx:unified-event', onEvent)
-          reject(new Error('任务事件连接超时。'))
+          finish(new Error('任务事件连接超时。'))
         },
-        options.appReady ? 35_000 : 30 * 60 * 1000
+        options.timeoutMs ?? (options.appReady ? 35_000 : 30 * 60 * 1000)
       )
       const finish = (
         reason?: Error,
         task?: Parameters<NonNullable<typeof options.onTask>>[0]
       ) => {
+        if (settled) return
+        settled = true
         window.clearTimeout(timeout)
         window.removeEventListener('alx:unified-event', onEvent)
         if (reason) reject(reason)
         else resolve(task ?? {})
+      }
+      const settleTask = (
+        task: Parameters<NonNullable<typeof options.onTask>>[0]
+      ) => {
+        if (task.status === 'running') return
+        options.onTask?.(task)
+        if (task.status === 'failed') {
+          finish(new Error(task.error || '操作未完成。'))
+          return
+        }
+        if (options.appReady) {
+          finish(new Error('应用进程在端口就绪前结束。'))
+          return
+        }
+        finish(undefined, task)
       }
       const onEvent = (event: Event) => {
         try {
@@ -1238,22 +1258,19 @@ export function Dashboard({
             return
           }
           if (payload.type !== 'task' || !payload.task) return
-          options.onTask?.(payload.task)
-          if (payload.task.status === 'running') return
-          if (payload.task.status === 'failed') {
-            finish(new Error(payload.task.error || '操作未完成。'))
-            return
-          }
-          if (options.appReady) {
-            finish(new Error('应用进程在端口就绪前结束。'))
-            return
-          }
-          finish(undefined, payload.task)
+          settleTask(payload.task)
         } catch {
           // Ignore malformed frames and rely on EventSource reconnection.
         }
       }
       window.addEventListener('alx:unified-event', onEvent)
+      // A stop can finish before its HTTP response reaches the browser. Read
+      // the authoritative snapshot after installing the listener so that race
+      // cannot leave the whole panel in its global busy state.
+      void loadRobotTask(taskID, true)
+        .unwrap()
+        .then(settleTask)
+        .catch(() => {})
     })
   const persistFile = async (
     targetRoot: string,
@@ -1811,7 +1828,15 @@ export function Dashboard({
         return true
       }
       showOutput('操作已开始，正在等待完成…')
-      const current = await waitForRobotTask(task.id)
+      const current =
+        task.status && task.status !== 'running'
+          ? task
+          : await waitForRobotTask(task.id, {
+              timeoutMs:
+                data.action === 'dev-stop' || data.action === 'app-stop'
+                  ? 12_000
+                  : undefined
+            })
       dispatch(
         workspaceApi.util.invalidateTags([{ type: 'Runtime', id: root }])
       )

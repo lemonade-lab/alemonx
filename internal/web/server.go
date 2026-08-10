@@ -778,6 +778,10 @@ func NewServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	// Kill any previously supervised robot process that survived a restart so a
 	// stray node cannot keep the app port occupied.
 	cleanupStaleProcesses()
+	// A dev/app process is supervised only in memory. After a workbench restart
+	// there is no longer a live supervisor, so persisted "running" local tasks
+	// must not keep the UI in a false running/stopping state.
+	s.reconcileRecoveredLocalOperations()
 	// Poll plugin roots so adding/removing a plugin directory or editing a
 	// manifest is reflected without a restart or manual refresh.
 	// Filesystem notifications avoid a recurring one-second directory scan. A
@@ -2613,6 +2617,10 @@ func (s *server) downloadUpdateHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if !update.PlatformMatched || !update.IntegrityReady {
 		if update.PlatformMatched {
+			if update.IntegrityError != "" {
+				writeError(w, http.StatusBadGateway, "无法读取发布校验文件，请检查网络后重试："+update.IntegrityError)
+				return
+			}
 			writeError(w, http.StatusBadRequest, "该版本未提供校验文件，无法安全地自动更新，请使用手动安装。")
 			return
 		}
@@ -2732,9 +2740,12 @@ func (s *server) loadUpdateHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer file.Close()
-	lower := strings.ToLower(header.Filename)
-	if !strings.HasSuffix(lower, ".zip") && !strings.HasSuffix(lower, ".tar.gz") && !strings.HasSuffix(lower, ".tgz") {
-		writeError(w, http.StatusBadRequest, "更新包应为 GitHub Release 下载的 zip 或 tar.gz 文件。")
+	if !isSupportedUpdateArchive(header.Filename) {
+		writeError(w, http.StatusBadRequest, "更新包应为 GitHub Release 下载的 .zip、.tgz 或 .tar.gz 文件。")
+		return
+	}
+	if header.Size <= 0 {
+		writeError(w, http.StatusBadRequest, "更新包为空，请重新选择完整下载的安装包。")
 		return
 	}
 	directory, err := os.MkdirTemp("", "alx-upload-")
@@ -2777,6 +2788,11 @@ func (s *server) loadUpdateHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"output": applied.Message + " 正在重启应用。"})
 	s.requestGracefulUpdateShutdown()
+}
+
+func isSupportedUpdateArchive(name string) bool {
+	lower := strings.ToLower(strings.TrimSpace(name))
+	return strings.HasSuffix(lower, ".zip") || strings.HasSuffix(lower, ".tar.gz") || strings.HasSuffix(lower, ".tgz")
 }
 
 func (s *server) robotHandler(w http.ResponseWriter, r *http.Request) {
@@ -3396,6 +3412,7 @@ func (s *server) robotTasksHandler(w http.ResponseWriter, r *http.Request) {
 	if input.Action == "dev-stop" || input.Action == "app-stop" {
 		mode := map[string]string{"dev-stop": "开发模式", "app-stop": "前台运行"}[input.Action]
 		if !s.developmentRunning(input.Root) {
+			s.settleUnmanagedLocalOperations(input.Root, "未检测到受管本机进程，已结束遗留运行状态。")
 			finished := time.Now()
 			created.Status = "completed"
 			created.Output = "当前没有正在运行的" + mode + "进程。"
@@ -3412,17 +3429,7 @@ func (s *server) robotTasksHandler(w http.ResponseWriter, r *http.Request) {
 		if !s.stopDevelopment(input.Root, mode) {
 			// The process vanished between the check and the stop request. Finish
 			// the task immediately so it never hangs as "running" forever.
-			finished := time.Now()
-			s.mu.Lock()
-			for index := range s.operations {
-				if s.operations[index].ID == created.ID {
-					s.operations[index].Status = "completed"
-					s.operations[index].Output = "进程已退出，无需停止。"
-					s.operations[index].FinishedAt = &finished
-					break
-				}
-			}
-			s.mu.Unlock()
+			s.settleUnmanagedLocalOperations(input.Root, "进程已退出，无需停止。")
 		}
 		writeJSON(w, http.StatusAccepted, created)
 		return
@@ -4037,6 +4044,45 @@ func (s *server) completePendingStopTasks(root string, finished time.Time) {
 		item.Status = "completed"
 		item.FinishedAt = &finished
 		item.Output = "已停止" + map[string]string{"dev-stop": "开发模式", "app-stop": "前台运行"}[item.Action] + "。"
+	}
+}
+
+// reconcileRecoveredLocalOperations clears only app/dev lifecycle tasks that
+// were persisted as running before the workbench restarted. These processes
+// are not resumable: startup already terminates any recorded process group.
+func (s *server) reconcileRecoveredLocalOperations() {
+	s.settleUnmanagedLocalOperations("", "工作台重启后，本机运行已结束。")
+}
+
+// settleUnmanagedLocalOperations finalizes stale local lifecycle tasks. An
+// empty root reconciles every project during startup; otherwise it applies to
+// one project after a stop request finds no actual supervised process.
+func (s *server) settleUnmanagedLocalOperations(root, message string) {
+	finished := time.Now()
+	s.mu.Lock()
+	updated := make([]operationTask, 0, 2)
+	for index := range s.operations {
+		item := &s.operations[index]
+		if item.Status != "running" || (root != "" && item.Root != root) {
+			continue
+		}
+		switch item.Action {
+		case "dev", "app":
+			item.Status = "completed"
+			item.FinishedAt = &finished
+			item.Output = strings.TrimSpace(item.Output+"\n"+message) + "\n"
+			updated = append(updated, *item)
+		case "dev-stop", "app-stop":
+			item.Status = "completed"
+			item.FinishedAt = &finished
+			item.Output = message
+			updated = append(updated, *item)
+		}
+	}
+	s.mu.Unlock()
+	for index := range updated {
+		snapshot := updated[index]
+		s.publishRobotEvent(robotEvent{Type: "task", TaskID: snapshot.ID, Task: &snapshot})
 	}
 }
 

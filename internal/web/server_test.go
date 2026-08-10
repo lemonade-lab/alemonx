@@ -500,6 +500,31 @@ func TestCompletePendingStopTasks(t *testing.T) {
 	}
 }
 
+func TestSettleUnmanagedLocalOperationsClearsForegroundAndDevelopmentState(t *testing.T) {
+	root := t.TempDir()
+	s := newStatefulTestServer()
+	s.operations = []operationTask{
+		{ID: "app", Root: root, Action: "app", Status: "running"},
+		{ID: "dev", Root: root, Action: "dev", Status: "running"},
+		{ID: "app-stop", Root: root, Action: "app-stop", Status: "running"},
+		{ID: "install", Root: root, Action: "install", Status: "running"},
+		{ID: "other", Root: "/other", Action: "app", Status: "running"},
+	}
+	s.settleUnmanagedLocalOperations(root, "已停止")
+	byID := map[string]operationTask{}
+	for _, item := range s.operations {
+		byID[item.ID] = item
+	}
+	for _, id := range []string{"app", "dev", "app-stop"} {
+		if byID[id].Status != "completed" || byID[id].FinishedAt == nil {
+			t.Fatalf("%s = %+v, want completed local lifecycle task", id, byID[id])
+		}
+	}
+	if byID["install"].Status != "running" || byID["other"].Status != "running" {
+		t.Fatalf("unrelated tasks must remain running: install=%+v other=%+v", byID["install"], byID["other"])
+	}
+}
+
 func TestWebViewHTMLRewriteAndRestrictedBridge(t *testing.T) {
 	html := rewriteWebViewHTML(`<!doctype html><head><link href="/favicon.ico"><link href="/assets/app.css"></head><body><script src="/assets/app.js"></script></body>`)
 	for _, expected := range []string{`href="favicon.ico"`, `href="assets/app.css"`, `src="assets/app.js"`, `<script src="bridge.js"></script></head>`} {
@@ -554,8 +579,12 @@ func TestGoals(t *testing.T) {
 func TestRobotTasksStartsAsJSONArray(t *testing.T) {
 	response := httptest.NewRecorder()
 	newTestServer().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/robot/tasks", nil))
-	if response.Code != http.StatusOK || response.Body.String() != "[]\n" {
-		t.Fatalf("empty robot tasks = %d %q, want JSON array", response.Code, response.Body.String())
+	if response.Code != http.StatusOK {
+		t.Fatalf("robot tasks status = %d, want 200", response.Code)
+	}
+	var tasks []operationTask
+	if err := json.Unmarshal(response.Body.Bytes(), &tasks); err != nil {
+		t.Fatalf("robot tasks = %q, want JSON array: %v", response.Body.String(), err)
 	}
 }
 

@@ -33,6 +33,19 @@ type UpdateTransaction = {
   pluginError?: string
 }
 
+const acceptedUpdateArchiveExtensions = ['.zip', '.tgz', '.tar.gz']
+
+function updateArchiveValidationError(candidate: File): string | null {
+  const name = candidate.name.trim().toLowerCase()
+  if (!acceptedUpdateArchiveExtensions.some(extension => name.endsWith(extension))) {
+    return '请选择 .zip、.tgz 或 .tar.gz 格式的更新压缩包。'
+  }
+  if (candidate.size === 0) {
+    return '该更新包为空，请重新选择完整下载的安装包。'
+  }
+  return null
+}
+
 const updatePhaseLabels: Record<string, string> = {
   checking: '正在检查更新…',
   downloading: '正在下载更新包…',
@@ -55,21 +68,28 @@ export function SetupUpdateButton() {
   const [confirmRestart, setConfirmRestart] = useStoreState(false)
   const [transaction, setTransaction] = useState<UpdateTransaction | null>(null)
   const updateAvailable = Boolean(data?.available)
-  const checkUpdate = useCallback(async (force = false) => {
-    try {
-      if (force) {
-        const response = await fetch('/api/v1/update?refresh=1', { cache: 'no-store' })
-        if (!response.ok) throw new Error('更新检查暂不可用。')
+  const checkUpdate = useCallback(
+    async (force = false) => {
+      try {
+        if (force) {
+          const response = await fetch('/api/v1/update?refresh=1', {
+            cache: 'no-store'
+          })
+          if (!response.ok) throw new Error('更新检查暂不可用。')
+        }
+        await check().unwrap()
+      } catch {
+        // The server retains the last known status; a temporary failure should
+        // not turn into a client polling loop.
       }
-      await check().unwrap()
-    } catch {
-      // The server retains the last known status; a temporary failure should
-      // not turn into a client polling loop.
-    }
-  }, [check])
+    },
+    [check]
+  )
   const loadUpdateStatus = useCallback(async () => {
     try {
-      const response = await fetch('/api/v1/update/status', { cache: 'no-store' })
+      const response = await fetch('/api/v1/update/status', {
+        cache: 'no-store'
+      })
       if (!response.ok) throw new Error('更新状态暂不可用。')
       const next = (await response.json()) as UpdateTransaction
       setTransaction(next.phase === 'idle' ? null : next)
@@ -87,9 +107,11 @@ export function SetupUpdateButton() {
       window.removeEventListener('alx:top-tool-open', closeWhenAnotherToolOpens)
   }, [setOpen])
   const uploadInputID = useId()
-  const { data: releaseData = [] } = useReleasesQuery('alemonx', {
-    skip: !open || mode !== 'manual'
-  })
+  const {
+    data: releaseData = [],
+    error: releasesError,
+    isFetching: releasesLoading
+  } = useReleasesQuery('alemonx', { skip: !open || mode !== 'manual' })
   const releases = releaseData as Release[]
   const selected = releases.find(item => item.url === releaseURL) ?? releases[0]
 
@@ -104,7 +126,8 @@ export function SetupUpdateButton() {
       if (detail?.type === 'system.update.changed') void checkUpdate()
     }
     window.addEventListener('alx:unified-event', onUpdateChanged)
-    return () => window.removeEventListener('alx:unified-event', onUpdateChanged)
+    return () =>
+      window.removeEventListener('alx:unified-event', onUpdateChanged)
   }, [checkUpdate])
   useEffect(() => {
     if (open) void loadUpdateStatus()
@@ -137,7 +160,9 @@ export function SetupUpdateButton() {
           if (Date.now() < deadline) window.setTimeout(retry, 500)
           else {
             setBusy(false)
-            setMessage('新版未在 40 秒内完成验证，请查看发布说明或使用手动安装。')
+            setMessage(
+              '新版未在 40 秒内完成验证，请查看发布说明或使用手动安装。'
+            )
           }
         })
         .catch(() => {
@@ -206,6 +231,18 @@ export function SetupUpdateButton() {
     }
   }
 
+  const selectUpdateArchive = (candidate: File | null) => {
+    if (!candidate) return
+    const validationError = updateArchiveValidationError(candidate)
+    if (validationError) {
+      setFile(null)
+      setMessage(validationError)
+      return
+    }
+    setFile(candidate)
+    setMessage(`已选择 ${candidate.name}，确认部署后才会上传并替换当前版本。`)
+  }
+
   const openPanel = () => {
     window.dispatchEvent(
       new CustomEvent('alx:top-tool-open', { detail: 'update' })
@@ -257,7 +294,7 @@ export function SetupUpdateButton() {
               <span className="grid gap-0.5">
                 <strong className="text-sm text-ink-950">应用更新</strong>
                 <small className="text-[11px] text-slate-400">
-                  保持 ALemonX 为最新版本
+                  当前版本 {data?.current ?? '—'}
                 </small>
               </span>
             </div>
@@ -272,7 +309,10 @@ export function SetupUpdateButton() {
           <Tabs
             ariaLabel="更新方式"
             value={mode}
-            onChange={setMode}
+            onChange={nextMode => {
+              setMode(nextMode)
+              if (nextMode === 'now') setFile(null)
+            }}
             variant="segmented"
             className="grid grid-cols-2"
             items={[
@@ -310,6 +350,7 @@ export function SetupUpdateButton() {
                       className="inline-flex min-h-9 justify-self-end rounded-md bg-brand-600 px-3 text-xs font-semibold text-white transition hover:bg-brand-700 disabled:opacity-60"
                       disabled={busy}
                       onClick={() => {
+                        setFile(null)
                         if (data.downloadReady) setConfirmRestart(true)
                         else void download()
                       }}
@@ -323,7 +364,9 @@ export function SetupUpdateButton() {
                   ) : (
                     <p className="rounded-lg border border-amber-200 bg-amber-50 p-2.5 text-xs leading-5 text-amber-800">
                       {data.platformMatched
-                        ? '该版本未提供校验文件，无法自动更新；请切换到「手动安装」。'
+                        ? data.integrityError
+                          ? `暂时无法读取发布校验文件：${data.integrityError}`
+                          : '该版本未提供校验文件，无法自动更新；请切换到「手动安装」。'
                         : '当前系统没有匹配的更新包，无法自动更新；请切换到「手动安装」。'}
                     </p>
                   )}
@@ -347,47 +390,53 @@ export function SetupUpdateButton() {
           )}
           {mode === 'manual' && (
             <section className="grid gap-2.5">
-              <header className="grid gap-0.5">
-                <strong className="text-xs text-slate-700">选择更新包</strong>
-                <small className="text-[11px] leading-4 text-slate-500">
-                  下载后，导入文件即可完成安装。
+              {releasesLoading ? (
+                <small className="rounded-md bg-slate-50 p-2 text-[11px] leading-4 text-slate-500">
+                  正在读取可用发布版本…
                 </small>
-              </header>
-              <label className="grid gap-1 text-[11px] font-semibold text-slate-500">
-                版本
-                <select
-                  className="min-h-9 rounded-md border border-slate-200 bg-white px-2 text-xs font-normal text-slate-700"
-                  value={releaseURL || selected?.url || ''}
-                  onChange={event => setReleaseURL(event.target.value)}
-                >
-                  {releases.map(item => (
-                    <option key={item.url} value={item.url}>
-                      {item.tag} · {item.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <div className="overflow-hidden rounded-lg border border-slate-200">
-                {selected?.assets.map(asset => (
-                  <a
-                    className="flex min-h-8 items-center gap-2 border-b border-slate-100 px-2.5 text-xs text-brand-600 last:border-0 hover:bg-brand-50"
-                    key={asset.url}
-                    href={asset.url}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    <Download className="size-3.5 shrink-0" />
-                    <span className="min-w-0 truncate">{asset.name}</span>
-                    <ExternalLink className="ml-auto size-3.5 shrink-0 text-slate-400" />
-                  </a>
-                ))}
-              </div>
+              ) : releasesError ? (
+                <small className="rounded-md border border-amber-200 bg-amber-50 p-2 text-[11px] leading-4 text-amber-800">
+                  暂时无法读取 GitHub 发布列表；你仍可直接选择已下载的本地安装包。
+                </small>
+              ) : (
+                <>
+                  <label className="grid gap-1 text-[11px] font-semibold text-slate-500">
+                    版本
+                    <select
+                      className="min-h-9 rounded-md border border-slate-200 bg-white px-2 text-xs font-normal text-slate-700"
+                      value={releaseURL || selected?.url || ''}
+                      onChange={event => setReleaseURL(event.target.value)}
+                    >
+                      {releases.map(item => (
+                        <option key={item.url} value={item.url}>
+                          {item.tag} · {item.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <div className="overflow-hidden rounded-lg border border-slate-200">
+                    {selected?.assets.map(asset => (
+                      <a
+                        className="flex min-h-8 items-center gap-2 border-b border-slate-100 px-2.5 text-xs text-brand-600 last:border-0 hover:bg-brand-50"
+                        key={asset.url}
+                        href={asset.url}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        <Download className="size-3.5 shrink-0" />
+                        <span className="min-w-0 truncate">{asset.name}</span>
+                        <ExternalLink className="ml-auto size-3.5 shrink-0 text-slate-400" />
+                      </a>
+                    ))}
+                  </div>
+                </>
+              )}
               <section
                 className="grid gap-2.5"
                 onDragOver={event => event.preventDefault()}
                 onDrop={event => {
                   event.preventDefault()
-                  setFile(event.dataTransfer.files[0] ?? null)
+                  selectUpdateArchive(event.dataTransfer.files[0] ?? null)
                 }}
               >
                 <input
@@ -395,7 +444,10 @@ export function SetupUpdateButton() {
                   id={uploadInputID}
                   type="file"
                   accept=".zip,.tgz,.tar.gz"
-                  onChange={event => setFile(event.target.files?.[0] ?? null)}
+                  onChange={event => {
+                    selectUpdateArchive(event.target.files?.[0] ?? null)
+                    event.currentTarget.value = ''
+                  }}
                 />
                 <label
                   htmlFor={uploadInputID}
@@ -414,13 +466,16 @@ export function SetupUpdateButton() {
                     </strong>
                     <small className="text-[11px] leading-4 text-slate-500">
                       {file
-                        ? '已选择，可开始安装。'
-                        : '也可将 .zip 或 .tgz 文件拖到这里。'}
+                        ? '已选择，确认部署后才会上传。'
+                        : '仅支持 .zip、.tgz 或 .tar.gz，也可拖到这里。'}
                     </small>
                   </span>
                 </label>
-                <Button disabled={!file || busy} onClick={() => void upload()}>
-                  {busy ? '正在安装…' : '安装更新'}
+                <Button
+                  disabled={!file || busy}
+                  onClick={() => setConfirmRestart(true)}
+                >
+                  {busy ? '正在部署…' : '部署此安装包'}
                 </Button>
                 {message && (
                   <small className="rounded-md bg-slate-50 p-2 text-[11px] leading-4 text-slate-500">
@@ -438,9 +493,13 @@ export function SetupUpdateButton() {
           {transaction && (
             <small className="rounded-md bg-slate-50 p-2 text-[11px] leading-4 text-slate-500">
               {updatePhaseLabels[transaction.phase] ?? '正在处理更新…'}
-              {transaction.targetVersion ? ` 目标 ${transaction.targetVersion}` : ''}
+              {transaction.targetVersion
+                ? ` 目标 ${transaction.targetVersion}`
+                : ''}
               {transaction.error ? `：${transaction.error}` : ''}
-              {transaction.pluginError ? ` 插件同步：${transaction.pluginError}` : ''}
+              {transaction.pluginError
+                ? ` 插件同步：${transaction.pluginError}`
+                : ''}
             </small>
           )}
           {data?.releaseUrl && (
@@ -457,13 +516,21 @@ export function SetupUpdateButton() {
       )}
       <ConfirmDialog
         open={confirmRestart}
-        title="立即更新并重启"
-        subtitle="已下载的更新包保存在本机应用存储目录中。"
+        title={file ? '部署本地安装包并重启' : '立即更新并重启'}
+        subtitle={
+          file
+            ? `将上传并校验 ${file.name}，通过后才替换当前应用。`
+            : '已下载的更新包保存在本机应用存储目录中。'
+        }
         message="应用会替换为新版本并自动重启；浏览器会在重启后重新连接。"
-        confirmLabel="立即更新并重启"
+        confirmLabel={file ? '确认部署并重启' : '立即更新并重启'}
         busy={busy}
         onCancel={() => setConfirmRestart(false)}
-        onConfirm={() => void applyAndRestart()}
+        onConfirm={() => {
+          setConfirmRestart(false)
+          if (file) void upload()
+          else void applyAndRestart()
+        }}
       />
     </div>
   )

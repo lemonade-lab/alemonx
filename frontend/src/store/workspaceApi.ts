@@ -165,7 +165,13 @@ export type SetupPluginRelease = {
   name: string
   url: string
   publishedAt: string
-  assets: Array<{ name: string; url: string; size: number; sha256?: string; compatible: boolean }>
+  assets: Array<{
+    name: string
+    url: string
+    size: number
+    sha256?: string
+    compatible: boolean
+  }>
 }
 export type SetupPluginVersion = {
   tag: string
@@ -224,6 +230,7 @@ export const workspaceApi = createApi({
         releaseUrl?: string
         downloadUrl?: string
         assetName?: string
+        integrityError?: string
         platformMatched: boolean
         integrityReady: boolean
         downloadReady: boolean
@@ -235,10 +242,12 @@ export const workspaceApi = createApi({
       providesTags: ['SetupPlugins']
     }),
     setupPluginReleases: build.query<SetupPluginRelease[], string>({
-      query: pluginID => `setup/plugins/releases/${encodeURIComponent(pluginID)}`
+      query: pluginID =>
+        `setup/plugins/releases/${encodeURIComponent(pluginID)}`
     }),
     setupPluginVersions: build.query<SetupPluginVersion[], string>({
-      query: pluginID => `setup/plugins/${encodeURIComponent(pluginID)}/versions`,
+      query: pluginID =>
+        `setup/plugins/${encodeURIComponent(pluginID)}/versions`,
       providesTags: ['SetupPlugins']
     }),
     setupPluginCache: build.query<SetupPluginCacheSummary, void>({
@@ -365,7 +374,13 @@ export const workspaceApi = createApi({
       query: () => 'robot/tasks',
       providesTags: ['OperationTasks']
     }),
-    robotConsole: build.query<ConsolePayload, { root: string; refresh?: boolean }>({
+    robotTask: build.query<RobotTask, string>({
+      query: id => `robot/tasks?${new URLSearchParams({ id })}`
+    }),
+    robotConsole: build.query<
+      ConsolePayload,
+      { root: string; refresh?: boolean }
+    >({
       query: ({ root, refresh }) =>
         `robot/console?${new URLSearchParams(refresh ? { root, refresh: '1' } : { root })}`
     }),
@@ -403,10 +418,7 @@ export const workspaceApi = createApi({
         { type: 'RobotFile', id: `${body.root}:alemon.config.yaml` }
       ]
     }),
-    saveAppPort: build.mutation<
-      RobotResult,
-      { root: string; port: number }
-    >({
+    saveAppPort: build.mutation<RobotResult, { root: string; port: number }>({
       query: ({ root, port }) => ({
         url: `robot/app-port?${new URLSearchParams({ root })}`,
         method: 'POST',
@@ -420,15 +432,21 @@ export const workspaceApi = createApi({
     robotRuntimePreflight: build.query<RuntimePreflight, string>({
       query: root => `robot/runtime/preflight?${new URLSearchParams({ root })}`
     }),
-    robotRuntimeRepair: build.query<RuntimeRepairPlan, { root: string; mode: string }>({
-      query: ({ root, mode }) => `robot/runtime/repair?${new URLSearchParams({ root, mode })}`
+    robotRuntimeRepair: build.query<
+      RuntimeRepairPlan,
+      { root: string; mode: string }
+    >({
+      query: ({ root, mode }) =>
+        `robot/runtime/repair?${new URLSearchParams({ root, mode })}`
     }),
     applyRuntimeRepair: build.mutation<
       RuntimeRepairResult,
       { root: string; mode: string; confirmOverrides: boolean }
     >({
       query: body => ({ url: 'robot/runtime/repair', method: 'POST', body }),
-      invalidatesTags: (_result, _error, body) => [{ type: 'Runtime', id: body.root }]
+      invalidatesTags: (_result, _error, body) => [
+        { type: 'Runtime', id: body.root }
+      ]
     }),
     robotProject: build.query<
       { valid: boolean; path?: string; error?: string },
@@ -611,6 +629,7 @@ export const {
   useLocalPackageReadmeQuery,
   usePackageManifestQuery,
   useRobotTasksQuery,
+  useLazyRobotTaskQuery,
   useLazyRobotConsoleQuery,
   useRobotRuntimeQuery,
   useRobotPM2StatusQuery,
