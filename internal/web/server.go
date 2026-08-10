@@ -318,26 +318,30 @@ type server struct {
 	// pm2Status lets tests substitute a fake PM2 state. The default read runs a
 	// real `npx pm2 jlist` behind a short timeout so a missing pm2 never blocks
 	// a local start request for the full package-manager timeout.
-	pm2Status             func(string) (robot.PM2Status, error)
-	requestID             atomic.Uint64
-	nodeID                string
-	directoryRoots        []string
-	events                *robotEventHub
-	eventGateway          *eventGateway
-	operationEvents       *OperationEventStore
-	opsEvents             *opsEventHub
-	mcpEvents             *mcpEventHub
-	mcpMonitorStop        chan struct{}
-	pluginEventsStop      chan struct{}
-	updateMonitorStop     chan struct{}
-	updateMu              sync.Mutex
-	updateStateMu         sync.RWMutex
-	updateState           updateStatusState
-	requestUpdateShutdown func()
-	robotProjectsMu       sync.Mutex
-	robotProjectsCache    robotProjectsSnapshot
-	pluginStatusMu        sync.Mutex
-	pluginStatusCache     map[string]*pluginStatusSnapshot
+	pm2Status                func(string) (robot.PM2Status, error)
+	requestID                atomic.Uint64
+	nodeID                   string
+	directoryRoots           []string
+	events                   *robotEventHub
+	eventGateway             *eventGateway
+	operationEvents          *OperationEventStore
+	opsEvents                *opsEventHub
+	mcpEvents                *mcpEventHub
+	mcpMonitorStop           chan struct{}
+	pluginEventsStop         chan struct{}
+	updateMonitorStop        chan struct{}
+	updateMu                 sync.Mutex
+	updateStateMu            sync.RWMutex
+	updateState              updateStatusState
+	requestUpdateShutdown    func()
+	robotProjectsMu          sync.Mutex
+	robotProjectsCache       robotProjectsSnapshot
+	pluginStatusMu           sync.Mutex
+	pluginStatusCache        map[string]*pluginStatusSnapshot
+	privilegeStore           *privilegeStore
+	sudoAttemptMu            sync.Mutex
+	sudoAttempts             map[string]sudoAttempt
+	runNapcatAPTDependencies func(context.Context, []byte) (string, error)
 }
 
 type pluginStatusSnapshot struct {
@@ -345,6 +349,18 @@ type pluginStatusSnapshot struct {
 	err       error
 	expiresAt time.Time
 	done      chan struct{}
+}
+
+type sudoAttempt struct {
+	Failures    int
+	LockedUntil time.Time
+}
+
+type setupPluginActionRequest struct {
+	Action       string            `json:"action"`
+	Confirm      bool              `json:"confirm"`
+	Params       map[string]string `json:"params"`
+	SudoPassword *string           `json:"sudoPassword"`
 }
 
 type updateStatusState struct {
@@ -456,6 +472,7 @@ func (r *ServerRuntime) Shutdown(ctx context.Context) error {
 				shutdownErr = err
 			}
 		}
+		s.privilegeStore.close()
 		select {
 		case <-ctx.Done():
 			if shutdownErr == nil {
@@ -578,7 +595,11 @@ func NewServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 		}
 	}
 	operationEvents := newOperationEventStore(filepath.Join(filepath.Dir(taskStore.TasksDir()), "operations", "events.db"))
-	s := &server{version: version, assets: assets, static: http.FileServer(http.FS(assets)), checker: system.NewChecker(), plugins: setupplugin.NewRegistry(), auth: identity, ai: aiManager, agentSessions: sessionStore, agentTaskStore: taskStore, agentTasks: tasks, taskService: &agent.TaskService{Manager: tasks}, goalStore: goalStore, opsStore: opsStore, opsPaused: opsStartupErr != nil, goalSchedulerStop: make(chan struct{}), goalRunning: map[string]bool{}, agentConfirms: newAgentConfirmManager(), development: map[string]developmentProcess{}, webviewRuntimes: map[string]*webViewRuntime{}, stopping: map[string]bool{}, consoleCache: map[string]consoleSnapshot{}, outputBuffers: map[string]*operationOutputBuffer{}, directoryRoots: managedDirectoryRoots(), events: newRobotEventHub(), eventGateway: newEventGateway(), operationEvents: operationEvents, operations: operationEvents.snapshot(), opsEvents: newOpsEventHub(), mcpEvents: newMCPEventHub(), mcpMonitorStop: make(chan struct{}), pluginEventsStop: make(chan struct{}), updateMonitorStop: make(chan struct{}), updateState: updateStatusState{Update: releases.Update{Current: version}}, nodeID: fmt.Sprintf("%s-%d", hostname(), os.Getpid()), pluginStatusCache: map[string]*pluginStatusSnapshot{}}
+	privileges, privilegeErr := newPrivilegeStoreAt(filepath.Join(filepath.Dir(taskStore.TasksDir()), "privileges"))
+	if privilegeErr != nil {
+		log.Printf("权限审计存储不可用：%v", privilegeErr)
+	}
+	s := &server{version: version, assets: assets, static: http.FileServer(http.FS(assets)), checker: system.NewChecker(), plugins: setupplugin.NewRegistry(), auth: identity, ai: aiManager, agentSessions: sessionStore, agentTaskStore: taskStore, agentTasks: tasks, taskService: &agent.TaskService{Manager: tasks}, goalStore: goalStore, opsStore: opsStore, opsPaused: opsStartupErr != nil, goalSchedulerStop: make(chan struct{}), goalRunning: map[string]bool{}, agentConfirms: newAgentConfirmManager(), development: map[string]developmentProcess{}, webviewRuntimes: map[string]*webViewRuntime{}, stopping: map[string]bool{}, consoleCache: map[string]consoleSnapshot{}, outputBuffers: map[string]*operationOutputBuffer{}, directoryRoots: managedDirectoryRoots(), events: newRobotEventHub(), eventGateway: newEventGateway(), operationEvents: operationEvents, operations: operationEvents.snapshot(), opsEvents: newOpsEventHub(), mcpEvents: newMCPEventHub(), mcpMonitorStop: make(chan struct{}), pluginEventsStop: make(chan struct{}), updateMonitorStop: make(chan struct{}), updateState: updateStatusState{Update: releases.Update{Current: version}}, nodeID: fmt.Sprintf("%s-%d", hostname(), os.Getpid()), pluginStatusCache: map[string]*pluginStatusSnapshot{}, privilegeStore: privileges, sudoAttempts: map[string]sudoAttempt{}, runNapcatAPTDependencies: system.InstallNapCatAPTDependencies}
 	if opsStartupErr != nil {
 		log.Printf("AI 运维 SQLite 初始化失败，已回退 JSON 并暂停自动维护: %v", opsStartupErr)
 	}
@@ -816,6 +837,9 @@ func NewServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	mux.HandleFunc("/api/v1/system/ssh", s.sshHandler)
 	mux.HandleFunc("/api/v1/system/mcp", s.systemMCPHandler)
 	mux.HandleFunc("/api/v1/system/events", s.systemEventsHandler)
+	mux.HandleFunc("/api/v1/system/privileged/status", s.privilegedStatusHandler)
+	mux.HandleFunc("/api/v1/system/privileged/audit", s.privilegedAuditHandler)
+	mux.HandleFunc("/api/v1/system/privileged/napcat-dependencies", s.napcatDependenciesHandler)
 	mux.HandleFunc("/api/v1/directories", s.directoryHandler)
 	mux.HandleFunc("/api/v1/catalog", s.catalogHandler)
 	mux.HandleFunc("/api/v1/catalog/versions", s.catalogVersionsHandler)
@@ -1558,13 +1582,24 @@ func (s *server) setupPluginActionHandler(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusNotFound, "未找到 Setup 插件操作。")
 		return
 	}
-	var input struct {
-		Action  string            `json:"action"`
-		Confirm bool              `json:"confirm"`
-		Params  map[string]string `json:"params"`
-	}
+	var input setupPluginActionRequest
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil || input.Action == "" {
 		writeError(w, http.StatusBadRequest, "请选择要执行的插件操作。")
+		return
+	}
+	if isApprovedSudoAction(parts[0], input.Action) {
+		// Compatibility route. The browser uses the dedicated host endpoint,
+		// but this alias retains existing local clients without returning the
+		// password to the plugin runner.
+		s.handleApprovedSudoAction(w, r, parts[0], input)
+		return
+	}
+	if parts[0] == "alemonx-network" && (input.Action == "apply-plan" || input.Action == "undo-last") {
+		s.handleNetworkPrivilegedAction(w, r, input)
+		return
+	}
+	if input.SudoPassword != nil {
+		writeError(w, http.StatusBadRequest, "此操作不接受系统管理员密码。")
 		return
 	}
 	created := operationTask{ID: "setup-" + time.Now().Format("20060102150405.000000000"), Root: "", Action: "setup:" + parts[0] + ":" + input.Action, Status: "running", CreatedAt: time.Now()}
@@ -1578,8 +1613,89 @@ func (s *server) setupPluginActionHandler(w http.ResponseWriter, r *http.Request
 		result, err := s.plugins.RunResultWithProgress(parts[0], input.Action, input.Params, input.Confirm, func(event setupplugin.Progress) {
 			s.updateOperation(created.ID, event.Percent, event.Message, "", false)
 		})
+		if err == nil && parts[0] == "alemonx-network" && input.Action == "plan" {
+			if s.privilegeStore == nil {
+				s.updateOperationData(created.ID, 100, result.Output, "权限审计存储不可用", nil, true)
+				return
+			}
+			status, _ := s.auth.Status(s.authToken(r))
+			stored, storeErr := s.privilegeStore.saveNetworkPlan(result.Data, status.Account)
+			if storeErr != nil {
+				s.updateOperationData(created.ID, 100, result.Output, storeErr.Error(), nil, true)
+				return
+			}
+			result.Data = stored
+		}
 		if err != nil {
 			s.updateOperationData(created.ID, 100, result.Output, err.Error(), result.Data, true)
+			return
+		}
+		s.updateOperationData(created.ID, 100, result.Output, "", result.Data, true)
+	}()
+	writeJSON(w, http.StatusAccepted, created)
+}
+
+func (s *server) handleNetworkPrivilegedAction(w http.ResponseWriter, r *http.Request, input setupPluginActionRequest) {
+	if input.SudoPassword != nil || !input.Confirm || !s.localPrivilegeRequest(r) {
+		writeError(w, http.StatusForbidden, "网络系统变更仅允许已确认的本机桌面权限操作。")
+		return
+	}
+	status, err := s.auth.Status(s.authToken(r))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if status.Enabled && (!status.Authenticated || !s.auth.Authorize(s.authToken(r), "system.manage")) {
+		writeError(w, http.StatusForbidden, "当前账户没有系统变更权限。")
+		return
+	}
+	var plan networkPlan
+	policyAction := input.Action
+	if input.Action == "apply-plan" {
+		if len(input.Params) != 1 {
+			writeError(w, http.StatusBadRequest, "网络应用仅接受宿主签发的计划 ID。")
+			return
+		}
+		if err := s.plugins.PrivilegeAvailability("alemonx-network", "apply-plan"); err != nil {
+			writeError(w, http.StatusForbidden, err.Error())
+			return
+		}
+		plan, err = s.privilegeStore.consumeNetworkPlan(input.Params["planID"], status.Account)
+	} else {
+		if err := s.plugins.PrivilegeAvailability("alemonx-network", "undo-last"); err != nil {
+			writeError(w, http.StatusForbidden, err.Error())
+			return
+		}
+		plan, err = s.privilegeStore.latestUndoPlan()
+	}
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	params := map[string]string{"operation": plan.Operation}
+	for key, value := range plan.Params {
+		params[key] = value
+	}
+	if plan.Fingerprint != "" {
+		params["__alxFingerprint"] = plan.Fingerprint
+	}
+	created := operationTask{ID: "setup-" + time.Now().Format("20060102150405.000000000"), Action: "setup:alemonx-network:" + policyAction, Status: "running", Output: "正在请求系统管理员授权…", CreatedAt: time.Now()}
+	s.mu.Lock()
+	s.operations = append([]operationTask{created}, s.operations...)
+	if len(s.operations) > 40 {
+		s.operations = s.operations[:40]
+	}
+	s.mu.Unlock()
+	go func() {
+		result, runErr := s.plugins.RunPrivilegedApproved("alemonx-network", policyAction, "apply-approved-plan", params, func(event setupplugin.Progress) {
+			s.updateOperation(created.ID, event.Percent, event.Message, "", false)
+		})
+		if runErr != nil {
+			s.updateOperationData(created.ID, 100, result.Output, runErr.Error(), result.Data, true)
+			return
+		}
+		if auditErr := s.privilegeStore.appendAudit(plan.Operation, plan.Params, result.Output, status.Account); auditErr != nil {
+			s.updateOperationData(created.ID, 100, result.Output, auditErr.Error(), result.Data, true)
 			return
 		}
 		s.updateOperationData(created.ID, 100, result.Output, "", result.Data, true)
@@ -1781,6 +1897,208 @@ func (s *server) startMCPStatusMonitor() {
 			}
 		}
 	}()
+}
+
+// isApprovedSudoAction is a host-owned allowlist. A plugin manifest never
+// grants a downloaded executor arbitrary root access merely by naming an
+// action; each new operation must be reviewed in this process.
+func isApprovedSudoAction(pluginID, action string) bool {
+	return pluginID == "alemonx-qq" && action == system.NapCatAPTDependencyAction
+}
+
+func (s *server) privilegedStatusHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
+		return
+	}
+	status := system.CurrentPrivilegeStatus()
+	audit := s.privilegeStore.auditStatus(status.Version)
+	networkReason := s.plugins.PrivilegeAvailability("alemonx-network", "apply-plan")
+	networkEnabled := status.Enabled && networkReason == nil && audit.Valid
+	response := map[string]any{"privilege": status, "audit": audit, "network": map[string]any{"enabled": networkEnabled}}
+	if networkReason != nil {
+		response["network"] = map[string]any{"enabled": false, "reason": networkReason.Error()}
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (s *server) privilegedAuditHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet || r.URL.Query().Get("plugin") != "alemonx-network" {
+		writeError(w, http.StatusBadRequest, "仅支持读取网络插件的权限审计。")
+		return
+	}
+	items, err := s.privilegeStore.auditItems()
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items, "audit": s.privilegeStore.auditStatus(system.CurrentPrivilegeStatus().Version)})
+}
+
+func (s *server) napcatDependenciesHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
+		return
+	}
+	var input setupPluginActionRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&input); err != nil || input.Action != system.NapCatAPTDependencyAction {
+		writeError(w, http.StatusBadRequest, "仅支持安装固定的 NapCat Linux 系统依赖。")
+		return
+	}
+	s.handleApprovedSudoAction(w, r, "alemonx-qq", input)
+}
+
+func (s *server) handleApprovedSudoAction(w http.ResponseWriter, r *http.Request, pluginID string, input setupPluginActionRequest) {
+	if input.SudoPassword == nil || strings.TrimSpace(*input.SudoPassword) == "" {
+		writeError(w, http.StatusBadRequest, "请输入当前系统账户的 sudo 密码。")
+		return
+	}
+	if !input.Confirm {
+		writeError(w, http.StatusBadRequest, "请先确认安装固定的 NapCat 系统依赖。")
+		return
+	}
+	if len(input.Params) != 0 {
+		writeError(w, http.StatusBadRequest, "系统依赖安装不接受额外参数。")
+		return
+	}
+	if !s.localPrivilegeRequest(r) {
+		writeError(w, http.StatusForbidden, "系统管理员密码只能在本机桌面工作台中使用，反代和线上部署已禁用此操作。")
+		return
+	}
+	status, err := s.auth.Status(s.authToken(r))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !status.Enabled || !status.Authenticated || !status.SuperAdmin {
+		writeError(w, http.StatusForbidden, "只有已登录的超级管理员可以安装系统依赖。")
+		return
+	}
+	plugin, err := s.plugins.Find(pluginID)
+	if err != nil || plugin.Online || !plugin.Enabled {
+		writeError(w, http.StatusBadRequest, "NapCat QQ 系统插件未安装或已停用。")
+		return
+	}
+	key := sudoAttemptKey(status.Account, r, pluginID, input.Action)
+	if err := s.checkSudoAttempt(key); err != nil {
+		writeError(w, http.StatusTooManyRequests, err.Error())
+		return
+	}
+	password := []byte(*input.SudoPassword)
+	*input.SudoPassword = ""
+	input.SudoPassword = nil
+	created := operationTask{ID: "setup-" + time.Now().Format("20060102150405.000000000"), Root: "", Action: "setup:" + pluginID + ":" + input.Action, Status: "running", Output: "等待管理员授权…", CreatedAt: time.Now()}
+	s.mu.Lock()
+	s.operations = append([]operationTask{created}, s.operations...)
+	if len(s.operations) > 40 {
+		s.operations = s.operations[:40]
+	}
+	s.mu.Unlock()
+	go func() {
+		defer clearSudoPassword(password)
+		s.updateOperation(created.ID, 5, "正在验证管理员授权…", "", false)
+		ctx, cancel := context.WithTimeout(context.Background(), system.NapCatAPTTimeout)
+		defer cancel()
+		runDependencies := s.runNapcatAPTDependencies
+		if runDependencies == nil {
+			runDependencies = system.InstallNapCatAPTDependencies
+		}
+		output, runErr := runDependencies(ctx, password)
+		if errors.Is(runErr, system.ErrSudoPasswordInvalid) {
+			s.recordSudoPasswordFailure(key)
+		} else if runErr == nil {
+			s.clearSudoAttempts(key)
+		}
+		if runErr != nil {
+			s.updateOperation(created.ID, 100, "", runErr.Error(), true)
+			return
+		}
+		s.updateOperation(created.ID, 100, output, "", true)
+	}()
+	writeJSON(w, http.StatusAccepted, created)
+}
+
+func (s *server) localPrivilegeRequest(r *http.Request) bool {
+	status := system.CurrentPrivilegeStatus()
+	if !status.Enabled || !requestIsLoopback(r) {
+		return false
+	}
+	for _, header := range []string{"Forwarded", "X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto"} {
+		if strings.TrimSpace(r.Header.Get(header)) != "" {
+			return false
+		}
+	}
+	return true
+}
+
+// clearSudoPassword is intentionally local to the host. It also protects
+// test substitutes and future executor changes: the web layer never retains
+// the transient password after the one fixed sudo command returns.
+func clearSudoPassword(password []byte) {
+	for index := range password {
+		password[index] = 0
+	}
+}
+
+func requestIsLoopback(r *http.Request) bool {
+	host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
+	if err != nil {
+		return false
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+func sudoAttemptKey(account string, r *http.Request, pluginID, action string) string {
+	host, _, _ := net.SplitHostPort(r.RemoteAddr)
+	return strings.Join([]string{account, host, pluginID, action}, "\x00")
+}
+
+func (s *server) checkSudoAttempt(key string) error {
+	if s.privilegeStore != nil {
+		if err := s.privilegeStore.checkSudoAttempt(key); err != nil {
+			return err
+		}
+	}
+	s.sudoAttemptMu.Lock()
+	defer s.sudoAttemptMu.Unlock()
+	if s.sudoAttempts == nil {
+		s.sudoAttempts = map[string]sudoAttempt{}
+	}
+	attempt := s.sudoAttempts[key]
+	if time.Now().Before(attempt.LockedUntil) {
+		return errors.New("密码连续错误次数过多，请在 10 分钟后再试")
+	}
+	return nil
+}
+
+func (s *server) recordSudoPasswordFailure(key string) {
+	if s.privilegeStore != nil {
+		_ = s.privilegeStore.recordSudoFailure(key)
+		return
+	}
+	s.sudoAttemptMu.Lock()
+	defer s.sudoAttemptMu.Unlock()
+	if s.sudoAttempts == nil {
+		s.sudoAttempts = map[string]sudoAttempt{}
+	}
+	attempt := s.sudoAttempts[key]
+	attempt.Failures++
+	if attempt.Failures >= 3 {
+		attempt.Failures = 0
+		attempt.LockedUntil = time.Now().Add(10 * time.Minute)
+	}
+	s.sudoAttempts[key] = attempt
+}
+
+func (s *server) clearSudoAttempts(key string) {
+	if s.privilegeStore != nil {
+		s.privilegeStore.clearSudoAttempt(key)
+		return
+	}
+	s.sudoAttemptMu.Lock()
+	delete(s.sudoAttempts, key)
+	s.sudoAttemptMu.Unlock()
 }
 
 // startUpdateStatusMonitor performs the only periodic release lookup on the
@@ -4936,13 +5254,27 @@ func (s *server) loggableRequestBody(c *gin.Context) string {
 		}
 		return text
 	}
-	for _, key := range []string{"token", "password", "confirmation", "content", "message", "values"} {
-		if _, ok := fields[key]; ok {
-			fields[key] = "[REDACTED]"
-		}
-	}
+	redactRequestFields(fields)
 	encoded, _ := json.Marshal(fields)
 	return string(encoded)
+}
+
+func redactRequestFields(value any) {
+	switch item := value.(type) {
+	case map[string]any:
+		for key, child := range item {
+			switch strings.ToLower(strings.ReplaceAll(key, "-", "")) {
+			case "token", "password", "sudopassword", "confirmation", "content", "message", "values":
+				item[key] = "[REDACTED]"
+			default:
+				redactRequestFields(child)
+			}
+		}
+	case []any:
+		for _, child := range item {
+			redactRequestFields(child)
+		}
+	}
 }
 
 func writeJSON(w http.ResponseWriter, status int, data any) {

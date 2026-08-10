@@ -55,24 +55,26 @@ type Navigation struct {
 // no file from its directory is executed during discovery. A plugin is usable
 // only when it declares a web root (its UI) and has an executor.
 type Plugin struct {
-	ID           string            `json:"id"`
-	Name         string            `json:"name"`
-	Version      string            `json:"version"`
-	Description  string            `json:"description,omitempty"`
-	Platforms    []string          `json:"platforms,omitempty"`
-	Navigation   Navigation        `json:"navigation"`
-	Runtime      string            `json:"runtime,omitempty"`
-	Entry        map[string]string `json:"entry,omitempty"`
-	Development  *RuntimeSpec      `json:"development,omitempty"`
-	Web          *WebSpec          `json:"web,omitempty"`
-	Services     []ServiceSpec     `json:"services,omitempty"`
-	Permissions  Permissions       `json:"permissions,omitempty"`
-	Runnable     bool              `json:"runnable"`
-	Enabled      bool              `json:"enabled"`
-	Online       bool              `json:"online,omitempty"`
-	Source       string            `json:"source,omitempty"`
-	InstalledTag string            `json:"installedTag,omitempty"`
-	Fingerprint  string            `json:"fingerprint,omitempty"`
+	ID             string            `json:"id"`
+	Name           string            `json:"name"`
+	Version        string            `json:"version"`
+	Description    string            `json:"description,omitempty"`
+	Platforms      []string          `json:"platforms,omitempty"`
+	Navigation     Navigation        `json:"navigation"`
+	Runtime        string            `json:"runtime,omitempty"`
+	Entry          map[string]string `json:"entry,omitempty"`
+	Development    *RuntimeSpec      `json:"development,omitempty"`
+	Web            *WebSpec          `json:"web,omitempty"`
+	Services       []ServiceSpec     `json:"services,omitempty"`
+	Permissions    Permissions       `json:"permissions,omitempty"`
+	Runnable       bool              `json:"runnable"`
+	Enabled        bool              `json:"enabled"`
+	Online         bool              `json:"online,omitempty"`
+	Source         string            `json:"source,omitempty"`
+	InstalledTag   string            `json:"installedTag,omitempty"`
+	InstalledAsset string            `json:"installedAsset,omitempty"`
+	ArchiveSHA256  string            `json:"archiveSha256,omitempty"`
+	Fingerprint    string            `json:"fingerprint,omitempty"`
 }
 
 // Permissions explicitly opts a plugin into individually elevated actions.
@@ -334,7 +336,7 @@ func pluginSetsEqual(a, b []Plugin) bool {
 func pluginsEqual(a, b Plugin) bool {
 	return a.ID == b.ID && a.Name == b.Name && a.Version == b.Version &&
 		a.Description == b.Description && a.Runnable == b.Runnable &&
-		a.Enabled == b.Enabled && a.Online == b.Online && a.InstalledTag == b.InstalledTag && a.Fingerprint == b.Fingerprint &&
+		a.Enabled == b.Enabled && a.Online == b.Online && a.InstalledTag == b.InstalledTag && a.InstalledAsset == b.InstalledAsset && a.ArchiveSHA256 == b.ArchiveSHA256 && a.Fingerprint == b.Fingerprint &&
 		strings.Join(a.Platforms, ",") == strings.Join(b.Platforms, ",") &&
 		a.Navigation.Label == b.Navigation.Label && a.Navigation.Icon == b.Navigation.Icon &&
 		a.Navigation.Order == b.Navigation.Order && webRootEqual(a.Web, b.Web) &&
@@ -543,19 +545,13 @@ func (r *Registry) RunResultWithProgress(id, actionID string, params map[string]
 	if plugin.RequiresElevation(actionID) && !confirmed {
 		return ActionResult{}, errors.New("此操作需要在界面确认后才会请求系统管理员权限")
 	}
-	requestPayload := request{Protocol: "alx/v1", Method: "run", Action: actionID, Params: params, Confirm: confirmed}
 	if plugin.RequiresElevation(actionID) {
-		if configDir, configErr := os.UserConfigDir(); configErr == nil {
-			requestPayload.StateDir = filepath.Join(configDir, "alx-network")
-		}
+		return ActionResult{}, errors.New("系统权限操作必须经宿主权限代理执行")
 	}
+	requestPayload := request{Protocol: "alx/v1", Method: "run", Action: actionID, Params: params, Confirm: confirmed}
 	payload, err := json.Marshal(requestPayload)
 	if err != nil {
 		return ActionResult{}, err
-	}
-	if plugin.RequiresElevation(actionID) {
-		output, runErr := system.RunWithPrivilegesInput(plugin.Source, entry.name, entry.args, payload)
-		return parseActionResult(output, runErr)
 	}
 	command := exec.Command(entry.name, entry.args...)
 	command.Dir = plugin.Source
@@ -606,6 +602,52 @@ func (r *Registry) RunResultWithProgress(id, actionID string, params map[string]
 		return ActionResult{}, fmt.Errorf("插件执行失败：%s", message)
 	}
 	return parseActionResult(output, nil)
+}
+
+// RunPrivilegedApproved is intentionally separate from RunResultWithProgress:
+// only the host broker may choose the policy action and the runner action. A
+// downloaded manifest can describe a button but can never elevate itself.
+func (r *Registry) RunPrivilegedApproved(id, policyAction, runnerAction string, params map[string]string, progress func(Progress)) (ActionResult, error) {
+	plugin, err := r.Find(id)
+	if err != nil {
+		return ActionResult{}, err
+	}
+	if plugin.Online || !plugin.Enabled || !plugin.Runnable {
+		return ActionResult{}, errors.New("系统插件未安装、已停用或没有可用执行器")
+	}
+	if !plugin.RequiresElevation(policyAction) {
+		return ActionResult{}, errors.New("该操作未被插件声明为系统变更")
+	}
+	entry, err := plugin.entryPath()
+	if err != nil {
+		return ActionResult{}, err
+	}
+	if err := system.AuthorizePluginPrivilege(system.PluginPrivilegeIdentity{PluginID: plugin.ID, Action: policyAction, Tag: plugin.InstalledTag, Asset: plugin.InstalledAsset, ArchiveSHA256: plugin.ArchiveSHA256, RunnerPath: entry.name, RunnerArgs: entry.args, DeclaredActions: plugin.Permissions.ElevatedActions}); err != nil {
+		return ActionResult{}, err
+	}
+	payload, err := json.Marshal(request{Protocol: "alx/v1", Method: "run", Action: runnerAction, Params: params, Confirm: true})
+	if err != nil {
+		return ActionResult{}, err
+	}
+	output, runErr := system.RunWithPrivilegesInput(plugin.Source, entry.name, entry.args, payload)
+	return parseActionResult(output, runErr)
+}
+
+// PrivilegeAvailability exposes only a safe readiness result for the host UI.
+// It lets a plugin show preview-only mode before a user reaches an OS prompt.
+func (r *Registry) PrivilegeAvailability(id, action string) error {
+	plugin, err := r.Find(id)
+	if err != nil {
+		return err
+	}
+	if plugin.Online || !plugin.Enabled || !plugin.Runnable || !plugin.RequiresElevation(action) {
+		return errors.New("当前插件没有可用的受控系统权限操作")
+	}
+	entry, err := plugin.entryPath()
+	if err != nil {
+		return err
+	}
+	return system.CheckPluginPrivilege(system.PluginPrivilegeIdentity{PluginID: plugin.ID, Action: action, Tag: plugin.InstalledTag, Asset: plugin.InstalledAsset, ArchiveSHA256: plugin.ArchiveSHA256, RunnerPath: entry.name, RunnerArgs: entry.args, DeclaredActions: plugin.Permissions.ElevatedActions})
 }
 
 func parseActionResult(output []byte, runErr error) (ActionResult, error) {
@@ -740,6 +782,8 @@ func load(directory string) (Plugin, error) {
 		if readErr == nil && json.Unmarshal(metadataBytes, &metadata) == nil && metadata.ID == plugin.ID && validReleaseTag(metadata.Tag) && len(metadata.ArchiveSHA256) == 64 && metadata.Fingerprint == installFingerprint(metadata.ID, metadata.Tag, metadata.Asset, metadata.ArchiveSHA256) {
 			plugin.Version = strings.TrimPrefix(metadata.Tag, "v")
 			plugin.InstalledTag = metadata.Tag
+			plugin.InstalledAsset = metadata.Asset
+			plugin.ArchiveSHA256 = metadata.ArchiveSHA256
 			plugin.Fingerprint = metadata.Fingerprint
 		}
 	}

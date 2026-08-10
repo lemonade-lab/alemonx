@@ -79,13 +79,13 @@ func newTestServer() http.Handler {
 // and keeping the body readable by the downstream handler.
 func TestLoggableRequestBodyRedactsSecretsAndRestoresStream(t *testing.T) {
 	s := newStatefulTestServer()
-	payload := `{"action":"npm-publish","token":"sekrit","package":"@alemonjs/onebot","values":{"a":"b"}}`
+	payload := `{"action":"npm-publish","token":"sekrit","sudoPassword":"also-sekrit","package":"@alemonjs/onebot","values":{"password":"nested-sekrit"}}`
 	recorder := httptest.NewRecorder()
 	ginCtx, _ := gin.CreateTestContext(recorder)
 	ginCtx.Request = httptest.NewRequest(http.MethodPost, "/api/v1/robot", bytes.NewBufferString(payload))
 	logged := s.loggableRequestBody(ginCtx)
 	if strings.Contains(logged, "sekrit") {
-		t.Fatalf("token leaked into log: %s", logged)
+		t.Fatalf("secret leaked into log: %s", logged)
 	}
 	if !strings.Contains(logged, `"action":"npm-publish"`) {
 		t.Fatalf("action missing from log: %s", logged)
@@ -97,6 +97,151 @@ func TestLoggableRequestBodyRedactsSecretsAndRestoresStream(t *testing.T) {
 	after, err := io.ReadAll(ginCtx.Request.Body)
 	if err != nil || string(after) != payload {
 		t.Fatalf("body not restored: %q, %v", after, err)
+	}
+}
+
+func newSudoActionTestServer(t *testing.T, run func(context.Context, []byte) (string, error)) (*server, string) {
+	t.Helper()
+	if err := system.ConfigurePrivilegedMode("127.0.0.1", false); err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	pluginRoot := filepath.Join(root, "alemonx-qq")
+	if err := os.MkdirAll(filepath.Join(pluginRoot, "web"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	key := runtime.GOOS + "-" + runtime.GOARCH
+	manifest := `{"id":"alemonx-qq","name":"QQ","version":"1.0.0","entry":{"` + key + `":"runner"},"web":{"root":"web"}}`
+	if err := os.WriteFile(filepath.Join(pluginRoot, "alx.json"), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	identity, err := access.NewAt(filepath.Join(t.TempDir(), "auth.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := identity.Enable("root", "test-password", "test-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &server{
+		plugins:                  setupplugin.NewRegistry(root),
+		auth:                     identity,
+		operations:               []operationTask{},
+		events:                   newRobotEventHub(),
+		sudoAttempts:             map[string]sudoAttempt{},
+		runNapcatAPTDependencies: run,
+	}, token
+}
+
+func sudoActionRequest(t *testing.T, token, remote, password string, confirm bool) *http.Request {
+	t.Helper()
+	body := fmt.Sprintf(`{"action":"napcat-install-dependencies","confirm":%t,"sudoPassword":%q}`, confirm, password)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/setup/plugins/alemonx-qq/actions", strings.NewReader(body))
+	request.RemoteAddr = remote
+	request.AddCookie(&http.Cookie{Name: authCookieName, Value: token})
+	return request
+}
+
+func waitForSetupOperation(t *testing.T, s *server) operationTask {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		s.mu.RLock()
+		if len(s.operations) != 0 && s.operations[0].Status != "running" {
+			operation := s.operations[0]
+			s.mu.RUnlock()
+			return operation
+		}
+		s.mu.RUnlock()
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("sudo setup operation did not finish")
+	return operationTask{}
+}
+
+func TestNapcatSudoActionRequiresLocalSuperAdminAndConfirmation(t *testing.T) {
+	s, token := newSudoActionTestServer(t, func(context.Context, []byte) (string, error) {
+		t.Fatal("sudo executor must not run when the request is rejected")
+		return "", nil
+	})
+	if _, err := s.auth.CreateAccount("operator", "operator-password", "operator-password", nil); err != nil {
+		t.Fatal(err)
+	}
+	operatorToken, err := s.auth.Login("operator", "operator-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, request := range map[string]*http.Request{
+		"remote":           sudoActionRequest(t, token, "203.0.113.10:4242", "password", true),
+		"unconfirmed":      sudoActionRequest(t, token, "127.0.0.1:4242", "password", false),
+		"unauthenticated":  sudoActionRequest(t, "", "127.0.0.1:4242", "password", true),
+		"ordinary-account": sudoActionRequest(t, operatorToken, "127.0.0.1:4242", "password", true),
+	} {
+		t.Run(name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			s.setupPluginActionHandler(recorder, request)
+			if recorder.Code != http.StatusForbidden && recorder.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, body=%s", recorder.Code, recorder.Body.String())
+			}
+		})
+	}
+}
+
+func TestNapcatSudoActionUsesTransientPasswordAndLocksAfterThreeFailures(t *testing.T) {
+	var received []byte
+	s, token := newSudoActionTestServer(t, func(_ context.Context, password []byte) (string, error) {
+		received = password
+		return "", system.ErrSudoPasswordInvalid
+	})
+	for attempt := 0; attempt < 3; attempt++ {
+		recorder := httptest.NewRecorder()
+		s.setupPluginActionHandler(recorder, sudoActionRequest(t, token, "127.0.0.1:4242", "only-once", true))
+		if recorder.Code != http.StatusAccepted {
+			t.Fatalf("attempt %d status = %d, body=%s", attempt+1, recorder.Code, recorder.Body.String())
+		}
+		operation := waitForSetupOperation(t, s)
+		if operation.Error != system.ErrSudoPasswordInvalid.Error() || strings.Contains(operation.Error, "only-once") || strings.Contains(operation.Output, "only-once") {
+			t.Fatalf("unsafe sudo operation result: %#v", operation)
+		}
+	}
+	if len(received) == 0 {
+		t.Fatal("sudo executor was not called")
+	}
+	for _, value := range received {
+		if value != 0 {
+			t.Fatal("host retained transient sudo password bytes")
+		}
+	}
+	recorder := httptest.NewRecorder()
+	s.setupPluginActionHandler(recorder, sudoActionRequest(t, token, "127.0.0.1:4242", "only-once", true))
+	if recorder.Code != http.StatusTooManyRequests {
+		t.Fatalf("locked attempt status = %d, body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestNormalPluginActionRejectsSudoPassword(t *testing.T) {
+	s := newStatefulTestServer()
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/setup/plugins/example/actions", strings.NewReader(`{"action":"status","sudoPassword":"never-forward"}`))
+	s.setupPluginActionHandler(recorder, request)
+	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "不接受系统管理员密码") {
+		t.Fatalf("normal action password rejection = %d %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestLocalPrivilegeRequestRejectsProxyHeaders(t *testing.T) {
+	if err := system.ConfigurePrivilegedMode("127.0.0.1", false); err != nil {
+		t.Fatal(err)
+	}
+	s := newStatefulTestServer()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/system/privileged/napcat-dependencies", nil)
+	request.RemoteAddr = "127.0.0.1:1234"
+	if !s.localPrivilegeRequest(request) {
+		t.Fatal("direct loopback request must be local")
+	}
+	request.Header.Set("X-Forwarded-For", "203.0.113.8")
+	if s.localPrivilegeRequest(request) {
+		t.Fatal("proxied request must not be treated as a local privilege request")
 	}
 }
 

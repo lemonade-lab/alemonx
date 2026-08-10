@@ -223,7 +223,11 @@ func main() {
 			log.Fatal("ALX_DEPLOYMENT=production 要求先启用本地身份认证（alx auth enable）")
 		}
 	}
-	serve(env("alx_BIND", "127.0.0.1"), port)
+	bind := env("alx_BIND", "127.0.0.1")
+	if err := system.ConfigurePrivilegedMode(bind, strings.EqualFold(strings.TrimSpace(os.Getenv("ALX_DEPLOYMENT")), "production")); err != nil {
+		log.Fatal(err)
+	}
+	serve(bind, port)
 }
 
 func authCommand(arguments []string, confirmed bool, account, password, confirmation string) {

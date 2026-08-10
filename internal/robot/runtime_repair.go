@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"alemonx/internal/pm2config"
 )
 
 // RuntimeRepairPlan is a safe, inspectable description of the changes needed
@@ -94,8 +96,10 @@ func (m Manager) RuntimeRepairPlan(root, mode string) (RuntimeRepairPlan, error)
 		config := filepath.Join(path, "pm2.config.cjs")
 		if !exists(config) {
 			plan.Automatic = append(plan.Automatic, "创建默认 PM2 配置")
-		} else if data, readErr := os.ReadFile(config); readErr == nil && string(data) != defaultPM2Config() {
+		} else if data, readErr := os.ReadFile(config); readErr == nil && !isManagedPM2Config(path, string(data)) {
 			plan.RequiresConfirmation = append(plan.RequiresConfirmation, "覆盖自定义 pm2.config.cjs（将先备份）")
+		} else if data, readErr := os.ReadFile(config); readErr == nil && string(data) != defaultPM2Config(path) {
+			plan.Automatic = append(plan.Automatic, "升级默认 PM2 配置，隔离同名项目进程")
 		}
 	}
 	if len(plan.Blocked) > 0 {
@@ -170,8 +174,14 @@ func (m Manager) ApplyRuntimeRepair(root, mode string, confirmOverrides bool) (R
 		manifest.Scripts["stop"] = "npx --yes pm2 stop pm2.config.cjs"
 		manifest.DevDependencies["pm2"] = "^5"
 		manifest.DevDependencies["yaml"] = "^2.6.0"
-		if err := os.WriteFile(filepath.Join(path, "pm2.config.cjs"), []byte(defaultPM2Config()), 0644); err != nil {
-			return result, err
+		configPath := filepath.Join(path, "pm2.config.cjs")
+		data, readErr := os.ReadFile(configPath)
+		if os.IsNotExist(readErr) || readErr == nil && string(data) != defaultPM2Config(path) {
+			if err := os.WriteFile(configPath, []byte(defaultPM2Config(path)), 0644); err != nil {
+				return result, err
+			}
+		} else if readErr != nil {
+			return result, readErr
 		}
 	}
 	if !exists(filepath.Join(path, "index.js")) && (mode == "app" || mode == "dev" || mode == "pm2" || mode == "all") {
@@ -271,8 +281,18 @@ func restoreRuntimeRepairFiles(root, backup string) error {
 	return nil
 }
 
-func defaultPM2Config() string {
-	return "const pm2 = globalThis.pm2;\n\nmodule.exports = pm2 || {\n  apps: [\n    {\n      name: 'alemonb',\n      script: './index.js',\n      env: {\n        NODE_ENV: 'production'\n      }\n    }\n  ]\n};\n"
+func defaultPM2Config(root string) string {
+	return pm2config.Config(root)
 }
+
+func isManagedPM2Config(root, config string) bool {
+	return config == defaultPM2Config(root) || config == legacyRepairPM2Config || config == legacyTemplatePM2Config || config == legacyDevTemplatePM2Config
+}
+
+const legacyRepairPM2Config = "const pm2 = globalThis.pm2;\n\nmodule.exports = pm2 || {\n  apps: [\n    {\n      name: 'alemonb',\n      script: './index.js',\n      env: {\n        NODE_ENV: 'production'\n      }\n    }\n  ]\n};\n"
+
+const legacyTemplatePM2Config = "module.exports = {\n  apps: [\n    {\n      name: 'alemonb',\n      script: './index.js',\n      env: {\n        NODE_ENV: 'production'\n      }\n    }\n  ]\n};\n"
+
+const legacyDevTemplatePM2Config = "/**\n * @type {{ apps: import(\"pm2\").StartOptions[] }}\n */\nmodule.exports = {\n  apps: [\n    {\n      name: 'alemonb',\n      script: './index.js',\n      env: {\n        NODE_ENV: 'production'\n      }\n    }\n  ]\n};\n"
 
 func exists(path string) bool { _, err := os.Stat(path); return err == nil }

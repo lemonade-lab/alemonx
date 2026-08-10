@@ -55,6 +55,45 @@ func TestRepairRuntimePM2UsesIndexJSEntry(t *testing.T) {
 	}
 }
 
+func TestRuntimeRepairUpgradesLegacyPM2ConfigWithoutTreatingItAsCustom(t *testing.T) {
+	root := t.TempDir()
+	writeWebViewFixture(t, filepath.Join(root, "package.json"), `{"name":"bot","dependencies":{"alemonjs":"^2"},"scripts":{}}`)
+	if err := os.WriteFile(filepath.Join(root, "app.js"), []byte("export default {}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "pm2.config.cjs"), []byte(legacyTemplatePM2Config), 0644); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := (Manager{}).RuntimeRepairPlan(root, "pm2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.RequiresConfirmation) != 0 {
+		t.Fatalf("legacy generated config should not require confirmation: %#v", plan)
+	}
+	if !strings.Contains(strings.Join(plan.Automatic, "\n"), "隔离同名项目进程") {
+		t.Fatalf("legacy PM2 config should be marked for upgrade: %#v", plan)
+	}
+}
+
+func TestRuntimeRepairPreservesCustomPM2ConfigUntilConfirmed(t *testing.T) {
+	root := t.TempDir()
+	writeWebViewFixture(t, filepath.Join(root, "package.json"), `{"name":"bot","dependencies":{"alemonjs":"^2"},"scripts":{}}`)
+	if err := os.WriteFile(filepath.Join(root, "app.js"), []byte("export default {}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "pm2.config.cjs"), []byte("module.exports = { apps: [{ name: 'my-custom-bot', script: './server.js' }] };\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := (Manager{}).RuntimeRepairPlan(root, "pm2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.RequiresConfirmation) != 1 {
+		t.Fatalf("custom PM2 config should require confirmation: %#v", plan)
+	}
+}
+
 // TestParsePM2ProcessesMapsJListFields verifies the pm2 jlist payload maps to
 // the table fields the UI renders.
 func TestParsePM2ProcessesMapsJListFields(t *testing.T) {

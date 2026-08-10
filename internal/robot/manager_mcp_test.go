@@ -7,6 +7,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"alemonx/internal/pm2config"
 )
 
 func TestMCPProjectFilesStayWithinSafeProjectWorkspace(t *testing.T) {
@@ -92,7 +94,7 @@ func TestRepairPM2CreatesRunnableProductionEntryAndConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, expected := range []string{"module.exports = pm2 ||", "name: 'alemonb'", "script: './index.js'", "NODE_ENV: 'production'"} {
+	for _, expected := range []string{"module.exports = {", "name: \"" + pm2config.Name(root) + "\"", "namespace: \"alemonx\"", "cwd: ", "script: './index.js'", "NODE_ENV: 'production'"} {
 		if !strings.Contains(string(config), expected) {
 			t.Errorf("pm2 config does not contain %q:\n%s", expected, config)
 		}

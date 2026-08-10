@@ -71,6 +71,33 @@ func TestDevelopmentTemplatePackagesFollowSelections(t *testing.T) {
 	}
 }
 
+func TestPM2TemplateGetsAnIsolatedProjectIdentity(t *testing.T) {
+	configs := make([]string, 0, 2)
+	for _, template := range []string{"dev", "bot"} {
+		root := filepath.Join(t.TempDir(), "same-name")
+		if err := copyTemplate(os.DirFS("../../templates"), template, root); err != nil {
+			t.Fatal(err)
+		}
+		if err := patchPackage(root, Config{Template: template, Language: "js", UsePM2: true, ImageMode: "none", StyleMode: "css"}); err != nil {
+			t.Fatal(err)
+		}
+		config, err := os.ReadFile(filepath.Join(root, "pm2.config.cjs"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		content := string(config)
+		for _, want := range []string{"name: \"alemonx-", "namespace: \"alemonx\"", "cwd: \"" + root + "\""} {
+			if !strings.Contains(content, want) {
+				t.Fatalf("%s generated PM2 config missing %q:\n%s", template, want, content)
+			}
+		}
+		configs = append(configs, content)
+	}
+	if configs[0] == configs[1] {
+		t.Fatal("development and robot projects with the same directory name must get separate PM2 identities")
+	}
+}
+
 func TestDevelopmentTemplateReactDependenciesFollowLanguage(t *testing.T) {
 	for _, language := range []string{"js", "ts"} {
 		t.Run(language, func(t *testing.T) {

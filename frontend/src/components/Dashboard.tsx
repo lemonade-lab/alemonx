@@ -8462,7 +8462,7 @@ function OperationLog({
       <small>
         {needsPermission
           ? '授权完成后，请回到这里重新执行本次操作。'
-          : '完整记录可在右上角的任务按钮中查看。'}
+          : ''}
       </small>
     </aside>
   )

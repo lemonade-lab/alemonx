@@ -13,6 +13,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"alemonx/internal/pm2config"
 )
 
 type Config struct {
@@ -255,6 +257,11 @@ func patchPackage(root string, config Config) error {
 	if config.UsePM2 {
 		dependencies["pm2"] = "^5"
 		dependencies["yaml"] = "^2.6.0"
+		// The embedded template is intentionally rewritten with this project's
+		// absolute path. This gives each project a stable, isolated PM2 identity.
+		if err := os.WriteFile(filepath.Join(root, "pm2.config.cjs"), []byte(pm2config.Config(root)), 0644); err != nil {
+			return err
+		}
 	}
 	if config.ImageMode != "react" {
 		remove("jsxp")
