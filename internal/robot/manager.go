@@ -226,6 +226,8 @@ type RuntimePackage struct {
 	Declared  bool   `json:"declared"`
 	Installed bool   `json:"installed"`
 	Version   string `json:"version,omitempty"`
+	Source    string `json:"source,omitempty"`
+	Logo      string `json:"logo,omitempty"`
 }
 
 type RuntimePreflight struct {
@@ -236,13 +238,149 @@ type RuntimePreflight struct {
 	DependenciesComplete bool     `json:"dependenciesComplete"`
 }
 
-var runtimePlatforms = []struct{ id, label, pkg string }{
+type platformCandidate struct{ id, label, pkg string }
+
+// builtinPlatforms are the well-known connection packages shown as installable
+// candidates. Discovered desktop.platform declarations always override them.
+var builtinPlatforms = []platformCandidate{
 	{"onebot", "OneBot", "@alemonjs/onebot"},
 	{"qq-bot", "QQ Bot", "@alemonjs/qq-bot"},
 	{"discord", "Discord", "@alemonjs/discord"},
 	{"bubble", "Bubble", "@alemonjs/bubble"},
 	{"kook", "KOOK", "@alemonjs/kook"},
 	{"telegram", "Telegram", "@alemonjs/telegram"},
+}
+
+// resolveRuntimePlatforms merges the builtin candidates with platform
+// connections declared by installed dependencies and backpack packages.
+// Dynamic declarations win for the same login identifier.
+func resolveRuntimePlatforms(project string) ([]RuntimePackage, error) {
+	data, err := os.ReadFile(filepath.Join(project, "package.json"))
+	if err != nil {
+		return nil, errors.New("无法读取 package.json")
+	}
+	var manifest struct {
+		Dependencies         map[string]string `json:"dependencies"`
+		DevDependencies      map[string]string `json:"devDependencies"`
+		OptionalDependencies map[string]string `json:"optionalDependencies"`
+	}
+	if json.Unmarshal(data, &manifest) != nil {
+		return nil, errors.New("package.json 无法识别")
+	}
+	declared := map[string]bool{}
+	for name := range manifest.Dependencies {
+		declared[name] = true
+	}
+	for name := range manifest.DevDependencies {
+		declared[name] = true
+	}
+	for name := range manifest.OptionalDependencies {
+		declared[name] = true
+	}
+	merged := map[string]RuntimePackage{}
+	for _, candidate := range builtinPlatforms {
+		item := RuntimePackage{ID: candidate.id, Label: candidate.label, Package: candidate.pkg, Source: "builtin"}
+		item.Declared = declared[item.Package]
+		if packageData, readErr := os.ReadFile(filepath.Join(project, "node_modules", filepath.FromSlash(item.Package), "package.json")); readErr == nil {
+			var installed struct {
+				Version string `json:"version"`
+			}
+			if json.Unmarshal(packageData, &installed) == nil {
+				item.Installed = true
+				item.Version = installed.Version
+			}
+		}
+		merged[item.ID] = item
+	}
+	for name := range declared {
+		packageFile := filepath.Join(project, "node_modules", filepath.FromSlash(name), "package.json")
+		if data, readErr := os.ReadFile(packageFile); readErr == nil {
+			mergeDeclaredPlatform(merged, data)
+		}
+	}
+	backpack := filepath.Join(project, "packages")
+	if entries, readErr := os.ReadDir(backpack); readErr == nil {
+		for _, entry := range entries {
+			if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
+				continue
+			}
+			packageFile := filepath.Join(backpack, entry.Name(), "package.json")
+			if data, readErr := os.ReadFile(packageFile); readErr == nil {
+				mergeDeclaredPlatform(merged, data)
+			}
+			if strings.HasPrefix(entry.Name(), "@") {
+				if scoped, scopedErr := os.ReadDir(filepath.Join(backpack, entry.Name())); scopedErr == nil {
+					for _, child := range scoped {
+						if child.IsDir() {
+							if data, readErr := os.ReadFile(filepath.Join(backpack, entry.Name(), child.Name(), "package.json")); readErr == nil {
+								mergeDeclaredPlatform(merged, data)
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	result := make([]RuntimePackage, 0, len(merged))
+	for _, item := range merged {
+		result = append(result, item)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		left, right := strings.ToLower(result[i].Label), strings.ToLower(result[j].Label)
+		if left == right {
+			return result[i].ID < result[j].ID
+		}
+		return left < right
+	})
+	return result, nil
+}
+
+// mergeDeclaredPlatform registers every desktop.platform entry of an installed
+// package. Dynamic entries override builtin candidates with the same ID.
+func mergeDeclaredPlatform(merged map[string]RuntimePackage, data []byte) {
+	var manifest struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+		Version     string `json:"version"`
+		Alemonjs    struct {
+			Desktop struct {
+				Logo     string `json:"logo"`
+				Platform []struct {
+					Name  string `json:"name"`
+					Value string `json:"value"`
+				} `json:"platform"`
+			} `json:"desktop"`
+		} `json:"alemonjs"`
+	}
+	if json.Unmarshal(data, &manifest) != nil || manifest.Name == "" {
+		return
+	}
+	for _, platform := range manifest.Alemonjs.Desktop.Platform {
+		if !yamlNamePattern.MatchString(platform.Name) {
+			continue
+		}
+		packageName := strings.TrimSpace(platform.Value)
+		if packageName == "" {
+			packageName = manifest.Name
+		}
+		label := strings.TrimSpace(manifest.Description)
+		if label == "" {
+			label = manifest.Name
+			if slash := strings.LastIndex(label, "/"); slash >= 0 {
+				label = label[slash+1:]
+			}
+		}
+		merged[platform.Name] = RuntimePackage{
+			ID:        platform.Name,
+			Label:     label,
+			Package:   packageName,
+			Declared:  true,
+			Installed: true,
+			Version:   manifest.Version,
+			Source:    "declared",
+			Logo:      manifest.Alemonjs.Desktop.Logo,
+		}
+	}
 }
 
 const maxMCPFileSize = 1024 * 1024
@@ -462,23 +600,11 @@ func (Manager) RuntimeOverview(root string) (RuntimeOverview, error) {
 	if _, err := os.Stat(filepath.Join(path, "pm2.config.cjs")); err == nil {
 		overview.PM2Configured = true
 	}
-	for _, platform := range runtimePlatforms {
-		item := RuntimePackage{ID: platform.id, Label: platform.label, Package: platform.pkg}
-		_, dependency := manifest.Dependencies[item.Package]
-		_, devDependency := manifest.DevDependencies[item.Package]
-		item.Declared = dependency || devDependency
-		packageFile := filepath.Join(path, "node_modules", filepath.FromSlash(item.Package), "package.json")
-		if packageData, readErr := os.ReadFile(packageFile); readErr == nil {
-			var installed struct {
-				Version string `json:"version"`
-			}
-			if json.Unmarshal(packageData, &installed) == nil {
-				item.Installed = true
-				item.Version = installed.Version
-			}
-		}
-		overview.Platforms = append(overview.Platforms, item)
+	platforms, platformErr := resolveRuntimePlatforms(path)
+	if platformErr != nil {
+		return RuntimeOverview{}, platformErr
 	}
+	overview.Platforms = platforms
 	return overview, nil
 }
 
@@ -513,22 +639,26 @@ func (m Manager) RuntimePreflight(root string) (RuntimePreflight, error) {
 	}
 	preflight.Login = strings.TrimSpace(match[1])
 	preflight.Summary = append(preflight.Summary, "登录连接："+preflight.Login)
-	for _, platform := range runtimePlatforms {
-		if platform.id != preflight.Login {
+	platforms, platformErr := resolveRuntimePlatforms(path)
+	if platformErr != nil {
+		return RuntimePreflight{}, platformErr
+	}
+	for _, platform := range platforms {
+		if platform.ID != preflight.Login {
 			continue
 		}
-		preflight.Package = platform.pkg
-		if _, _, installedErr := installedPackageManifest(path, platform.pkg); installedErr != nil {
-			preflight.Missing = append(preflight.Missing, "连接包 "+platform.pkg+" 未安装")
+		preflight.Package = platform.Package
+		if _, _, installedErr := installedPackageManifest(path, platform.Package); installedErr != nil {
+			preflight.Missing = append(preflight.Missing, "连接包 "+platform.Package+" 未安装")
 			return preflight, nil
 		}
-		definition, configErr := m.PackageConfig(root, platform.pkg)
+		definition, configErr := m.PackageConfig(root, platform.Package)
 		if configErr != nil {
-			preflight.Missing = append(preflight.Missing, "连接包 "+platform.pkg+" 配置无法读取")
+			preflight.Missing = append(preflight.Missing, "连接包 "+platform.Package+" 配置无法读取")
 			return preflight, nil
 		}
 		if len(definition.Fields) == 0 {
-			preflight.Summary = append(preflight.Summary, "连接包 "+platform.pkg+"：已安装，无额外配置")
+			preflight.Summary = append(preflight.Summary, "连接包 "+platform.Package+"：已安装，无额外配置")
 			return preflight, nil
 		}
 		for _, field := range definition.Fields {
@@ -536,8 +666,8 @@ func (m Manager) RuntimePreflight(root string) (RuntimePreflight, error) {
 			if label == "" {
 				label = field.Name
 			}
-			configured := strings.TrimSpace(definition.Values[field.Name]) != ""
-			if field.Required && !configured {
+			configured := !isConfigEmpty(definition.Values[field.Name])
+			if field.Required && !configured && !field.DefaultConfigured() {
 				preflight.Missing = append(preflight.Missing, label)
 			}
 			preflight.Summary = append(preflight.Summary, label+map[bool]string{true: "：已填写", false: "：未填写"}[configured])

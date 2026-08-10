@@ -868,6 +868,9 @@ func NewServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	mux.HandleFunc("/api/v1/robot/pm2-processes", s.robotPM2ProcessesHandler)
 	mux.HandleFunc("/api/v1/robot/app-port", s.robotAppPortHandler)
 	mux.HandleFunc("/api/v1/robot/app/", s.robotAppHandler)
+	mux.HandleFunc("/api/v1/robot/test-port", s.robotTestPortHandler)
+	mux.HandleFunc("/api/v1/robot/ports", s.robotPortsHandler)
+	mux.HandleFunc("/api/v1/robot/test/", s.robotTestHandler)
 	mux.HandleFunc("/api/v1/robot/runtime", s.robotRuntimeHandler)
 	mux.HandleFunc("/api/v1/robot/runtime/preflight", s.robotRuntimePreflightHandler)
 	mux.HandleFunc("/api/v1/robot/runtime/repair", s.robotRuntimeRepairHandler)
@@ -3139,6 +3142,115 @@ func (s *server) robotAppPortHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
+func (s *server) robotTestPortHandler(w http.ResponseWriter, r *http.Request) {
+	root := r.URL.Query().Get("root")
+	if root == "" {
+		writeError(w, http.StatusBadRequest, "请选择机器人目录。")
+		return
+	}
+	if r.Method == http.MethodGet {
+		if r.URL.Query().Get("probe") == "1" {
+			reachable, port, err := s.robots.TestPortReachable(root)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"reachable": reachable, "port": port})
+			return
+		}
+		info, err := s.robots.TestPort(root)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		sandbox, sandboxErr := s.robots.TestSandboxAvailable(root)
+		if sandboxErr != nil {
+			writeError(w, http.StatusBadRequest, sandboxErr.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"port":       info.Port,
+			"configured": info.Configured,
+			"sandbox":    sandbox,
+		})
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
+		return
+	}
+	var input struct {
+		Port int `json:"port"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, "请求内容无法识别。")
+		return
+	}
+	result, err := s.robots.SaveTestPort(root, input.Port)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+// robotPortStatus is the per-port payload of the proactive start preflight.
+// Owned marks an occupant that belongs to the same robot directory (a
+// supervised dev/app process, a stray process from an earlier run, or the
+// directory's PM2 service), so the UI can distinguish it from a real clash.
+type robotPortStatus struct {
+	Kind       string `json:"kind"`
+	Label      string `json:"label"`
+	Port       int    `json:"port"`
+	Configured bool   `json:"configured"`
+	Occupied   bool   `json:"occupied"`
+	PID        int    `json:"pid,omitempty"`
+	Process    string `json:"process,omitempty"`
+	Owned      bool   `json:"owned"`
+	Error      string `json:"error,omitempty"`
+}
+
+func (s *server) robotPortsHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
+		return
+	}
+	root := r.URL.Query().Get("root")
+	if root == "" {
+		writeError(w, http.StatusBadRequest, "请选择机器人目录。")
+		return
+	}
+	ports, err := s.robots.Ports(root)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	items := make([]robotPortStatus, 0, len(ports))
+	for _, info := range ports {
+		item := robotPortStatus{
+			Kind:       info.Kind,
+			Label:      info.Label,
+			Port:       info.Port,
+			Configured: info.Configured,
+		}
+		occupied, occupants := sniffPort(info.Port)
+		item.Occupied = occupied
+		for _, occupant := range occupants {
+			if item.PID == 0 && occupant.PID > 0 {
+				item.PID = occupant.PID
+			}
+			if item.Process == "" {
+				item.Process = occupant.Process
+			}
+			if s.portOccupantOwnedByRoot(root, occupant) {
+				item.Owned = true
+			}
+		}
+		items = append(items, item)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
 func (s *server) robotAppsHandler(w http.ResponseWriter, r *http.Request) {
 	root := r.URL.Query().Get("root")
 	if root == "" {
@@ -3373,6 +3485,7 @@ func (s *server) robotTasksHandler(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		Root    string `json:"root"`
 		Action  string `json:"action"`
+		Ready   string `json:"ready"`
 		Value   string `json:"value"`
 		Message string `json:"message"`
 		Package string `json:"package"`
@@ -3392,6 +3505,15 @@ func (s *server) robotTasksHandler(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.robots.Validate(input.Root); err != nil {
 		writeError(w, http.StatusBadRequest, "当前机器人目录不可用："+err.Error()+"。请在左侧移除后重新选择目录。")
 		return
+	}
+	// Proactively sniff the ports the robot will bind before any start action.
+	// An unrelated occupier is reported here instead of after the process boots
+	// and prints its bind error to the logs.
+	if input.Action == "dev" || input.Action == "app" || input.Action == "pm2" || input.Action == "pm2-reload" || input.Action == "pm2-restart" {
+		if blockers := s.robotStartPortBlockers(input.Root); len(blockers) > 0 {
+			writeError(w, http.StatusConflict, "启动前端口检查未通过："+strings.Join(blockers, " "))
+			return
+		}
 	}
 	created := operationTask{ID: "robot-" + time.Now().Format("20060102150405.000000000"), Root: input.Root, Action: input.Action, Status: "running", CreatedAt: time.Now()}
 	if input.Action == "dev-stop" || input.Action == "app-stop" {
@@ -3447,6 +3569,22 @@ func (s *server) robotTasksHandler(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		// 测试（testone）模式需要机器人 CBP 端口，同样先确保测试端口释放，
+		// 避免上一个进程（PM2/前台/残留 node）仍占着 17117 导致 EADDRINUSE。
+		readyKind := input.Ready
+		if readyKind == "" {
+			readyKind = "app"
+		}
+		if readyKind == "test" {
+			if info, portErr := s.robots.TestPort(input.Root); portErr == nil {
+				if !s.waitPortFreeOn(info.Port, 0) {
+					if err := s.forceFreePortOn(info.Port); err != nil {
+						writeError(w, http.StatusConflict, "测试端口仍被占用："+err.Error())
+						return
+					}
+				}
+			}
+		}
 		command, err := s.robots.DevelopmentCommand(input.Root)
 		if input.Action == "app" {
 			command, err = s.robots.ForegroundCommand(input.Root)
@@ -3480,7 +3618,7 @@ func (s *server) robotTasksHandler(w http.ResponseWriter, r *http.Request) {
 		s.addOperation(created)
 		log.Printf("[ROBOT %s] 开始 action=%s root=%q", created.ID, input.Action, created.Root)
 		go s.watchDevelopmentTask(created.ID, input.Root, input.Action, command)
-		go s.watchAppReadiness(created.ID, input.Root)
+		go s.watchPortReadiness(created.ID, input.Root, readyKind)
 		writeJSON(w, http.StatusAccepted, created)
 		return
 	}
@@ -3546,35 +3684,44 @@ func (s *server) addOperation(created operationTask) {
 	s.publishRobotEvent(robotEvent{Type: "task", TaskID: created.ID, Task: &created})
 }
 
-// watchAppReadiness keeps the browser from polling a port while a dev/app
+// watchPortReadiness keeps the browser from polling a port while a dev/app
 // process boots. It emits one terminal readiness event for the task; the
-// process lifecycle itself remains represented by ordinary task events.
-func (s *server) watchAppReadiness(id, root string) {
-	timeout := time.NewTimer(25 * time.Second)
+// process lifecycle itself remains represented by ordinary task events. kind
+// selects the port predicate and event names: "app" watches serverPort and
+// emits app-ready/app-failed, "test" watches the robot's top-level CBP port
+// and emits test-ready/test-failed.
+func (s *server) watchPortReadiness(id, root, kind string) {
+	readyType, failedType := "app-ready", "app-failed"
+	probe := s.robots.AppPortReachable
+	if kind == "test" {
+		readyType, failedType = "test-ready", "test-failed"
+		probe = s.robots.TestPortReachable
+	}
+	timeout := time.NewTimer(40 * time.Second)
 	defer timeout.Stop()
 	// Port checks are a server-side startup predicate, not a browser polling
 	// loop. Probe immediately and then back off so a slow dev server does not
 	// create two fixed requests per second for its entire boot window.
 	delay := 100 * time.Millisecond
 	for {
-		reachable, _, err := s.robots.AppPortReachable(root)
+		reachable, _, err := probe(root)
 		if err == nil && reachable {
-			s.publishRobotEvent(robotEvent{Type: "app-ready", TaskID: id})
+			s.publishRobotEvent(robotEvent{Type: readyType, TaskID: id})
 			return
 		}
 		if !s.developmentRunning(root) {
-			message := "应用进程在端口就绪前退出。"
+			message := "进程在端口就绪前退出。"
 			if err != nil {
-				message = "应用端口检测失败：" + err.Error()
+				message = "端口检测失败：" + err.Error()
 			}
-			s.publishRobotEvent(robotEvent{Type: "app-failed", TaskID: id, Text: message})
+			s.publishRobotEvent(robotEvent{Type: failedType, TaskID: id, Text: message})
 			return
 		}
 		wait := time.NewTimer(delay)
 		select {
 		case <-timeout.C:
 			wait.Stop()
-			s.publishRobotEvent(robotEvent{Type: "app-failed", TaskID: id, Text: "应用服务启动超时，端口未响应。"})
+			s.publishRobotEvent(robotEvent{Type: failedType, TaskID: id, Text: "服务启动超时，端口未响应。"})
 			return
 		case <-wait.C:
 			if delay < 2*time.Second {
@@ -3698,20 +3845,104 @@ func (s *server) stopLocalForStart(root string) error {
 	return nil
 }
 
-// waitPortFree polls the configured application port until the previous
-// process has released it. It retries for ~12 seconds so a graceful stop that
-// needs its 3-second force-stop fallback has time to finish.
-func (s *server) waitPortFree(root string, attempts int) bool {
+// robotStartPortBlockers proactively sniffs the ports the robot will bind
+// before a dev/app/PM2 process is launched. A port held by a process that does
+// not belong to this robot directory is reported immediately, instead of the
+// start completing and the occupancy only showing up in the process logs.
+func (s *server) robotStartPortBlockers(root string) []string {
+	ports, err := s.robots.Ports(root)
+	if err != nil {
+		return nil
+	}
+	var blockers []string
+	seen := map[int]bool{}
+	for _, info := range ports {
+		if seen[info.Port] {
+			continue
+		}
+		seen[info.Port] = true
+		occupied, occupants := sniffPort(info.Port)
+		if !occupied {
+			continue
+		}
+		owned := false
+		var first portOccupant
+		for _, occupant := range occupants {
+			if first.PID == 0 {
+				first = occupant
+			}
+			if s.portOccupantOwnedByRoot(root, occupant) {
+				owned = true
+				break
+			}
+		}
+		if owned {
+			continue
+		}
+		label := info.Label
+		if label == "" {
+			label = "端口"
+		}
+		if first.PID > 0 {
+			description := first.Process
+			if description == "" {
+				description = "未知进程"
+			}
+			blockers = append(blockers, fmt.Sprintf("%s %d 已被其他进程占用（PID %d：%s）。", label, info.Port, first.PID, description))
+		} else {
+			blockers = append(blockers, fmt.Sprintf("%s %d 已被其他进程占用。", label, info.Port))
+		}
+	}
+	return blockers
+}
+
+// portOccupantOwnedByRoot reports whether the process holding a port belongs
+// to this robot directory. Recognised owners are processes whose working
+// directory is the project, a supervised dev/app process group, a persisted
+// stray process from an earlier run, and the directory's PM2 service. The
+// "谁最后启动谁为准" flow is allowed to stop those; everything else is a
+// genuine clash that must be reported before starting.
+func (s *server) portOccupantOwnedByRoot(root string, occupant portOccupant) bool {
+	if occupant.CWD != "" {
+		cwd := filepath.Clean(occupant.CWD)
+		cleanedRoot := filepath.Clean(root)
+		if cwd == cleanedRoot || strings.HasPrefix(cwd, cleanedRoot+string(filepath.Separator)) {
+			return true
+		}
+	}
+	if occupant.PID > 0 {
+		pgid := processPGID(occupant.PID)
+		s.mu.RLock()
+		dev := s.development[root]
+		s.mu.RUnlock()
+		if dev.Command != nil && dev.Command.Process != nil {
+			if dev.Command.Process.Pid == occupant.PID || (dev.PGID > 0 && pgid == dev.PGID) {
+				return true
+			}
+		}
+		for _, marker := range loadPersistedProcesses() {
+			if marker.Root == root && marker.PGID > 0 && (marker.PGID == occupant.PID || marker.PGID == pgid) {
+				return true
+			}
+		}
+	}
+	status, err := s.pm2StatusFor(root)
+	if err == nil && status.Running {
+		return true
+	}
+	return false
+}
+
+// waitPortFreeOn polls a loopback port until the previous process has released
+// it. It retries for ~12 seconds so a graceful stop that needs its 3-second
+// force-stop fallback has time to finish.
+func (s *server) waitPortFreeOn(port int, attempts int) bool {
 	if attempts <= 0 {
 		attempts = 30
 	}
-	info, err := s.robots.AppPort(root)
-	if err != nil {
-		return true
-	}
 	client := &http.Client{Timeout: 500 * time.Millisecond}
 	for i := 0; i < attempts; i++ {
-		response, err := client.Get("http://127.0.0.1:" + strconv.Itoa(info.Port))
+		response, err := client.Get("http://127.0.0.1:" + strconv.Itoa(port))
 		if err != nil {
 			return true // connection refused => port free
 		}
@@ -3719,6 +3950,45 @@ func (s *server) waitPortFree(root string, attempts int) bool {
 		time.Sleep(400 * time.Millisecond)
 	}
 	return false
+}
+
+// waitPortFree polls the configured application port until it is released.
+func (s *server) waitPortFree(root string, attempts int) bool {
+	info, err := s.robots.AppPort(root)
+	if err != nil {
+		return true
+	}
+	return s.waitPortFreeOn(info.Port, attempts)
+}
+
+// forceFreePortOn kills whatever is listening on a given loopback port. This is
+// the final "谁最后启动谁为准" fallback: the old process (PM2, a supervised
+// dev/app, or a stray node) could not release the port gracefully, so we
+// identify the listener and terminate it. Only the robot's configured
+// serverPort or test port is targeted, never an arbitrary port.
+func (s *server) forceFreePortOn(port int) error {
+	output, err := s.runCommandForPort("lsof", "-ti", "tcp:"+strconv.Itoa(port))
+	if err != nil || strings.TrimSpace(output) == "" {
+		return fmt.Errorf("未找到占用端口 %d 的进程", port)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		pid := strings.TrimSpace(line)
+		if pid == "" || !isNumeric(pid) {
+			continue
+		}
+		_, _ = s.runCommandForPort("kill", "-9", pid)
+	}
+	// Re-check after killing.
+	client := &http.Client{Timeout: 500 * time.Millisecond}
+	for i := 0; i < 10; i++ {
+		response, err := client.Get("http://127.0.0.1:" + strconv.Itoa(port))
+		if err != nil {
+			return nil
+		}
+		_ = response.Body.Close()
+		time.Sleep(300 * time.Millisecond)
+	}
+	return fmt.Errorf("端口 %d 仍被占用", port)
 }
 
 // forceFreePort kills whatever is listening on the configured application port.
@@ -3731,28 +4001,7 @@ func (s *server) forceFreePort(root string) error {
 	if err != nil {
 		return err
 	}
-	output, err := s.runCommandForPort("lsof", "-ti", "tcp:"+strconv.Itoa(info.Port))
-	if err != nil || strings.TrimSpace(output) == "" {
-		return fmt.Errorf("未找到占用端口 %d 的进程", info.Port)
-	}
-	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
-		pid := strings.TrimSpace(line)
-		if pid == "" || !isNumeric(pid) {
-			continue
-		}
-		_, _ = s.runCommandForPort("kill", "-9", pid)
-	}
-	// Re-check after killing.
-	client := &http.Client{Timeout: 500 * time.Millisecond}
-	for i := 0; i < 10; i++ {
-		response, err := client.Get("http://127.0.0.1:" + strconv.Itoa(info.Port))
-		if err != nil {
-			return nil
-		}
-		_ = response.Body.Close()
-		time.Sleep(300 * time.Millisecond)
-	}
-	return fmt.Errorf("端口 %d 仍被占用", info.Port)
+	return s.forceFreePortOn(info.Port)
 }
 
 // runCommandForPort runs a small helper command without a managed process
@@ -4182,6 +4431,33 @@ func (s *server) robotWebViewHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
+	if filepath.Ext(file) == ".html" {
+		entry, entryErr := s.robots.WebViewEntry(string(rootBytes), parts[1])
+		if entryErr != nil {
+			writeError(w, http.StatusNotFound, entryErr.Error())
+			return
+		}
+		if entry.RequiresServerPort {
+			info, infoErr := s.robots.AppPort(string(rootBytes))
+			if infoErr != nil {
+				writeError(w, http.StatusBadRequest, infoErr.Error())
+				return
+			}
+			if !info.Configured {
+				writeError(w, http.StatusBadRequest, "该插件页面要求先配置应用端口（serverPort）。")
+				return
+			}
+			reachable, _, probeErr := s.robots.AppPortReachable(string(rootBytes))
+			if probeErr != nil {
+				writeError(w, http.StatusBadRequest, probeErr.Error())
+				return
+			}
+			if !reachable {
+				writeError(w, http.StatusBadRequest, "该插件页面要求应用端口已启动（serverPort 暂不可达）。")
+				return
+			}
+		}
+	}
 	// Each WebView is opened through a robot-specific *.localhost hostname.
 	// It remains loopback-only while keeping plugin storage and cookies separate
 	// from both the management UI and other robots. Plugin actions can only use
@@ -4308,6 +4584,52 @@ func (s *server) robotAppHandler(w http.ResponseWriter, r *http.Request) {
 		},
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, _ error) {
 			writeError(w, http.StatusBadGateway, "机器人应用尚未启动或无法连接。请在“运行”中启动开发模式后重试。")
+		},
+	}
+	proxy.ServeHTTP(w, r)
+}
+
+// robotTestHandler reverse-proxies the robot's CBP/sandbox WebSocket service
+// (the testone endpoint on the robot's top-level port) so the migrated test
+// center connects to the workbench origin instead of opening a different port
+// from the browser. Path shape: /api/v1/robot/test/<token>/testone. The robot
+// root travels in the path (base64url token) just like the app proxy; the
+// upstream is always the configured test port, never a browser-supplied value.
+func (s *server) robotTestHandler(w http.ResponseWriter, r *http.Request) {
+	const mount = "/api/v1/robot/test/"
+	root, _ := robotAppRootFromPath(r.URL.Path, mount)
+	if root == "" {
+		root = r.URL.Query().Get("root")
+	}
+	if root == "" {
+		writeError(w, http.StatusBadRequest, "请选择机器人目录。")
+		return
+	}
+	info, err := s.robots.TestPort(root)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	// The transport dials an HTTP request and completes the WebSocket upgrade
+	// through the Upgrade headers, so the target scheme is http (same as the
+	// app proxy). A "ws://" scheme here makes http.Transport fail the dial.
+	target, err := url.Parse("http://127.0.0.1:" + strconv.Itoa(info.Port))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "测试服务地址无效。")
+		return
+	}
+	proxy := &httputil.ReverseProxy{
+		Director: func(request *http.Request) {
+			request.URL.Scheme = target.Scheme
+			request.URL.Host = target.Host
+			// The testone endpoint is fixed; strip the mount and token so the
+			// upstream CBP server sees /testone for the WebSocket upgrade.
+			request.URL.Path = "/testone"
+			request.URL.RawPath = ""
+			request.Host = target.Host
+		},
+		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, _ error) {
+			writeError(w, http.StatusBadGateway, "机器人测试服务尚未启动或无法连接。请先在“运行”中启动开发模式。")
 		},
 	}
 	proxy.ServeHTTP(w, r)
@@ -4776,9 +5098,9 @@ func (s *server) robotManifestHandler(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) robotPackageConfigHandler(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		Root    string            `json:"root"`
-		Package string            `json:"package"`
-		Values  map[string]string `json:"values"`
+		Root    string         `json:"root"`
+		Package string         `json:"package"`
+		Values  map[string]any `json:"values"`
 	}
 	if r.Method == http.MethodGet {
 		input.Root = r.URL.Query().Get("root")
@@ -4882,7 +5204,7 @@ func (s *server) robotOneBotSyncHandler(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if _, err := s.robots.SavePackageConfig(input.Root, "@alemonjs/onebot", map[string]string{"url": input.URL, "token": input.Token}); err != nil {
+	if _, err := s.robots.SavePackageConfig(input.Root, "@alemonjs/onebot", map[string]any{"url": input.URL, "token": input.Token}); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}

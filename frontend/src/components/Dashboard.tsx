@@ -40,11 +40,14 @@ import {
   Eye,
   EyeOff,
   FileText,
+  FlaskConical,
   Folder,
+  Gamepad2,
   GitBranch,
   Globe,
   Globe2,
   HardDrive,
+  Headphones,
   KeyRound,
   Link,
   MessageSquare,
@@ -97,12 +100,16 @@ import { GLOBAL_MODAL_Z_INDEX, Modal } from './Modal'
 import { AuthControl } from './AuthControl'
 import { AccountManagementPage } from './AccountManagement'
 import { RobotGitControl } from './RobotGitControl'
+import { useIsMobileViewport } from '../hooks/useIsMobileViewport'
+import { TestCenter } from './TestCenter'
 import {
   DesktopWindow,
   WindowResizeHandles,
   type ResizeCorner
 } from './DesktopWindow'
 import { SSHControl } from './SSHControl'
+import { ConfigFieldsEditor, ConfigSourceLinks } from './PackageConfigFields'
+import { sameConfigValues } from './configFieldUtils'
 import {
   workspaceApi,
   useCatalogDocumentQuery,
@@ -127,8 +134,12 @@ import {
   useRobotPM2StatusQuery,
   useRobotPM2ProcessesQuery,
   useLazyAppPortQuery,
+  useLazyRobotPortsQuery,
+  useLazyTestPortQuery,
   useSaveAppPortMutation,
+  useSaveTestPortMutation,
   useRobotAppsQuery,
+  useRobotWebViewsQuery,
   useSetAppEnabledMutation,
   useRobotTasksQuery,
   useLazyRobotTaskQuery,
@@ -149,6 +160,9 @@ import {
   type RuntimeOverview,
   type PM2Status,
   type RuntimePreflight,
+  type RobotPortStatus,
+  type PackageConfig,
+  type PackageConfigField,
   type SetupPlugin,
   type SetupPluginRelease,
   type SetupPluginVersion
@@ -191,6 +205,7 @@ type FloatingWindowID =
   | 'terminal'
   | 'git'
   | 'app'
+  | 'test'
   | 'pm2Logs'
   | 'pm2Status'
   | 'ops'
@@ -210,6 +225,7 @@ type Props = {
     terminal: { open: boolean; minimized: boolean }
     git: { open: boolean; minimized: boolean }
     app: { open: boolean; minimized: boolean }
+    test: { open: boolean; minimized: boolean }
     pm2Logs: { open: boolean; minimized: boolean }
     pm2Status: { open: boolean; minimized: boolean }
     ops: { open: boolean; minimized: boolean }
@@ -288,20 +304,38 @@ function setupPluginIcon(icon?: string) {
   return <Plug />
 }
 
+// 平台连接包通过 desktop.logo 声明 antd 图标名；这里映射到 lucide 展示。
+function platformLogoIcon(logo?: string): LucideIcon {
+  const text = (logo ?? '').toLowerCase()
+  if (text.includes('qq') || text.includes('wechat') || text.includes('weixin'))
+    return MessageSquare
+  if (text.includes('discord')) return Gamepad2
+  if (text.includes('kook')) return Headphones
+  if (text.includes('telegram')) return Send
+  return Bot
+}
+
+function PlatformLogo({
+  logo,
+  className
+}: {
+  logo?: string
+  className?: string
+}) {
+  const Icon = platformLogoIcon(logo)
+  return <Icon className={className ?? 'size-4'} />
+}
+
 function projectName(path: string) {
   return path.replace(/\/$/, '').split('/').pop() || path
 }
 
-function sameRecord(
-  left: Record<string, string>,
-  right: Record<string, string>
-) {
-  const leftKeys = Object.keys(left)
-  const rightKeys = Object.keys(right)
-  return (
-    leftKeys.length === rightKeys.length &&
-    leftKeys.every(key => left[key] === right[key])
-  )
+function isMissingConfigValue(value: unknown) {
+  if (value === undefined || value === null) return true
+  if (typeof value === 'string') return value.trim() === ''
+  if (Array.isArray(value)) return value.length === 0
+  if (typeof value === 'object') return Object.keys(value).length === 0
+  return false
 }
 
 // RTK Query rejects with a serialised object rather than an Error. Keep the
@@ -929,6 +963,14 @@ export function Dashboard({
   const [appLaunching, setAppLaunching] = useStoreState(false)
   const [appContentOpen, setAppContentOpen] = useStoreState(false)
   const [appMinimized, setAppMinimized] = useStoreState(false)
+  const [testPortDialog, setTestPortDialog] = useStoreState(false)
+  const [testPortValue, setTestPortValue] = useStoreState('')
+  const [testPortBusy, setTestPortBusy] = useStoreState(false)
+  const [testLaunching, setTestLaunching] = useStoreState(false)
+  const [testContentOpen, setTestContentOpen] = useStoreState(false)
+  const [testMinimized, setTestMinimized] = useStoreState(false)
+  const [selectedWebViewID, setSelectedWebViewID] = useStoreState('')
+  const [pendingWebViewID, setPendingWebViewID] = useStoreState('')
   const [gitMinimized, setGitMinimized] = useStoreState(false)
   const [pm2LogsOpen, setPM2LogsOpen] = useStoreState(false)
   const [pm2LogsMinimized, setPM2LogsMinimized] = useStoreState(false)
@@ -941,13 +983,15 @@ export function Dashboard({
       terminal: 101,
       git: 102,
       app: 103,
-      pm2Logs: 104,
-      pm2Status: 105,
-      ops: 106
+      test: 104,
+      pm2Logs: 105,
+      pm2Status: 106,
+      ops: 107
     }
   )
-  const nextWindowLayer = useRef(106)
+  const nextWindowLayer = useRef(107)
   const openAppRef = useRef<() => void>(() => {})
+  const openTestRef = useRef<() => void>(() => {})
   const [invalidDirectory, setInvalidDirectory] = useStoreState('')
   const [pendingBackpackRemoval, setPendingBackpackRemoval] = useStoreState('')
   const [pendingProjectRemoval, setPendingProjectRemoval] = useStoreState<
@@ -997,6 +1041,7 @@ export function Dashboard({
       terminal: { open: consoleOpen, minimized: consoleMinimized },
       git: { open: Boolean(gitProject), minimized: gitMinimized },
       app: { open: appContentOpen, minimized: appMinimized },
+      test: { open: testContentOpen, minimized: testMinimized },
       pm2Logs: { open: pm2LogsOpen, minimized: pm2LogsMinimized },
       pm2Status: { open: pm2ProcessesOpen, minimized: pm2ProcessesMinimized },
       ops: { open: opsOpen, minimized: opsMinimized },
@@ -1026,7 +1071,9 @@ export function Dashboard({
     pm2ProcessesMinimized,
     pm2ProcessesOpen,
     setupPlugins,
-    systemWindows
+    systemWindows,
+    testContentOpen,
+    testMinimized
   ])
   useEffect(() => {
     const toggleTerminal = () => {
@@ -1166,6 +1213,11 @@ export function Dashboard({
   const [startRobotTask] = useStartRobotTaskMutation()
   const [loadAppPort] = useLazyAppPortQuery()
   const [saveAppPort] = useSaveAppPortMutation()
+  const [loadTestPort] = useLazyTestPortQuery()
+  const [saveTestPort] = useSaveTestPortMutation()
+  const { data: robotWebViews = [] } = useRobotWebViewsQuery(root, {
+    skip: !root
+  })
   const [writeRobotFile] = useWriteRobotFileMutation()
   const [writePackageConfig] = useWritePackageConfigMutation()
   const [saveRobotLogin] = useSaveRobotLoginMutation()
@@ -1186,6 +1238,7 @@ export function Dashboard({
     taskID: string,
     options: {
       appReady?: boolean
+      testReady?: boolean
       timeoutMs?: number
       onTask?: (task: {
         status?: string
@@ -1208,7 +1261,8 @@ export function Dashboard({
         () => {
           finish(new Error('任务事件连接超时。'))
         },
-        options.timeoutMs ?? (options.appReady ? 35_000 : 30 * 60 * 1000)
+        options.timeoutMs ??
+          (options.appReady || options.testReady ? 35_000 : 30 * 60 * 1000)
       )
       const finish = (
         reason?: Error,
@@ -1230,7 +1284,7 @@ export function Dashboard({
           finish(new Error(task.error || '操作未完成。'))
           return
         }
-        if (options.appReady) {
+        if (options.appReady || options.testReady) {
           finish(new Error('应用进程在端口就绪前结束。'))
           return
         }
@@ -1255,6 +1309,14 @@ export function Dashboard({
           }
           if (payload.type === 'app-failed' && options.appReady) {
             finish(new Error(payload.text || '应用服务未能启动。'))
+            return
+          }
+          if (payload.type === 'test-ready' && options.testReady) {
+            finish()
+            return
+          }
+          if (payload.type === 'test-failed' && options.testReady) {
+            finish(new Error(payload.text || '测试服务未能启动。'))
             return
           }
           if (payload.type !== 'task' || !payload.task) return
@@ -1328,6 +1390,18 @@ export function Dashboard({
       setAppPortBusy(false)
     }
   })
+  const scheduleTestPortSave = useAutoSave<number>(async port => {
+    if (!root) return
+    setTestPortBusy(true)
+    try {
+      await saveTestPort({ root, port }).unwrap()
+      await refreshConfigDraft()
+    } catch (reason) {
+      showOutput(operationErrorMessage(reason, '测试端口自动保存失败。'), true)
+    } finally {
+      setTestPortBusy(false)
+    }
+  })
   // "应用" = 机器人 + 应用端口。读取 serverPort；未配置则先让用户输入并
   // 保存，然后启动开发模式，最后在浏览器打开应用地址。
   const openApp = async () => {
@@ -1363,10 +1437,44 @@ export function Dashboard({
       // Launch happens after the dialog closes; reflect it on the toolbar icon.
       setAppLaunching(true)
       await launchApp()
+      if (pendingWebViewID) {
+        setSelectedWebViewID(pendingWebViewID)
+        setPendingWebViewID('')
+        setAppContentOpen(true)
+        setAppMinimized(false)
+        activateFloatingWindow('app')
+      }
     } catch (reason) {
       showOutput(operationErrorMessage(reason, '应用端口保存失败。'), true)
     } finally {
       setAppPortBusy(false)
+      setAppLaunching(false)
+    }
+  }
+  // 插件页面按 web.serverPort 声明决定是否必须先配置并启动应用端口。
+  const openWebView = async (entry: (typeof robotWebViews)[number]) => {
+    if (!root) return
+    try {
+      if (!entry.requiresServerPort) {
+        setSelectedWebViewID(entry.id)
+        setAppContentOpen(true)
+        setAppMinimized(false)
+        activateFloatingWindow('app')
+        return
+      }
+      const info = await loadAppPort(root, true).unwrap()
+      if (!info.configured) {
+        setPendingWebViewID(entry.id)
+        setAppPortValue(String(info.port))
+        setAppPortDialog(true)
+        return
+      }
+      setAppLaunching(true)
+      await launchApp()
+      setSelectedWebViewID(entry.id)
+    } catch (reason) {
+      showOutput(operationErrorMessage(reason, '无法打开插件页面。'), true)
+    } finally {
       setAppLaunching(false)
     }
   }
@@ -1401,6 +1509,87 @@ export function Dashboard({
       return false
     }
   }
+  // "测试" = 机器人 + 测试端口（alemon.config.yaml 顶层 port，默认 17117，
+  // testone 沙盒的 /testone WebSocket 由后端同源代理）。机制与 "应用" 一致：
+  // 读取端口，未配置则先让用户输入并保存，然后启动开发模式，最后打开测试台。
+  const openTest = async () => {
+    if (!root || testLaunching) return
+    setTestLaunching(true)
+    try {
+      const info = await loadTestPort(root, true).unwrap()
+      if (info.sandbox === false) {
+        showOutput(
+          '当前机器人配置了登录连接（platform/login），testone 沙盒需要不配置登录才能连接。请先在“机器人配置”中移除登录连接后重试。',
+          true
+        )
+        return
+      }
+      if (info.configured) {
+        await launchTest()
+      } else {
+        setTestPortValue(String(info.port))
+        setTestPortDialog(true)
+      }
+    } catch (reason) {
+      showOutput(operationErrorMessage(reason, '无法读取测试端口。'), true)
+    } finally {
+      setTestLaunching(false)
+    }
+  }
+  openTestRef.current = () => void openTest()
+  const confirmTestPort = async () => {
+    if (!root) return
+    const port = Number(testPortValue.trim())
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      showOutput('测试端口应为 1-65535 之间的整数。', true)
+      return
+    }
+    setTestPortBusy(true)
+    try {
+      await saveTestPort({ root, port }).unwrap()
+      await refreshConfigDraft()
+      setTestPortDialog(false)
+      // Launch happens after the dialog closes; reflect it on the toolbar icon.
+      setTestLaunching(true)
+      await launchTest()
+    } catch (reason) {
+      showOutput(operationErrorMessage(reason, '测试端口保存失败。'), true)
+    } finally {
+      setTestPortBusy(false)
+      setTestLaunching(false)
+    }
+  }
+  const launchTest = async () => {
+    if (!root) return
+    try {
+      // If the sandbox service is already serving, open the test center
+      // instead of starting another dev/app process.
+      if (await checkTestReachable()) {
+        setTestContentOpen(true)
+        setTestMinimized(false)
+        activateFloatingWindow('test')
+        return
+      }
+      const task = await startRobotTask({ root, action: 'dev', ready: 'test' }).unwrap()
+      await waitForRobotTask(task.id, { testReady: true })
+      setTestContentOpen(true)
+      setTestMinimized(false)
+      activateFloatingWindow('test')
+    } catch (reason) {
+      showOutput(operationErrorMessage(reason, '测试服务启动失败。'), true)
+    }
+  }
+  const checkTestReachable = async () => {
+    try {
+      const response = await fetch(
+        `/api/v1/robot/test-port?${new URLSearchParams({ root, probe: '1' })}`
+      )
+      const data = (await response.json()) as { reachable?: boolean }
+      return response.ok && data.reachable === true
+    } catch {
+      return false
+    }
+  }
   useEffect(() => {
     const toggleGit = () => {
       activateFloatingWindow('git')
@@ -1418,6 +1607,14 @@ export function Dashboard({
         return
       }
       openAppRef.current()
+    }
+    const toggleTest = () => {
+      activateFloatingWindow('test')
+      if (testContentOpen) {
+        setTestMinimized(value => !value)
+        return
+      }
+      openTestRef.current()
     }
     const togglePM2Logs = () => {
       activateFloatingWindow('pm2Logs')
@@ -1458,6 +1655,7 @@ export function Dashboard({
     }
     window.addEventListener('alx:desktop-git-toggle', toggleGit)
     window.addEventListener('alx:desktop-app-toggle', toggleApp)
+    window.addEventListener('alx:desktop-test-toggle', toggleTest)
     window.addEventListener('alx:desktop-pm2-logs-toggle', togglePM2Logs)
     window.addEventListener('alx:desktop-pm2-status-toggle', togglePM2Status)
     window.addEventListener('alx:desktop-ops-toggle', toggleOps)
@@ -1465,6 +1663,7 @@ export function Dashboard({
     return () => {
       window.removeEventListener('alx:desktop-git-toggle', toggleGit)
       window.removeEventListener('alx:desktop-app-toggle', toggleApp)
+      window.removeEventListener('alx:desktop-test-toggle', toggleTest)
       window.removeEventListener('alx:desktop-pm2-logs-toggle', togglePM2Logs)
       window.removeEventListener(
         'alx:desktop-pm2-status-toggle',
@@ -1481,6 +1680,8 @@ export function Dashboard({
     setAppMinimized,
     setGitMinimized,
     setGitProject,
+    setTestMinimized,
+    testContentOpen,
     pm2LogsOpen,
     pm2ProcessesOpen,
     setPM2LogsMinimized,
@@ -1881,7 +2082,7 @@ export function Dashboard({
 
   async function savePackageConfig(
     packageName: string,
-    values: Record<string, string>
+    values: Record<string, unknown>
   ): Promise<boolean> {
     if (!root) return false
     try {
@@ -2683,6 +2884,60 @@ export function Dashboard({
               </footer>
             </form>
           </Modal>
+          <Modal
+            open={testPortDialog}
+            ariaLabel="设置测试端口"
+            // 与应用端口弹窗一致：不点遮罩关闭，避免输入时误关。
+          >
+            <form
+              className="grid w-full max-w-sm gap-4 rounded-xl border border-slate-200 bg-white p-5 shadow-[0_20px_58px_rgb(28_26_23/0.22)]"
+              onSubmit={event => {
+                event.preventDefault()
+                void confirmTestPort()
+              }}
+              onMouseDown={event => event.stopPropagation()}
+            >
+              <div className="grid gap-1">
+                <strong className="text-sm text-ink-950">配置测试端口</strong>
+                <p className="text-xs leading-5 text-slate-500">
+                  测试是机器人的沙盒测试台（testone），需要顶层 port
+                  （CBP 端口，默认 17117）才能访问 /testone
+                  服务。输入后会自动保存到 alemon.config.yaml；启动时会打开测试台。
+                </p>
+              </div>
+              <label className="grid gap-1.5 text-xs font-medium text-slate-600">
+                测试端口（1-65535）
+                <input
+                  className="h-10 rounded-md border border-slate-300 px-3 text-sm text-slate-800 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
+                  value={testPortValue}
+                  onChange={event => {
+                    const next = event.target.value
+                    setTestPortValue(next)
+                    const port = Number(next)
+                    if (Number.isInteger(port) && port >= 1 && port <= 65535)
+                      scheduleTestPortSave(port)
+                  }}
+                  type="number"
+                  min={1}
+                  max={65535}
+                  autoFocus
+                />
+              </label>
+              <footer className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={() => setTestPortDialog(false)}
+                  disabled={testPortBusy}
+                >
+                  取消
+                </button>
+                <button className="primary-button" disabled={testPortBusy}>
+                  {testPortBusy ? '保存中…' : '启动测试'}
+                </button>
+              </footer>
+            </form>
+          </Modal>
           <DirectoryPicker
             open={directoryPickerOpen}
             onClose={() => setDirectoryPickerOpen(false)}
@@ -2814,6 +3069,8 @@ export function Dashboard({
                     }}
                     appLaunching={appLaunching}
                     onOpenApp={() => void openApp()}
+                    testLaunching={testLaunching}
+                    onOpenTest={() => void openTest()}
                     onPage={selectPage}
                     onSection={openSection}
                     onBuildMode={mode => {
@@ -2841,11 +3098,33 @@ export function Dashboard({
           root={root}
           minimized={appMinimized}
           zIndex={windowLayers.app}
+          webviews={robotWebViews}
+          selectedWebViewID={selectedWebViewID}
+          onSelectWebView={entry => {
+            if (!entry.id) {
+              setSelectedWebViewID('')
+              return
+            }
+            void openWebView(entry)
+          }}
           onActivate={() => activateFloatingWindow('app')}
           onMinimize={() => setAppMinimized(true)}
           onClose={() => {
             setAppContentOpen(false)
             setAppMinimized(false)
+          }}
+        />
+      )}
+      {testContentOpen && (
+        <TestCenterWindow
+          root={root}
+          minimized={testMinimized}
+          zIndex={windowLayers.test}
+          onActivate={() => activateFloatingWindow('test')}
+          onMinimize={() => setTestMinimized(true)}
+          onClose={() => {
+            setTestContentOpen(false)
+            setTestMinimized(false)
           }}
         />
       )}
@@ -3022,6 +3301,14 @@ function ProjectRail({
   )
   const [canManageAccounts, setCanManageAccounts] = useStoreState(false)
   const [authRevision, setAuthRevision] = useStoreState(0)
+  const isMobile = useIsMobileViewport()
+  const [mobileOpen, setMobileOpen] = useState<{
+    robot: boolean
+    plugins: boolean
+    system: boolean
+  }>({ robot: false, plugins: false, system: false })
+  const toggleMobileGroup = (group: 'robot' | 'plugins' | 'system') =>
+    setMobileOpen(current => ({ ...current, [group]: !current[group] }))
   useEffect(() => {
     const refreshAuth = () => setAuthRevision(value => value + 1)
     window.addEventListener('alx:auth-changed', refreshAuth)
@@ -3076,181 +3363,285 @@ function ProjectRail({
       }, 0)
     }
   }
+  const robotActions = (
+    <div className="flex items-center gap-0.5">
+      <button
+        className="inline-flex size-6 items-center justify-center rounded text-slate-400 transition-colors hover:bg-slate-200/60 hover:text-slate-600 dark:text-slate-500 dark:hover:bg-slate-700 dark:hover:text-slate-300"
+        onClick={onClone}
+        aria-label="从 Git 克隆机器人"
+        title="从 Git 克隆机器人"
+      >
+        <GitBranch className="size-3.5" />
+      </button>
+      <button
+        className="inline-flex size-6 items-center justify-center rounded text-slate-400 transition-colors hover:bg-slate-200/60 hover:text-slate-600 dark:text-slate-500 dark:hover:bg-slate-700 dark:hover:text-slate-300"
+        onClick={onAdd}
+        aria-label="添加本地机器人目录"
+        title="添加本地机器人目录"
+      >
+        <Plus className="size-3.5" />
+      </button>
+    </div>
+  )
+  const robotList = (
+    <div
+      className="grid content-start h-full gap-1.5 overflow-auto px-1.5 pb-2"
+      onPointerUp={finishProjectDrag}
+      onPointerCancel={finishProjectDrag}
+    >
+      {projects.map(project => (
+        <ProjectItem
+          active={project.id === activeID}
+          dragging={project.id === draggingProjectID}
+          dragTarget={
+            project.id === dragTargetID && project.id !== draggingProjectID
+          }
+          key={project.id}
+          project={project}
+          agentSessions={agentSessions}
+          onSelect={id => {
+            if (!ignoreProjectSelect.current) onSelect(id)
+          }}
+          onRemove={onRemove}
+          onOpenAgent={onOpenAgent}
+          onPin={onPinProject}
+          onRename={onRenameSession}
+          onArchive={onArchiveSession}
+          onDragStart={startProjectDrag}
+          onDragTarget={id => {
+            if (draggingProjectID && id !== draggingProjectID)
+              setDragTargetID(id)
+          }}
+        />
+      ))}
+      {!projects.length && (
+        <p className="px-2 py-4 text-center text-xs text-slate-400">
+          添加机器人目录开始管理
+        </p>
+      )}
+    </div>
+  )
+  const pluginNav = (
+    <nav className="grid gap-0.5">
+      {activePlugins.map(item => (
+        <button
+          className={cn(
+            'flex min-h-8 w-full items-center gap-2 rounded-md px-2 text-left text-xs font-medium transition-colors',
+            feature === `setup:${item.id}`
+              ? 'workspace-nav-active'
+              : 'text-slate-600 hover:bg-slate-200/40 dark:text-slate-400 dark:hover:bg-slate-700/40'
+          )}
+          key={item.id}
+          onClick={() => onFeature(`setup:${item.id}`)}
+        >
+          <i className="inline-flex size-4 items-center justify-center not-italic">
+            {setupPluginIcon(item.navigation.icon)}
+          </i>
+          <span className="min-w-0 flex-1 truncate">
+            {item.navigation.label || item.name}
+          </span>
+        </button>
+      ))}
+    </nav>
+  )
+  const systemNav = (
+    <nav className="grid gap-0.5">
+      {coreFeatureCatalog
+        .filter(item => item.id !== 'accounts' || canManageAccounts)
+        .map(item => (
+          <button
+            className={cn(
+              'flex min-h-8 w-full items-center gap-2 rounded-md px-2 text-left text-xs font-medium transition-colors',
+              feature === item.id
+                ? 'workspace-nav-active'
+                : 'text-slate-600 hover:bg-slate-200/40 dark:text-slate-400 dark:hover:bg-slate-700/40'
+            )}
+            key={item.id}
+            onClick={() => onFeature(item.id)}
+          >
+            <i className="inline-flex size-4 items-center justify-center not-italic">
+              {item.icon}
+            </i>
+            <span className="min-w-0 flex-1 truncate">{item.label}</span>
+            {item.status && (
+              <small className="text-[10px] text-slate-400">
+                {item.status}
+              </small>
+            )}
+          </button>
+        ))}
+      <button
+        className={cn(
+          'flex min-h-8 w-full items-center gap-2 rounded-md px-2 text-left text-xs font-medium transition-colors',
+          feature === 'tasks'
+            ? 'workspace-nav-active'
+            : 'text-slate-600 hover:bg-slate-200/40 dark:text-slate-400 dark:hover:bg-slate-700/40'
+        )}
+        onClick={() => onFeature('tasks')}
+        aria-label="操作记录"
+        title="当前目录操作记录"
+      >
+        <i className="inline-flex size-4 shrink-0 items-center justify-center not-italic">
+          <ClipboardList className="size-4" />
+        </i>
+        <span className="min-w-0 flex-1 truncate">日志</span>
+      </button>
+      <button
+        className={cn(
+          'flex min-h-8 w-full items-center gap-2 rounded-md px-2 text-left text-xs font-medium transition-colors',
+          feature === 'environment'
+            ? 'workspace-nav-active'
+            : 'text-slate-600 hover:bg-slate-200/40 dark:text-slate-400 dark:hover:bg-slate-700/40'
+        )}
+        onClick={() => onFeature('environment')}
+        aria-label="全局环境"
+        title="查看并检查全局环境"
+      >
+        <i className="inline-flex size-4 shrink-0 items-center justify-center not-italic">
+          {checking ? (
+            <Loader2 className="size-4 animate-spin" />
+          ) : environmentWarning ? (
+            <AlertTriangle className="size-4" />
+          ) : (
+            <CheckCircle2 className="size-4" />
+          )}
+        </i>
+        <span className="min-w-0 flex-1 truncate">环境</span>
+      </button>
+    </nav>
+  )
   return (
     <aside className="project-rail flex min-h-0 min-w-0 flex-col border-r border-slate-200 bg-slate-50">
-      <section
-        className="order-3 border-t border-slate-200 px-2.5 py-2 dark:border-slate-700"
-        aria-label="系统功能目录"
-      >
-        <header className="px-1.5 pb-1 text-[0.7rem] font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">
-          系统
-        </header>
-        <nav className="grid gap-0.5">
-          {coreFeatureCatalog
-            .filter(item => item.id !== 'accounts' || canManageAccounts)
-            .map(item => (
-              <button
-                className={cn(
-                  'flex min-h-8 w-full items-center gap-2 rounded-md px-2 text-left text-xs font-medium transition-colors',
-                  feature === item.id
-                    ? 'workspace-nav-active'
-                    : 'text-slate-600 hover:bg-slate-200/40 dark:text-slate-400 dark:hover:bg-slate-700/40'
-                )}
-                key={item.id}
-                onClick={() => onFeature(item.id)}
-              >
-                <i className="inline-flex size-4 items-center justify-center not-italic">
-                  {item.icon}
-                </i>
-                <span className="min-w-0 flex-1 truncate">{item.label}</span>
-                {item.status && (
-                  <small className="text-[10px] text-slate-400">
-                    {item.status}
-                  </small>
-                )}
-              </button>
-            ))}
-          <button
-            className={cn(
-              'flex min-h-8 w-full items-center gap-2 rounded-md px-2 text-left text-xs font-medium transition-colors',
-              feature === 'tasks'
-                ? 'workspace-nav-active'
-                : 'text-slate-600 hover:bg-slate-200/40 dark:text-slate-400 dark:hover:bg-slate-700/40'
-            )}
-            onClick={() => onFeature('tasks')}
-            aria-label="操作记录"
-            title="当前目录操作记录"
+      {isMobile ? (
+        <>
+          <MobileRailGroup
+            title="机器人"
+            count={projects.length}
+            icon={<Bot className="size-4" />}
+            actions={robotActions}
+            open={mobileOpen.robot}
+            onToggle={() => toggleMobileGroup('robot')}
           >
-            <i className="inline-flex size-4 shrink-0 items-center justify-center not-italic">
-              <ClipboardList className="size-4" />
-            </i>
-            <span className="min-w-0 flex-1 truncate">日志</span>
-          </button>
-          <button
-            className={cn(
-              'flex min-h-8 w-full items-center gap-2 rounded-md px-2 text-left text-xs font-medium transition-colors',
-              feature === 'environment'
-                ? 'workspace-nav-active'
-                : 'text-slate-600 hover:bg-slate-200/40 dark:text-slate-400 dark:hover:bg-slate-700/40'
-            )}
-            onClick={() => onFeature('environment')}
-            aria-label="全局环境"
-            title="查看并检查全局环境"
-          >
-            <i className="inline-flex size-4 shrink-0 items-center justify-center not-italic">
-              {checking ? (
-                <Loader2 className="size-4 animate-spin" />
-              ) : environmentWarning ? (
-                <AlertTriangle className="size-4" />
-              ) : (
-                <CheckCircle2 className="size-4" />
-              )}
-            </i>
-            <span className="min-w-0 flex-1 truncate">环境</span>
-          </button>
-        </nav>
-      </section>
-      {activePlugins.length > 0 && (
-        <section
-          className="order-2 border-t border-slate-200 px-2.5 py-2 dark:border-slate-700"
-          aria-label="已加载插件"
-        >
-          <header className="flex  px-1.5 pb-1">
-            <span className="text-[0.7rem] font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">
-              插件
-              <span className="ml-1.5 text-slate-300 dark:text-slate-600">
-                {activePlugins.length}
-              </span>
-            </span>
-          </header>
-          <nav className="grid gap-0.5">
-            {activePlugins.map(item => (
-              <button
-                className={cn(
-                  'flex min-h-8 w-full items-center gap-2 rounded-md px-2 text-left text-xs font-medium transition-colors',
-                  feature === `setup:${item.id}`
-                    ? 'workspace-nav-active'
-                    : 'text-slate-600 hover:bg-slate-200/40 dark:text-slate-400 dark:hover:bg-slate-700/40'
-                )}
-                key={item.id}
-                onClick={() => onFeature(`setup:${item.id}`)}
-              >
-                <i className="inline-flex size-4 items-center justify-center not-italic">
-                  {setupPluginIcon(item.navigation.icon)}
-                </i>
-                <span className="min-w-0 flex-1 truncate">
-                  {item.navigation.label || item.name}
-                </span>
-              </button>
-            ))}
-          </nav>
-        </section>
-      )}
-      <section className="order-1 flex min-h-0 flex-1 flex-col">
-        <header className="flex min-h-9 items-center justify-between px-2.5 py-1.5">
-          <span className="text-[0.7rem] font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">
-            机器人
-            <span className="ml-1.5 text-slate-300 dark:text-slate-600">
-              {projects.length}
-            </span>
-          </span>
-          <div className="flex items-center gap-0.5">
-            <button
-              className="inline-flex size-6 items-center justify-center rounded text-slate-400 transition-colors hover:bg-slate-200/60 hover:text-slate-600 dark:text-slate-500 dark:hover:bg-slate-700 dark:hover:text-slate-300"
-              onClick={onClone}
-              aria-label="从 Git 克隆机器人"
-              title="从 Git 克隆机器人"
+            {robotList}
+          </MobileRailGroup>
+          {activePlugins.length > 0 && (
+            <MobileRailGroup
+              title="插件"
+              count={activePlugins.length}
+              icon={<Plug className="size-4" />}
+              open={mobileOpen.plugins}
+              onToggle={() => toggleMobileGroup('plugins')}
             >
-              <GitBranch className="size-3.5" />
-            </button>
-            <button
-              className="inline-flex size-6 items-center justify-center rounded text-slate-400 transition-colors hover:bg-slate-200/60 hover:text-slate-600 dark:text-slate-500 dark:hover:bg-slate-700 dark:hover:text-slate-300"
-              onClick={onAdd}
-              aria-label="添加本地机器人目录"
-              title="添加本地机器人目录"
-            >
-              <Plus className="size-3.5" />
-            </button>
-          </div>
-        </header>
-        <div
-          className="grid content-start h-full gap-1.5 overflow-auto px-1.5 pb-2"
-          onPointerUp={finishProjectDrag}
-          onPointerCancel={finishProjectDrag}
-        >
-          {projects.map(project => (
-            <ProjectItem
-              active={project.id === activeID}
-              dragging={project.id === draggingProjectID}
-              dragTarget={
-                project.id === dragTargetID && project.id !== draggingProjectID
-              }
-              key={project.id}
-              project={project}
-              agentSessions={agentSessions}
-              onSelect={id => {
-                if (!ignoreProjectSelect.current) onSelect(id)
-              }}
-              onRemove={onRemove}
-              onOpenAgent={onOpenAgent}
-              onPin={onPinProject}
-              onRename={onRenameSession}
-              onArchive={onArchiveSession}
-              onDragStart={startProjectDrag}
-              onDragTarget={id => {
-                if (draggingProjectID && id !== draggingProjectID)
-                  setDragTargetID(id)
-              }}
-            />
-          ))}
-          {!projects.length && (
-            <p className="px-2 py-4 text-center text-xs text-slate-400">
-              添加机器人目录开始管理
-            </p>
+              {pluginNav}
+            </MobileRailGroup>
           )}
-        </div>
-      </section>
+          <MobileRailGroup
+            title="系统"
+            icon={<Settings className="size-4" />}
+            open={mobileOpen.system}
+            onToggle={() => toggleMobileGroup('system')}
+          >
+            {systemNav}
+          </MobileRailGroup>
+        </>
+      ) : (
+        <>
+          <section
+            className="order-3 border-t border-slate-200 px-2.5 py-2 dark:border-slate-700"
+            aria-label="系统功能目录"
+          >
+            <header className="px-1.5 pb-1 text-[0.7rem] font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">
+              系统
+            </header>
+            {systemNav}
+          </section>
+          {activePlugins.length > 0 && (
+            <section
+              className="order-2 border-t border-slate-200 px-2.5 py-2 dark:border-slate-700"
+              aria-label="已加载插件"
+            >
+              <header className="flex  px-1.5 pb-1">
+                <span className="text-[0.7rem] font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">
+                  插件
+                  <span className="ml-1.5 text-slate-300 dark:text-slate-600">
+                    {activePlugins.length}
+                  </span>
+                </span>
+              </header>
+              {pluginNav}
+            </section>
+          )}
+          <section className="order-1 flex min-h-0 flex-1 flex-col">
+            <header className="flex min-h-9 items-center justify-between px-2.5 py-1.5">
+              <span className="text-[0.7rem] font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">
+                机器人
+                <span className="ml-1.5 text-slate-300 dark:text-slate-600">
+                  {projects.length}
+                </span>
+              </span>
+              {robotActions}
+            </header>
+            {robotList}
+          </section>
+        </>
+      )}
     </aside>
+  )
+}
+
+function MobileRailGroup({
+  title,
+  count,
+  icon,
+  actions,
+  open,
+  onToggle,
+  children
+}: {
+  title: string
+  count?: number
+  icon: ReactNode
+  actions?: ReactNode
+  open: boolean
+  onToggle: () => void
+  children: ReactNode
+}) {
+  return (
+    <section className="border-b border-slate-200 dark:border-slate-700">
+      <div className="flex min-h-10 items-center gap-0.5 py-0.5 pl-1 pr-2">
+        <button
+          type="button"
+          className={cn(
+            'mobile-rail-group-toggle flex min-h-9 min-w-0 flex-1 items-center gap-2 rounded-md px-2 text-left text-[0.8rem] font-semibold transition-colors',
+            open
+              ? 'workspace-nav-active'
+              : 'text-slate-700 hover:bg-slate-200/40 dark:text-slate-200 dark:hover:bg-slate-700/40'
+          )}
+          onClick={onToggle}
+          aria-expanded={open}
+        >
+          <i className="inline-flex size-4 shrink-0 items-center justify-center not-italic">
+            {icon}
+          </i>
+          <span className="min-w-0 flex-1 truncate">{title}</span>
+          {typeof count === 'number' && (
+            <small className="text-[10px] text-slate-300 dark:text-slate-600">
+              {count}
+            </small>
+          )}
+          <ChevronRight
+            className={cn(
+              'size-4 shrink-0 text-slate-400 transition-transform',
+              open && 'rotate-90'
+            )}
+          />
+        </button>
+        {actions}
+      </div>
+      {open && (
+        <div className="mobile-rail-group-content px-2 pb-2">{children}</div>
+      )}
+    </section>
   )
 }
 
@@ -5268,7 +5659,7 @@ function BackpackPanel({
   busy: boolean
   onSaveConfig: (
     packageName: string,
-    values: Record<string, string>
+    values: Record<string, unknown>
   ) => Promise<boolean>
   onConfigChanged: () => Promise<void>
   onRemove: (packageName: string) => Promise<void>
@@ -5446,7 +5837,7 @@ function BackpackPackageManager({
   busy: boolean
   onSave: (
     packageName: string,
-    values: Record<string, string>
+    values: Record<string, unknown>
   ) => Promise<boolean>
   onRemove: (packageName: string) => Promise<void>
   onReplace: (packageName: string, version: string) => Promise<boolean>
@@ -5478,21 +5869,26 @@ function BackpackPackageManager({
       skip: !item.valid || tab !== 'version'
     }
   )
-  const [values, setValues] = useStoreState<Record<string, string>>({})
-  const scheduleSave = useAutoSave<Record<string, string>>(next =>
+  const [values, setValues] = useStoreState<Record<string, unknown>>({})
+  const scheduleSave = useAutoSave<Record<string, unknown>>(next =>
     onSave(item.name, next)
   )
-  const updateValue = (name: string, value: string) => {
+  const updateValue = (name: string, value: unknown) => {
     const next = { ...values, [name]: value }
     setValues(next)
     scheduleSave(next)
   }
   useEffect(() => {
     if (!data) return
-    const next = Object.fromEntries(
-      data.fields.map(field => [field.name, data.values[field.name] ?? ''])
-    )
-    setValues(current => (sameRecord(current, next) ? current : next))
+    const next: Record<string, unknown> = {}
+    for (const field of data.fields ?? []) {
+      if (field.name in data.values) {
+        next[field.name] = data.values[field.name]
+      } else if (field.default !== undefined && field.default !== null) {
+        next[field.name] = field.default
+      }
+    }
+    setValues(current => (sameConfigValues(current, next) ? current : next))
   }, [data, setValues])
   useEffect(() => {
     if (versions?.latest) setVersion(versions.latest)
@@ -5512,7 +5908,6 @@ function BackpackPackageManager({
           )}
         </>
       }
-      description={<span title={item.path}>{item.path}</span>}
       actions={
         <>
           <button className="text-button" onClick={onBack}>
@@ -5565,62 +5960,49 @@ function BackpackPackageManager({
         ) : tab === 'config' ? (
           isConfigLoading ? (
             <p className="backpack-manager-note">正在读取插件的配置声明…</p>
-          ) : error || !data || !data.fields.length ? (
-            <p className="backpack-manager-note">
-              该插件没有可填写的可视化配置。使用方式请查看“文档”页。
-            </p>
+          ) : error || !data || !data.fields?.length ? (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white p-4">
+              <p className="m-0 text-sm text-slate-500">
+                该插件没有可填写的可视化配置。使用方式请查看“文档”页。
+              </p>
+              <ConfigSourceLinks source={data?.configSource} />
+            </div>
           ) : (
             <div className="package-config-panel grid gap-4 rounded-xl border border-slate-200 bg-white p-4">
               <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3">
                 <div className="grid gap-1">
-                  <strong className="text-sm font-semibold text-slate-800">
+                  <strong className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+                    <PlatformLogo logo={data.logo} className="size-4" />
                     插件配置
                   </strong>
                   <span className="text-xs text-slate-500">
                     保存到当前机器人的 alemon.config.yaml · {data.namespace}.*
                   </span>
                 </div>
-                <small className="text-xs text-slate-400">修改后自动保存</small>
+                <div className="flex items-center gap-3">
+                  <ConfigSourceLinks source={data.configSource} />
+                </div>
               </header>
-              <div className="grid gap-3 sm:grid-cols-2">
-                {data.fields.map(field => (
-                  <label
-                    className="grid gap-1 text-xs font-semibold text-slate-600"
-                    key={field.name}
-                  >
-                    {field.description || field.name}
-                    {field.required && (
-                      <em className="not-italic text-amber-700">必填</em>
-                    )}
-                    {field.type === 'boolean' || field.type === 'bool' ? (
-                      <select
-                        className="h-9 rounded-md border border-slate-300 bg-white px-2.5 text-sm font-normal text-slate-800 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
-                        value={values[field.name] ?? ''}
-                        onChange={event =>
-                          updateValue(field.name, event.target.value)
-                        }
-                      >
-                        <option value="">不设置</option>
-                        <option value="true">开启</option>
-                        <option value="false">关闭</option>
-                      </select>
-                    ) : (
-                      <input
-                        className="h-9 rounded-md border border-slate-300 bg-white px-2.5 text-sm font-normal text-slate-800 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
-                        value={values[field.name] ?? ''}
-                        type={
-                          field.type === 'number' || field.type === 'integer'
-                            ? 'number'
-                            : 'text'
-                        }
-                        onChange={event =>
-                          updateValue(field.name, event.target.value)
-                        }
-                      />
-                    )}
-                  </label>
-                ))}
-              </div>
+              <ConfigFieldsEditor
+                fields={data.fields ?? []}
+                values={values}
+                onChange={updateValue}
+              />
+              {data.commands?.length ? (
+                <div className="grid gap-1.5 border-t border-slate-100 pt-3">
+                  <strong className="text-xs font-semibold text-slate-600">
+                    桌面命令
+                  </strong>
+                  {data.commands.map(command => (
+                    <code
+                      key={command.command}
+                      className="rounded-md bg-slate-100 px-2 py-1 text-[11px] text-slate-600"
+                    >
+                      {command.name} · {command.command}
+                    </code>
+                  ))}
+                </div>
+              ) : null}
             </div>
           )
         ) : versionsFetching ? (
@@ -5690,16 +6072,10 @@ function CatalogDetail({
   onRun: (action: string, packageName: string) => void
   onSaveConfig: (
     packageName: string,
-    values: Record<string, string>
+    values: Record<string, unknown>
   ) => Promise<boolean>
 }) {
   const [version, setVersion] = useStoreState('')
-  const [configOpen, setConfigOpen] = useStoreState(false)
-  const {
-    data: document,
-    isFetching,
-    error
-  } = useCatalogDocumentQuery(item.url, { skip: !item.url })
   const packageName =
     item.install ||
     (item.name === 'alemonjs' || item.name.startsWith('@alemonjs/')
@@ -5758,7 +6134,6 @@ function CatalogDetail({
         <div className="flex flex-wrap items-end justify-end gap-2">
           {packageName ? (
             <label className="grid gap-1 text-[11px] font-semibold text-slate-500">
-              {repositoryInstall ? '插件版本' : '版本'}
               <select
                 className="h-9 min-w-32 rounded-md border border-slate-300 bg-white px-2 text-xs font-medium text-slate-700 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
                 value={version}
@@ -5813,13 +6188,16 @@ function CatalogDetail({
           >
             卸载
           </button>
-          <button
-            className="secondary-button"
-            disabled={busy || !item.url}
-            onClick={() => setConfigOpen(open => !open)}
-          >
-            配置
-          </button>
+          {item.url && (
+            <a
+              className="inline-flex min-h-9 items-center justify-center rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 transition hover:border-slate-400 hover:bg-slate-50"
+              href={item.url}
+              target="_blank"
+              rel="noreferrer"
+            >
+              ↗
+            </a>
+          )}
         </div>
       </section>
       {repositoryInstall && noRepositoryTag && (
@@ -5832,46 +6210,66 @@ function CatalogDetail({
           无法读取插件 Release，请检查网络后重试。
         </p>
       )}
-      {configOpen && (
-        <PackageConfigPanel source={item.url} onSave={onSaveConfig} />
-      )}
-      <section className="catalog-document grid gap-3 rounded-xl border border-slate-200 bg-white p-4">
-        <header className="flex items-center justify-between gap-3 border-b border-slate-200 pb-3">
-          <strong className="text-sm font-semibold text-slate-800">
-            在线文档
-          </strong>
-          {item.url && (
-            <a
-              className="text-xs font-semibold text-slate-600 hover:text-slate-900"
-              href={item.url}
-              target="_blank"
-              rel="noreferrer"
-            >
-              在浏览器打开 ↗
-            </a>
-          )}
-        </header>
-        {isFetching && (
-          <p className="text-sm text-slate-500">正在读取 README.md…</p>
-        )}
-        {error && (
-          <p className="text-sm text-slate-500">
-            在线文档暂时无法读取，请使用右上角链接查看。
-          </p>
-        )}
-        {document && <MarkdownPage markdown={document.markdown} />}
-      </section>
+      <PackageConfigPanel
+        source={item.url}
+        readmeURL={item.url}
+        onSave={onSaveConfig}
+      />
     </RobotPanel>
+  )
+}
+function ConfigReadmeCard({
+  docURL,
+  document,
+  loading,
+  error
+}: {
+  docURL?: string
+  document?: { source: string; markdown: string }
+  loading: boolean
+  error: boolean
+}) {
+  return (
+    <section className="catalog-document grid gap-3 rounded-xl border border-slate-200 bg-white p-4">
+      <header className="flex flex-wrap items-center justify-between gap-3">
+        <strong className="text-sm font-semibold text-slate-800">
+          配置说明
+        </strong>
+        {docURL && (
+          <a
+            className="text-xs font-semibold text-slate-600 hover:text-slate-900"
+            href={docURL}
+            target="_blank"
+            rel="noreferrer"
+          >
+            在浏览器打开 ↗
+          </a>
+        )}
+      </header>
+      {loading && <p className="text-sm text-slate-500">正在读取配置文档…</p>}
+      {error && (
+        <p className="text-sm text-slate-500">
+          配置文档暂时无法读取，请使用右上角链接查看。
+        </p>
+      )}
+      {document && (
+        <div className="max-h-96 overflow-auto rounded-lg border border-slate-100 bg-slate-50/40 p-3">
+          <MarkdownPage markdown={document.markdown} />
+        </div>
+      )}
+    </section>
   )
 }
 function PackageConfigPanel({
   source,
+  readmeURL,
   onSave
 }: {
   source: string
+  readmeURL?: string
   onSave: (
     packageName: string,
-    values: Record<string, string>
+    values: Record<string, unknown>
   ) => Promise<boolean>
 }) {
   const {
@@ -5879,21 +6277,32 @@ function PackageConfigPanel({
     isLoading: isConfigLoading,
     error
   } = useCatalogPackageConfigQuery(source, { skip: !source })
-  const [values, setValues] = useStoreState<Record<string, string>>({})
-  const scheduleSave = useAutoSave<Record<string, string>>(next =>
+  const docURL = data?.configSource?.readme || readmeURL
+  const {
+    data: document,
+    isFetching: isDocumentFetching,
+    error: documentError
+  } = useCatalogDocumentQuery(docURL ?? '', { skip: !docURL })
+  const [values, setValues] = useStoreState<Record<string, unknown>>({})
+  const scheduleSave = useAutoSave<Record<string, unknown>>(next =>
     onSave(data?.package ?? '', next)
   )
-  const updateValue = (name: string, value: string) => {
+  const updateValue = (name: string, value: unknown) => {
     const next = { ...values, [name]: value }
     setValues(next)
     scheduleSave(next)
   }
   useEffect(() => {
     if (!data) return
-    const next = Object.fromEntries(
-      data.fields.map(field => [field.name, data.values[field.name] ?? ''])
-    )
-    setValues(current => (sameRecord(current, next) ? current : next))
+    const next: Record<string, unknown> = {}
+    for (const field of data.fields ?? []) {
+      if (field.name in data.values) {
+        next[field.name] = data.values[field.name]
+      } else if (field.default !== undefined && field.default !== null) {
+        next[field.name] = field.default
+      }
+    }
+    setValues(current => (sameConfigValues(current, next) ? current : next))
   }, [data, setValues])
   if (isConfigLoading)
     return (
@@ -5907,62 +6316,78 @@ function PackageConfigPanel({
         <p>该条目没有可读取的 alemonjs.config 声明。</p>
       </section>
     )
-  if (!data.fields.length)
+  if (!data.fields?.length)
     return (
-      <section className="package-config-panel rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-500">
-        <p>该条目没有可填写的配置项。</p>
-      </section>
+      <div className="grid gap-4">
+        <section className="package-config-panel grid gap-3 rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-500">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="m-0">该条目没有可填写的配置项。</p>
+            <ConfigSourceLinks
+              source={data.configSource}
+              readmeURL={readmeURL}
+            />
+          </div>
+        </section>
+        <ConfigReadmeCard
+          docURL={docURL}
+          document={document}
+          loading={isDocumentFetching}
+          error={Boolean(documentError)}
+        />
+      </div>
     )
   return (
-    <section className="package-config-panel grid gap-4 rounded-xl border border-slate-200 bg-white p-4">
-      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3">
-        <div className="grid gap-1">
-          <strong className="text-sm font-semibold text-slate-800">
-            运行配置
-          </strong>
-          <span className="text-xs text-slate-500">
-            保存至 alemon.config.yaml · {data.namespace}.*
-          </span>
-        </div>
-        <small className="text-xs text-slate-400">修改后自动保存</small>
-      </header>
-      <div className="grid gap-3 sm:grid-cols-2">
-        {data.fields.map(field => (
-          <label
-            className="grid gap-1 text-xs font-semibold text-slate-600"
-            key={field.name}
-          >
-            {field.description || field.name}
-            {field.required && (
-              <em className="not-italic text-amber-700">必填</em>
-            )}
-            {field.type === 'boolean' || field.type === 'bool' ? (
-              <select
-                className="h-9 rounded-md border border-slate-300 bg-white px-2.5 text-sm font-normal text-slate-800 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
-                value={values[field.name] ?? ''}
-                onChange={event => updateValue(field.name, event.target.value)}
+    <div className="grid gap-4">
+      <section className="package-config-panel grid gap-4 rounded-xl border border-slate-200 bg-white p-4">
+        <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3">
+          <div className="grid gap-1">
+            <strong className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+              <PlatformLogo logo={data.logo} className="size-4" />
+              运行配置
+            </strong>
+            <span className="text-xs text-slate-500">
+              保存至 alemon.config.yaml · {data.namespace}.*
+            </span>
+          </div>
+          <div className="flex items-center gap-3">
+            <ConfigSourceLinks
+              source={data.configSource}
+              readmeURL={readmeURL}
+            />
+            <small className="text-xs text-slate-400">修改后自动保存</small>
+          </div>
+        </header>
+        <ConfigFieldsEditor
+          fields={data.fields ?? []}
+          values={values}
+          onChange={updateValue}
+        />
+        {data.commands?.length ? (
+          <div className="grid gap-1.5 border-t border-slate-100 pt-3">
+            <strong className="text-xs font-semibold text-slate-600">
+              桌面命令
+            </strong>
+            {data.commands.map(command => (
+              <code
+                key={command.command}
+                className="rounded-md bg-slate-100 px-2 py-1 text-[11px] text-slate-600"
               >
-                <option value="">不设置</option>
-                <option value="true">开启</option>
-                <option value="false">关闭</option>
-              </select>
-            ) : (
-              <input
-                className="h-9 rounded-md border border-slate-300 bg-white px-2.5 text-sm font-normal text-slate-800 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
-                value={values[field.name] ?? ''}
-                type={
-                  field.type === 'number' || field.type === 'integer'
-                    ? 'number'
-                    : 'text'
-                }
-                onChange={event => updateValue(field.name, event.target.value)}
-                placeholder={field.name}
-              />
-            )}
-          </label>
-        ))}
-      </div>
-    </section>
+                {command.name} · {command.command}
+              </code>
+            ))}
+            <small className="text-[11px] text-slate-400">
+              命令由包桌面端处理，工作台仅展示声明。
+            </small>
+          </div>
+        ) : null}
+      </section>
+      <ConfigReadmeCard
+        docURL={docURL}
+        document={document}
+        loading={isDocumentFetching}
+        error={Boolean(documentError)}
+      />
+    </div>
   )
 }
 function CurrentProjectConfigPanel({
@@ -5970,32 +6395,29 @@ function CurrentProjectConfigPanel({
   loading,
   onSave
 }: {
-  config?: {
-    package: string
-    namespace: string
-    fields: Array<{
-      name: string
-      type: string
-      required: boolean
-      description: string
-    }>
-    values: Record<string, string>
-  }
+  config?: PackageConfig
   loading: boolean
-  onSave: (values: Record<string, string>) => Promise<boolean>
+  onSave: (values: Record<string, unknown>) => Promise<boolean>
 }) {
-  const [values, setValues] = useStoreState<Record<string, string>>({})
+  const [values, setValues] = useStoreState<Record<string, unknown>>({})
   const scheduleSave = useAutoSave(onSave)
-  const updateValue = (name: string, value: string) => {
+  const updateValue = (name: string, value: unknown) => {
     const next = { ...values, [name]: value }
     setValues(next)
     scheduleSave(next)
   }
   useEffect(() => {
-    if (config)
-      setValues(current =>
-        sameRecord(current, config.values) ? current : config.values
-      )
+    if (config) {
+      const next: Record<string, unknown> = {}
+      for (const field of config.fields ?? []) {
+        if (field.name in config.values) {
+          next[field.name] = config.values[field.name]
+        } else if (field.default !== undefined && field.default !== null) {
+          next[field.name] = field.default
+        }
+      }
+      setValues(current => (sameConfigValues(current, next) ? current : next))
+    }
   }, [config, setValues])
   // A config declaration is optional. Do not turn its absence into an error
   // for ordinary robots that do not expose project-specific settings.
@@ -6005,12 +6427,13 @@ function CurrentProjectConfigPanel({
         <p>正在识别当前项目的扩展配置…</p>
       </section>
     )
-  if (!config?.fields.length) return null
+  if (!config?.fields?.length) return null
   return (
     <section className="project-config-panel grid gap-4 rounded-xl border border-slate-200 bg-white p-4">
       <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3">
         <div className="grid gap-1">
-          <strong className="text-sm font-semibold text-slate-800">
+          <strong className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+            <PlatformLogo logo={config.logo} className="size-4" />
             项目扩展配置
           </strong>
           <span className="text-xs text-slate-500">
@@ -6018,44 +6441,30 @@ function CurrentProjectConfigPanel({
             区域
           </span>
         </div>
-        <small className="text-xs text-slate-400">修改后自动保存</small>
+        <div className="flex items-center gap-3">
+          <ConfigSourceLinks source={config.configSource} />
+        </div>
       </header>
-      <div className="grid gap-3 sm:grid-cols-2">
-        {config.fields.map(field => (
-          <label
-            className="grid gap-1 text-xs font-semibold text-slate-600"
-            key={field.name}
-          >
-            {field.description || field.name}
-            {field.required && (
-              <em className="not-italic text-amber-700">必填</em>
-            )}
-            {field.type === 'boolean' || field.type === 'bool' ? (
-              <select
-                className="h-9 rounded-md border border-slate-300 bg-white px-2.5 text-sm font-normal text-slate-800 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
-                value={values[field.name] ?? ''}
-                onChange={event => updateValue(field.name, event.target.value)}
-              >
-                <option value="">不设置</option>
-                <option value="true">开启</option>
-                <option value="false">关闭</option>
-              </select>
-            ) : (
-              <input
-                className="h-9 rounded-md border border-slate-300 bg-white px-2.5 text-sm font-normal text-slate-800 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
-                value={values[field.name] ?? ''}
-                type={
-                  field.type === 'number' || field.type === 'integer'
-                    ? 'number'
-                    : 'text'
-                }
-                onChange={event => updateValue(field.name, event.target.value)}
-                placeholder={field.name}
-              />
-            )}
-          </label>
-        ))}
-      </div>
+      <ConfigFieldsEditor
+        fields={config.fields ?? []}
+        values={values}
+        onChange={updateValue}
+      />
+      {config.commands?.length ? (
+        <div className="grid gap-1.5 border-t border-slate-100 pt-3">
+          <strong className="text-xs font-semibold text-slate-600">
+            桌面命令
+          </strong>
+          {config.commands.map(command => (
+            <code
+              key={command.command}
+              className="rounded-md bg-slate-100 px-2 py-1 text-[11px] text-slate-600"
+            >
+              {command.name} · {command.command}
+            </code>
+          ))}
+        </div>
+      ) : null}
     </section>
   )
 }
@@ -6130,7 +6539,7 @@ function RuntimePanel({
   onSaveLogin: (login: string, packageName?: string) => Promise<boolean>
   onSavePackageConfig: (
     packageName: string,
-    values: Record<string, string>
+    values: Record<string, unknown>
   ) => Promise<boolean>
   developerMode: boolean
 }) {
@@ -6151,20 +6560,39 @@ function RuntimePanel({
   const [loadPackageConfig] = useLazyPackageConfigQuery()
   const [loadRuntimePreflight] = useLazyRobotRuntimePreflightQuery()
   const [loadRuntimeRepair] = useLazyRobotRuntimeRepairQuery()
+  const [loadRobotPorts] = useLazyRobotPortsQuery()
   const [applyRuntimeRepair] = useApplyRuntimeRepairMutation()
+  const [portStatus, setPortStatus] = useState<RobotPortStatus[]>([])
+  const [portStatusError, setPortStatusError] = useState('')
+  const [portStatusBusy, setPortStatusBusy] = useState(false)
+  const refreshPorts = useCallback(async () => {
+    if (!root) return
+    setPortStatusBusy(true)
+    try {
+      const result = await loadRobotPorts(root, false).unwrap()
+      setPortStatus(result.items ?? [])
+      setPortStatusError('')
+    } catch (reason) {
+      setPortStatusError(
+        operationErrorMessage(reason, '端口检测失败，请稍后重试。')
+      )
+    } finally {
+      setPortStatusBusy(false)
+    }
+  }, [loadRobotPorts, root])
+  useEffect(() => {
+    void refreshPorts()
+  }, [refreshPorts])
   const [loginChoice, setLoginChoice] = useStoreState<LoginChoice | null>(null)
   const [connectionConfig, setConnectionConfig] = useStoreState<{
     package: string
-    fields: Array<{
-      name: string
-      type: string
-      required: boolean
-      description: string
-    }>
-    values: Record<string, string>
+    fields: PackageConfigField[]
+    values: Record<string, unknown>
+    logo?: string
+    configSource?: { readme?: string; official?: string; platform?: string }
   } | null>(null)
   const [connectionValues, setConnectionValues] = useStoreState<
-    Record<string, string>
+    Record<string, unknown>
   >({})
   const [loginDialogError, setLoginDialogError] = useStoreState('')
   const [loginDialogBusy, setLoginDialogBusy] = useStoreState(false)
@@ -6178,15 +6606,15 @@ function RuntimePanel({
   )
   const packageTarget = knownPlatform?.package || customPackage.trim()
   const connectionPackage = connectionConfig?.package || packageTarget
-  const valuesForConnectionPackage = (values: Record<string, string>) => {
-    if (!connectionConfig?.fields.length) return values
+  const valuesForConnectionPackage = (values: Record<string, unknown>) => {
+    if (!connectionConfig?.fields?.length) return values
     const allowed = new Set(connectionConfig.fields.map(field => field.name))
     return Object.fromEntries(
       Object.entries(values).filter(([name]) => allowed.has(name))
     )
   }
-  const scheduleConnectionSave = useAutoSave<Record<string, string>>(next => {
-    if (!connectionPackage || !connectionConfig?.fields.length) return
+  const scheduleConnectionSave = useAutoSave<Record<string, unknown>>(next => {
+    if (!connectionPackage || !connectionConfig?.fields?.length) return
     return onSavePackageConfig(
       connectionPackage,
       valuesForConnectionPackage(next)
@@ -6199,7 +6627,7 @@ function RuntimePanel({
     if (!login.trim()) return
     return onSaveLogin(login, packageName)
   })
-  const updateConnectionValue = (name: string, value: string) => {
+  const updateConnectionValue = (name: string, value: unknown) => {
     const next = { ...connectionValues, [name]: value }
     setConnectionValues(next)
     scheduleConnectionSave(next)
@@ -6263,12 +6691,13 @@ function RuntimePanel({
       // already reflected when the start dialog opens.
       setValidationTitle('运行前配置不完整')
       const preflight = await loadRuntimePreflight(root, false).unwrap()
+      await refreshPorts()
       const freshOverview = await onRefreshOverview()
       const platform = (freshOverview?.platforms ?? []).find(
         item => item.id === preflight.login
       )
       setCustomLogin(preflight.login)
-      setSelectedPlatform(platform?.id ?? '')
+      setSelectedPlatform(platform?.id ?? (preflight.login ? '__custom__' : ''))
       setCustomPackage(platform?.package ?? '')
       setConnectionConfig(null)
       setConnectionValues({})
@@ -6299,14 +6728,19 @@ function RuntimePanel({
       }).unwrap()
       setConnectionConfig(config)
       setConnectionValues(current =>
-        sameRecord(current, config.values) ? current : config.values
+        sameConfigValues(current, config.values) ? current : config.values
       )
     } catch (reason) {
       const message = operationErrorMessage(reason, '无法读取连接包配置。')
       // A config declaration is optional; it is valid to continue without a
       // form when the installed package declares no alemonjs.config fields.
       if (message.includes('没有声明 alemonjs.config')) {
-        setConnectionConfig({ package: packageName, fields: [], values: {} })
+        setConnectionConfig({
+          package: packageName,
+          fields: [],
+          values: {},
+          logo: ''
+        })
         setConnectionValues({})
         return
       }
@@ -6321,6 +6755,10 @@ function RuntimePanel({
       setCustomPackage('')
       setConnectionConfig(null)
       setConnectionValues({})
+      setLoginDialogError('')
+      return
+    }
+    if (id === '__custom__') {
       setLoginDialogError('')
       return
     }
@@ -6365,12 +6803,21 @@ function RuntimePanel({
   // fields silently before launching.
   const startFromDialog = async () => {
     if (!loginChoice) return
-    // A login is the user's typed value, or the one already configured in the
-    // file when the user did not touch the login field.
-    const login = customLogin.trim() || loginChoice.preflight.login || ''
-    const hasLogin = Boolean(login || selectedPlatform)
+    // 登录值只来自用户的选择：已识别平台或自由输入。选择“不选择”时清空，
+    // 直接无 login 启动，避免沿用文件里的旧登录连接。
+    const login =
+      customLogin.trim() ||
+      (selectedPlatform && selectedPlatform !== '__custom__'
+        ? selectedPlatform
+        : '')
+    const hasLogin = Boolean(login)
     const missing = (connectionConfig?.fields ?? [])
-      .filter(field => field.required && !connectionValues[field.name]?.trim())
+      .filter(
+        field =>
+          field.required &&
+          !field.default &&
+          isMissingConfigValue(connectionValues[field.name])
+      )
       .map(field => field.description || field.name)
     if (hasLogin && missing.length) {
       setLoginDialogError(`请先填写必填项：${missing.join('、')} 再启动。`)
@@ -6380,7 +6827,7 @@ function RuntimePanel({
     try {
       // Persist required fields silently when a connection package is selected,
       // then save the login before launching.
-      if (connectionPackage && connectionConfig?.fields.length) {
+      if (connectionPackage && connectionConfig?.fields?.length) {
         if (
           !(await onSavePackageConfig(
             connectionPackage,
@@ -6392,7 +6839,10 @@ function RuntimePanel({
       if (login) {
         if (!(await onSaveLogin(login, connectionPackage))) return
       }
-      if (await onRun(loginChoice.action)) closeLoginDialog()
+      if (await onRun(loginChoice.action)) {
+        await refreshPorts()
+        closeLoginDialog()
+      }
     } catch (reason) {
       setLoginDialogError(
         operationErrorMessage(reason, '启动失败，请查看操作记录。')
@@ -6496,42 +6946,45 @@ function RuntimePanel({
                       value={selectedPlatform}
                       onChange={event => choosePlatform(event.target.value)}
                     >
-                      <option value="">不选择，直接输入</option>
+                      <option value="">不选择</option>
+                      <option value="__custom__">自由输入</option>
                       {(overview?.platforms ?? []).map(item => (
                         <option key={item.id} value={item.id}>
-                          {item.label}
+                          {item.id}
                           {item.installed ? ' · 已安装' : ' · 需安装'}
                         </option>
                       ))}
                     </select>
                   </label>
-                  <label className="grid gap-1 text-xs font-semibold text-slate-600">
-                    登录连接
-                    <input
-                      value={customLogin}
-                      onChange={event => {
-                        setSelectedPlatform('')
-                        setCustomLogin(event.target.value)
-                        scheduleLoginSave({
-                          login: event.target.value,
-                          packageName: customPackage.trim()
-                        })
-                      }}
-                      placeholder="如 onebot"
-                    />
-                  </label>
-                  <label className="grid gap-1 text-xs font-semibold text-slate-600">
-                    连接包（可选）
-                    <input
-                      value={customPackage}
-                      onChange={event => {
-                        setSelectedPlatform('')
-                        setCustomPackage(event.target.value)
-                        setConnectionConfig(null)
-                      }}
-                      placeholder="如 @alemonjs/onebot"
-                    />
-                  </label>
+                  {selectedPlatform === '__custom__' && (
+                    <>
+                      <label className="grid gap-1 text-xs font-semibold text-slate-600">
+                        登录连接
+                        <input
+                          value={customLogin}
+                          onChange={event => {
+                            setCustomLogin(event.target.value)
+                            scheduleLoginSave({
+                              login: event.target.value,
+                              packageName: customPackage.trim()
+                            })
+                          }}
+                          placeholder="如 onebot"
+                        />
+                      </label>
+                      <label className="grid gap-1 text-xs font-semibold text-slate-600">
+                        连接包（可选）
+                        <input
+                          value={customPackage}
+                          onChange={event => {
+                            setCustomPackage(event.target.value)
+                            setConnectionConfig(null)
+                          }}
+                          placeholder="如 @alemonjs/onebot"
+                        />
+                      </label>
+                    </>
+                  )}
                 </div>
                 {packageTarget &&
                   (!knownPlatform || !knownPlatform.installed) && (
@@ -6549,58 +7002,32 @@ function RuntimePanel({
                     </footer>
                   )}
               </section>
-              {connectionConfig?.fields.length ? (
+              {connectionConfig?.fields?.length ? (
                 <section className="rounded-lg border border-slate-200">
                   <header className="border-b border-slate-200 bg-slate-50 px-3 py-2">
-                    <strong className="text-xs text-slate-700">连接配置</strong>
-                    <small className="ml-2 text-[11px] text-slate-400">
-                      保存到 alemon.config.yaml
-                    </small>
+                    <strong className="flex items-center gap-1.5 text-xs text-slate-700">
+                      <PlatformLogo
+                        logo={connectionConfig.logo}
+                        className="size-3.5"
+                      />
+                      连接配置
+                    </strong>
+                    <div className="flex items-center justify-between">
+                      <div className="text-[11px] text-slate-400">
+                        保存到 alemon.config.yaml
+                      </div>
+                      <ConfigSourceLinks
+                        source={connectionConfig.configSource}
+                      />
+                    </div>
                   </header>
-                  <div className="grid gap-3 p-3 sm:grid-cols-2">
-                    {connectionConfig.fields.map(field => (
-                      <label
-                        key={field.name}
-                        className="grid gap-1 text-xs font-semibold text-slate-600"
-                      >
-                        {field.description || field.name}
-                        {field.required && (
-                          <em className="not-italic text-orange-700">必填</em>
-                        )}
-                        {field.type === 'boolean' || field.type === 'bool' ? (
-                          <select
-                            value={connectionValues[field.name] ?? ''}
-                            onChange={event =>
-                              updateConnectionValue(
-                                field.name,
-                                event.target.value
-                              )
-                            }
-                          >
-                            <option value="">不设置</option>
-                            <option value="true">开启</option>
-                            <option value="false">关闭</option>
-                          </select>
-                        ) : (
-                          <input
-                            type={
-                              field.type === 'number' ||
-                              field.type === 'integer'
-                                ? 'number'
-                                : 'text'
-                            }
-                            value={connectionValues[field.name] ?? ''}
-                            onChange={event =>
-                              updateConnectionValue(
-                                field.name,
-                                event.target.value
-                              )
-                            }
-                            placeholder={field.name}
-                          />
-                        )}
-                      </label>
-                    ))}
+                  <div className="p-3">
+                    <ConfigFieldsEditor
+                      fields={connectionConfig.fields}
+                      values={connectionValues}
+                      onChange={updateConnectionValue}
+                      className="grid gap-3 sm:grid-cols-2"
+                    />
                   </div>
                 </section>
               ) : packageTarget && knownPlatform?.installed ? (
@@ -6616,14 +7043,17 @@ function RuntimePanel({
                 // or typed one). The configured login is ignored here so the
                 // button stays enabled when the user makes no choice.
                 const userLogin = Boolean(
-                  customLogin.trim() || selectedPlatform
+                  customLogin.trim() ||
+                  (selectedPlatform && selectedPlatform !== '__custom__')
                 )
                 // Missing required fields only block start when a login is
                 // chosen; without a login the robot starts directly.
                 const missing = (connectionConfig?.fields ?? [])
                   .filter(
                     field =>
-                      field.required && !connectionValues[field.name]?.trim()
+                      field.required &&
+                      !field.default &&
+                      isMissingConfigValue(connectionValues[field.name])
                   )
                   .map(field => field.description || field.name)
                 const blocked = userLogin && missing.length > 0
@@ -6649,6 +7079,92 @@ function RuntimePanel({
         </Modal>
       )}
       <section className="grid gap-3">
+        <section className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+          <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+            <div className="grid gap-1">
+              <strong className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+                端口检查
+                <StatusDot
+                  active={portStatus.length > 0 && portStatus.every(item => !item.occupied || item.owned)}
+                  label={
+                    portStatus.length > 0
+                      ? portStatus.some(item => item.occupied && !item.owned)
+                        ? '有端口被其他进程占用'
+                        : '可正常启动'
+                      : '检测中'
+                  }
+                />
+              </strong>
+              <span className="block text-xs text-slate-500">
+                启动前会主动确认机器人要绑定的端口没有被其他进程占用。
+              </span>
+            </div>
+            <button
+              className="text-button"
+              disabled={portStatusBusy}
+              onClick={() => void refreshPorts()}
+            >
+              {portStatusBusy ? '检测中…' : '重新检测'}
+            </button>
+          </div>
+          <div className="divide-y divide-slate-100 border-t border-slate-100">
+            {portStatusError && (
+              <p className="m-0 px-4 py-3 text-xs leading-5 text-orange-700">
+                {portStatusError}
+              </p>
+            )}
+            {!portStatusError && portStatus.length === 0 && (
+              <p className="m-0 px-4 py-3 text-xs leading-5 text-slate-500">
+                {portStatusBusy ? '正在检测端口…' : '暂无可检测的端口。'}
+              </p>
+            )}
+            {!portStatusError &&
+              portStatus.map(item => {
+                const blocked = item.occupied && !item.owned
+                return (
+                  <div
+                    key={`${item.kind}:${item.port}`}
+                    className="flex flex-wrap items-center gap-2 px-4 py-2.5 text-xs"
+                  >
+                    <i
+                      className={cn(
+                        'inline-block size-2 rounded-full',
+                        blocked
+                          ? 'bg-red-500'
+                          : item.occupied
+                            ? 'bg-amber-500'
+                            : 'bg-emerald-500'
+                      )}
+                      aria-hidden="true"
+                    />
+                    <span className="font-semibold text-slate-700">
+                      {item.label}
+                    </span>
+                    <span className="text-slate-500">端口 {item.port}</span>
+                    {item.occupied ? (
+                      <span
+                        className={
+                          blocked ? 'text-red-600' : 'text-amber-600'
+                        }
+                      >
+                        {blocked
+                          ? `已被其他进程占用${
+                              item.pid
+                                ? `（PID ${item.pid}${
+                                    item.process ? `：${item.process}` : ''
+                                  }）`
+                                : ''
+                            }`
+                          : '由本机器人进程占用'}
+                      </span>
+                    ) : (
+                      <span className="text-emerald-600">空闲</span>
+                    )}
+                  </div>
+                )
+              })}
+          </div>
+        </section>
         <section className="overflow-hidden rounded-xl border border-slate-200 bg-white">
           <div className="divide-y divide-slate-200">
             <section className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
@@ -6937,39 +7453,43 @@ function RuntimePanel({
             {/* PM2 status detection can be unreliable (daemon/version mismatch,
                 sandboxed reads), so these actions stay clickable regardless of
                 the detected state. The backend reports errors per action. */}
-            <button
-              className="secondary-button"
-              disabled={busy}
-              onClick={() =>
-                ask('停止服务', '会停止当前项目在后台运行的机器人。', () =>
-                  onRun('pm2-stop')
-                )
-              }
-            >
-              停止服务
-            </button>
-            <button
-              className="secondary-button"
-              disabled={busy}
-              onClick={() =>
-                ask('重启服务', '会停止并重新启动后台运行的机器人。', () =>
-                  onRun('pm2-restart')
-                )
-              }
-            >
-              重启
-            </button>
-            <button
-              className="secondary-button"
-              disabled={busy}
-              onClick={() =>
-                ask('更新服务', '会尽量不中断服务地应用最新设置。', () =>
-                  onRun('pm2-reload')
-                )
-              }
-            >
-              重载
-            </button>
+            {persistentReady && (
+              <>
+                <button
+                  className="secondary-button"
+                  disabled={busy}
+                  onClick={() =>
+                    ask('停止服务', '会停止当前项目在后台运行的机器人。', () =>
+                      onRun('pm2-stop')
+                    )
+                  }
+                >
+                  停止服务
+                </button>
+                <button
+                  className="secondary-button"
+                  disabled={busy}
+                  onClick={() =>
+                    ask('重启服务', '会停止并重新启动后台运行的机器人。', () =>
+                      onRun('pm2-restart')
+                    )
+                  }
+                >
+                  重启
+                </button>
+                <button
+                  className="secondary-button"
+                  disabled={busy}
+                  onClick={() =>
+                    ask('更新服务', '会尽量不中断服务地应用最新设置。', () =>
+                      onRun('pm2-reload')
+                    )
+                  }
+                >
+                  重载
+                </button>
+              </>
+            )}
             {!persistentReady && (
               <button
                 className="secondary-button"
@@ -7039,7 +7559,10 @@ function AppEmbed({
   onMinimize,
   zIndex,
   onActivate,
-  minimized
+  minimized,
+  webviews,
+  selectedWebViewID,
+  onSelectWebView
 }: {
   root: string
   onClose: () => void
@@ -7047,8 +7570,21 @@ function AppEmbed({
   zIndex: number
   onActivate: () => void
   minimized: boolean
+  webviews: Array<{
+    id: string
+    name: string
+    package: string
+    logo?: string
+  }>
+  selectedWebViewID: string
+  onSelectWebView: (entry: (typeof webviews)[number]) => void
 }) {
-  const src = `/api/v1/robot/app/${robotAppToken(root)}/`
+  const token = robotAppToken(root)
+  const appSrc = `/api/v1/robot/app/${token}/`
+  const selectedWebView = webviews.find(item => item.id === selectedWebViewID)
+  const frameSrc = selectedWebView
+    ? `/api/v1/robot/webview/${token}/${selectedWebView.id}/`
+    : appSrc
   return (
     <DesktopWindow
       id="app"
@@ -7067,7 +7603,78 @@ function AppEmbed({
       width={980}
       height={680}
     >
-      <iframe className="h-full w-full border-0" src={src} title="机器人应用" />
+      <div className="flex min-h-0 flex-1 flex-col">
+        <div className="flex items-center gap-1 overflow-x-auto border-b border-slate-200 bg-slate-50 px-2 py-1.5">
+          <button
+            className={`shrink-0 rounded-md px-2.5 py-1 text-xs font-semibold ${
+              !selectedWebView
+                ? 'bg-white text-brand-700 shadow-sm'
+                : 'text-slate-500 hover:bg-white/70'
+            }`}
+            onClick={() => onSelectWebView({ id: '', name: '', package: '' })}
+          >
+            机器人应用
+          </button>
+          {webviews.map(entry => (
+            <button
+              key={entry.id}
+              className={`flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-semibold ${
+                selectedWebViewID === entry.id
+                  ? 'bg-white text-brand-700 shadow-sm'
+                  : 'text-slate-500 hover:bg-white/70'
+              }`}
+              onClick={() => onSelectWebView(entry)}
+              title={entry.package}
+            >
+              <PlatformLogo logo={entry.logo} className="size-3.5" />
+              {entry.name}
+            </button>
+          ))}
+        </div>
+        <iframe
+          className="min-h-0 flex-1 border-0"
+          src={frameSrc}
+          title={selectedWebView ? selectedWebView.name : '机器人应用'}
+        />
+      </div>
+    </DesktopWindow>
+  )
+}
+
+function TestCenterWindow({
+  root,
+  minimized,
+  zIndex,
+  onClose,
+  onMinimize,
+  onActivate
+}: {
+  root: string
+  minimized: boolean
+  zIndex: number
+  onClose: () => void
+  onMinimize: () => void
+  onActivate: () => void
+}) {
+  return (
+    <DesktopWindow
+      id="test"
+      open
+      minimized={minimized}
+      title="机器人测试"
+      subtitle={root || '当前机器人目录'}
+      icon={
+        <FlaskConical className="size-4 shrink-0 text-brand-600 dark:text-brand-200" />
+      }
+      onClose={onClose}
+      onMinimize={onMinimize}
+      zIndex={zIndex}
+      onActivate={onActivate}
+      initialPosition={{ left: 72, top: 56 }}
+      width={980}
+      height={680}
+    >
+      <TestCenter root={root} />
     </DesktopWindow>
   )
 }
@@ -7082,10 +7689,12 @@ function ControlCard({
   developerMode,
   agentOpen,
   appLaunching,
+  testLaunching,
   onOpenConsole,
   onOpenAI,
   onOpenOps,
   onOpenApp,
+  onOpenTest,
   onPage,
   onSection,
   onBuildMode,
@@ -7101,10 +7710,12 @@ function ControlCard({
   developerMode: boolean
   agentOpen: boolean
   appLaunching: boolean
+  testLaunching: boolean
   onOpenConsole: () => void
   onOpenAI: () => void
   onOpenOps: () => void
   onOpenApp: () => void
+  onOpenTest: () => void
   onPage: (page: Page) => void
   onSection: (section: Section) => void
   onBuildMode: (mode: 'manifest' | 'npm' | 'git') => void
@@ -7304,7 +7915,7 @@ function ControlCard({
         )}
         {project && (
           <footer
-            className="control-quick-actions mt-2 grid grid-cols-3 gap-1 border-t border-slate-100 pt-2 dark:border-slate-700"
+            className="control-quick-actions mt-2 grid grid-cols-4 gap-1 border-t border-slate-100 pt-2 dark:border-slate-700"
             title={project.path}
           >
             <button
@@ -7333,6 +7944,24 @@ function ControlCard({
                 <Monitor className="size-3.5" />
               )}
               <span>应用</span>
+            </button>
+            <button
+              className="inline-flex min-h-8 items-center justify-center gap-1 rounded-md px-1 text-[11px] text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700 disabled:opacity-40 dark:text-slate-400 dark:hover:bg-slate-700 dark:hover:text-slate-200"
+              onClick={onOpenTest}
+              disabled={testLaunching}
+              aria-label={testLaunching ? '正在启动测试…' : '打开测试'}
+              title={
+                testLaunching
+                  ? '正在启动测试，请稍候…'
+                  : '打开测试（需配置机器人端口并启动沙盒模式）'
+              }
+            >
+              {testLaunching ? (
+                <span className="inline-block size-3.5 animate-spin rounded-full border-2 border-slate-300 border-t-brand-600" />
+              ) : (
+                <FlaskConical className="size-3.5" />
+              )}
+              <span>测试</span>
             </button>
             <button
               className="inline-flex min-h-8 items-center justify-center gap-1 rounded-md px-1 text-[11px] text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-700 dark:hover:text-slate-200"
@@ -8439,7 +9068,7 @@ function FileEditor({
       className="file-editor"
       icon={<Settings className="size-4" />}
       title="文本编辑"
-      description="直接编辑当前配置文件内容 · 修改后自动保存"
+      description="直接编辑当前配置文件内容"
       actions={toolbar}
     >
       <textarea
@@ -8485,9 +9114,7 @@ function OperationLog({
       </header>
       <pre>{output}</pre>
       <small>
-        {needsPermission
-          ? '授权完成后，请回到这里重新执行本次操作。'
-          : ''}
+        {needsPermission ? '授权完成后，请回到这里重新执行本次操作。' : ''}
       </small>
     </aside>
   )

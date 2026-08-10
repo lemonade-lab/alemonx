@@ -53,6 +53,20 @@ func TestWebViewsDiscoverCurrentRobotPluginsAndContainFiles(t *testing.T) {
 	}
 }
 
+func TestWebViewServerPortRequirementIsExposed(t *testing.T) {
+	root := t.TempDir()
+	writeWebViewFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
+	writeWebViewFixture(t, filepath.Join(root, "packages", "web", "package.json"), `{"name":"web","alemonjs":{"web":{"root":"dist","serverPort":true},"desktop":{"sidebars":[{"name":"需要端口的页面"}]}}}`)
+	writeWebViewFixture(t, filepath.Join(root, "packages", "web", "dist", "index.html"), `ok`)
+	entries, err := (Manager{}).WebViews(root)
+	if err != nil {
+		t.Fatalf("WebViews: %v", err)
+	}
+	if len(entries) != 1 || !entries[0].RequiresServerPort {
+		t.Fatalf("entries = %#v, want requiresServerPort", entries)
+	}
+}
+
 func writeWebViewFixture(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {

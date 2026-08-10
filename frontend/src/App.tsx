@@ -14,6 +14,11 @@ import { registerDesktopWindowShortcut } from './components/desktopWindowShortcu
 import { EnvironmentFixDialog } from './components/EnvironmentFixDialog'
 import { ErrorNotice } from './components/ErrorNotice'
 import {
+  isPadViewport,
+  PAD_BREAKPOINT,
+  useIsPadViewport
+} from './hooks/useIsPadViewport'
+import {
   workspaceApi,
   useGoalsQuery,
   useLazyEnvironmentReportQuery,
@@ -23,7 +28,16 @@ import { GuideHome } from './features/guide/GuideHome'
 import { EnvironmentCheckPanel } from './features/guide/EnvironmentCheckPanel'
 import { guideIcons as icons } from './features/guide/icons'
 import { recommendReleaseAssets } from './features/guide/releaseAssets'
-import { Activity, GitBranch, Home, Monitor, Settings, ShieldCheck, Terminal } from 'lucide-react'
+import {
+  Activity,
+  FlaskConical,
+  GitBranch,
+  Home,
+  Monitor,
+  Settings,
+  ShieldCheck,
+  Terminal
+} from 'lucide-react'
 import type {
   Check,
   Creation,
@@ -48,6 +62,7 @@ type DockWindows = {
   terminal: DockWindowState
   git: DockWindowState
   app: DockWindowState
+  test: DockWindowState
   pm2Logs: DockWindowState
   pm2Status: DockWindowState
   ops: DockWindowState
@@ -56,7 +71,17 @@ type DockWindows = {
 type ResizeCorner = 'nw' | 'ne' | 'sw' | 'se'
 type WorkbenchRect = { left: number; top: number; width: number; height: number }
 
+function padWorkbenchRect(): WorkbenchRect {
+  return {
+    left: 0,
+    top: 0,
+    width: window.innerWidth,
+    height: window.innerHeight
+  }
+}
+
 function initialWorkbenchRect(): WorkbenchRect {
+  if (isPadViewport()) return padWorkbenchRect()
   const width = Math.min(1240, Math.max(640, window.innerWidth - 48))
   const height = Math.min(760, Math.max(420, window.innerHeight - 56))
   return {
@@ -68,6 +93,7 @@ function initialWorkbenchRect(): WorkbenchRect {
 }
 
 function clampWorkbenchRect(rect: WorkbenchRect): WorkbenchRect {
+  if (isPadViewport()) return padWorkbenchRect()
   const maxWidth = Math.max(640, window.innerWidth - 32)
   const maxHeight = Math.max(420, window.innerHeight - 32)
   const width = Math.min(maxWidth, Math.max(640, rect.width))
@@ -85,6 +111,7 @@ const emptyDockWindows: DockWindows = {
   terminal: closedDockWindow,
   git: closedDockWindow,
   app: closedDockWindow,
+  test: closedDockWindow,
   pm2Logs: closedDockWindow,
   pm2Status: closedDockWindow,
   ops: closedDockWindow,
@@ -120,6 +147,8 @@ export default function App() {
   const previewRect = useRef<WorkbenchRect | null>(null)
   const previewFrame = useRef<number | null>(null)
   const [workbenchMaximized, setWorkbenchMaximized] = useState(false)
+  const isPadView = useIsPadViewport()
+  const padRestoreRef = useRef<WorkbenchRect | null>(null)
   const [workbenchLayer, setWorkbenchLayer] = useState(100)
   const [dockWindows, setDockWindows] = useState<DockWindows>(emptyDockWindows)
   const [mainWindowHidden, setMainWindowHidden] = useState(false)
@@ -192,6 +221,7 @@ export default function App() {
   }
 
   function beginWorkbenchDrag(event: React.PointerEvent<HTMLDivElement>) {
+    if (isPadView) return
     const target = event.target as HTMLElement
     if (target.closest('.guide-window') && !hasOpenDesktopWindow)
       activateWorkbench()
@@ -272,6 +302,7 @@ export default function App() {
     corner: ResizeCorner,
     event: React.PointerEvent<HTMLButtonElement>
   ) {
+    if (isPadView) return
     const windowElement = document.querySelector<HTMLElement>('.guide-window')
     const stage = event.currentTarget.closest<HTMLDivElement>('.workbench-stage')
     if (!windowElement || !stage) return
@@ -300,6 +331,7 @@ export default function App() {
   }
 
   function toggleWorkbenchMaximize(event: React.MouseEvent<HTMLDivElement>) {
+    if (isPadView) return
     const target = event.target as HTMLElement
     const topbar = target.closest('.topbar')
     if (
@@ -346,10 +378,29 @@ export default function App() {
       window.removeEventListener('alx:desktop-window-layer', syncWindowLayer)
   }, [])
   useLayoutEffect(() => {
+    const media = window.matchMedia(PAD_BREAKPOINT)
     const clampWorkbench = () => setWorkbenchRect(clampWorkbenchRect)
+    const syncPadMode = () => {
+      if (media.matches) {
+        if (!padRestoreRef.current)
+          padRestoreRef.current = workbenchRectRef.current
+        setWorkbenchRect(padWorkbenchRect())
+        setWorkbenchMaximized(false)
+      } else if (padRestoreRef.current) {
+        const restore = clampWorkbenchRect(padRestoreRef.current)
+        padRestoreRef.current = null
+        setWorkbenchRect(restore)
+      } else {
+        setWorkbenchRect(initialWorkbenchRect())
+      }
+    }
     clampWorkbench()
     window.addEventListener('resize', clampWorkbench)
-    return () => window.removeEventListener('resize', clampWorkbench)
+    media.addEventListener('change', syncPadMode)
+    return () => {
+      window.removeEventListener('resize', clampWorkbench)
+      media.removeEventListener('change', syncPadMode)
+    }
   }, [])
   useLayoutEffect(() => {
     workbenchRectRef.current = workbenchRect
@@ -441,19 +492,20 @@ export default function App() {
     maxWidth: 'none',
     maxHeight: 'none'
   }
-  const workbenchWindowControls = workbenchMaximized ? null : (
-    <>
-      {(['nw', 'ne', 'sw', 'se'] as ResizeCorner[]).map(corner => (
-        <button
-          className={`desktop-window-resize desktop-window-resize-${corner}`}
-          onPointerDown={event => beginWorkbenchResize(corner, event)}
-          aria-label="调整工作台窗口大小"
-          title="调整窗口大小"
-          key={corner}
-        />
-      ))}
-    </>
-  )
+  const workbenchWindowControls =
+    workbenchMaximized || isPadView ? null : (
+      <>
+        {(['nw', 'ne', 'sw', 'se'] as ResizeCorner[]).map(corner => (
+          <button
+            className={`desktop-window-resize desktop-window-resize-${corner}`}
+            onPointerDown={event => beginWorkbenchResize(corner, event)}
+            aria-label="调整工作台窗口大小"
+            title="调整窗口大小"
+            key={corner}
+          />
+        ))}
+      </>
+    )
   const hasOpenDesktopWindow =
     [
       dockWindows.terminal,
@@ -497,6 +549,9 @@ export default function App() {
           }
           onApp={() =>
             window.dispatchEvent(new CustomEvent('alx:desktop-app-toggle'))
+          }
+          onTest={() =>
+            window.dispatchEvent(new CustomEvent('alx:desktop-test-toggle'))
           }
           onPM2Logs={() =>
             window.dispatchEvent(new CustomEvent('alx:desktop-pm2-logs-toggle'))
@@ -614,6 +669,7 @@ function WorkbenchDock({
   onTerminal,
   onGit,
   onApp,
+  onTest,
   onPM2Logs,
   onPM2Status,
   onOps,
@@ -627,6 +683,7 @@ function WorkbenchDock({
   onTerminal: () => void
   onGit: () => void
   onApp: () => void
+  onTest: () => void
   onPM2Logs: () => void
   onPM2Status: () => void
   onOps: () => void
@@ -636,6 +693,7 @@ function WorkbenchDock({
     windows.terminal,
     windows.git,
     windows.app,
+    windows.test,
     windows.pm2Logs,
     windows.pm2Status,
     windows.ops,
@@ -696,6 +754,18 @@ function WorkbenchDock({
             >
               <Monitor className="size-5" />
               <span>应用</span>
+            </button>
+          </div>
+        )}
+        {windows.test.open && (
+          <div className="workbench-dock-apps">
+            <button
+              className={windows.test.minimized ? '' : 'active'}
+              onClick={onTest}
+              title={windows.test.minimized ? '恢复测试' : '最小化测试'}
+            >
+              <FlaskConical className="size-5" />
+              <span>测试</span>
             </button>
           </div>
         )}

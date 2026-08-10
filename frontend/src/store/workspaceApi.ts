@@ -29,16 +29,36 @@ type CatalogGroup = {
 }
 type CatalogDocument = { source: string; markdown: string }
 type CatalogVersions = { latest: string; versions: string[] }
-type PackageConfig = {
+export type PackageConfigField = {
+  name: string
+  type: string
+  required: boolean
+  description: string
+  default?: unknown
+  rules?: Array<{ pattern: string; message?: string }>
+  config?: PackageConfigField[]
+}
+export type PackageConfig = {
   package: string
   namespace: string
-  fields: Array<{
-    name: string
-    type: string
-    required: boolean
-    description: string
-  }>
-  values: Record<string, string>
+  fields: PackageConfigField[]
+  values: Record<string, unknown>
+  configSource?: {
+    readme?: string
+    official?: string
+    platform?: string
+  }
+  logo?: string
+  commands?: Array<{ name: string; command: string }>
+  webServerPort?: boolean
+}
+type WebViewEntry = {
+  id: string
+  package: string
+  name: string
+  description?: string
+  logo?: string
+  requiresServerPort?: boolean
 }
 type LocalPackages = {
   items: Array<{
@@ -72,6 +92,8 @@ export type RuntimeOverview = {
     declared: boolean
     installed: boolean
     version?: string
+    source?: 'builtin' | 'declared'
+    logo?: string
   }>
 }
 export type PM2Status = {
@@ -132,6 +154,17 @@ export type RuntimeRepairPlan = {
 export type RuntimeRepairResult = RuntimeRepairPlan & {
   backupPath?: string
   output?: string
+}
+export type RobotPortStatus = {
+  kind: string
+  label: string
+  port: number
+  configured: boolean
+  occupied: boolean
+  pid?: number
+  process?: string
+  owned?: boolean
+  error?: string
 }
 type PackageManifest = {
   name: string
@@ -405,6 +438,29 @@ export const workspaceApi = createApi({
         { type: 'RobotFile', id: `${root}:alemon.config.yaml` }
       ]
     }),
+    robotWebViews: build.query<WebViewEntry[], string>({
+      query: root => `robot/webviews?${new URLSearchParams({ root })}`
+    }),
+    robotAppPortProbe: build.query<{ reachable: boolean; port: number }, string>({
+      query: root =>
+        `robot/app-port?${new URLSearchParams({ root, probe: '1' })}`
+    }),
+    testPort: build.query<
+      { port: number; configured: boolean; sandbox?: boolean },
+      string
+    >({
+      query: root => `robot/test-port?${new URLSearchParams({ root })}`
+    }),
+    robotTestPortProbe: build.query<
+      { reachable: boolean; port: number; sandbox?: boolean },
+      string
+    >({
+      query: root =>
+        `robot/test-port?${new URLSearchParams({ root, probe: '1' })}`
+    }),
+    robotPorts: build.query<{ items: RobotPortStatus[] }, string>({
+      query: root => `robot/ports?${new URLSearchParams({ root })}`
+    }),
     setAppEnabled: build.mutation<
       RobotResult,
       { root: string; package: string; enabled: boolean }
@@ -421,6 +477,17 @@ export const workspaceApi = createApi({
     saveAppPort: build.mutation<RobotResult, { root: string; port: number }>({
       query: ({ root, port }) => ({
         url: `robot/app-port?${new URLSearchParams({ root })}`,
+        method: 'POST',
+        body: { port }
+      }),
+      invalidatesTags: (_result, _error, body) => [
+        { type: 'RobotFile', id: `${body.root}:alemon.config.yaml` },
+        { type: 'Runtime', id: body.root }
+      ]
+    }),
+    saveTestPort: build.mutation<RobotResult, { root: string; port: number }>({
+      query: ({ root, port }) => ({
+        url: `robot/test-port?${new URLSearchParams({ root })}`,
         method: 'POST',
         body: { port }
       }),
@@ -562,7 +629,7 @@ export const workspaceApi = createApi({
     }),
     writePackageConfig: build.mutation<
       RobotResult,
-      { root: string; package: string; values: Record<string, string> }
+      { root: string; package: string; values: Record<string, unknown> }
     >({
       query: body => ({ url: 'robot/package-config', method: 'PUT', body }),
       invalidatesTags: (_result, _error, body) => [
@@ -638,6 +705,13 @@ export const {
   useLazyAppPortQuery,
   useSaveAppPortMutation,
   useRobotAppsQuery,
+  useRobotWebViewsQuery,
+  useRobotAppPortProbeQuery,
+  useLazyRobotPortsQuery,
+  useTestPortQuery,
+  useLazyTestPortQuery,
+  useRobotTestPortProbeQuery,
+  useSaveTestPortMutation,
   useSetAppEnabledMutation,
   useLazyRobotRuntimePreflightQuery,
   useLazyRobotRuntimeRepairQuery,

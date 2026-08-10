@@ -8152,6 +8152,18 @@ button > svg,
 .topbar button:hover {
   background: var(--theme-surface-hover) !important;
 }
+/* Floating window header buttons follow the same borderless chrome as the
+ * workbench topbar. Terminal tabs keep their own active indicator. */
+.floating-window-header button:not(.readonly-console-tab):not(
+    .readonly-console-tab-add
+  ) {
+  border-color: transparent !important;
+  box-shadow: none !important;
+}
+.floating-window-header
+  button:not(.readonly-console-tab):not(.readonly-console-tab-add):hover {
+  background: var(--theme-surface-hover) !important;
+}
 .topbar-popover {
   background: var(--theme-surface-panel) !important;
   border-color: var(--theme-border-default) !important;

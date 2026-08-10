@@ -23,10 +23,19 @@ func TestRepositoryFileCandidatesKeepURLDirectory(t *testing.T) {
 			t.Fatal(err)
 		}
 		items, err := repositoryFileCandidates(parsed, test.filename)
-		if err != nil || len(items) == 0 || items[0] != test.want {
+		if err != nil || len(items) == 0 || !containsString(items, test.want) {
 			t.Fatalf("%s %s: got %v, %v", test.source, test.filename, items, err)
 		}
 	}
+}
+
+func containsString(items []string, want string) bool {
+	for _, item := range items {
+		if item == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestRepositoryInstallURLKeepsTreeRef(t *testing.T) {
@@ -35,6 +44,32 @@ func TestRepositoryInstallURLKeepsTreeRef(t *testing.T) {
 	}
 	if got, want := repositoryInstallURL("https://gitee.com/example/project"), "https://gitee.com/example/project.git"; got != want {
 		t.Fatalf("default install URL = %q, want %q", got, want)
+	}
+}
+
+func TestJsDelivrURLConvertsRawGitHubURL(t *testing.T) {
+	if got, want := jsDelivrURL("https://raw.githubusercontent.com/lemonade-lab/alemonjs/main/packages/qq-bot/README.md"), "https://cdn.jsdelivr.net/gh/lemonade-lab/alemonjs@main/packages/qq-bot/README.md"; got != want {
+		t.Fatalf("jsDelivr URL = %q, want %q", got, want)
+	}
+	if got := jsDelivrURL("https://example.com/not-github/file.md"); got != "" {
+		t.Fatalf("non-GitHub URL must not convert, got %q", got)
+	}
+}
+
+func TestRepositoryFileCandidatesPreferJsDelivr(t *testing.T) {
+	parsed, err := url.Parse("https://github.com/example/project/blob/main/packages/kook/README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err := repositoryFileCandidates(parsed, "README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) == 0 || !strings.HasPrefix(items[0], "https://cdn.jsdelivr.net/gh/") {
+		t.Fatalf("first candidate should be jsDelivr mirror: %v", items)
+	}
+	if !strings.Contains(strings.Join(items, " "), "raw.githubusercontent.com") {
+		t.Fatalf("raw GitHub fallback must remain: %v", items)
 	}
 }
 

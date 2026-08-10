@@ -285,7 +285,7 @@ export function RobotConfigForm({ content, toolbar, onChange }: Props) {
       className="max-w-190"
       icon={<Settings className="size-4" />}
       title="机器人配置"
-      description="管理当前机器人的运行与连接参数 · 修改后自动保存"
+      description="管理当前机器人的运行与连接参数"
       actions={toolbar}
     >
       {group(

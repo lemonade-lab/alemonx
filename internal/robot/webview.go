@@ -23,10 +23,12 @@ import (
 // selected robot. A desktop.sidebar is used only as its registration point;
 // setup never runs its desktop command.
 type WebViewEntry struct {
-	ID          string `json:"id"`
-	Package     string `json:"package"`
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
+	ID                string `json:"id"`
+	Package           string `json:"package"`
+	Name              string `json:"name"`
+	Description       string `json:"description,omitempty"`
+	Logo              string `json:"logo,omitempty"`
+	RequiresServerPort bool  `json:"requiresServerPort,omitempty"`
 }
 
 type webViewManifest struct {
@@ -34,9 +36,11 @@ type webViewManifest struct {
 	Description string `json:"description"`
 	Alemonjs    struct {
 		Web struct {
-			Root string `json:"root"`
+			Root       string `json:"root"`
+			ServerPort bool   `json:"serverPort"`
 		} `json:"web"`
 		Desktop struct {
+			Logo     string `json:"logo"`
 			Sidebars []struct {
 				Name string `json:"name"`
 			} `json:"sidebars"`
@@ -162,7 +166,7 @@ func resolveWebViews(root string) ([]resolvedWebView, error) {
 				continue
 			}
 			seen[id] = true
-			items = append(items, resolvedWebView{WebViewEntry: WebViewEntry{ID: id, Package: manifest.Name, Name: label, Description: manifest.Description}, root: resolvedRoot})
+			items = append(items, resolvedWebView{WebViewEntry: WebViewEntry{ID: id, Package: manifest.Name, Name: label, Description: manifest.Description, Logo: manifest.Alemonjs.Desktop.Logo, RequiresServerPort: manifest.Alemonjs.Web.ServerPort}, root: resolvedRoot})
 		}
 	}
 	sort.Slice(items, func(i, j int) bool { return strings.ToLower(items[i].Name) < strings.ToLower(items[j].Name) })

@@ -1,0 +1,238 @@
+:root {
+        /* 字体设置 */
+        --font-family: var(--vscode-font-family,
+                        -apple-system,
+                        BlinkMacSystemFont,
+                        sans-serif);
+        --font-weight: var(--vscode-font-weight, normal);
+        --font-size: var(--vscode-font-size, 13px);
+        --editor-font-family: var(--vscode-editor-font-family,
+                        Menlo,
+                        Monaco,
+                        'Courier New',
+                        monospace);
+        --editor-font-weight: var(--vscode-editor-font-weight, normal);
+        --editor-font-size: var(--vscode-editor-font-size, 12px);
+
+        /* 主要背景色 */
+        --activityBar-background: var(--vscode-activityBar-background,
+                        #003847);
+        /* main color #003847 */
+        --editor-background: var(--vscode-editor-background,
+                        #002b36);
+        /* main color #002b36 */
+        --editorGroupHeader-tabsBackground: var(--vscode-editorGroupHeader-tabsBackground,
+                        #004052);
+        /*  main color #004052 */
+        --editorWidget-background: var(--vscode-editorWidget-background,
+                        #00212b);
+        /*  main color #00212b */
+        --dropdown-background: var(--vscode-dropdown-background, #00212b);
+        --input-background: var(--vscode-input-background, #003847);
+        --panel-background: var(--vscode-panel-background, #002b36);
+        --sideBar-background: var(--vscode-sideBar-background, #00212b);
+        --textPreformat-background: var(--vscode-textPreformat-background,
+                        rgba(255, 255, 255, 0.1));
+        --statusBar-background: var(--vscode-statusBar-background, #00212b);
+        --titleBar-background: var(--vscode-titleBar-activeBackground, #002c39);
+        --tab-activeBackground: var(--vscode-tab-activeBackground,
+                        #002b37);
+        /*  main color #002b37 */
+        --tab-inactiveBackground: var(--vscode-tab-inactiveBackground, #004052);
+
+        /* 悬停背景色 */
+        --input-hoverBackground: var(--vscode-inputOption-hoverBackground,
+                        rgba(90, 93, 94, 0.5));
+        --button-hoverBackground: var(--vscode-button-hoverBackground,
+                        rgba(50, 193, 181, 0.6));
+        --list-hoverBackground: var(--vscode-list-hoverBackground,
+                        rgba(0, 68, 84, 0.67));
+        --statusBarItem-hoverBackground: var(--vscode-statusBarItem-hoverBackground,
+                        rgba(255, 255, 255, 0.12));
+
+        /* 选择和焦点背景色 */
+        --selection-background: var(--vscode-editor-selectionBackground, #274642);
+        --list-activeSelectionBackground: var(--vscode-list-activeSelectionBackground,
+                        #005a6f);
+        --list-inactiveSelectionBackground: var(--vscode-list-inactiveSelectionBackground,
+                        rgba(0, 68, 84, 0.53));
+
+        /* 主要前景色 */
+        --foreground: var(--vscode-foreground, #cccccc);
+        --input-foreground: var(--vscode-input-foreground, #93a1a1);
+        --editor-foreground: var(--vscode-editor-foreground, #839496);
+        --editorWidget-foreground: var(--vscode-editorWidget-foreground, #cccccc);
+        --descriptionForeground: var(--vscode-descriptionForeground,
+                        rgba(204, 204, 204, 0.7));
+        --statusBar-foreground: var(--vscode-statusBar-foreground, #93a1a1);
+        --tab-activeForeground: var(--vscode-tab-activeForeground, #d6dbdb);
+        --tab-inactiveForeground: var(--vscode-tab-inactiveForeground, #93a1a1);
+
+        /* 特殊前景色 */
+        --errorForeground: var(--vscode-errorForeground, #ffeaea);
+        --icon-foreground: var(--vscode-icon-foreground, #c5c5c5);
+        --textLink-foreground: var(--vscode-textLink-foreground, #3794ff);
+        --textPreformat-foreground: var(--vscode-textPreformat-foreground, #d7ba7d);
+
+        /* 按钮样式 */
+        --button-background: var(--vscode-button-background, rgba(42, 161, 152, 0.6));
+        --button-foreground: var(--vscode-button-foreground, #ffffff);
+        --button-secondaryBackground: var(--vscode-button-secondaryBackground,
+                        #3a3d41);
+        --button-secondaryForeground: var(--vscode-button-secondaryForeground,
+                        #ffffff);
+
+        /* 边框和分隔符 */
+        --dropdown-border: var(--vscode-dropdown-border, rgba(42, 161, 152, 0.6));
+        --editorWidget-border: var(--vscode-editorWidget-border, #454545);
+        --focusBorder: var(--vscode-focusBorder, rgba(42, 161, 152, 0.6));
+        --panel-border: var(--vscode-panel-border, #2b2b4a);
+        --tab-border: var(--vscode-tab-border, #003847);
+
+        /* 输入框样式 */
+        --input-placeholderForeground: var(--vscode-input-placeholderForeground,
+                        rgba(147, 161, 161, 0.67));
+        --inputValidation-errorBackground: var(--vscode-inputValidation-errorBackground,
+                        #571b26);
+        --inputValidation-warningBackground: var(--vscode-inputValidation-warningBackground,
+                        #5d5938);
+        --inputValidation-infoBackground: var(--vscode-inputValidation-infoBackground,
+                        #052730);
+
+        /* 列表和树形控件 */
+        --list-highlightForeground: var(--vscode-list-highlightForeground, #1ebcc5);
+        --list-errorForeground: var(--vscode-list-errorForeground, #f88070);
+        --list-warningForeground: var(--vscode-list-warningForeground, #cca700);
+
+        /* 编辑器特定 */
+        --editor-lineHighlightBackground: var(--vscode-editor-lineHighlightBackground,
+                        #073642);
+        --editorCursor-foreground: var(--vscode-editorCursor-foreground, #d30102);
+        --editorLineNumber-foreground: var(--vscode-editorLineNumber-foreground,
+                        #858585);
+        --editorIndentGuide-background: var(--vscode-editorIndentGuide-background,
+                        rgba(147, 161, 161, 0.5));
+
+        /* 小地图和滚动条 */
+        --scrollbarSlider-background: var(--vscode-scrollbarSlider-background,
+                        rgba(121, 121, 121, 0.4));
+        --scrollbarSlider-hoverBackground: var(--vscode-scrollbarSlider-hoverBackground,
+                        rgba(100, 100, 100, 0.7));
+        --scrollbarSlider-activeBackground: var(--vscode-scrollbarSlider-activeBackground,
+                        rgba(191, 191, 191, 0.4));
+
+        /* 终端颜色 */
+        --terminal-foreground: var(--vscode-terminal-foreground, #cccccc);
+        --terminal-selectionBackground: var(--vscode-terminal-selectionBackground,
+                        #274642);
+        --terminal-ansiBlack: var(--vscode-terminal-ansiBlack, #073642);
+        --terminal-ansiRed: var(--vscode-terminal-ansiRed, #dc322f);
+        --terminal-ansiGreen: var(--vscode-terminal-ansiGreen, #859900);
+        --terminal-ansiYellow: var(--vscode-terminal-ansiYellow, #b58900);
+        --terminal-ansiBlue: var(--vscode-terminal-ansiBlue, #268bd2);
+        --terminal-ansiMagenta: var(--vscode-terminal-ansiMagenta, #d33682);
+        --terminal-ansiCyan: var(--vscode-terminal-ansiCyan, #2aa198);
+        --terminal-ansiWhite: var(--vscode-terminal-ansiWhite, #eee8d5);
+
+        /* 调试相关 */
+        --debugIcon-startForeground: var(--vscode-debugIcon-startForeground, #89d185);
+        --debugIcon-breakpointForeground: var(--vscode-debugIcon-breakpointForeground,
+                        #e51400);
+        --debugIcon-pauseForeground: var(--vscode-debugIcon-pauseForeground, #75beff);
+        --debugIcon-stopForeground: var(--vscode-debugIcon-stopForeground, #f48771);
+
+        /* 测试相关 */
+        --testing-iconPassed: var(--vscode-testing-iconPassed, #73c991);
+        --testing-iconFailed: var(--vscode-testing-iconFailed, #f14c4c);
+        --testing-iconErrored: var(--vscode-testing-iconErrored, #f14c4c);
+        --testing-iconQueued: var(--vscode-testing-iconQueued, #cca700);
+
+        /* Git 装饰色 */
+        --gitDecoration-addedResourceForeground: var(--vscode-gitDecoration-addedResourceForeground,
+                        #81b88b);
+        --gitDecoration-modifiedResourceForeground: var(--vscode-gitDecoration-modifiedResourceForeground,
+                        #e2c08d);
+        --gitDecoration-deletedResourceForeground: var(--vscode-gitDecoration-deletedResourceForeground,
+                        #c74e39);
+        --gitDecoration-untrackedResourceForeground: var(--vscode-gitDecoration-untrackedResourceForeground,
+                        #73c991);
+        --gitDecoration-ignoredResourceForeground: var(--vscode-gitDecoration-ignoredResourceForeground,
+                        #8c8c8c);
+
+        /* 扩展和徽章 */
+        --badge-background: var(--vscode-badge-background, #047aa6);
+        --badge-foreground: var(--vscode-badge-foreground, #ffffff);
+        --activityBarBadge-background: var(--vscode-activityBarBadge-background,
+                        #007acc);
+        --activityBarBadge-foreground: var(--vscode-activityBarBadge-foreground,
+                        #ffffff);
+
+        /* 聊天和内联编辑 */
+        --chat-requestBackground: var(--vscode-chat-requestBackground,
+                        rgba(0, 43, 54, 0.62));
+        --chat-avatarBackground: var(--vscode-chat-avatarBackground, #1f1f1f);
+        --inlineChat-background: var(--vscode-inlineChat-background, #00212b);
+        --inlineChat-border: var(--vscode-inlineChat-border, #454545);
+
+        /* 欢迎页面 */
+        --welcomePage-tileBackground: var(--vscode-welcomePage-tileBackground,
+                        #00212b);
+        --welcomePage-tileHoverBackground: var(--vscode-welcomePage-tileHoverBackground,
+                        #002734);
+        --welcomePage-progress-background: var(--vscode-welcomePage-progress\.background,
+                        #003847);
+        --welcomePage-progress-foreground: var(--vscode-welcomePage-progress\.foreground,
+                        #3794ff);
+}
+
+/* 限定在 testone 容器内，避免覆盖 ALemonX 工作台自身的 body 背景与字体。 */
+.testone-root {
+        color: var(--editor-foreground);
+        font-family: var(--font-family);
+        font-weight: var(--font-weight);
+        font-size: var(--font-size);
+        background-color: var(--editor-background);
+}
+
+/* Hover 轻微提升（保留一个简单工具） */
+.hover-lift { transition: transform .25s ease, box-shadow .25s ease; }
+.hover-lift:hover { transform: translateY(-2px); }
+[data-theme='web3'] .hover-lift:hover { box-shadow: 0 4px 14px -4px rgba(0,234,255,0.45),0 0 0 1px rgba(127,90,240,0.4); }
+
+
+.testone-message {
+        .testone-message-notice-wrapper {
+                .testone-message-notice-content {
+                        background-color: var(--input-hoverBackground);
+                        color: var(--editor-foreground);
+                        border-radius: 4px;
+                        padding: 8px;
+                        font-family: var(--font-family);
+                        font-size: var(--font-size);
+                }
+        }
+}
+
+.testone-modal {
+        .ant-modal-content {
+                background-color: var(--welcomePage-tileBackground);
+                color: var(--editor-foreground);
+                border-radius: 8px;
+                padding: 16px;
+                box-shadow: var(--modal-box-shadow);
+
+                .ant-modal-header {
+                        background-color: var(--welcomePage-tileBackground);
+                }
+        }
+}
+
+/* 默认主题基础装饰（非 Web3 时保持轻量） */
+.gradient-border {
+        border: 1px solid var(--panel-border);
+        /* border-radius: 8px; */
+}
+
+/* 消息气泡默认外观 */
+.message-bubble { transition: background-color .25s ease, border-color .25s ease, box-shadow .25s ease; border: 1px solid rgba(255, 255, 255, 0.04); }
+.message-bubble:hover { border-color: var(--focusBorder); }

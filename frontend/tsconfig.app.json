@@ -24,7 +24,8 @@
 
     /* Path mapping */
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "@testone/*": ["./src/features/testone/*"]
     }
   },
   "include": ["src"]

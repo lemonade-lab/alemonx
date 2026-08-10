@@ -1,0 +1,148 @@
+// ALemonX 专用的 testone 样式入口：与原始 input.scss 等价，但去掉会污染
+// 宿主工作台的全局副作用（隐藏所有滚动条、给所有 div 加 outline、以及
+@use 'animate.css';
+@use './assets/styles/root.css';
+@use './assets/styles/theme-web3.css';
+@use './assets/styles/scrollbar.scss';
+
+// testone 跟随 ALemonX 当前项目主题：把 testone 的语义变量映射到工作台的
+// --theme-* 变量。工作台在文档根 [data-theme='light'|'dark'] 上切换这些
+// 变量，因此测试台无需自己的主题状态，亮/暗即时联动。
+.testone-root {
+  --font-family: var(
+    --theme-font-family,
+    Inter,
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    sans-serif
+  );
+  --font-size: 13px;
+  --font-weight: normal;
+  --editor-font-family: Menlo, Monaco, 'Courier New', monospace;
+  --editor-font-size: 12px;
+
+  /* 表面 */
+  --activityBar-background: var(--theme-surface-raised);
+  --editor-background: var(--theme-surface-page);
+  --editorGroupHeader-tabsBackground: var(--theme-surface-raised);
+  --editorWidget-background: var(--theme-surface-panel);
+  --dropdown-background: var(--theme-surface-panel);
+  --input-background: var(--theme-surface-input);
+  --panel-background: var(--theme-surface-panel);
+  --sideBar-background: var(--theme-surface-page);
+  --textPreformat-background: var(--theme-surface-code);
+  --statusBar-background: var(--theme-surface-raised);
+  --titleBar-background: var(--theme-surface-page);
+  --tab-activeBackground: var(--theme-surface-panel);
+  --tab-inactiveBackground: var(--theme-surface-raised);
+
+  /* 悬停与选中 */
+  --input-hoverBackground: var(--theme-surface-hover);
+  --button-hoverBackground: var(--theme-accent-hover);
+  --list-hoverBackground: var(--theme-surface-hover);
+  --statusBarItem-hoverBackground: var(--theme-surface-hover);
+  --selection-background: var(--theme-accent-soft);
+  --list-activeSelectionBackground: var(--theme-accent-soft);
+  --list-inactiveSelectionBackground: var(--theme-surface-hover);
+
+  /* 前景 */
+  --foreground: var(--theme-text-primary);
+  --input-foreground: var(--theme-text-primary);
+  --editor-foreground: var(--theme-text-primary);
+  --editorWidget-foreground: var(--theme-text-primary);
+  --descriptionForeground: var(--theme-text-muted);
+  --statusBar-foreground: var(--theme-text-secondary);
+  --tab-activeForeground: var(--theme-text-strong);
+  --tab-inactiveForeground: var(--theme-text-muted);
+  --errorForeground: var(--theme-danger);
+  --icon-foreground: var(--theme-text-secondary);
+  --textLink-foreground: var(--theme-accent);
+  --textPreformat-foreground: var(--theme-text-code);
+
+  /* 按钮 */
+  --button-background: var(--theme-accent);
+  --button-foreground: var(--theme-accent-contrast);
+  --button-secondaryBackground: var(--theme-surface-raised);
+  --button-secondaryForeground: var(--theme-text-primary);
+  --vscode-button-background: var(--theme-accent);
+  --vscode-button-foreground: var(--theme-accent-contrast);
+
+  /* 边框与焦点 */
+  --dropdown-border: var(--theme-border-strong);
+  --editorWidget-border: var(--theme-border-strong);
+  --focusBorder: var(--theme-accent);
+  --panel-border: var(--theme-border-default);
+  --tab-border: var(--theme-border-default);
+  --input-placeholderForeground: var(--theme-text-faint);
+  --inputValidation-errorBackground: var(--theme-danger-soft);
+  --inputValidation-warningBackground: var(--theme-warning-soft);
+  --inputValidation-infoBackground: var(--theme-info-soft);
+
+  /* 列表与编辑器 */
+  --list-highlightForeground: var(--theme-accent-text);
+  --list-errorForeground: var(--theme-danger);
+  --list-warningForeground: var(--theme-warning);
+  --editor-lineHighlightBackground: var(--theme-accent-soft);
+  --editorCursor-foreground: var(--theme-accent);
+  --editorLineNumber-foreground: var(--theme-text-faint);
+  --editorIndentGuide-background: var(--theme-border-default);
+  --scrollbarSlider-background: var(--theme-border-strong);
+  --scrollbarSlider-hoverBackground: var(--theme-text-muted);
+  --scrollbarSlider-activeBackground: var(--theme-text-secondary);
+
+  /* 终端色（跟随语义色） */
+  --terminal-foreground: var(--theme-text-primary);
+  --terminal-selectionBackground: var(--theme-accent-soft);
+  --terminal-ansiBlack: var(--theme-text-strong);
+  --terminal-ansiRed: var(--theme-danger);
+  --terminal-ansiGreen: var(--theme-success);
+  --terminal-ansiYellow: var(--theme-warning);
+  --terminal-ansiBlue: var(--theme-info);
+  --terminal-ansiMagenta: var(--theme-accent-hover);
+  --terminal-ansiCyan: var(--theme-info);
+  --terminal-ansiWhite: var(--theme-text-primary);
+
+  /* 调试 */
+  --debugIcon-startForeground: var(--theme-success);
+  --debugIcon-breakpointForeground: var(--theme-danger);
+}
+
+/* antd App 会包一层 .ant-app 普通 div，这里保证它参与 flex 布局，
+   否则 TestoneApp 的 flex-1 会断链导致窗口内容铺不满。 */
+.testone-root > .ant-app {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+
+/* antd 静态消息（Message.info 等）提升到浮窗之上，避免被桌面窗口遮挡 */
+.testone-message {
+  z-index: 3000;
+}
+
+/* 静态消息不走 ConfigProvider，这里用工作台主题变量直接适配亮/暗 */
+.testone-message .testone-message-notice-wrapper .testone-message-notice-content {
+  background: var(--theme-surface-panel) !important;
+  color: var(--theme-text-primary) !important;
+  border: 1px solid var(--theme-border-default) !important;
+  border-radius: 8px !important;
+  box-shadow: var(--theme-shadow-pop) !important;
+}
+
+/* antd Modal（BaseModal）跟随项目主题：覆盖迁移自带的 vendored 深色背景 */
+.testone-modal .ant-modal-content,
+.testone-modal .ant-modal-header {
+  background-color: var(--theme-surface-panel) !important;
+  color: var(--theme-text-primary) !important;
+}
+
+.testone-modal .ant-modal-content {
+  box-shadow: var(--theme-shadow-pop) !important;
+}
+
+.testone-modal .ant-modal-title {
+  color: var(--theme-text-strong) !important;
+}

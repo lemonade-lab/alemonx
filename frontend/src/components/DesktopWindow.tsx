@@ -11,6 +11,7 @@ import { Minus, X } from 'lucide-react'
 import { Modal } from './Modal'
 import { registerDesktopWindowShortcut } from './desktopWindowShortcuts'
 import { isWindowHeaderInteractiveTarget } from './desktopWindowInteraction'
+import { useIsPadViewport } from '../hooks/useIsPadViewport'
 
 export type ResizeCorner = 'nw' | 'ne' | 'sw' | 'se'
 
@@ -90,6 +91,7 @@ export function DesktopWindow({
   const [maximized, setMaximized] = useState(false)
   const restoreRect = useRef<typeof windowRect | null>(null)
   const windowRef = useRef<HTMLElement>(null)
+  const isPadView = useIsPadViewport()
   const dragStart = useRef<{
     pointerId: number
     x: number
@@ -224,6 +226,7 @@ export function DesktopWindow({
     resizeStart.current = null
   }
   const toggleMaximize = useCallback(() => {
+    if (isPadView) return
     if (maximized) {
       if (restoreRect.current) setWindowRect(restoreRect.current)
       setMaximized(false)
@@ -237,7 +240,7 @@ export function DesktopWindow({
       height: Math.max(320, window.innerHeight - 32)
     })
     setMaximized(true)
-  }, [maximized, windowRect])
+  }, [isPadView, maximized, windowRect])
 
   useEffect(() => {
     if (!open) return
@@ -263,6 +266,7 @@ export function DesktopWindow({
         aria-label={title}
         onPointerDownCapture={onActivate}
         onDoubleClickCapture={event => {
+          if (isPadView) return
           const target = event.target as HTMLElement
           if (
             !target.closest('.floating-window-header') ||
@@ -275,6 +279,7 @@ export function DesktopWindow({
         <header
           className={`floating-window-header flex min-h-12 items-center justify-between gap-3 border-b border-slate-200 px-4 dark:border-slate-700${headerLeft ? ' floating-window-header-custom' : ''}`}
           onPointerDown={event => {
+            if (isPadView) return
             if (isWindowHeaderInteractiveTarget(event.target)) return
             dragStart.current = {
               pointerId: event.pointerId,
@@ -307,26 +312,28 @@ export function DesktopWindow({
           </div>
         </header>
         {children}
-        <WindowResizeHandles
-          label={title}
-          onStart={(corner, event) => {
-            event.preventDefault()
-            event.stopPropagation()
-            resizeStart.current = {
-              corner,
-              x: event.clientX,
-              y: event.clientY,
-              width: windowRect.width,
-              height: windowRect.height,
-              left: windowRect.left,
-              top: windowRect.top
-            }
-            event.currentTarget.setPointerCapture(event.pointerId)
-          }}
-          onMove={previewResize}
-          onEnd={commitResize}
-          onCancel={cancelResize}
-        />
+        {!isPadView && (
+          <WindowResizeHandles
+            label={title}
+            onStart={(corner, event) => {
+              event.preventDefault()
+              event.stopPropagation()
+              resizeStart.current = {
+                corner,
+                x: event.clientX,
+                y: event.clientY,
+                width: windowRect.width,
+                height: windowRect.height,
+                left: windowRect.left,
+                top: windowRect.top
+              }
+              event.currentTarget.setPointerCapture(event.pointerId)
+            }}
+            onMove={previewResize}
+            onEnd={commitResize}
+            onCancel={cancelResize}
+          />
+        )}
       </section>
     </Modal>
   )

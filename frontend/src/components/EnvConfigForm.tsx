@@ -75,7 +75,7 @@ export function EnvConfigForm({ content, onChange }: Props) {
         className="max-w-190"
         icon={<KeyRound className="size-4" />}
         title="环境变量"
-        description="管理密钥、端口和第三方服务地址 · 修改后自动保存"
+        description="管理密钥、端口和第三方服务地址"
         actions={editor}
       >
         <textarea
@@ -91,7 +91,7 @@ export function EnvConfigForm({ content, onChange }: Props) {
       className="max-w-190"
       icon={<KeyRound className="size-4" />}
       title="环境变量"
-      description="管理密钥、端口和第三方服务地址 · 修改后自动保存"
+      description="管理密钥、端口和第三方服务地址"
       actions={editor}
     >
       <div className="grid gap-2">

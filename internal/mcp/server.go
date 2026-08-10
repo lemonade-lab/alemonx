@@ -454,7 +454,7 @@ func (s *Server) execute(name string, arguments json.RawMessage) (string, error)
 		var input struct {
 			Root    string            `json:"root"`
 			Package string            `json:"package"`
-			Values  map[string]string `json:"values"`
+			Values  map[string]any    `json:"values"`
 			Confirm bool              `json:"confirm"`
 		}
 		if err := decodeArguments(arguments, &input); err != nil {

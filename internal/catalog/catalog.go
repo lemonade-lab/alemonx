@@ -3,6 +3,7 @@ package catalog
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -15,6 +16,9 @@ import (
 	"time"
 
 	"golang.org/x/mod/semver"
+
+	"alemonx/internal/httpcache"
+	"alemonx/internal/packageschema"
 )
 
 type Item struct {
@@ -41,18 +45,16 @@ type PackageVersions struct {
 	Versions []string `json:"versions"`
 }
 
-type PackageConfigField struct {
-	Name        string `json:"name"`
-	Type        string `json:"type"`
-	Required    bool   `json:"required"`
-	Description string `json:"description"`
-}
-
 type PackageConfig struct {
-	Package   string               `json:"package"`
-	Namespace string               `json:"namespace"`
-	Fields    []PackageConfigField `json:"fields"`
-	Values    map[string]string    `json:"values"`
+	Package       string                    `json:"package"`
+	Namespace     string                    `json:"namespace"`
+	Fields        []packageschema.Field     `json:"fields"`
+	Values        map[string]any            `json:"values"`
+	ConfigSource  packageschema.ConfigSource `json:"configSource,omitempty"`
+	Logo          string                    `json:"logo,omitempty"`
+	Commands      []packageschema.Command   `json:"commands,omitempty"`
+	Platforms     []packageschema.Platform  `json:"platforms,omitempty"`
+	WebServerPort bool                      `json:"webServerPort,omitempty"`
 }
 
 var sources = map[string]string{
@@ -61,20 +63,28 @@ var sources = map[string]string{
 }
 
 func Fetch(kind string) ([]Group, error) {
-	url, ok := sources[kind]
+	raw, ok := sources[kind]
 	if !ok {
 		return nil, fmt.Errorf("不支持的生态目录")
 	}
 	client := &http.Client{Timeout: 8 * time.Second}
-	response, err := client.Get(url)
-	if err != nil {
-		return nil, fmt.Errorf("无法读取官方目录，请检查网络后重试")
+	var body []byte
+	if candidate := jsDelivrURL(raw); candidate != "" {
+		if response, err := httpcache.Get(client, candidate, 10*time.Minute); err == nil && response.Status == http.StatusOK {
+			body = response.Body
+		}
 	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("官方目录暂时不可用")
+	if body == nil {
+		response, err := httpcache.Get(client, raw, 10*time.Minute)
+		if err != nil {
+			return nil, fmt.Errorf("无法读取官方目录，请检查网络后重试")
+		}
+		if response.Status != http.StatusOK {
+			return nil, fmt.Errorf("官方目录暂时不可用")
+		}
+		body = response.Body
 	}
-	groups, references, err := parseCatalog(response.Body)
+	groups, references, err := parseCatalog(bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -92,6 +102,21 @@ func Fetch(kind string) ([]Group, error) {
 		}
 	}
 	return groups, nil
+}
+
+// jsDelivrURL converts a raw.githubusercontent.com URL into its jsDelivr CDN
+// mirror. jsDelivr serves cached GitHub content without touching GitHub's
+// rate-limited endpoints, so it is preferred for README/package.json reads.
+func jsDelivrURL(raw string) string {
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Host != "raw.githubusercontent.com" {
+		return ""
+	}
+	parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+	if len(parts) < 4 {
+		return ""
+	}
+	return "https://cdn.jsdelivr.net/gh/" + parts[0] + "/" + parts[1] + "@" + parts[2] + "/" + strings.Join(parts[3:], "/")
 }
 
 // parseCatalog keeps the meaning of a Markdown table instead of assuming that
@@ -277,26 +302,16 @@ func LoadPackageVersions(name string) (PackageVersions, error) {
 	}
 	endpoint := "https://registry.npmjs.org/" + url.PathEscape(name)
 	client := &http.Client{Timeout: 8 * time.Second}
-	request, err := http.NewRequest(http.MethodGet, endpoint, nil)
-	if err != nil {
-		return PackageVersions{}, fmt.Errorf("无法读取插件 Release，请检查网络后重试")
-	}
-	request.Header.Set("Accept", "application/vnd.github+json")
-	request.Header.Set("User-Agent", "alemonjs-setup")
-	response, err := client.Do(request)
-	if err != nil {
+	response, err := httpcache.GetWithHeaders(client, endpoint, 15*time.Minute, map[string]string{"Accept": "application/vnd.github+json"})
+	if err != nil || response.Status != http.StatusOK {
 		return PackageVersions{}, fmt.Errorf("无法读取 npm 版本列表，请检查网络后重试")
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return PackageVersions{}, fmt.Errorf("npm 暂时无法提供该包的版本列表")
 	}
 	var metadata struct {
 		DistTags map[string]string `json:"dist-tags"`
 		Versions map[string]any    `json:"versions"`
 		Time     map[string]string `json:"time"`
 	}
-	if err := json.NewDecoder(io.LimitReader(response.Body, 8<<20)).Decode(&metadata); err != nil {
+	if err := json.Unmarshal(response.Body, &metadata); err != nil {
 		return PackageVersions{}, fmt.Errorf("npm 版本列表无法识别")
 	}
 	versions := make([]string, 0, len(metadata.Versions))
@@ -329,20 +344,16 @@ func loadRepositoryReleases(source string) (PackageVersions, error) {
 		endpoint = "https://gitee.com/api/v5/repos/" + url.PathEscape(parts[0]) + "/" + url.PathEscape(parts[1]) + "/releases?per_page=100"
 	}
 	client := &http.Client{Timeout: 8 * time.Second}
-	response, err := client.Get(endpoint)
-	if err != nil {
+	response, err := httpcache.Get(client, endpoint, 15*time.Minute)
+	if err != nil || response.Status != http.StatusOK {
 		return PackageVersions{}, fmt.Errorf("无法读取插件 Release，请检查网络后重试")
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return PackageVersions{}, fmt.Errorf("无法读取插件 Release")
 	}
 	var releases []struct {
 		TagName    string `json:"tag_name"`
 		Draft      bool   `json:"draft"`
 		Prerelease bool   `json:"prerelease"`
 	}
-	if err := json.NewDecoder(io.LimitReader(response.Body, 2<<20)).Decode(&releases); err != nil {
+	if err := json.Unmarshal(response.Body, &releases); err != nil {
 		return PackageVersions{}, fmt.Errorf("插件 Release 无法识别")
 	}
 	versions := make([]string, 0, len(releases))
@@ -369,24 +380,14 @@ func loadRepositoryTags(host, owner, repository string) (PackageVersions, error)
 	if host == "github.com" {
 		endpoint = "https://api.github.com/repos/" + url.PathEscape(owner) + "/" + url.PathEscape(repository) + "/tags?per_page=100"
 	}
-	request, err := http.NewRequest(http.MethodGet, endpoint, nil)
-	if err != nil {
+	response, err := httpcache.GetWithHeaders(&http.Client{Timeout: 8 * time.Second}, endpoint, 15*time.Minute, map[string]string{"Accept": "application/vnd.github+json"})
+	if err != nil || response.Status != http.StatusOK {
 		return PackageVersions{}, fmt.Errorf("无法读取插件版本，请检查网络后重试")
-	}
-	request.Header.Set("Accept", "application/vnd.github+json")
-	request.Header.Set("User-Agent", "alemonjs-setup")
-	response, err := (&http.Client{Timeout: 8 * time.Second}).Do(request)
-	if err != nil {
-		return PackageVersions{}, fmt.Errorf("无法读取插件版本，请检查网络后重试")
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return PackageVersions{}, fmt.Errorf("无法读取插件版本")
 	}
 	var tags []struct {
 		Name string `json:"name"`
 	}
-	if err := json.NewDecoder(io.LimitReader(response.Body, 2<<20)).Decode(&tags); err != nil {
+	if err := json.Unmarshal(response.Body, &tags); err != nil {
 		return PackageVersions{}, fmt.Errorf("插件版本无法识别")
 	}
 	versions := make([]string, 0, len(tags))
@@ -448,40 +449,25 @@ func LoadPackageConfig(source string) (PackageConfig, error) {
 	if err != nil {
 		return PackageConfig{}, err
 	}
-	var manifest struct {
-		Name     string `json:"name"`
-		Alemonjs struct {
-			Config  []PackageConfigField `json:"config"`
-			Desktop struct {
-				Platform []struct {
-					Name  string `json:"name"`
-					Value string `json:"value"`
-				} `json:"platform"`
-			} `json:"desktop"`
-		} `json:"alemonjs"`
+	declaration, err := packageschema.Parse(data)
+	if err != nil {
+		return PackageConfig{}, fmt.Errorf("在线 %s", err)
 	}
-	if err := json.Unmarshal(data, &manifest); err != nil {
-		return PackageConfig{}, fmt.Errorf("在线 package.json 无法识别")
+	config := PackageConfig{
+		Package:       declaration.Name,
+		Namespace:     declaration.ResolveNamespace(),
+		Fields:        declaration.Config,
+		Values:        map[string]any{},
+		ConfigSource:  declaration.ConfigSource,
+		Logo:          declaration.Desktop.Logo,
+		Commands:      declaration.Desktop.Commands,
+		Platforms:     declaration.Desktop.Platforms,
+		WebServerPort: declaration.Web.ServerPort,
 	}
-	if manifest.Name == "" {
-		return PackageConfig{}, fmt.Errorf("在线 package.json 缺少 name")
+	if config.Fields == nil {
+		config.Fields = []packageschema.Field{}
 	}
-	if len(manifest.Alemonjs.Config) == 0 {
-		return PackageConfig{
-			Package:   manifest.Name,
-			Namespace: manifest.Name,
-			Fields:    []PackageConfigField{},
-			Values:    map[string]string{},
-		}, nil
-	}
-	namespace := manifest.Name
-	for _, platform := range manifest.Alemonjs.Desktop.Platform {
-		if platform.Value == manifest.Name && platform.Name != "" {
-			namespace = platform.Name
-			break
-		}
-	}
-	return PackageConfig{Package: manifest.Name, Namespace: namespace, Fields: manifest.Alemonjs.Config, Values: map[string]string{}}, nil
+	return config, nil
 }
 
 func loadRepositoryFile(source, filename string) ([]byte, string, error) {
@@ -495,22 +481,11 @@ func loadRepositoryFile(source, filename string) ([]byte, string, error) {
 	}
 	client := &http.Client{Timeout: 10 * time.Second}
 	for _, candidate := range candidates {
-		response, err := client.Get(candidate)
-		if err != nil || response.StatusCode != http.StatusOK {
-			if response != nil {
-				response.Body.Close()
-			}
+		response, fetchErr := httpcache.Get(client, candidate, 10*time.Minute)
+		if fetchErr != nil || response.Status != http.StatusOK {
 			continue
 		}
-		data, readErr := io.ReadAll(io.LimitReader(response.Body, 2<<20))
-		response.Body.Close()
-		if readErr != nil {
-			return nil, "", fmt.Errorf("读取在线文档失败")
-		}
-		if len(data) == 2<<20 {
-			return nil, "", fmt.Errorf("在线文档过大，无法显示")
-		}
-		return data, candidate, nil
+		return response.Body, candidate, nil
 	}
 	return nil, "", fmt.Errorf("暂时无法读取在线文档")
 }
@@ -521,30 +496,42 @@ func loadRepositoryFile(source, filename string) ([]byte, string, error) {
 func repositoryFileCandidates(parsed *url.URL, filename string) ([]string, error) {
 	parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
 	isDocument := filename == "README.md"
+	var candidates []string
 	switch parsed.Host {
 	case "raw.githubusercontent.com":
 		if isDocument {
-			return []string{parsed.String()}, nil
+			candidates = []string{parsed.String()}
+		} else {
+			if len(parts) < 4 {
+				return nil, fmt.Errorf("仓库地址无效")
+			}
+			candidates = []string{"https://raw.githubusercontent.com/" + path.Join(append(parts[:len(parts)-1], filename)...)}
 		}
-		if len(parts) < 4 {
-			return nil, fmt.Errorf("仓库地址无效")
-		}
-		return []string{"https://raw.githubusercontent.com/" + path.Join(append(parts[:len(parts)-1], filename)...)}, nil
 	case "github.com":
 		if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
 			return nil, fmt.Errorf("仓库地址无效")
 		}
 		repo := path.Join(parts[0], strings.TrimSuffix(parts[1], ".git"))
-		return githubCandidates(repo, parts[2:], filename, isDocument), nil
+		candidates = githubCandidates(repo, parts[2:], filename, isDocument)
 	case "gitee.com":
 		if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
 			return nil, fmt.Errorf("仓库地址无效")
 		}
 		repo := path.Join(parts[0], strings.TrimSuffix(parts[1], ".git"))
-		return giteeCandidates(repo, parts[2:], filename, isDocument), nil
+		candidates = giteeCandidates(repo, parts[2:], filename, isDocument)
 	default:
 		return nil, fmt.Errorf("暂不支持该文档来源")
 	}
+	// jsDelivr mirrors GitHub raw files on its own CDN, which is not subject
+	// to GitHub's API/raw rate limits. Try it before direct GitHub hosts and
+	// keep the direct URLs as fallbacks.
+	js := []string{}
+	for _, candidate := range candidates {
+		if mirror := jsDelivrURL(candidate); mirror != "" {
+			js = append(js, mirror)
+		}
+	}
+	return append(js, candidates...), nil
 }
 
 func githubCandidates(repo string, suffix []string, filename string, isDocument bool) []string {

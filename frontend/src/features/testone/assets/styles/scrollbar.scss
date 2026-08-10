@@ -1,0 +1,30 @@
+$scrollbar-thumb-color: var(--vscode-button-background);
+$scrollbar-track-color: transparent;
+$scrollbar-thumb-radius: 1rem;
+$scrollbar-width: thin;
+$scrollbar-color: var(--vscode-button-background);
+
+.scrollbar {
+  &-y,
+  &-x {
+    scrollbar-width: $scrollbar-width;
+    scrollbar-color: $scrollbar-color $scrollbar-track-color;
+
+    ::-webkit-scrollbar {
+      @if &==&-y {
+        width: 1px; // 垂直滚动条的宽度
+      } @else {
+        height: 1px; // 水平滚动条的高度
+      }
+    }
+
+    ::-webkit-scrollbar-track {
+      background: $scrollbar-track-color;
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background-color: $scrollbar-thumb-color;
+      border-radius: $scrollbar-thumb-radius;
+    }
+  }
+}

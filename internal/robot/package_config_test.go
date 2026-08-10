@@ -18,6 +18,9 @@ func TestCurrentPackageConfigWithoutDeclarationIsEmpty(t *testing.T) {
 	if config.Package != "robot" || config.Namespace != "robot" || len(config.Fields) != 0 || len(config.Values) != 0 {
 		t.Fatalf("config = %#v, want an empty robot schema", config)
 	}
+	if config.Fields == nil {
+		t.Fatal("fields must serialize as [] rather than null")
+	}
 }
 
 // TestScopedConnectionPackageUsesShortNamespace covers @alemonjs/* packages,
@@ -93,7 +96,7 @@ func TestSaveScopedConnectionMigratesLegacyKey(t *testing.T) {
   url: "ws://old"
 `)
 
-	if _, err := (Manager{}).SavePackageConfig(root, "@alemonjs/onebot", map[string]string{
+	if _, err := (Manager{}).SavePackageConfig(root, "@alemonjs/onebot", map[string]any{
 		"token": "new",
 		"url":   "ws://new",
 	}); err != nil {
@@ -112,5 +115,185 @@ func TestSaveScopedConnectionMigratesLegacyKey(t *testing.T) {
 	}
 	if !strings.Contains(output, `token: "new"`) || !strings.Contains(output, `url: "ws://new"`) {
 		t.Fatalf("saved config misses new values:\n%s", output)
+	}
+}
+
+func TestPackageConfigReadsNestedObjectAndArrayValues(t *testing.T) {
+	root := t.TempDir()
+	writeWebViewFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
+	writeWebViewFixture(t, filepath.Join(root, "node_modules", "example", "package.json"), `{
+  "name":"example",
+  "alemonjs":{
+    "config":[
+      {"name":"request_config","type":"object","description":"请求配置","config":[
+        {"name":"timeout","type":"number","description":"超时"},
+        {"name":"proxy","type":"object","config":[]}
+      ]},
+      {"name":"master_key","type":"array<string>","description":"密钥列表"}
+    ]
+  }
+}`)
+	writeWebViewFixture(t, filepath.Join(root, "alemon.config.yaml"), "example:\n  request_config:\n    timeout: 20000\n  master_key:\n    - \"a\"\n    - \"b\"\n")
+
+	config, err := (Manager{}).PackageConfig(root, "example")
+	if err != nil {
+		t.Fatalf("PackageConfig: %v", err)
+	}
+	requestConfig, ok := config.Values["request_config"].(map[string]any)
+	if !ok || requestConfig["timeout"] != float64(20000) {
+		t.Fatalf("request_config = %#v", config.Values["request_config"])
+	}
+	masterKey, ok := config.Values["master_key"].([]any)
+	if !ok || len(masterKey) != 2 || masterKey[0] != "a" {
+		t.Fatalf("master_key = %#v", config.Values["master_key"])
+	}
+
+	if _, err := (Manager{}).SavePackageConfig(root, "example", map[string]any{
+		"request_config": map[string]any{"timeout": 30000, "proxy": map[string]any{}},
+		"master_key":     []any{"x", "y"},
+	}); err != nil {
+		t.Fatalf("SavePackageConfig: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "alemon.config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := string(data)
+	if !strings.Contains(output, "timeout: 30000") || !strings.Contains(output, "- \"x\"") || !strings.Contains(output, "- \"y\"") {
+		t.Fatalf("saved config misses nested/array values:\n%s", output)
+	}
+}
+
+func TestSavePackageConfigEnforcesRules(t *testing.T) {
+	root := t.TempDir()
+	writeWebViewFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
+	writeWebViewFixture(t, filepath.Join(root, "node_modules", "example", "package.json"), `{
+  "name":"example",
+  "alemonjs":{
+    "config":[
+      {"name":"port","type":"number","required":true,"rules":[{"pattern":"^[0-9]+$","message":"端口必须为数字"}],"description":"服务端口"}
+    ]
+  }
+}`)
+	if _, err := (Manager{}).SavePackageConfig(root, "example", map[string]any{"port": "abc"}); err == nil {
+		t.Fatal("rule violation must block saving")
+	}
+	if _, err := (Manager{}).SavePackageConfig(root, "example", map[string]any{"port": 8080}); err != nil {
+		t.Fatalf("valid value must save: %v", err)
+	}
+}
+
+func TestPackageConfigRejectsInvalidRulePattern(t *testing.T) {
+	root := t.TempDir()
+	writeWebViewFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
+	writeWebViewFixture(t, filepath.Join(root, "node_modules", "example", "package.json"), `{
+  "name":"example",
+  "alemonjs":{
+    "config":[{"name":"port","type":"number","rules":[{"pattern":"(","message":"坏表达式"}],"description":"服务端口"}]
+  }
+}`)
+	if _, err := (Manager{}).PackageConfig(root, "example"); err == nil {
+		t.Fatal("invalid rule pattern must surface as a declaration error")
+	}
+}
+
+func TestSaveLoginThirdPartyWritesPlatform(t *testing.T) {
+	root := t.TempDir()
+	writeWebViewFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
+	writeWebViewFixture(t, filepath.Join(root, "node_modules", "@myorg", "example", "package.json"), `{
+  "name":"@myorg/example",
+  "description":"Example",
+  "alemonjs":{
+    "config":[{"name":"app_id","type":"string","required":true,"description":"app_id"}],
+    "desktop":{"platform":[{"name":"example","value":"@myorg/example"}]}
+  }
+}`)
+	if _, err := (Manager{}).SavePackageConfig(root, "@myorg/example", map[string]any{"app_id": "abc"}); err != nil {
+		t.Fatalf("SavePackageConfig: %v", err)
+	}
+	if _, err := (Manager{}).SaveLogin(root, "example", "@myorg/example"); err != nil {
+		t.Fatalf("SaveLogin: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "alemon.config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := string(data)
+	if !strings.Contains(output, "login: \"example\"") || !strings.Contains(output, "platform: \"@myorg/example\"") {
+		t.Fatalf("login/platform missing:\n%s", output)
+	}
+}
+
+func TestSaveLoginDefaultCountsAsConfigured(t *testing.T) {
+	root := t.TempDir()
+	writeWebViewFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
+	writeWebViewFixture(t, filepath.Join(root, "node_modules", "example", "package.json"), `{
+  "name":"example",
+  "alemonjs":{
+    "config":[{"name":"url","type":"string","required":true,"default":"ws://127.0.0.1:3001","description":"连接地址"}],
+    "desktop":{"platform":[{"name":"example"}]}
+  }
+}`)
+	if _, err := (Manager{}).SaveLogin(root, "example", "example"); err != nil {
+		t.Fatalf("SaveLogin must accept required field with a default: %v", err)
+	}
+}
+
+func TestSaveLoginWithoutPlatformValueSkipsPlatformKey(t *testing.T) {
+	root := t.TempDir()
+	writeWebViewFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
+	writeWebViewFixture(t, filepath.Join(root, "node_modules", "@alemonjs", "onebot", "package.json"), `{
+  "name":"@alemonjs/onebot",
+  "alemonjs":{
+    "desktop":{"platform":[{"name":"onebot"}]}
+  }
+}`)
+	if _, err := (Manager{}).SaveLogin(root, "onebot", "@alemonjs/onebot"); err != nil {
+		t.Fatalf("SaveLogin: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "alemon.config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "platform:") {
+		t.Fatalf("derivable login must not write platform:\n%s", data)
+	}
+}
+
+func TestResolveRuntimePlatformsMergesDeclaredOverBuiltin(t *testing.T) {
+	root := t.TempDir()
+	writeWebViewFixture(t, filepath.Join(root, "package.json"), `{"name":"robot","dependencies":{"@myorg/custom":"1.0.0"}}`)
+	writeWebViewFixture(t, filepath.Join(root, "node_modules", "@myorg", "custom", "package.json"), `{
+  "name":"@myorg/custom",
+  "description":"自定义 OneBot",
+  "version":"1.0.0",
+  "alemonjs":{"desktop":{"platform":[{"name":"onebot","value":"@myorg/custom"}]}}
+}`)
+	writeWebViewFixture(t, filepath.Join(root, "packages", "third", "package.json"), `{
+  "name":"third",
+  "description":"第三方平台",
+  "version":"2.0.0",
+  "alemonjs":{"desktop":{"platform":[{"name":"example","value":"@org/third"}]}}
+}`)
+
+	platforms, err := resolveRuntimePlatforms(root)
+	if err != nil {
+		t.Fatalf("resolveRuntimePlatforms: %v", err)
+	}
+	byID := map[string]RuntimePackage{}
+	for _, item := range platforms {
+		byID[item.ID] = item
+	}
+	onebot := byID["onebot"]
+	if onebot.Package != "@myorg/custom" || onebot.Source != "declared" || onebot.Installed != true {
+		t.Fatalf("builtin onebot must be overridden by declared platform: %#v", onebot)
+	}
+	example := byID["example"]
+	if example.Package != "@org/third" || example.Source != "declared" || example.Label != "第三方平台" {
+		t.Fatalf("backpack platform missing: %#v", example)
+	}
+	qqBot := byID["qq-bot"]
+	if qqBot.Package != "@alemonjs/qq-bot" || qqBot.Source != "builtin" {
+		t.Fatalf("builtin candidates must remain: %#v", qqBot)
 	}
 }

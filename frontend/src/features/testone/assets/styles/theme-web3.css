@@ -1,0 +1,121 @@
+:root[data-theme='web3'] {
+    /* Web3 赛博霓虹主题变量 */
+    --gradient-1: linear-gradient(135deg, #4316dd 0%, #7f5af0 50%, #00eaff 100%);
+    --gradient-2: linear-gradient(145deg, #0d0f1a 0%, #101b3a 60%, #062d42 100%);
+    --glow-color: #00eaff;
+    --accent-color: #7f5af0;
+    --accent-color-rgb: 127, 90, 240;
+    --danger-color: #ff5470;
+    --success-color: #2cb67d;
+    --warning-color: #f5d90a;
+    --panel-bg-translucent: rgba(20, 25, 45, 0.6);
+    --panel-border-glow: 0 0 0 1px rgba(127, 90, 240, 0.35), 0 0 12px -2px rgba(0, 234, 255, 0.4);
+    --focusBorder: rgba(0, 234, 255, 0.8);
+    --button-background: rgba(127, 90, 240, 0.25);
+    --button-hoverBackground: rgba(0, 234, 255, 0.55);
+    --editor-background: #0b0f17;
+    --sideBar-background: #0d111c;
+    --editorWidget-background: #121b2e;
+    --panel-background: #101828;
+    --tab-activeBackground: #18263a;
+    --tab-inactiveBackground: #121b2e;
+    --panel-border: rgba(127, 90, 240, 0.4);
+    --foreground: #c8d7f4;
+    --editor-foreground: #c8d7f4;
+    --badge-background: #7f5af0;
+    --badge-foreground: #ffffff;
+    --list-hoverBackground: rgba(127, 90, 240, 0.18);
+    --selection-background: rgba(0, 234, 255, 0.35);
+}
+
+[data-theme='web3'] body {
+    background: radial-gradient(circle at 20% 20%, rgba(127, 90, 240, 0.18), transparent 60%),
+        radial-gradient(circle at 80% 70%, rgba(0, 234, 255, 0.12), transparent 65%),
+        var(--editor-background);
+    background-attachment: fixed;
+}
+
+[data-theme='web3'] .gradient-border {
+    position: relative;
+    border: 1px solid rgba(127, 90, 240, 0.35) !important;
+}
+
+[data-theme='web3'] .gradient-border::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    padding: 1px;
+    border-radius: inherit;
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    pointer-events: none;
+    filter: blur(6px) brightness(1.3);
+}
+
+/* 霓虹按钮 */
+[data-theme='web3'] .btn,
+[data-theme='web3'] button,
+[data-theme='web3'] .testone-button {
+    position: relative;
+    background: linear-gradient(120deg, rgba(127, 90, 240, 0.35), rgba(0, 234, 255, 0.25));
+    backdrop-filter: blur(8px) saturate(160%);
+    border: 1px solid rgba(127, 90, 240, 0.4);
+    color: var(--foreground);
+    transition: all .25s ease;
+}
+
+[data-theme='web3'] .btn:hover,
+[data-theme='web3'] button:hover,
+[data-theme='web3'] .testone-button:hover {
+    border-color: var(--glow-color);
+    box-shadow: 0 0 0 1px rgba(0, 234, 255, 0.55), 0 0 18px -4px rgba(0, 234, 255, 0.6), 0 0 28px -6px rgba(127, 90, 240, 0.45);
+    transform: translateY(-1px);
+}
+
+/* 滚动条微调 */
+[data-theme='web3'] ::-webkit-scrollbar-thumb {
+    background: linear-gradient(var(--accent-color), var(--glow-color));
+}
+
+/* 消息气泡适配 */
+[data-theme='web3'] .message-bubble {
+    background: linear-gradient(145deg, rgba(127, 90, 240, 0.18), rgba(0, 234, 255, 0.12));
+    border: 1px solid rgba(127, 90, 240, 0.3);
+    box-shadow: 0 2px 4px -2px rgba(0, 0, 0, 0.4), 0 0 12px -4px rgba(0, 234, 255, 0.4);
+}
+
+/* Header 背景与发光底边 */
+[data-theme='web3'] header,
+[data-theme='web3'] section.relative.select-none {
+    background: linear-gradient(90deg, rgba(127, 90, 240, 0.2), rgba(0, 234, 255, 0.08));
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid rgba(127, 90, 240, 0.35);
+    box-shadow: 0 4px 18px -6px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(127, 90, 240, 0.25);
+}
+
+/* 任务/命令侧栏 */
+[data-theme='web3'] .command-item {
+    background: linear-gradient(160deg, rgba(127, 90, 240, 0.14), rgba(0, 234, 255, 0.14));
+    border: 1px solid rgba(127, 90, 240, 0.25);
+    transition: all .25s;
+}
+
+[data-theme='web3'] .command-item:hover {
+    border-color: var(--glow-color);
+    box-shadow: 0 0 0 1px rgba(0, 234, 255, 0.55), 0 0 12px -4px rgba(0, 234, 255, 0.55);
+}
+
+/* Tag / Badge */
+[data-theme='web3'] .badge {
+    background: linear-gradient(120deg, var(--accent-color), var(--glow-color));
+    color: #fff;
+    border: none;
+    font-weight: 500;
+    letter-spacing: .5px;
+}
+
+/* Footer */
+[data-theme='web3'] footer {
+    background: linear-gradient(120deg, rgba(127, 90, 240, 0.25), rgba(0, 234, 255, 0.12));
+    border-top: 1px solid rgba(127, 90, 240, 0.35);
+}

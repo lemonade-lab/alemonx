@@ -63,7 +63,7 @@ export function NpmrcConfigForm({ content, onChange }: Props) {
       className="max-w-190"
       icon={<Package className="size-4" />}
       title="npm 源"
-      description="配置当前机器人的包下载源 · 修改后自动保存"
+      description="配置当前机器人的包下载源"
       actions={mode}
     >
       {editor === 'visual' ? (

@@ -7,35 +7,27 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/goccy/go-yaml"
+
+	"alemonx/internal/packageschema"
 )
 
-type PackageConfigField struct {
-	Name        string `json:"name"`
-	Type        string `json:"type"`
-	Required    bool   `json:"required"`
-	Description string `json:"description"`
-}
-
+// PackageConfig is the workbench-facing shape of a package's AlemonJS
+// declaration plus its current values from alemon.config.yaml.
 type PackageConfig struct {
-	Package   string               `json:"package"`
-	Namespace string               `json:"namespace"`
-	Fields    []PackageConfigField `json:"fields"`
-	Values    map[string]string    `json:"values"`
-}
-
-type packageConfigManifest struct {
-	Name     string `json:"name"`
-	Alemonjs struct {
-		Config  []PackageConfigField `json:"config"`
-		Desktop struct {
-			Platform []struct {
-				Name  string `json:"name"`
-				Value string `json:"value"`
-			} `json:"platform"`
-		} `json:"desktop"`
-	} `json:"alemonjs"`
+	Package       string                    `json:"package"`
+	Namespace     string                    `json:"namespace"`
+	Fields        []packageschema.Field     `json:"fields"`
+	Values        map[string]any            `json:"values"`
+	ConfigSource  packageschema.ConfigSource `json:"configSource,omitempty"`
+	Logo          string                    `json:"logo,omitempty"`
+	Commands      []packageschema.Command   `json:"commands,omitempty"`
+	Platforms     []packageschema.Platform  `json:"platforms,omitempty"`
+	WebServerPort bool                      `json:"webServerPort,omitempty"`
 }
 
 var packageNamePattern = regexp.MustCompile(`^(?:@[a-zA-Z0-9][a-zA-Z0-9._-]*/)?[a-zA-Z0-9][a-zA-Z0-9._-]*$`)
@@ -106,41 +98,27 @@ func (m Manager) CurrentPackageConfig(root string) (PackageConfig, error) {
 }
 
 func packageConfigFromManifest(path string, data []byte, subject string) (PackageConfig, error) {
-	var manifest packageConfigManifest
-	if err := json.Unmarshal(data, &manifest); err != nil {
-		return PackageConfig{}, errors.New(subject + "的 package.json 无法识别")
+	declaration, err := packageschema.Parse(data)
+	if err != nil {
+		return PackageConfig{}, errors.New(subject + "的 " + err.Error())
 	}
-	if manifest.Name == "" {
-		return PackageConfig{}, errors.New(subject + "的 package.json 缺少 name")
+	namespace := declaration.ResolveNamespace()
+	config := PackageConfig{
+		Package:       declaration.Name,
+		Namespace:     namespace,
+		Fields:        declaration.Config,
+		Values:        map[string]any{},
+		ConfigSource:  declaration.ConfigSource,
+		Logo:          declaration.Desktop.Logo,
+		Commands:      declaration.Desktop.Commands,
+		Platforms:     declaration.Desktop.Platforms,
+		WebServerPort: declaration.Web.ServerPort,
 	}
-	// A package may intentionally expose no visual fields. That is a valid,
-	// empty configuration schema rather than a request error.
-	if len(manifest.Alemonjs.Config) == 0 {
-		return PackageConfig{
-			Package:   manifest.Name,
-			Namespace: manifest.Name,
-			Fields:    []PackageConfigField{},
-			Values:    map[string]string{},
-		}, nil
+	if config.Fields == nil {
+		config.Fields = []packageschema.Field{}
 	}
-	// The connection's YAML section is keyed by its short platform name (for
-	// example onebot), not the scoped package name (@alemonjs/onebot). Older
-	// packages declared the full package name in platform.value, newer ones
-	// leave it empty; both must resolve to the short name when it is a valid
-	// YAML key and matches this package.
-	baseName := manifest.Name
-	if slash := strings.LastIndex(baseName, "/"); slash >= 0 {
-		baseName = baseName[slash+1:]
-	}
-	namespace := manifest.Name
-	for _, platform := range manifest.Alemonjs.Desktop.Platform {
-		if !yamlNamePattern.MatchString(platform.Name) {
-			continue
-		}
-		if platform.Value == "" || platform.Value == manifest.Name || platform.Value == baseName {
-			namespace = platform.Name
-			break
-		}
+	if len(declaration.Config) == 0 {
+		return config, nil
 	}
 	content, err := os.ReadFile(filepath.Join(path, "alemon.config.yaml"))
 	if err != nil && !os.IsNotExist(err) {
@@ -149,13 +127,30 @@ func packageConfigFromManifest(path string, data []byte, subject string) (Packag
 	// Prefer the short connection key but keep reading the legacy scoped-package
 	// key ('@alemonjs/onebot') so existing values survive the migration.
 	candidates := []string{namespace}
-	if namespace != manifest.Name {
-		candidates = append(candidates, manifest.Name)
+	if namespace != declaration.Name {
+		candidates = append(candidates, declaration.Name)
 	}
-	return PackageConfig{Package: manifest.Name, Namespace: namespace, Fields: manifest.Alemonjs.Config, Values: readConfigValuesForNamespaces(string(content), candidates)}, nil
+	config.Values = readConfigValues(string(content), candidates, declaration.Config)
+	return config, nil
 }
 
-func (m Manager) SavePackageConfig(root, name string, values map[string]string) (Result, error) {
+// PlatformValueForLogin returns the explicit --platform value that must be
+// written next to login, or "" when the runtime can derive it from login.
+func (c PackageConfig) PlatformValueForLogin(login string) string {
+	for _, platform := range c.Platforms {
+		if platform.Name != login {
+			continue
+		}
+		value := strings.TrimSpace(platform.Value)
+		if value == "" || value == "@alemonjs/"+login {
+			return ""
+		}
+		return value
+	}
+	return ""
+}
+
+func (m Manager) SavePackageConfig(root, name string, values map[string]any) (Result, error) {
 	definition, err := m.PackageConfig(root, name)
 	if err != nil {
 		return Result{}, err
@@ -163,14 +158,14 @@ func (m Manager) SavePackageConfig(root, name string, values map[string]string) 
 	return m.savePackageConfigDefinition(root, definition, values)
 }
 
-func (m Manager) savePackageConfigDefinition(root string, definition PackageConfig, values map[string]string) (Result, error) {
-	allowed := make(map[string]PackageConfigField, len(definition.Fields))
+func (m Manager) savePackageConfigDefinition(root string, definition PackageConfig, values map[string]any) (Result, error) {
+	allowed := make(map[string]bool, len(definition.Fields))
 	for _, field := range definition.Fields {
-		allowed[field.Name] = field
+		allowed[field.Name] = true
 	}
 	for key := range values {
-		if _, ok := allowed[key]; !ok {
-			return Result{}, errors.New("配置项不属于该包")
+		if !allowed[key] {
+			return Result{}, fmt.Errorf("配置项 %s 不属于该包", key)
 		}
 	}
 	current, err := m.Read(root, "alemon.config.yaml")
@@ -185,11 +180,14 @@ func (m Manager) savePackageConfigDefinition(root string, definition PackageConf
 	if definition.Namespace != definition.Package {
 		legacy = definition.Package
 	}
-	updated := mergeConfigValuesWithLegacy(content, definition.Namespace, legacy, definition.Fields, values)
+	updated, err := mergeConfigValuesWithLegacy(content, definition.Namespace, legacy, definition.Fields, values)
+	if err != nil {
+		return Result{}, err
+	}
 	return m.Write(root, "alemon.config.yaml", updated)
 }
 
-func (m Manager) SaveCurrentPackageConfig(root string, values map[string]string) (Result, error) {
+func (m Manager) SaveCurrentPackageConfig(root string, values map[string]any) (Result, error) {
 	definition, err := m.CurrentPackageConfig(root)
 	if err != nil {
 		return Result{}, err
@@ -200,35 +198,34 @@ func (m Manager) SaveCurrentPackageConfig(root string, values map[string]string)
 // SaveLogin only changes login after the selected connection's declared
 // required fields already have values. This keeps a package from being made
 // active in alemon.config.yaml with an unusable, half-filled configuration.
+// Third-party platform packages additionally get an explicit platform key when
+// the runtime cannot derive it from the login value.
 func (m Manager) SaveLogin(root, login, packageName string) (Result, error) {
 	login = strings.TrimSpace(login)
 	if login == "" || strings.ContainsAny(login, "\r\n") {
 		return Result{}, errors.New("请填写有效的登录连接")
 	}
+	platformValue := ""
 	if packageName != "" {
 		definition, err := m.PackageConfig(root, packageName)
 		if err != nil {
-			// A custom npm package may not be an AlemonJS connection package. It
-			// has no declared fields to validate, so saving its custom login value
-			// remains valid. Installation/read failures still must be surfaced.
-			if !strings.Contains(err.Error(), "没有声明 alemonjs.config") {
-				return Result{}, err
-			}
-		} else {
-			missing := make([]string, 0)
-			for _, field := range definition.Fields {
-				if field.Required && strings.TrimSpace(definition.Values[field.Name]) == "" {
-					label := field.Description
-					if label == "" {
-						label = field.Name
-					}
-					missing = append(missing, label)
+			return Result{}, err
+		}
+		missing := make([]string, 0)
+		for _, field := range definition.Fields {
+			configured := !isConfigEmpty(definition.Values[field.Name])
+			if field.Required && !configured && !field.DefaultConfigured() {
+				label := field.Description
+				if label == "" {
+					label = field.Name
 				}
-			}
-			if len(missing) > 0 {
-				return Result{}, fmt.Errorf("请先完成 %s 的必填配置：%s", definition.Package, strings.Join(missing, "、"))
+				missing = append(missing, label)
 			}
 		}
+		if len(missing) > 0 {
+			return Result{}, fmt.Errorf("请先完成 %s 的必填配置：%s", definition.Package, strings.Join(missing, "、"))
+		}
+		platformValue = definition.PlatformValueForLogin(login)
 	}
 	current, err := m.Read(root, "alemon.config.yaml")
 	if err != nil && !strings.Contains(err.Error(), "no such file") {
@@ -238,15 +235,9 @@ func (m Manager) SaveLogin(root, login, packageName string) (Result, error) {
 	if err == nil {
 		content = current.Output
 	}
-	value := "login: '" + strings.ReplaceAll(login, "'", "''") + "'"
-	if regexp.MustCompile(`(?m)^login:\s*.*$`).MatchString(content) {
-		content = regexp.MustCompile(`(?m)^login:\s*.*$`).ReplaceAllString(content, value)
-	} else {
-		content = strings.TrimRight(content, "\n")
-		if content != "" {
-			content += "\n"
-		}
-		content += value + "\n"
+	content = setTopLevelScalar(content, "login", strconv.Quote(login))
+	if platformValue != "" {
+		content = setTopLevelScalar(content, "platform", strconv.Quote(platformValue))
 	}
 	result, err := m.Write(root, "alemon.config.yaml", content)
 	if err != nil {
@@ -256,112 +247,236 @@ func (m Manager) SaveLogin(root, login, packageName string) (Result, error) {
 	return result, nil
 }
 
-func readConfigValues(content, namespace string) map[string]string {
-	return readConfigValuesForNamespaces(content, []string{namespace})
+// setTopLevelScalar replaces or appends a quoted top-level YAML scalar.
+func setTopLevelScalar(content, key, value string) string {
+	pattern := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(key) + `:\s*.*$`)
+	line := key + ": " + value
+	if pattern.MatchString(content) {
+		return pattern.ReplaceAllString(content, line)
+	}
+	content = strings.TrimRight(content, "\n")
+	if content != "" {
+		content += "\n"
+	}
+	return content + line + "\n"
 }
 
-// readConfigValuesForNamespaces parses values from every top-level YAML section
-// whose key matches one of the candidates. The namespace usually resolves to
-// the short connection name (onebot), but files saved before that fix may still
-// carry the scoped package key ('@alemonjs/onebot'). Accepting both lets an
-// existing configuration keep its values while the write path migrates to the
-// short key.
-func readConfigValuesForNamespaces(content string, namespaces []string) map[string]string {
-	target := map[string]bool{}
-	for _, ns := range namespaces {
-		target[yamlKey(ns)+":"] = true
+func readConfigValues(content string, namespaces []string, fields []packageschema.Field) map[string]any {
+	root := map[string]any{}
+	if strings.TrimSpace(content) != "" {
+		if err := yaml.Unmarshal([]byte(content), &root); err != nil {
+			return map[string]any{}
+		}
 	}
-	values := map[string]string{}
-	lines := strings.Split(content, "\n")
-	inSection := false
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if inSection {
-			// A non-indented line ends the current section.
-			if len(line) > 0 && line[0] != ' ' && line[0] != '\t' {
-				if target[trimmed] {
-					inSection = true // the next section also matches
-					continue
-				}
-				inSection = false
-				continue
+	raw := map[string]any{}
+	for _, namespace := range namespaces {
+		section := normalizeSection(root[namespace])
+		for key, value := range section {
+			if _, exists := raw[key]; !exists {
+				raw[key] = value
 			}
-			parts := strings.SplitN(trimmed, ":", 2)
-			if len(parts) != 2 || !yamlNamePattern.MatchString(parts[0]) {
-				continue
-			}
-			values[parts[0]] = strings.Trim(strings.TrimSpace(parts[1]), "\"'")
+		}
+	}
+	values := map[string]any{}
+	for i := range fields {
+		field := &fields[i]
+		value, present := raw[field.Name]
+		if !present {
 			continue
 		}
-		if target[trimmed] {
-			inSection = true
+		coerced, err := field.Coerce(value)
+		if err != nil {
+			values[field.Name] = packageschema.NormalizeValue(value)
+			continue
+		}
+		if coerced != nil {
+			values[field.Name] = packageschema.NormalizeValue(coerced)
 		}
 	}
 	return values
 }
 
-func mergeConfigValues(content, namespace string, fields []PackageConfigField, values map[string]string) string {
-	return mergeConfigValuesWithLegacy(content, namespace, "", fields, values)
-}
-
 // mergeConfigValuesWithLegacy writes the short connection key and, when a file
 // still carries the old scoped-package key ('@alemonjs/onebot'), migrates its
-// section into the new key instead of leaving a stale duplicate.
-func mergeConfigValuesWithLegacy(content, namespace, legacyNamespace string, fields []PackageConfigField, values map[string]string) string {
+// section into the new key instead of leaving a stale duplicate. The managed
+// section is regenerated in schema order; other sections and their comments
+// are preserved verbatim.
+func mergeConfigValuesWithLegacy(content, namespace, legacyNamespace string, fields []packageschema.Field, values map[string]any) (string, error) {
 	lines := strings.Split(strings.TrimRight(content, "\n"), "\n")
 	if len(lines) == 1 && lines[0] == "" {
 		lines = nil
 	}
-	// Capture the legacy scoped-package block before removing it: when the file
-	// has no short key yet, its values migrate into the new section so nothing
-	// is lost.
-	legacySection := []string{}
+	legacyLines := []string{}
 	if legacyNamespace != "" {
 		if legacyStart, legacyEnd := findYAMLSection(lines, yamlKey(legacyNamespace)+":"); legacyStart >= 0 {
-			legacySection = append(legacySection, lines[legacyStart+1:legacyEnd]...)
+			legacyLines = append(legacyLines, lines[legacyStart+1:legacyEnd]...)
 		}
 		lines = removeYAMLSection(lines, yamlKey(legacyNamespace)+":")
 	}
 	start, end := findYAMLSection(lines, yamlKey(namespace)+":")
-	section := []string{}
+	existingLines := []string{}
 	if start >= 0 {
-		section = append(section, lines[start+1:end]...)
+		existingLines = append(existingLines, lines[start+1:end]...)
 	} else {
-		section = append(section, legacySection...)
+		existingLines = append(existingLines, legacyLines...)
 	}
-	for _, field := range fields {
-		value, ok := values[field.Name]
-		if !ok {
+	section := parseIndentedBlock(existingLines)
+	for i := range fields {
+		field := &fields[i]
+		value, submitted := values[field.Name]
+		if !submitted {
 			continue
 		}
-		replacement := "  " + field.Name + ": " + yamlValue(field.Type, value)
-		updated := false
-		for index, line := range section {
-			if strings.HasPrefix(strings.TrimSpace(line), field.Name+":") {
-				section[index] = replacement
-				updated = true
-				break
-			}
+		if isConfigEmpty(value) {
+			delete(section, field.Name)
+			continue
 		}
-		if !updated {
-			section = append(section, replacement)
+		coerced, err := field.Coerce(value)
+		if err != nil {
+			return "", err
+		}
+		section[field.Name] = coerced
+	}
+	// Required and rule validation runs against the merged section so clearing
+	// a value cannot silently leave an invalid configuration behind.
+	for i := range fields {
+		field := &fields[i]
+		finalValue := section[field.Name]
+		if field.Required && (finalValue == nil || isConfigEmpty(finalValue)) && !field.DefaultConfigured() {
+			label := field.Description
+			if label == "" {
+				label = field.Name
+			}
+			return "", fmt.Errorf("请填写必填配置项：%s", label)
+		}
+		if messages := field.ValidateValue(finalValue); len(messages) > 0 {
+			return "", fmt.Errorf("%s 配置无效：%s", field.Name, strings.Join(messages, "；"))
 		}
 	}
-	result := make([]string, 0, len(lines)+len(section)+1)
+	sectionLines := marshalSection(section, fields)
+	result := make([]string, 0, len(lines)+len(sectionLines)+1)
 	if start < 0 {
 		result = append(result, lines...)
 		if len(result) > 0 {
 			result = append(result, "")
 		}
 		result = append(result, yamlKey(namespace)+":")
-		result = append(result, section...)
+		result = append(result, sectionLines...)
 	} else {
 		result = append(result, lines[:start]...)
 		result = append(result, yamlKey(namespace)+":")
-		result = append(result, section...)
+		result = append(result, sectionLines...)
 		result = append(result, lines[end:]...)
 	}
-	return strings.Join(result, "\n") + "\n"
+	return strings.Join(result, "\n") + "\n", nil
+}
+
+// parseIndentedBlock decodes an indented YAML block (the body of a section)
+// by wrapping it in a root key, since the parser rejects root indentation.
+func parseIndentedBlock(lines []string) map[string]any {
+	if len(lines) == 0 {
+		return map[string]any{}
+	}
+	wrapped := "root:\n" + strings.Join(lines, "\n") + "\n"
+	var decoded map[string]any
+	if err := yaml.Unmarshal([]byte(wrapped), &decoded); err != nil {
+		return map[string]any{}
+	}
+	return normalizeSection(decoded["root"])
+}
+
+func normalizeSection(raw any) map[string]any {
+	normalized := packageschema.NormalizeValue(raw)
+	if section, ok := normalized.(map[string]any); ok {
+		return section
+	}
+	return map[string]any{}
+}
+
+// marshalSection emits the managed section deterministically: declared fields
+// first in schema order, then remaining keys sorted alphabetically.
+func marshalSection(section map[string]any, fields []packageschema.Field) []string {
+	ordered := make([]string, 0, len(section))
+	seen := map[string]bool{}
+	for i := range fields {
+		name := fields[i].Name
+		if _, ok := section[name]; ok && !seen[name] {
+			ordered = append(ordered, name)
+			seen[name] = true
+		}
+	}
+	rest := make([]string, 0, len(section))
+	for name := range section {
+		if !seen[name] {
+			rest = append(rest, name)
+		}
+	}
+	sort.Strings(rest)
+	ordered = append(ordered, rest...)
+	lines := []string{}
+	for _, name := range ordered {
+		appendYAMLLines(&lines, 1, name, section[name])
+	}
+	return lines
+}
+
+func appendYAMLLines(lines *[]string, indent int, key string, value any) {
+	prefix := strings.Repeat("  ", indent)
+	switch typed := value.(type) {
+	case map[string]any:
+		*lines = append(*lines, prefix+yamlKey(key)+":")
+		keys := make([]string, 0, len(typed))
+		for name := range typed {
+			keys = append(keys, name)
+		}
+		sort.Strings(keys)
+		for _, name := range keys {
+			appendYAMLLines(lines, indent+1, name, typed[name])
+		}
+	case []any:
+		if len(typed) == 0 {
+			*lines = append(*lines, prefix+yamlKey(key)+": []")
+			return
+		}
+		*lines = append(*lines, prefix+yamlKey(key)+":")
+		for _, item := range typed {
+			*lines = append(*lines, prefix+"  - "+yamlScalar(item))
+		}
+	default:
+		*lines = append(*lines, prefix+yamlKey(key)+": "+yamlScalar(value))
+	}
+}
+
+func yamlScalar(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return strconv.Quote(typed)
+	case bool:
+		return strconv.FormatBool(typed)
+	case float64:
+		return strconv.FormatFloat(typed, 'f', -1, 64)
+	case int:
+		return strconv.Itoa(typed)
+	default:
+		return strconv.Quote(fmt.Sprintf("%v", typed))
+	}
+}
+
+func isConfigEmpty(value any) bool {
+	switch typed := value.(type) {
+	case nil:
+		return true
+	case string:
+		return strings.TrimSpace(typed) == ""
+	case []any:
+		return len(typed) == 0
+	case map[string]any:
+		return len(typed) == 0
+	case bool:
+		return false
+	default:
+		return false
+	}
 }
 
 // findYAMLSection returns the start and end line indices of the top-level
@@ -399,18 +514,4 @@ func yamlKey(value string) string {
 		return value
 	}
 	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
-}
-
-func yamlValue(kind, value string) string {
-	switch kind {
-	case "number", "integer":
-		if _, err := strconv.ParseFloat(value, 64); err == nil {
-			return value
-		}
-	case "boolean", "bool":
-		if value == "true" || value == "false" {
-			return value
-		}
-	}
-	return strconv.Quote(value)
 }
