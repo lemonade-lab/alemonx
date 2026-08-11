@@ -72,10 +72,13 @@ func (c *Checker) platform() Check {
 }
 
 func (c *Checker) command(id, name, argument, suggestion string) Check {
-	path, err := c.commandPath(id)
+	previousPath, previousErr := exec.LookPath(id)
+	RefreshCommandEnvironment(id)
+	path, err := ResolveCommand(id)
 	if err != nil {
 		return Check{ID: id, Name: name, Status: "missing", Detail: "未检测到", Suggestion: suggestion}
 	}
+	repaired := previousErr != nil || filepath.Clean(previousPath) != filepath.Clean(path)
 	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
 	defer cancel()
 	output, err := exec.CommandContext(ctx, path, argument).CombinedOutput()
@@ -86,34 +89,90 @@ func (c *Checker) command(id, name, argument, suggestion string) Check {
 		return Check{ID: id, Name: name, Status: "warning", Detail: "已找到，但无法正常运行", Suggestion: "请重新安装或修复 " + name + " 后重试。"}
 	}
 	version := strings.TrimSpace(strings.Split(string(output), "\n")[0])
+	if repaired {
+		if version != "" {
+			version += " · "
+		}
+		version += "已自动修复当前服务 PATH"
+	}
 	return Check{ID: id, Name: name, Status: "ready", Detail: version}
 }
 
-// commandPath resolves a command without relying solely on this process's PATH.
-// On Windows, an app that was already open when Node.js or Git was installed
-// retains its old environment. The installers update the registry, but not the
-// GUI process, so LookPath alone keeps reporting a false negative until restart.
-func (c *Checker) commandPath(name string) (string, error) {
+// ResolveCommand resolves a prerequisite without relying solely on the PATH
+// captured when AlemonX started. The managed Node runtime deliberately wins
+// over an older system Node so installs immediately use the LTS chosen here.
+func ResolveCommand(name string) (string, error) {
+	if path := ManagedNodeCommand(name); path != "" {
+		return path, nil
+	}
 	if path, err := exec.LookPath(name); err == nil {
 		return path, nil
 	}
-	if (name == "node" || name == "npm" || name == "npx") && ManagedNodeBin() != "" {
-		candidate := filepath.Join(ManagedNodeBin(), name)
-		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
-			return candidate, nil
+	if runtime.GOOS == "windows" {
+		for _, directory := range windowsCommandDirectories(name) {
+			path := filepath.Join(directory, name+".exe")
+			if info, err := os.Stat(path); err == nil && !info.IsDir() {
+				return path, nil
+			}
 		}
-	}
-	if runtime.GOOS != "windows" {
 		return "", exec.ErrNotFound
 	}
-
-	for _, directory := range windowsCommandDirectories(name) {
-		path := filepath.Join(directory, name+".exe")
-		if info, err := os.Stat(path); err == nil && !info.IsDir() {
+	for _, directory := range unixCommandDirectories(name) {
+		path := filepath.Join(directory, name)
+		if info, err := os.Stat(path); err == nil && !info.IsDir() && info.Mode()&0o111 != 0 {
 			return path, nil
 		}
 	}
 	return "", exec.ErrNotFound
+}
+
+// RefreshCommandEnvironment updates AlemonX's own process environment after
+// an approved install. It does not alter the machine-wide PATH; it makes the
+// current service and every child process immediately see the new tool.
+func RefreshCommandEnvironment(names ...string) []string {
+	directories := []string{}
+	seen := map[string]bool{}
+	for _, name := range names {
+		path, err := ResolveCommand(name)
+		if err != nil {
+			continue
+		}
+		directory := filepath.Dir(path)
+		key := directory
+		if runtime.GOOS == "windows" {
+			key = strings.ToLower(key)
+		}
+		if !seen[key] {
+			seen[key] = true
+			directories = append(directories, directory)
+		}
+	}
+	if len(directories) == 0 {
+		return nil
+	}
+	entries := filepath.SplitList(os.Getenv("PATH"))
+	merged := make([]string, 0, len(directories)+len(entries))
+	seen = map[string]bool{}
+	for _, directory := range append(directories, entries...) {
+		key := directory
+		if runtime.GOOS == "windows" {
+			key = strings.ToLower(key)
+		}
+		if directory != "" && !seen[key] {
+			seen[key] = true
+			merged = append(merged, directory)
+		}
+	}
+	_ = os.Setenv("PATH", strings.Join(merged, string(os.PathListSeparator)))
+	return directories
+}
+
+func unixCommandDirectories(name string) []string {
+	directories := []string{"/usr/local/bin", "/usr/bin", "/bin"}
+	if runtime.GOOS == "darwin" {
+		directories = append([]string{"/opt/homebrew/bin", "/Applications/Docker.app/Contents/Resources/bin"}, directories...)
+	}
+	return directories
 }
 
 func windowsCommandDirectories(name string) []string {
@@ -140,6 +199,12 @@ func windowsCommandDirectories(name string) []string {
 		}
 		if localAppData := os.Getenv("LOCALAPPDATA"); localAppData != "" {
 			directories = append(directories, filepath.Join(localAppData, "Programs", "Git", "cmd"), filepath.Join(localAppData, "Programs", "Git", "bin"))
+		}
+	case "docker":
+		for _, root := range programFiles {
+			if root != "" {
+				directories = append(directories, filepath.Join(root, "Docker", "Docker", "resources", "bin"))
+			}
 		}
 	}
 

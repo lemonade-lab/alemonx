@@ -73,14 +73,16 @@ func EnvironmentInstallPlanForHost(checkID string) (EnvironmentInstallPlan, erro
 
 func hostPackageManager() (string, error) {
 	if runtime.GOOS == "darwin" {
-		if _, err := exec.LookPath("brew"); err != nil {
+		if _, err := ResolveCommand("brew"); err != nil {
 			return "", errors.New("未检测到 Homebrew。请先由 macOS 管理员安装 Homebrew，随后即可在工作台内安装环境")
 		}
+		RefreshCommandEnvironment("brew")
 		return "brew", nil
 	}
 	if runtime.GOOS == "windows" {
 		for _, name := range []string{"winget", "choco"} {
-			if _, err := exec.LookPath(name); err == nil {
+			if _, err := ResolveCommand(name); err == nil {
+				RefreshCommandEnvironment(name)
 				return name, nil
 			}
 		}
@@ -90,7 +92,8 @@ func hostPackageManager() (string, error) {
 		return "", errors.New("工作台内安装目前支持 Linux、macOS 与 Windows")
 	}
 	for _, name := range []string{"apt-get", "dnf", "yum", "apk", "pacman"} {
-		if _, err := exec.LookPath(name); err == nil {
+		if _, err := ResolveCommand(name); err == nil {
+			RefreshCommandEnvironment(name)
 			return name, nil
 		}
 	}
@@ -123,6 +126,7 @@ func InstallEnvironment(ctx context.Context, checkID string) (string, error) {
 	output, runErr := exec.CommandContext(ctx, program, args...).CombinedOutput()
 	text := strings.TrimSpace(string(output))
 	if runErr == nil {
+		RefreshCommandEnvironment(checkID)
 		return fmt.Sprintf("已在当前主机安装 %s。请重新检查环境确认版本。", plan.Name), nil
 	}
 	lower := strings.ToLower(text)

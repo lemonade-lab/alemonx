@@ -25,6 +25,7 @@ import {
   type DashboardPage,
   type DashboardSection
 } from '../lib/dashboardNavigation'
+import { createRandomID } from '../lib/randomId'
 import cn from 'classnames'
 import Markdown from 'markdown-to-jsx'
 import {
@@ -1866,7 +1867,7 @@ export function Dashboard({
     let retry: number | null = null
     let heartbeat: number | null = null
     let lastEventID = 0
-    const tabID = crypto.randomUUID()
+    const tabID = createRandomID()
     const channel =
       typeof BroadcastChannel === 'undefined'
         ? null

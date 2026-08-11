@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"alemonx/internal/system"
 )
 
 type Worktree struct {
@@ -22,17 +24,27 @@ func CreateWorktree(root, taskID string) (Worktree, error) {
 		return Worktree{}, err
 	}
 	_ = os.RemoveAll(dir)
-	if out, err := exec.Command("git", "-C", root, "worktree", "add", "--detach", dir, "HEAD").CombinedOutput(); err != nil {
+	git, err := system.ResolveCommand("git")
+	if err != nil {
+		return Worktree{}, errors.New("未检测到 Git；请先在环境中安装 Git")
+	}
+	if out, err := exec.Command(git, "-C", root, "worktree", "add", "--detach", dir, "HEAD").CombinedOutput(); err != nil {
 		return Worktree{}, errors.New(strings.TrimSpace(string(out)))
 	}
 	return Worktree{Root: dir, Base: root}, nil
 }
 
 func (w Worktree) Diff() string {
-	out, _ := exec.Command("git", "-C", w.Root, "diff", "--no-ext-diff").CombinedOutput()
+	git, err := system.ResolveCommand("git")
+	if err != nil {
+		return ""
+	}
+	out, _ := exec.Command(git, "-C", w.Root, "diff", "--no-ext-diff").CombinedOutput()
 	return string(out)
 }
 func (w Worktree) Remove() {
-	_, _ = exec.Command("git", "-C", w.Base, "worktree", "remove", "--force", w.Root).CombinedOutput()
+	if git, err := system.ResolveCommand("git"); err == nil {
+		_, _ = exec.Command(git, "-C", w.Base, "worktree", "remove", "--force", w.Root).CombinedOutput()
+	}
 	_ = os.RemoveAll(w.Root)
 }

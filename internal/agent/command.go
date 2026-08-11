@@ -12,6 +12,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"alemonx/internal/system"
 )
 
 // CommandRunner executes a whitelisted project command inside the project
@@ -77,7 +79,21 @@ func (commandRunner) Run(ctx context.Context, root, command string, args []strin
 	}
 	timeoutCtx, cancel := context.WithTimeout(ctx, commandTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(timeoutCtx, command, args...)
+	program := command
+	if command == "node" || command == "npm" {
+		if command == "npm" {
+			if _, err := system.ResolveCommand("node"); err != nil {
+				return "", errors.New("未检测到 Node.js 环境")
+			}
+		}
+		path, err := system.ResolveCommand(command)
+		if err != nil {
+			return "", fmt.Errorf("未检测到 %s 环境", command)
+		}
+		system.RefreshCommandEnvironment("node", "npm", "npx")
+		program = path
+	}
+	cmd := exec.CommandContext(timeoutCtx, program, args...)
 	cmd.Dir = root
 	cmd.Stdin = nil
 	var buffer bytes.Buffer

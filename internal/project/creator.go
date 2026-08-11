@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"alemonx/internal/pm2config"
+	"alemonx/internal/system"
 )
 
 type Config struct {
@@ -101,7 +102,7 @@ func (c *Creator) Create(config Config) (Result, error) {
 
 	packageCommand := config.PackageManager
 	packageName := ""
-	if _, err := exec.LookPath(config.PackageManager); err != nil {
+	if !projectCommandAvailable(config.PackageManager) {
 		// Do not try `npm install --global`: that commonly needs administrator
 		// rights. npx is scoped to this one command and keeps a new machine
 		// usable without modifying its global package directory.
@@ -516,8 +517,12 @@ func run(directory string, logs *[]string, name string, args ...string) error {
 	timeout := createCommandTimeout(name, args...)
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	command := exec.CommandContext(ctx, name, args...)
+	commandName := projectCommandPath(name)
+	command := exec.CommandContext(ctx, commandName, args...)
 	command.Dir = directory
+	if bin := system.ManagedNodeBin(); bin != "" {
+		command.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	}
 	output, err := command.CombinedOutput()
 	line := strings.TrimSpace(string(output))
 	if line != "" {
@@ -539,6 +544,33 @@ func run(directory string, logs *[]string, name string, args ...string) error {
 		return fmt.Errorf("%s %s：%w", name, strings.Join(args, " "), err)
 	}
 	return nil
+}
+
+func projectCommandPath(name string) string {
+	base := filepath.Base(name)
+	if base == "node" {
+		if path, err := system.ResolveCommand(base); err == nil {
+			system.RefreshCommandEnvironment("node", "npm", "npx")
+			return path
+		}
+	}
+	if base == "npm" || base == "npx" {
+		if _, err := system.ResolveCommand("node"); err == nil {
+			system.RefreshCommandEnvironment("node", "npm", "npx")
+			if path, resolveErr := system.ResolveCommand(base); resolveErr == nil {
+				return path
+			}
+		}
+	}
+	return name
+}
+
+func projectCommandAvailable(name string) bool {
+	if projectCommandPath(name) != name {
+		return true
+	}
+	_, err := exec.LookPath(name)
+	return err == nil
 }
 
 func ensureWritableDirectory(directory string) error {

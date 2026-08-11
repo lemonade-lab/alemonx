@@ -108,7 +108,7 @@ func TestPackageManagerCommandFallsBackToNPXWithoutGlobalYarn(t *testing.T) {
 	}
 	t.Setenv("PATH", "")
 	command, notice := PackageManagerCommand(root, "install")
-	if command.Args[0] != "npx" || !strings.Contains(strings.Join(command.Args, " "), "yarn@1.22.22 install") {
+	if filepath.Base(command.Args[0]) != "npx" || !strings.Contains(strings.Join(command.Args, " "), "yarn@1.22.22 install") {
 		t.Fatalf("fallback command = %#v", command.Args)
 	}
 	if !strings.Contains(notice, "不会修改电脑的全局安装") {
@@ -156,11 +156,14 @@ func TestPackageJSONManagerWinsOverLockFiles(t *testing.T) {
 	}
 }
 
-func TestRunReportsMissingNodeEnvironmentWithoutRawExecError(t *testing.T) {
+func TestRunRecoversNodeFromStandardInstallDirectoryOrReportsGuidance(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("PATH", "")
 	_, err := run(root, "npx", "--version")
-	if err == nil || !strings.Contains(err.Error(), "Node.js") {
+	if err == nil {
+		return // ResolveCommand restored the standard Node.js installation.
+	}
+	if !strings.Contains(err.Error(), "Node.js") {
 		t.Fatalf("npx error = %v, want Node.js guidance", err)
 	}
 	if strings.Contains(err.Error(), "executable file not found") {

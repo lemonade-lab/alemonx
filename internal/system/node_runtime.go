@@ -25,6 +25,8 @@ const (
 	nodeDownloadTimeout = 12 * time.Minute
 )
 
+var userCacheDir = os.UserCacheDir
+
 type nodeRelease struct {
 	Version string          `json:"version"`
 	LTS     json.RawMessage `json:"lts"`
@@ -56,12 +58,14 @@ func InstallManagedNode(ctx context.Context) (string, error) {
 		if runErr != nil {
 			return "", fmt.Errorf("Node.js 安装程序执行失败：%s", limitedNodeOutput(output, runErr))
 		}
+		RefreshCommandEnvironment("node", "npm", "npx")
 		return "已通过工作台镜像下载并安装 Node.js LTS。请重新检查环境确认版本。", nil
 	}
 	bin, err := installNodeArchive(ctx, archive, version)
 	if err != nil {
 		return "", err
 	}
+	RefreshCommandEnvironment("node", "npm", "npx")
 	return "已通过工作台镜像下载并安装 Node.js LTS（" + bin + "）。请重新检查环境确认版本。", nil
 }
 
@@ -241,8 +245,26 @@ func ManagedNodeBin() string {
 	return ""
 }
 
+// ManagedNodeCommand resolves the executable for a workbench-installed Node
+// runtime. Callers may fall back to exec.LookPath when it returns an empty
+// string, preserving a user's system or version-manager installation.
+func ManagedNodeCommand(name string) string {
+	if name != "node" && name != "npm" && name != "npx" {
+		return ""
+	}
+	bin := ManagedNodeBin()
+	if bin == "" {
+		return ""
+	}
+	path := filepath.Join(bin, name)
+	if info, err := os.Stat(path); err == nil && !info.IsDir() {
+		return path
+	}
+	return ""
+}
+
 func nodeRuntimeBase() (string, error) {
-	base, err := os.UserCacheDir()
+	base, err := userCacheDir()
 	if err != nil {
 		return "", err
 	}

@@ -54,8 +54,9 @@ func (Manager) StreamPM2Logs(ctx context.Context, root string, onLine func(strin
 	if err != nil {
 		return err
 	}
-	command := exec.CommandContext(ctx, "npx", "--yes", "pm2", "logs", "--raw", "--lines", "0")
+	command := exec.CommandContext(ctx, nodeToolPath("npx"), "--yes", "pm2", "logs", "--raw", "--lines", "0")
 	command.Dir = path
+	applyManagedNodeEnvironment(command)
 	stdout, err := command.StdoutPipe()
 	if err != nil {
 		return err
@@ -1000,9 +1001,10 @@ func pm2JList(root string) (string, error) {
 	timeout := commandTimeout("npx", "pm2", "jlist")
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "npx", "--yes", "pm2", "jlist")
+	cmd := exec.CommandContext(ctx, nodeToolPath("npx"), "--yes", "pm2", "jlist")
 	cmd.Dir = root
 	cmd.Env = os.Environ()
+	applyManagedNodeEnvironment(cmd)
 	HideWindow(cmd)
 	output, err := cmd.Output()
 	text := strings.TrimSpace(string(output))
@@ -1203,8 +1205,10 @@ func (Manager) scriptCommand(root, script string) (*exec.Cmd, error) {
 	}
 	command, _ := PackageManagerCommand(root, "run", script)
 	if filepath.Base(command.Path) == "npx" {
-		if _, err := exec.LookPath("npx"); err != nil {
-			return nil, missingCommandAdvice("npx")
+		if system.ManagedNodeCommand("npx") == "" {
+			if _, err := exec.LookPath("npx"); err != nil {
+				return nil, missingCommandAdvice("npx")
+			}
 		}
 	}
 	return command, nil
@@ -1579,6 +1583,42 @@ func run(root, name string, args ...string) (string, error) {
 	return runWithEnv(root, nil, name, args...)
 }
 
+// nodeToolPath keeps the bundled runtime usable by a GUI or service process
+// whose own PATH was established before Node.js was installed. Only bare
+// node/npm/npx names are resolved so explicit user command paths stay intact.
+func nodeToolPath(name string) string {
+	if filepath.Base(name) != name || (name != "node" && name != "npm" && name != "npx") {
+		return name
+	}
+	if _, err := system.ResolveCommand("node"); err != nil {
+		return name
+	}
+	system.RefreshCommandEnvironment("node", "npm", "npx")
+	if path, err := system.ResolveCommand(name); err == nil {
+		return path
+	}
+	return name
+}
+
+func applyManagedNodeEnvironment(command *exec.Cmd) {
+	bin := system.ManagedNodeBin()
+	if bin == "" {
+		return
+	}
+	if command.Env == nil {
+		command.Env = os.Environ()
+	}
+	prefix := "PATH="
+	value := bin + string(os.PathListSeparator) + os.Getenv("PATH")
+	for index := len(command.Env) - 1; index >= 0; index-- {
+		if strings.HasPrefix(command.Env[index], prefix) {
+			command.Env[index] = prefix + value
+			return
+		}
+	}
+	command.Env = append(command.Env, prefix+value)
+}
+
 // PackageManagerCommand keeps a robot usable when package.json requests a
 // package manager that is not globally installed. npx uses the npm bundled
 // with Node.js and needs no administrator write permission.
@@ -1587,9 +1627,17 @@ func PackageManagerCommand(root string, args ...string) (*exec.Cmd, string) {
 }
 
 func packageManagerCommand(root, manager string, args ...string) (*exec.Cmd, string) {
+	if path := nodeToolPath(manager); path != manager {
+		command := exec.Command(path, args...)
+		command.Dir = root
+		applyManagedNodeEnvironment(command)
+		HideWindow(command)
+		return command, ""
+	}
 	if _, err := exec.LookPath(manager); err == nil {
 		command := exec.Command(manager, args...)
 		command.Dir = root
+		applyManagedNodeEnvironment(command)
 		HideWindow(command)
 		return command, ""
 	}
@@ -1602,11 +1650,13 @@ func packageManagerCommand(root, manager string, args ...string) (*exec.Cmd, str
 	default:
 		command := exec.Command(manager, args...)
 		command.Dir = root
+		applyManagedNodeEnvironment(command)
 		HideWindow(command)
 		return command, ""
 	}
-	command := exec.Command("npx", append([]string{"--yes", packageName}, args...)...)
+	command := exec.Command(nodeToolPath("npx"), append([]string{"--yes", packageName}, args...)...)
 	command.Dir = root
+	applyManagedNodeEnvironment(command)
 	HideWindow(command)
 	return command, "未找到 " + strings.ToUpper(manager) + "，临时通过 npm 获取并执行；不会修改电脑的全局安装。"
 }
@@ -1721,9 +1771,10 @@ func runWithOutput(root string, values map[string]string, combined bool, name st
 	timeout := commandTimeout(name, args...)
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, name, args...)
+	cmd := exec.CommandContext(ctx, nodeToolPath(name), args...)
 	cmd.Dir = root
 	cmd.Env = os.Environ()
+	applyManagedNodeEnvironment(cmd)
 	HideWindow(cmd)
 	for key, value := range values {
 		prefix := key + "="

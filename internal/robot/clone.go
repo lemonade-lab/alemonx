@@ -246,7 +246,11 @@ func runCloneWithProgress(root string, onProgress func(CloneProgress), args ...s
 	timeout := commandTimeout("git", "clone")
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	command := exec.CommandContext(ctx, "git", args...)
+	git, lookupErr := system.ResolveCommand("git")
+	if lookupErr != nil {
+		return "", missingCommandAdvice("git")
+	}
+	command := exec.CommandContext(ctx, git, args...)
 	command.Dir = root
 	HideWindow(command)
 	var output bytes.Buffer

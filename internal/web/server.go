@@ -617,6 +617,9 @@ func NewServerWithAuth(version string, staticFiles fs.FS, identity *access.Manag
 }
 
 func NewServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *access.Manager, templateFiles ...fs.FS) *ServerRuntime {
+	// Rehydrate command paths on every service start so a managed Node remains
+	// usable after restart without writing to the machine-wide PATH.
+	system.RefreshCommandEnvironment("node", "npm", "npx", "git", "docker")
 	assets, err := fs.Sub(staticFiles, "dist")
 	if err != nil {
 		panic(err)
@@ -5568,12 +5571,15 @@ func (s *server) ensureRobotWebViewRuntime(root string) (*webViewRuntime, error)
 	} else if err != nil {
 		return nil, err
 	}
-	node, err := exec.LookPath("node")
-	if err != nil {
+	node, lookupErr := system.ResolveCommand("node")
+	if lookupErr != nil {
 		return nil, fmt.Errorf("插件 WebView 通信需要 Node.js，请先在环境管理中安装")
 	}
 	command := exec.Command(node, scriptPath)
 	command.Dir = project
+	if bin := system.ManagedNodeBin(); bin != "" {
+		command.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	}
 	robot.HideWindow(command)
 	stdin, err := command.StdinPipe()
 	if err != nil {

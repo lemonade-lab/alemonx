@@ -16,6 +16,7 @@ import (
 	"alemonx/internal/agent"
 	"alemonx/internal/ai"
 	"alemonx/internal/robot"
+	"alemonx/internal/system"
 )
 
 type agentTaskInput struct {
@@ -599,7 +600,12 @@ func (s *server) agentTaskHandler(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusConflict, "任务没有可应用的 diff。")
 				return
 			}
-			cmd := exec.Command("git", "-C", task.Root, "apply", "--whitespace=nowarn", "-")
+			git, resolveErr := system.ResolveCommand("git")
+			if resolveErr != nil {
+				writeError(w, http.StatusBadRequest, "未检测到 Git；请先在环境中安装 Git")
+				return
+			}
+			cmd := exec.Command(git, "-C", task.Root, "apply", "--whitespace=nowarn", "-")
 			cmd.Stdin = bytes.NewBufferString(report.Diff)
 			if output, applyErr := cmd.CombinedOutput(); applyErr != nil {
 				writeError(w, http.StatusConflict, "合并失败："+strings.TrimSpace(string(output)))

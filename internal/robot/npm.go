@@ -276,8 +276,9 @@ func npmPackage(name string) (latest, publishedAt string, found bool, err error)
 }
 
 func npmWhoami(root string) string {
-	cmd := exec.Command("npm", "whoami", "--registry="+npmRegistry)
+	cmd := exec.Command(nodeToolPath("npm"), "whoami", "--registry="+npmRegistry)
 	cmd.Dir = root
+	applyManagedNodeEnvironment(cmd)
 	HideWindow(cmd)
 	output, err := cmd.Output()
 	if err != nil {

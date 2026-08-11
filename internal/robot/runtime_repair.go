@@ -5,12 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"alemonx/internal/pm2config"
+	"alemonx/internal/system"
 )
 
 // RuntimeRepairPlan is a safe, inspectable description of the changes needed
@@ -67,7 +67,7 @@ func (m Manager) RuntimeRepairPlan(root, mode string) (RuntimeRepairPlan, error)
 	if !framework {
 		plan.Automatic = append(plan.Automatic, "补齐 AlemonJS 框架依赖")
 	}
-	if _, err := exec.LookPath("node"); err != nil {
+	if _, err := system.ResolveCommand("node"); err != nil {
 		plan.Blocked = append(plan.Blocked, "未检测到 Node.js；请先安装 Node.js LTS。")
 	}
 	missing, dependencyErr := m.RuntimeDependencies(root)
