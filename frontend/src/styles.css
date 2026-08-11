@@ -1529,11 +1529,10 @@ button {
   cursor: grabbing;
 }
 
-/* Application settings deliberately use the same desktop window chrome as
- * every other tool, while the inside mirrors the calm two-column structure of
- * macOS System Settings. */
+/* Settings are a regular desktop window: theme tokens, navigation states and
+ * content spacing match the rest of the workbench in both color schemes. */
 .app-settings-shell {
-  background: var(--theme-surface-raised, #fff);
+  background: var(--theme-surface-panel);
   display: grid;
   grid-template-columns: 176px minmax(0, 1fr);
   height: 100%;
@@ -1541,8 +1540,8 @@ button {
 }
 
 .app-settings-sidebar {
-  background: color-mix(in srgb, var(--theme-surface-muted, #f8fafc) 88%, transparent);
-  border-right: 1px solid var(--theme-border-default, #e2e8f0);
+  background: var(--theme-surface-raised);
+  border-right: 1px solid var(--theme-border-default);
   display: grid;
   align-content: start;
   gap: 8px;
@@ -1551,36 +1550,44 @@ button {
 
 .app-settings-nav {
   display: grid;
-  gap: 3px;
+  gap: 4px;
 }
 
 .app-settings-nav button {
   align-items: center;
   background: transparent;
-  border: 0;
+  border: 1px solid transparent;
   border-radius: 8px;
-  color: var(--theme-text-secondary, #475569);
+  color: var(--theme-text-secondary);
   cursor: pointer;
   display: flex;
   font: inherit;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
   gap: 9px;
-  min-height: 34px;
+  min-height: 36px;
   padding: 0 9px;
   text-align: left;
 }
 
 .app-settings-nav button:hover {
-  background: color-mix(in srgb, var(--theme-surface-hover, #e2e8f0) 70%, transparent);
+  background: var(--theme-surface-hover);
+  color: var(--theme-text-strong);
 }
 
 .app-settings-nav button.active {
-  background: var(--theme-accent-soft, #eff6ff);
-  color: var(--theme-accent-text, #2563eb);
+  background: var(--theme-accent-soft);
+  border-color: var(--theme-accent-soft-border);
+  color: var(--theme-accent-text);
+}
+
+.app-settings-nav button:focus-visible {
+  outline: 2px solid var(--theme-accent);
+  outline-offset: 2px;
 }
 
 .app-settings-content {
+  background: var(--theme-surface-panel);
   min-height: 0;
 }
 
@@ -1592,9 +1599,100 @@ button {
 }
 
 .settings-panel-content {
-  color: var(--theme-text-primary, #0f172a);
+  color: var(--theme-text-primary);
   margin: 0 auto;
-  max-width: 620px;
+  max-width: 640px;
+}
+
+.settings-service-card {
+  border: 1px solid var(--theme-border-default);
+  border-radius: 10px;
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+.settings-service-card > header {
+  align-items: center;
+  display: flex;
+  gap: 9px;
+}
+
+.settings-service-card > header > i {
+  align-items: center;
+  background: var(--theme-accent-soft);
+  border: 1px solid var(--theme-accent-soft-border);
+  border-radius: 8px;
+  color: var(--theme-accent-text);
+  display: inline-flex;
+  font-style: normal;
+  height: 30px;
+  justify-content: center;
+  width: 30px;
+}
+
+.settings-service-card > header > span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.settings-service-card > header strong {
+  color: var(--theme-text-strong);
+  font-size: 12px;
+}
+
+.settings-service-card > header small {
+  color: var(--theme-text-muted);
+  font-size: 11px;
+}
+
+.settings-service-refresh {
+  margin-left: auto;
+}
+
+.settings-service-status {
+  align-items: flex-start;
+  background: var(--theme-surface-raised);
+  border-radius: 7px;
+  display: flex;
+  gap: 8px;
+  padding: 8px 9px;
+}
+
+.settings-service-status > span {
+  background: var(--theme-text-faint);
+  border-radius: 50%;
+  flex: 0 0 auto;
+  height: 7px;
+  margin-top: 4px;
+  width: 7px;
+}
+
+.settings-service-status > span.is-ready {
+  background: var(--theme-success);
+}
+
+.settings-service-status > span.is-offline {
+  background: var(--theme-warning);
+}
+
+.settings-service-status small {
+  color: var(--theme-text-secondary);
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-line;
+}
+
+.settings-service-card > footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.settings-update-panel .settings-service-card {
+  order: 10;
 }
 
 .app-settings-body .account-management {
@@ -1610,10 +1708,11 @@ button {
 
 @container desktop-window (max-width: 759px) {
   .app-settings-shell { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
-  .app-settings-sidebar { border-bottom: 1px solid var(--theme-border-default, #e2e8f0); border-right: 0; gap: 10px; padding: 12px; }
+  .app-settings-sidebar { border-bottom: 1px solid var(--theme-border-default); border-right: 0; gap: 10px; padding: 12px; }
   .app-settings-nav { display: flex; overflow-x: auto; }
   .app-settings-nav button { flex: 0 0 auto; }
   .app-settings-body { padding: 16px; }
+  .settings-service-card > footer > button { flex: 1 1 0; }
 }
 
 /* A custom header still lives in the shared window chrome. Terminal tabs are

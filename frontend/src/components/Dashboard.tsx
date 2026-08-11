@@ -1531,32 +1531,8 @@ export function Dashboard({
       }, 500)
     )
   }
-  const scheduleAppPortSave = useAutoSave<number>(async port => {
-    if (!root) return
-    setAppPortBusy(true)
-    try {
-      await saveAppPort({ root, port }).unwrap()
-      await refreshConfigDraft()
-    } catch (reason) {
-      showOutput(operationErrorMessage(reason, '应用端口自动保存失败。'), true)
-    } finally {
-      setAppPortBusy(false)
-    }
-  })
-  const scheduleTestPortSave = useAutoSave<number>(async port => {
-    if (!root) return
-    setTestPortBusy(true)
-    try {
-      await saveTestPort({ root, port }).unwrap()
-      await refreshConfigDraft()
-    } catch (reason) {
-      showOutput(operationErrorMessage(reason, '测试端口自动保存失败。'), true)
-    } finally {
-      setTestPortBusy(false)
-    }
-  })
   // "应用" = 机器人 + 应用端口。读取 serverPort；未配置则先让用户输入并
-  // 保存，然后启动开发模式，最后在浏览器打开应用地址。
+  // 保存后优先启动开发脚本；没有 dev 时才安全回退到 app 前台脚本。
   const openApp = async () => {
     if (!root || appLaunching) return
     setAppLaunching(true)
@@ -1642,7 +1618,7 @@ export function Dashboard({
         activateFloatingWindow('app')
         return
       }
-      const task = await startRobotTask({ root, action: 'dev' }).unwrap()
+      const task = await startRobotTask({ root, action: 'app-open', ready: 'app' }).unwrap()
       await waitForRobotTask(task.id, { appReady: true })
       setAppContentOpen(true)
       setAppMinimized(false)
@@ -1662,7 +1638,7 @@ export function Dashboard({
       return false
     }
   }
-  // "测试" = 机器人 + 测试端口（alemon.config.yaml 顶层 port，默认 17117，
+  // "测试" = 机器人 + 测试端口（alemon.config.yaml 顶层 port，
   // testone 沙盒的 /testone WebSocket 由后端同源代理）。机制与 "应用" 一致：
   // 读取端口，未配置则先让用户输入并保存，然后启动开发模式，最后打开测试台。
   const openTest = async () => {
@@ -2198,6 +2174,13 @@ export function Dashboard({
         setConsoleOpen(true)
         return true
       }
+	  if (data.action === 'dev-stop' || data.action === 'app-stop') {
+		// Stopping is asynchronous: the task state keeps only the affected
+		// runtime controls disabled. Do not retain the panel-wide busy lock while
+		// a process handles SIGINT or the server performs its force-stop fallback.
+		showOutput(task.output || '已请求停止，正在等待进程退出…')
+		return task.status !== 'failed'
+	  }
       showOutput('操作已开始，正在等待完成…')
       const current =
         task.status && task.status !== 'running'
@@ -2649,11 +2632,6 @@ export function Dashboard({
             void refetchRuntime()
             void refetchPM2Status()
           }}
-          onOpenConsole={() => {
-            setConsoleOpen(true)
-            setConsoleMinimized(false)
-            activateFloatingWindow('terminal')
-          }}
           onOpenPM2Logs={() => {
             setPM2LogsOpen(true)
             setPM2LogsMinimized(false)
@@ -3042,11 +3020,7 @@ export function Dashboard({
                   className="h-10 rounded-md border border-slate-300 px-3 text-sm text-slate-800 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
                   value={appPortValue}
                   onChange={event => {
-                    const next = event.target.value
-                    setAppPortValue(next)
-                    const port = Number(next)
-                    if (Number.isInteger(port) && port >= 1 && port <= 65535)
-                      scheduleAppPortSave(port)
+                    setAppPortValue(event.target.value)
                   }}
                   type="number"
                   min={1}
@@ -3086,7 +3060,7 @@ export function Dashboard({
                 <strong className="text-sm text-ink-950">配置测试端口</strong>
                 <p className="text-xs leading-5 text-slate-500">
                   测试是机器人的沙盒测试台（testone），需要顶层 port
-                  （CBP 端口，默认 17117）才能访问 /testone
+                  （CBP 端口）才能访问 /testone
                   服务。输入后会自动保存到 alemon.config.yaml；启动时会打开测试台。
                 </p>
               </div>
@@ -3096,11 +3070,7 @@ export function Dashboard({
                   className="h-10 rounded-md border border-slate-300 px-3 text-sm text-slate-800 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
                   value={testPortValue}
                   onChange={event => {
-                    const next = event.target.value
-                    setTestPortValue(next)
-                    const port = Number(next)
-                    if (Number.isInteger(port) && port >= 1 && port <= 65535)
-                      scheduleTestPortSave(port)
+                    setTestPortValue(event.target.value)
                   }}
                   type="number"
                   min={1}
@@ -6733,7 +6703,6 @@ function RuntimePanel({
   pm2Running,
   onRefresh,
   onRefreshOverview,
-  onOpenConsole,
   onOpenPM2Logs,
   onOpenPM2Processes,
   onRun,
@@ -6754,7 +6723,6 @@ function RuntimePanel({
   pm2Running: boolean
   onRefresh: () => void
   onRefreshOverview: () => Promise<RuntimeOverview | undefined>
-  onOpenConsole: () => void
   onOpenPM2Logs: () => void
   onOpenPM2Processes: () => void
   onRun: (action: string, packageName?: string) => Promise<boolean>
@@ -7468,9 +7436,6 @@ function RuntimePanel({
                 </span>
               </div>
               <div className="ml-auto flex gap-2 shrink-0 justify-end">
-                <button className="secondary-button" onClick={onOpenConsole}>
-                  运行终端
-                </button>
                 {overview?.hasAppScript ? (
                   <button
                     className={

@@ -36,6 +36,7 @@ function robotAppToken(root: string) {
  */
 export function TestCenter({ root }: { root: string }) {
   const [loadTestPort] = useLazyTestPortQuery()
+  const [connectionError, setConnectionError] = useState('')
   const [projectTheme, setProjectTheme] = useState<'light' | 'dark'>(() =>
     document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light'
   )
@@ -61,6 +62,7 @@ export function TestCenter({ root }: { root: string }) {
 
   useEffect(() => {
     if (!wsUrl) return
+    setConnectionError('')
     setTestoneWsUrl(wsUrl)
     // 打开即进入群聊：testone 的 tab 路由在单例 store 中跨会话保留，这里
     // 每次打开都重置到初始页，避免重新打开时停留在上一次的页面。
@@ -70,13 +72,18 @@ export function TestCenter({ root }: { root: string }) {
     testoneStore.dispatch(setPrivateMessages([]))
     testoneStore.dispatch(setGroupMessages([]))
     void loadTestPort(root, false).then(result => {
-      const port = result.data?.port ?? 17117
+      const info = result.data
+      if (!info?.configured || !Number.isInteger(info.port)) {
+        testoneStore.dispatch(wsCancel())
+        setConnectionError('测试端口未配置或配置已失效，请关闭后重新打开测试并确认端口。')
+        return
+      }
       testoneStore.dispatch(
         wsConnectRequest({
           name: '本机测试服务',
           // 打开即固定连接本机地址；实际 socket 经后端同源代理转发。
           host: '127.0.0.1',
-          port
+          port: info.port
         })
       )
     })
@@ -88,6 +95,11 @@ export function TestCenter({ root }: { root: string }) {
 
   return (
     <div className="testone-root testone-window flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+      {connectionError ? (
+        <div className="m-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+          {connectionError}
+        </div>
+      ) : null}
       <Provider store={testoneStore}>
         <ConfigProvider
           theme={{

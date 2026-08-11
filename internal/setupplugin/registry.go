@@ -55,26 +55,27 @@ type Navigation struct {
 // no file from its directory is executed during discovery. A plugin is usable
 // only when it declares a web root (its UI) and has an executor.
 type Plugin struct {
-	ID             string            `json:"id"`
-	Name           string            `json:"name"`
-	Version        string            `json:"version"`
-	Description    string            `json:"description,omitempty"`
-	Platforms      []string          `json:"platforms,omitempty"`
-	Navigation     Navigation        `json:"navigation"`
-	Runtime        string            `json:"runtime,omitempty"`
-	Entry          map[string]string `json:"entry,omitempty"`
-	Development    *RuntimeSpec      `json:"development,omitempty"`
-	Web            *WebSpec          `json:"web,omitempty"`
-	Services       []ServiceSpec     `json:"services,omitempty"`
-	Permissions    Permissions       `json:"permissions,omitempty"`
-	Runnable       bool              `json:"runnable"`
-	Enabled        bool              `json:"enabled"`
-	Online         bool              `json:"online,omitempty"`
-	Source         string            `json:"source,omitempty"`
-	InstalledTag   string            `json:"installedTag,omitempty"`
-	InstalledAsset string            `json:"installedAsset,omitempty"`
-	ArchiveSHA256  string            `json:"archiveSha256,omitempty"`
-	Fingerprint    string            `json:"fingerprint,omitempty"`
+	ID             string             `json:"id"`
+	Name           string             `json:"name"`
+	Version        string             `json:"version"`
+	Description    string             `json:"description,omitempty"`
+	Platforms      []string           `json:"platforms,omitempty"`
+	Navigation     Navigation         `json:"navigation"`
+	Runtime        string             `json:"runtime,omitempty"`
+	Entry          map[string]string  `json:"entry,omitempty"`
+	Development    *RuntimeSpec       `json:"development,omitempty"`
+	Web            *WebSpec           `json:"web,omitempty"`
+	Services       []ServiceSpec      `json:"services,omitempty"`
+	SystemPickers  []SystemPickerSpec `json:"systemPickers,omitempty"`
+	Permissions    Permissions        `json:"permissions,omitempty"`
+	Runnable       bool               `json:"runnable"`
+	Enabled        bool               `json:"enabled"`
+	Online         bool               `json:"online,omitempty"`
+	Source         string             `json:"source,omitempty"`
+	InstalledTag   string             `json:"installedTag,omitempty"`
+	InstalledAsset string             `json:"installedAsset,omitempty"`
+	ArchiveSHA256  string             `json:"archiveSha256,omitempty"`
+	Fingerprint    string             `json:"fingerprint,omitempty"`
 }
 
 // Permissions explicitly opts a plugin into individually elevated actions.
@@ -132,6 +133,25 @@ type ServiceSpec struct {
 	RewriteHTML bool   `json:"rewriteHtml,omitempty"`
 	SSE         bool   `json:"sse,omitempty"`
 	WebSocket   bool   `json:"websocket,omitempty"`
+}
+
+// SystemPickerSpec declares one named, host-owned native selection dialog.
+// A plugin requests only its ID; it never submits an arbitrary filesystem path
+// or a command to run.
+type SystemPickerSpec struct {
+	ID       string            `json:"id"`
+	Kind     system.PickerKind `json:"kind"`
+	Title    string            `json:"title,omitempty"`
+	Multiple bool              `json:"multiple,omitempty"`
+}
+
+func (p Plugin) SystemPicker(id string) (SystemPickerSpec, bool) {
+	for _, picker := range p.SystemPickers {
+		if picker.ID == id {
+			return picker, true
+		}
+	}
+	return SystemPickerSpec{}, false
 }
 
 // Progress is an optional, structured stderr event emitted while a plugin
@@ -970,6 +990,22 @@ func decodeManifest(data []byte, source string) (Plugin, error) {
 			*value = "/" + strings.TrimPrefix(filepath.ToSlash(filepath.Clean(path)), "/")
 		}
 		seenServices[service.ID] = true
+	}
+	seenPickers := map[string]bool{}
+	for index := range plugin.SystemPickers {
+		picker := &plugin.SystemPickers[index]
+		picker.ID = strings.TrimSpace(picker.ID)
+		picker.Title = strings.TrimSpace(picker.Title)
+		if !validID.MatchString(picker.ID) || seenPickers[picker.ID] {
+			return Plugin{}, errors.New("setup plugin systemPickers requires unique ids")
+		}
+		if picker.Kind != system.PickerDirectory && picker.Kind != system.PickerFile {
+			return Plugin{}, errors.New("setup plugin system picker kind must be directory or file")
+		}
+		if len([]rune(picker.Title)) > 120 || strings.ContainsAny(picker.Title, "\x00\r\n") {
+			return Plugin{}, errors.New("setup plugin system picker title is invalid")
+		}
+		seenPickers[picker.ID] = true
 	}
 	if !validRuntime(plugin.Runtime) {
 		return Plugin{}, errors.New("setup plugin runtime must be binary, node or go")

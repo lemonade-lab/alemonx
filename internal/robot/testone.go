@@ -36,8 +36,8 @@ func (Manager) TestPort(root string) (TestPortInfo, error) {
 	if err != nil {
 		return TestPortInfo{Port: defaultTestPort}, nil
 	}
-	// Anchored at the line start so serverPort (应用端口) is never matched.
-	if match := regexp.MustCompile(`(?m)^\s*port\s*:\s*['\"]?(\d+)`).FindStringSubmatch(string(data)); len(match) == 2 {
+	// Only a YAML top-level port is the robot's CBP/test port.
+	if match := regexp.MustCompile(`(?m)^port\s*:\s*['\"]?(\d+)`).FindStringSubmatch(string(data)); len(match) == 2 {
 		if configured, parseErr := strconv.Atoi(match[1]); parseErr == nil && configured > 0 && configured < 65536 {
 			return TestPortInfo{Port: configured, Configured: true}, nil
 		}
@@ -62,7 +62,7 @@ func (Manager) SaveTestPort(root string, port int) (Result, error) {
 	}
 	text := string(content)
 	value := "port: " + strconv.Itoa(port)
-	pattern := regexp.MustCompile(`(?m)^\s*port\s*:\s*['\"]?\d+['\"]?\s*$`)
+	pattern := regexp.MustCompile(`(?m)^port\s*:\s*['\"]?\d+['\"]?\s*$`)
 	if pattern.MatchString(text) {
 		text = pattern.ReplaceAllString(text, value)
 	} else {

@@ -83,6 +83,20 @@ func TestDecodeManifestRejectsDuplicateElevatedAction(t *testing.T) {
 	}
 }
 
+func TestDecodeManifestAcceptsOnlyTypedSystemPickers(t *testing.T) {
+	plugin, err := decodeManifest([]byte(`{"id":"demo","name":"Demo","version":"1.0.0","web":{"root":"web"},"systemPickers":[{"id":"runtime-directory","kind":"directory","title":"选择运行目录"},{"id":"config-file","kind":"file"}]}`), "/plugins/demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	picker, ok := plugin.SystemPicker("runtime-directory")
+	if !ok || picker.Kind != "directory" || picker.Title != "选择运行目录" {
+		t.Fatalf("system picker = %#v, ok=%v", picker, ok)
+	}
+	if _, err := decodeManifest([]byte(`{"id":"demo","name":"Demo","version":"1.0.0","web":{"root":"web"},"systemPickers":[{"id":"bad","kind":"command"}]}`), "/plugins/demo"); err == nil {
+		t.Fatal("arbitrary picker kinds must be rejected")
+	}
+}
+
 func TestRegistryRejectsUnconfirmedElevatedAction(t *testing.T) {
 	root := t.TempDir()
 	directory := filepath.Join(root, "fixture")

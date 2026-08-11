@@ -373,6 +373,54 @@ func newStatefulTestServer() *server {
 	}
 }
 
+func TestSystemPickerUsesOnlyDeclaredLocalPluginPicker(t *testing.T) {
+	root := t.TempDir()
+	pluginRoot := filepath.Join(root, "alemonx-qq")
+	if err := os.MkdirAll(pluginRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := `{"id":"alemonx-qq","name":"QQ","version":"1.0.0","web":{"root":"web"},"systemPickers":[{"id":"napcat-directory","kind":"directory","title":"选择现有 NapCat 安装目录"}]}`
+	if err := os.WriteFile(filepath.Join(pluginRoot, "alx.json"), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	identity, err := access.NewAt(filepath.Join(t.TempDir(), "auth.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var selected system.PickerRequest
+	s := &server{
+		plugins: setupplugin.NewRegistry(root),
+		auth:    identity,
+		chooseSystemPaths: func(request system.PickerRequest) ([]string, error) {
+			selected = request
+			return []string{"/tmp/napcat"}, nil
+		},
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/system/picker", strings.NewReader(`{"pluginId":"alemonx-qq","pickerId":"napcat-directory"}`))
+	request.RemoteAddr = "127.0.0.1:1234"
+	response := httptest.NewRecorder()
+	s.systemPickerHandler(response, request)
+	if response.Code != http.StatusOK || selected.Kind != system.PickerDirectory || selected.Title != "选择现有 NapCat 安装目录" {
+		t.Fatalf("response=%d %s selected=%#v", response.Code, response.Body.String(), selected)
+	}
+
+	remote := httptest.NewRequest(http.MethodPost, "/api/v1/system/picker", strings.NewReader(`{"pluginId":"alemonx-qq","pickerId":"napcat-directory"}`))
+	remote.RemoteAddr = "203.0.113.9:1234"
+	response = httptest.NewRecorder()
+	s.systemPickerHandler(response, remote)
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("remote picker = %d %s", response.Code, response.Body.String())
+	}
+
+	unknown := httptest.NewRequest(http.MethodPost, "/api/v1/system/picker", strings.NewReader(`{"pluginId":"alemonx-qq","pickerId":"anything-else"}`))
+	unknown.RemoteAddr = "127.0.0.1:1234"
+	response = httptest.NewRecorder()
+	s.systemPickerHandler(response, unknown)
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("undeclared picker = %d %s", response.Code, response.Body.String())
+	}
+}
+
 func writeFixture(t *testing.T, root, name, content string) {
 	t.Helper()
 	path := filepath.Join(root, name)

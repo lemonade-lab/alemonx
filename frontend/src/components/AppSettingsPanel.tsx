@@ -30,6 +30,20 @@ const sections: Array<{
 
 export function AppSettingsPanel() {
   const [active, setActive] = useState<SettingsSection>('update')
+  const activePanelID = `app-settings-panel-${active}`
+  const activateTab = (next: SettingsSection) => {
+    setActive(next)
+    window.requestAnimationFrame(() =>
+      document.getElementById(`app-settings-tab-${next}`)?.focus()
+    )
+  }
+  const moveTab = (current: SettingsSection, direction: number) => {
+    const currentIndex = sections.findIndex(item => item.id === current)
+    const nextIndex =
+      (currentIndex + direction + sections.length) % sections.length
+    const next = sections[nextIndex].id
+    activateTab(next)
+  }
 
   return (
     <div className="app-settings-shell">
@@ -42,10 +56,31 @@ export function AppSettingsPanel() {
               <button
                 className={selected ? 'active' : ''}
                 key={item.id}
+                id={`app-settings-tab-${item.id}`}
                 role="tab"
                 type="button"
                 aria-selected={selected}
+                aria-controls={`app-settings-panel-${item.id}`}
+                tabIndex={selected ? 0 : -1}
                 onClick={() => setActive(item.id)}
+                onKeyDown={event => {
+                  if (event.key === 'ArrowDown' || event.key === 'ArrowRight') {
+                    event.preventDefault()
+                    moveTab(item.id, 1)
+                  }
+                  if (event.key === 'ArrowUp' || event.key === 'ArrowLeft') {
+                    event.preventDefault()
+                    moveTab(item.id, -1)
+                  }
+                  if (event.key === 'Home') {
+                    event.preventDefault()
+                    activateTab(sections[0].id)
+                  }
+                  if (event.key === 'End') {
+                    event.preventDefault()
+                    activateTab(sections[sections.length - 1].id)
+                  }
+                }}
               >
                 <Icon className="size-4" />
                 <span>{item.label}</span>
@@ -54,7 +89,12 @@ export function AppSettingsPanel() {
           })}
         </div>
       </aside>
-      <section className="app-settings-content" role="tabpanel">
+      <section
+        className="app-settings-content"
+        id={activePanelID}
+        role="tabpanel"
+        aria-labelledby={`app-settings-tab-${active}`}
+      >
         <div className="app-settings-body">
           {active === 'update' && <SetupUpdateButton embedded />}
           {active === 'auth' && <AuthControl embedded />}

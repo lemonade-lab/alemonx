@@ -42,6 +42,8 @@ import (
 	"alemonx/internal/system"
 )
 
+var systemPickerIDPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{1,63}$`)
+
 type goal struct {
 	ID          string   `json:"id"`
 	Title       string   `json:"title"`
@@ -342,6 +344,7 @@ type server struct {
 	sudoAttemptMu            sync.Mutex
 	sudoAttempts             map[string]sudoAttempt
 	runNapcatAPTDependencies func(context.Context, []byte) (string, error)
+	chooseSystemPaths        func(system.PickerRequest) ([]string, error)
 }
 
 type pluginStatusSnapshot struct {
@@ -368,6 +371,13 @@ type privilegePreflightRequest struct {
 	PluginID string `json:"pluginId"`
 	Action   string `json:"action"`
 	PlanID   string `json:"planId,omitempty"`
+}
+
+// systemPickerRequest contains identifiers only. The native dialog's type,
+// title and multi-select policy come from the installed plugin manifest.
+type systemPickerRequest struct {
+	PluginID string `json:"pluginId"`
+	PickerID string `json:"pickerId"`
 }
 
 type privilegePreflightResponse struct {
@@ -616,7 +626,7 @@ func NewServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	if privilegeErr != nil {
 		log.Printf("权限审计存储不可用：%v", privilegeErr)
 	}
-	s := &server{version: version, assets: assets, static: http.FileServer(http.FS(assets)), checker: system.NewChecker(), plugins: setupplugin.NewRegistry(), auth: identity, ai: aiManager, agentSessions: sessionStore, agentTaskStore: taskStore, agentTasks: tasks, taskService: &agent.TaskService{Manager: tasks}, goalStore: goalStore, opsStore: opsStore, opsPaused: opsStartupErr != nil, goalSchedulerStop: make(chan struct{}), goalRunning: map[string]bool{}, agentConfirms: newAgentConfirmManager(), development: map[string]developmentProcess{}, webviewRuntimes: map[string]*webViewRuntime{}, stopping: map[string]bool{}, consoleCache: map[string]consoleSnapshot{}, outputBuffers: map[string]*operationOutputBuffer{}, directoryRoots: managedDirectoryRoots(), events: newRobotEventHub(), eventGateway: newEventGateway(), operationEvents: operationEvents, operations: operationEvents.snapshot(), opsEvents: newOpsEventHub(), mcpEvents: newMCPEventHub(), mcpMonitorStop: make(chan struct{}), pluginEventsStop: make(chan struct{}), updateMonitorStop: make(chan struct{}), updateState: updateStatusState{Update: releases.Update{Current: version}}, nodeID: fmt.Sprintf("%s-%d", hostname(), os.Getpid()), pluginStatusCache: map[string]*pluginStatusSnapshot{}, privilegeStore: privileges, sudoAttempts: map[string]sudoAttempt{}, runNapcatAPTDependencies: system.InstallNapCatAPTDependencies}
+	s := &server{version: version, assets: assets, static: http.FileServer(http.FS(assets)), checker: system.NewChecker(), plugins: setupplugin.NewRegistry(), auth: identity, ai: aiManager, agentSessions: sessionStore, agentTaskStore: taskStore, agentTasks: tasks, taskService: &agent.TaskService{Manager: tasks}, goalStore: goalStore, opsStore: opsStore, opsPaused: opsStartupErr != nil, goalSchedulerStop: make(chan struct{}), goalRunning: map[string]bool{}, agentConfirms: newAgentConfirmManager(), development: map[string]developmentProcess{}, webviewRuntimes: map[string]*webViewRuntime{}, stopping: map[string]bool{}, consoleCache: map[string]consoleSnapshot{}, outputBuffers: map[string]*operationOutputBuffer{}, directoryRoots: managedDirectoryRoots(), events: newRobotEventHub(), eventGateway: newEventGateway(), operationEvents: operationEvents, operations: operationEvents.snapshot(), opsEvents: newOpsEventHub(), mcpEvents: newMCPEventHub(), mcpMonitorStop: make(chan struct{}), pluginEventsStop: make(chan struct{}), updateMonitorStop: make(chan struct{}), updateState: updateStatusState{Update: releases.Update{Current: version}}, nodeID: fmt.Sprintf("%s-%d", hostname(), os.Getpid()), pluginStatusCache: map[string]*pluginStatusSnapshot{}, privilegeStore: privileges, sudoAttempts: map[string]sudoAttempt{}, runNapcatAPTDependencies: system.InstallNapCatAPTDependencies, chooseSystemPaths: system.Choose}
 	if opsStartupErr != nil {
 		log.Printf("AI 运维 SQLite 初始化失败，已回退 JSON 并暂停自动维护: %v", opsStartupErr)
 	}
@@ -859,6 +869,7 @@ func NewServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	mux.HandleFunc("/api/v1/system/service", s.systemServiceHandler)
 	mux.HandleFunc("/api/v1/system/mcp", s.systemMCPHandler)
 	mux.HandleFunc("/api/v1/system/events", s.systemEventsHandler)
+	mux.HandleFunc("/api/v1/system/picker", s.systemPickerHandler)
 	mux.HandleFunc("/api/v1/system/privileged/status", s.privilegedStatusHandler)
 	mux.HandleFunc("/api/v1/system/privileged/preflight", s.privilegedPreflightHandler)
 	mux.HandleFunc("/api/v1/system/privileged/audit", s.privilegedAuditHandler)
@@ -2061,13 +2072,13 @@ func (s *server) buildPrivilegePreflight(r *http.Request, input privilegePreflig
 	switch {
 	case input.PluginID == "alemonx-qq" && input.Action == system.NapCatAPTDependencyAction:
 		response.Title = "授权安装 NapCat Linux 系统依赖"
-		response.Description = "将以当前系统账户通过 APT 安装固定的 xvfb、libnss3 和 libgbm1。密码仅用于本次授权。"
+		response.Description = "将以当前系统账户通过 APT 或 DNF 安装固定的 NapCat 图形、解压与运行依赖。密码仅用于本次授权，成功后会自动继续安装。"
 		if !status.Enabled || !status.Authenticated || !status.SuperAdmin {
 			response.Reason = "只有已登录的超级管理员可以安装系统依赖。"
 			return response, account, source
 		}
 		if runtime.GOOS != "linux" {
-			response.Reason = "NapCat 工作台密码授权仅适用于 Debian/Ubuntu Linux；当前平台请使用对应的系统安装方式。"
+			response.Reason = "NapCat 工作台密码授权仅适用于受支持的 Linux 系统；当前平台请使用对应的系统安装方式。"
 			return response, account, source
 		}
 		plugin, findErr := s.plugins.Find(input.PluginID)
@@ -2135,6 +2146,67 @@ func (s *server) privilegedStatusHandler(w http.ResponseWriter, r *http.Request)
 		response["network"] = map[string]any{"enabled": false, "reason": networkReason.Error()}
 	}
 	writeJSON(w, http.StatusOK, response)
+}
+
+// systemPickerHandler is the single host boundary for native file and
+// directory selection. It deliberately rejects remote/reverse-proxied calls:
+// a server must never pop a desktop picker and disclose its paths to a remote
+// browser. Plugins can select only pickers declared in their own manifest.
+func (s *server) systemPickerHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
+		return
+	}
+	if !s.localSystemDialogRequest(r) {
+		writeError(w, http.StatusForbidden, "系统文件与目录选择器只能在本机桌面工作台中打开。")
+		return
+	}
+	status, err := s.auth.Status(s.authToken(r))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if status.Enabled && !status.Authenticated {
+		writeError(w, http.StatusUnauthorized, "请先登录工作台后再选择本机文件。")
+		return
+	}
+	var input systemPickerRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, 16<<10)).Decode(&input); err != nil || !systemPickerIDPattern.MatchString(strings.TrimSpace(input.PluginID)) || !systemPickerIDPattern.MatchString(strings.TrimSpace(input.PickerID)) {
+		writeError(w, http.StatusBadRequest, "请选择有效的系统文件或目录选择器。")
+		return
+	}
+	plugin, err := s.plugins.Find(input.PluginID)
+	if err != nil || plugin.Online || !plugin.Enabled {
+		writeError(w, http.StatusNotFound, "系统插件未安装或已停用。")
+		return
+	}
+	picker, ok := plugin.SystemPicker(input.PickerID)
+	if !ok {
+		writeError(w, http.StatusForbidden, "该插件未声明此系统选择器。")
+		return
+	}
+	choose := s.chooseSystemPaths
+	if choose == nil {
+		choose = system.Choose
+	}
+	paths, err := choose(system.PickerRequest{Kind: picker.Kind, Title: picker.Title, Multiple: picker.Multiple})
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"paths": paths})
+}
+
+func (s *server) localSystemDialogRequest(r *http.Request) bool {
+	if !requestIsLoopback(r) {
+		return false
+	}
+	for _, header := range []string{"Forwarded", "X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto"} {
+		if strings.TrimSpace(r.Header.Get(header)) != "" {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *server) privilegedAuditHandler(w http.ResponseWriter, r *http.Request) {
@@ -3446,6 +3518,15 @@ func (s *server) robotAppPortHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.Method == http.MethodGet {
 		if r.URL.Query().Get("probe") == "1" {
+			info, infoErr := s.robots.AppPort(root)
+			if infoErr != nil {
+				writeError(w, http.StatusBadRequest, infoErr.Error())
+				return
+			}
+			if !info.Configured {
+				writeError(w, http.StatusConflict, "请先为当前机器人配置应用端口（serverPort）。")
+				return
+			}
 			reachable, port, err := s.robots.AppPortReachable(root)
 			if err != nil {
 				writeError(w, http.StatusBadRequest, err.Error())
@@ -3489,6 +3570,15 @@ func (s *server) robotTestPortHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.Method == http.MethodGet {
 		if r.URL.Query().Get("probe") == "1" {
+			info, infoErr := s.robots.TestPort(root)
+			if infoErr != nil {
+				writeError(w, http.StatusBadRequest, infoErr.Error())
+				return
+			}
+			if !info.Configured {
+				writeError(w, http.StatusConflict, "请先为当前机器人配置测试端口（port）。")
+				return
+			}
 			reachable, port, err := s.robots.TestPortReachable(root)
 			if err != nil {
 				writeError(w, http.StatusBadRequest, err.Error())
@@ -3848,8 +3938,42 @@ func (s *server) robotTasksHandler(w http.ResponseWriter, r *http.Request) {
 	// Proactively sniff the ports the robot will bind before any start action.
 	// An unrelated occupier is reported here instead of after the process boots
 	// and prints its bind error to the logs.
-	if input.Action == "dev" || input.Action == "app" || input.Action == "pm2" || input.Action == "pm2-reload" || input.Action == "pm2-restart" {
-		if blockers := s.robotStartPortBlockers(input.Root); len(blockers) > 0 {
+	readyKind := input.Ready
+	if input.Action == "app-open" {
+		readyKind = "app"
+	}
+	if readyKind != "" && readyKind != "app" && readyKind != "test" {
+		writeError(w, http.StatusBadRequest, "未知的启动就绪类型。")
+		return
+	}
+	if readyKind == "app" {
+		info, err := s.robots.AppPort(input.Root)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if !info.Configured {
+			writeError(w, http.StatusConflict, "请先为当前机器人配置应用端口（serverPort）。")
+			return
+		}
+	}
+	if readyKind == "test" {
+		info, err := s.robots.TestPort(input.Root)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if !info.Configured {
+			writeError(w, http.StatusConflict, "请先为当前机器人配置测试端口（port）。")
+			return
+		}
+		if !s.robots.HasScript(input.Root, "dev") {
+			writeError(w, http.StatusBadRequest, "测试需要 package.json 中可用的 dev 启动脚本；前台 app 脚本不能保证启动 testone 服务。")
+			return
+		}
+	}
+	if input.Action == "dev" || input.Action == "app" || input.Action == "app-open" || input.Action == "pm2" || input.Action == "pm2-reload" || input.Action == "pm2-restart" {
+		if blockers := s.robotStartPortBlockers(input.Root, readyKind); len(blockers) > 0 {
 			writeError(w, http.StatusConflict, "启动前端口检查未通过："+strings.Join(blockers, " "))
 			return
 		}
@@ -3880,7 +4004,7 @@ func (s *server) robotTasksHandler(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusAccepted, created)
 		return
 	}
-	if input.Action == "dev" || input.Action == "app" {
+	if input.Action == "dev" || input.Action == "app" || input.Action == "app-open" {
 		// Starting a robot owns the dependency lifecycle. A new clone or a
 		// changed workspace must not make beginners detour to a separate
 		// "install dependencies" button before they can run it.
@@ -3893,40 +4017,39 @@ func (s *server) robotTasksHandler(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusConflict, "当前目录已有前台或开发进程正在运行；请先停止后再启动。")
 			return
 		}
-		// "谁最后启动谁为准": a running background PM2 service would keep the
-		// app port, so a local start first stops PM2, waits for the port to be
-		// released, then starts the local process.
-		if err := s.stopPM2ForStart(input.Root); err != nil {
-			writeError(w, http.StatusConflict, "停止后台（PM2）服务失败："+err.Error())
-			return
-		}
-		if !s.waitPortFree(input.Root, 0) {
-			// The old process could not release the port gracefully. Kill the
-			// listener outright so the new start always wins the port.
-			if err := s.forceFreePort(input.Root); err != nil {
-				writeError(w, http.StatusConflict, "应用端口仍被占用："+err.Error())
+		// An app launch takes over its own configured web port from PM2. A test
+		// launch is isolated to the configured CBP port and must not interrupt a
+		// running application merely because it belongs to the same project.
+		if readyKind == "app" {
+			if err := s.stopPM2ForStart(input.Root); err != nil {
+				writeError(w, http.StatusConflict, "停止后台（PM2）服务失败："+err.Error())
 				return
 			}
 		}
-		// 测试（testone）模式需要机器人 CBP 端口，同样先确保测试端口释放，
-		// 避免上一个进程（PM2/前台/残留 node）仍占着 17117 导致 EADDRINUSE。
-		readyKind := input.Ready
-		if readyKind == "" {
-			readyKind = "app"
+		// Only the explicitly selected ready port participates in start-up. Never
+		// infer or free a framework default: several robot directories may exist.
+		if readyKind == "app" {
+			info, _ := s.robots.AppPort(input.Root)
+			if !s.waitPortFreeOn(info.Port, 0) {
+				writeError(w, http.StatusConflict, "应用端口仍被占用；请停止当前机器人自己的进程后重试。")
+				return
+			}
 		}
 		if readyKind == "test" {
-			if info, portErr := s.robots.TestPort(input.Root); portErr == nil {
-				if !s.waitPortFreeOn(info.Port, 0) {
-					if err := s.forceFreePortOn(info.Port); err != nil {
-						writeError(w, http.StatusConflict, "测试端口仍被占用："+err.Error())
-						return
-					}
-				}
+			info, _ := s.robots.TestPort(input.Root)
+			if !s.waitPortFreeOn(info.Port, 0) {
+				writeError(w, http.StatusConflict, "测试端口仍被占用；请停止当前机器人的测试进程后重试。")
+				return
 			}
 		}
 		command, err := s.robots.DevelopmentCommand(input.Root)
 		if input.Action == "app" {
 			command, err = s.robots.ForegroundCommand(input.Root)
+		}
+		if input.Action == "app-open" {
+			var mode string
+			command, mode, err = s.robots.ApplicationCommand(input.Root)
+			created.Action = mode
 		}
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
@@ -3944,7 +4067,7 @@ func (s *server) robotTasksHandler(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "运行启动失败："+err.Error())
 			return
 		}
-		if !s.registerDevelopment(input.Root, created.ID, input.Action, command, processGroupID(command)) {
+		if !s.registerDevelopment(input.Root, created.ID, created.Action, command, processGroupID(command)) {
 			_ = command.Process.Kill()
 			writeError(w, http.StatusConflict, "当前目录已有前台或开发进程正在运行；请先停止后再启动。")
 			return
@@ -3953,10 +4076,10 @@ func (s *server) robotTasksHandler(w http.ResponseWriter, r *http.Request) {
 		if created.Output != "" {
 			created.Output += "\n"
 		}
-		created.Output += map[bool]string{true: "开发模式已启动，正在等待进程输出…\n", false: "前台运行已启动，正在等待进程输出…\n"}[input.Action == "dev"]
+		created.Output += map[bool]string{true: "开发模式已启动，正在等待进程输出…\n", false: "前台运行已启动，正在等待进程输出…\n"}[created.Action == "dev"]
 		s.addOperation(created)
 		log.Printf("[ROBOT %s] 开始 action=%s root=%q", created.ID, input.Action, created.Root)
-		go s.watchDevelopmentTask(created.ID, input.Root, input.Action, command)
+		go s.watchDevelopmentTask(created.ID, input.Root, created.Action, command)
 		go s.watchPortReadiness(created.ID, input.Root, readyKind)
 		writeJSON(w, http.StatusAccepted, created)
 		return
@@ -3964,12 +4087,12 @@ func (s *server) robotTasksHandler(w http.ResponseWriter, r *http.Request) {
 	if input.Action == "pm2" || input.Action == "pm2-reload" {
 		// "谁最后启动谁为准": a running local process holds the app port, so a
 		// background start first stops the local process and waits for release.
+		// An absent serverPort is intentionally not substituted with a global
+		// default: it may belong to another robot directory.
 		s.stopLocalForStart(input.Root)
-		if !s.waitPortFree(input.Root, 0) {
-			if err := s.forceFreePort(input.Root); err != nil {
-				writeError(w, http.StatusConflict, "应用端口仍被占用："+err.Error())
-				return
-			}
+		if info, err := s.robots.AppPort(input.Root); err == nil && info.Configured && !s.waitPortFreeOn(info.Port, 0) {
+			writeError(w, http.StatusConflict, "应用端口仍被占用；请停止当前机器人自己的进程后重试。")
+			return
 		}
 	}
 	log.Printf("[ROBOT %s] 开始 action=%s root=%q", created.ID, created.Action, created.Root)
@@ -4030,6 +4153,11 @@ func (s *server) addOperation(created operationTask) {
 // emits app-ready/app-failed, "test" watches the robot's top-level CBP port
 // and emits test-ready/test-failed.
 func (s *server) watchPortReadiness(id, root, kind string) {
+	// A plain manual dev run has no declared readiness target. In particular,
+	// it must not turn a missing serverPort into a probe of a shared default.
+	if kind != "app" && kind != "test" {
+		return
+	}
 	readyType, failedType := "app-ready", "app-failed"
 	probe := s.robots.AppPortReachable
 	if kind == "test" {
@@ -4188,10 +4316,23 @@ func (s *server) stopLocalForStart(root string) error {
 // before a dev/app/PM2 process is launched. A port held by a process that does
 // not belong to this robot directory is reported immediately, instead of the
 // start completing and the occupancy only showing up in the process logs.
-func (s *server) robotStartPortBlockers(root string) []string {
-	ports, err := s.robots.Ports(root)
-	if err != nil {
+func (s *server) robotStartPortBlockers(root, readyKind string) []string {
+	if readyKind == "" {
 		return nil
+	}
+	var ports []robot.RobotPort
+	if readyKind == "app" {
+		info, err := s.robots.AppPort(root)
+		if err != nil || !info.Configured {
+			return nil
+		}
+		ports = []robot.RobotPort{{Port: info.Port, Label: "应用端口"}}
+	} else {
+		info, err := s.robots.TestPort(root)
+		if err != nil || !info.Configured {
+			return nil
+		}
+		ports = []robot.RobotPort{{Port: info.Port, Label: "测试端口"}}
 	}
 	var blockers []string
 	seen := map[int]bool{}
@@ -4237,8 +4378,8 @@ func (s *server) robotStartPortBlockers(root string) []string {
 
 // portOccupantOwnedByRoot reports whether the process holding a port belongs
 // to this robot directory. Recognised owners are processes whose working
-// directory is the project, a supervised dev/app process group, a persisted
-// stray process from an earlier run, and the directory's PM2 service. The
+// directory is the project, a supervised dev/app process group, or a persisted
+// stray process from an earlier run. The
 // "谁最后启动谁为准" flow is allowed to stop those; everything else is a
 // genuine clash that must be reported before starting.
 func (s *server) portOccupantOwnedByRoot(root string, occupant portOccupant) bool {
@@ -4265,10 +4406,6 @@ func (s *server) portOccupantOwnedByRoot(root string, occupant portOccupant) boo
 			}
 		}
 	}
-	status, err := s.pm2StatusFor(root)
-	if err == nil && status.Running {
-		return true
-	}
 	return false
 }
 
@@ -4279,13 +4416,12 @@ func (s *server) waitPortFreeOn(port int, attempts int) bool {
 	if attempts <= 0 {
 		attempts = 30
 	}
-	client := &http.Client{Timeout: 500 * time.Millisecond}
 	for i := 0; i < attempts; i++ {
-		response, err := client.Get("http://127.0.0.1:" + strconv.Itoa(port))
+		connection, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), 500*time.Millisecond)
 		if err != nil {
-			return true // connection refused => port free
+			return true // connection refused => no listener
 		}
-		_ = response.Body.Close()
+		_ = connection.Close()
 		time.Sleep(400 * time.Millisecond)
 	}
 	return false
@@ -4891,6 +5027,10 @@ func (s *server) robotAppHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if !info.Configured {
+		writeError(w, http.StatusConflict, "请先为当前机器人配置应用端口（serverPort）。")
+		return
+	}
 	target, err := url.Parse("http://127.0.0.1:" + strconv.Itoa(info.Port))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "应用地址无效。")
@@ -4947,6 +5087,10 @@ func (s *server) robotTestHandler(w http.ResponseWriter, r *http.Request) {
 	info, err := s.robots.TestPort(root)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if !info.Configured {
+		writeError(w, http.StatusConflict, "请先为当前机器人配置测试端口（port）。")
 		return
 	}
 	// The transport dials an HTTP request and completes the WebSocket upgrade

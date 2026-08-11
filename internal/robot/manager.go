@@ -1147,6 +1147,41 @@ func (Manager) DevelopmentCommand(root string) (*exec.Cmd, error) {
 	return (Manager{}).scriptCommand(root, "dev")
 }
 
+// ApplicationCommand prefers the project's development script for the embedded
+// application. Projects without one can still expose their declared foreground
+// app script; the returned mode is persisted by the caller for accurate UI
+// state. Testone deliberately does not use this fallback because it requires a
+// development command that starts the sandbox endpoint.
+func (Manager) ApplicationCommand(root string) (*exec.Cmd, string, error) {
+	if (Manager{}).HasScript(root, "dev") {
+		command, err := (Manager{}).DevelopmentCommand(root)
+		return command, "dev", err
+	}
+	if (Manager{}).HasScript(root, "app") {
+		command, err := (Manager{}).ForegroundCommand(root)
+		return command, "app", err
+	}
+	return nil, "", errors.New("未找到 dev 或 app 启动脚本；请先在“运行”中诊断并修复")
+}
+
+// HasScript reports whether package.json declares a non-empty script. Keeping
+// this check before process creation avoids treating a package-manager error as
+// a successfully started development session.
+func (Manager) HasScript(root, script string) bool {
+	path, err := projectPath(root)
+	if err != nil {
+		return false
+	}
+	data, err := os.ReadFile(filepath.Join(path, "package.json"))
+	if err != nil {
+		return false
+	}
+	var manifest struct {
+		Scripts map[string]string `json:"scripts"`
+	}
+	return json.Unmarshal(data, &manifest) == nil && strings.TrimSpace(manifest.Scripts[script]) != ""
+}
+
 // ForegroundCommand runs the project's declared `app` script under the same
 // supervised terminal used for development mode.
 func (Manager) ForegroundCommand(root string) (*exec.Cmd, error) {
@@ -1156,6 +1191,9 @@ func (Manager) ForegroundCommand(root string) (*exec.Cmd, error) {
 func (Manager) scriptCommand(root, script string) (*exec.Cmd, error) {
 	if err := project(root); err != nil {
 		return nil, err
+	}
+	if !(Manager{}).HasScript(root, script) {
+		return nil, fmt.Errorf("package.json 未配置 %q 启动脚本", script)
 	}
 	if script == "dev" {
 		if err := fixLegacyLvyScript(root); err != nil {

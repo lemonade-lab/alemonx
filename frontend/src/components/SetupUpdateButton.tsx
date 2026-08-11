@@ -8,6 +8,7 @@ import {
   Power,
   RefreshCw,
   RotateCcw,
+  Server,
   Upload,
   X
 } from 'lucide-react'
@@ -80,6 +81,12 @@ export function SetupUpdateButton({ embedded = false }: { embedded?: boolean }) 
   const [serviceInstalled, setServiceInstalled] = useState<boolean | null>(null)
   const [transaction, setTransaction] = useState<UpdateTransaction | null>(null)
   const updateAvailable = Boolean(data?.available)
+  const serviceStatusTone =
+    serviceInstalled === false
+      ? 'is-offline'
+      : serviceStatus.includes('运行中')
+        ? 'is-ready'
+        : 'is-idle'
   const checkUpdate = useCallback(
     async (force = false) => {
       try {
@@ -401,45 +408,57 @@ export function SetupUpdateButton({ embedded = false }: { embedded?: boolean }) 
           role={embedded ? undefined : 'dialog'}
           aria-label="应用更新"
         >
-          <section className="grid gap-2 rounded-lg border border-slate-200 bg-slate-50 p-2.5">
-            <div className="flex items-center justify-between gap-2">
-              <strong className="text-xs text-slate-700">AlemonX 服务</strong>
+          <section className="settings-service-card">
+            <header>
+              <i>
+                <Server className="size-4" />
+              </i>
+              <span>
+                <strong>AlemonX 服务</strong>
+                <small>工作台后台进程</small>
+              </span>
               <button
-                className="text-[11px] text-slate-500 hover:text-brand-600"
+                className="text-button settings-service-refresh"
                 onClick={() => void loadServiceStatus()}
                 disabled={busy}
               >
                 刷新状态
               </button>
+            </header>
+            <div className="settings-service-status" aria-live="polite">
+              <span className={serviceStatusTone} aria-hidden="true" />
+              <small>{serviceStatus || '正在读取服务状态…'}</small>
             </div>
-            <small className="whitespace-pre-line text-[11px] leading-4 text-slate-500">
-              {serviceStatus || '正在读取服务状态…'}
-            </small>
-            <div className="flex justify-end gap-2">
+            <footer>
               {serviceInstalled === false && (
                 <Button
-                  className="inline-flex min-h-8 items-center gap-1 px-2 text-[11px]"
+                  variant="primary"
+                  className="gap-1.5"
                   disabled={busy}
                   onClick={() => setServiceAction('install')}
                 >
-                  <Download className="size-3" /> 安装并启动后台服务
+                  <Download className="size-3.5" /> 安装并启动
                 </Button>
               )}
+              {serviceInstalled !== false && (
+                  <Button
+                    variant="secondary"
+                    className="gap-1.5"
+                    disabled={busy}
+                    onClick={() => setServiceAction('restart')}
+                  >
+                    <RotateCcw className="size-3.5" /> 重启
+                  </Button>
+              )}
               <Button
-                className="inline-flex min-h-8 items-center gap-1 px-2 text-[11px]"
-                disabled={busy}
-                onClick={() => setServiceAction('restart')}
-              >
-                <RotateCcw className="size-3" /> 重启服务
-              </Button>
-              <Button
-                className="inline-flex min-h-8 items-center gap-1 px-2 text-[11px]"
+                variant="danger"
+                className="gap-1.5"
                 disabled={busy}
                 onClick={() => setServiceAction('stop')}
               >
-                <Power className="size-3" /> 停止服务
+                <Power className="size-3.5" /> 停止
               </Button>
-            </div>
+            </footer>
           </section>
           <header className="flex items-start justify-between gap-3">
             <div className="flex items-center gap-2.5">
@@ -728,13 +747,17 @@ export function SetupUpdateButton({ embedded = false }: { embedded?: boolean }) 
         subtitle={
           serviceAction === 'install'
             ? '后台服务会在登录后自动运行，不会影响机器人项目。'
+            : serviceAction === 'stop' && serviceInstalled === false
+              ? '未安装后台守护服务；这会关闭当前前台运行的工作台服务。'
             : '仅影响工作台后台服务，不会停止机器人项目。'
         }
         message={
           serviceAction === 'install'
             ? '当前前台工作台会关闭，并切换为系统后台服务；页面恢复连接后会自动刷新。'
             : serviceAction === 'stop'
-            ? '服务停止后，工作台页面将无法继续连接，直到你从系统服务或命令行重新启动它。'
+            ? serviceInstalled === false
+              ? '当前页面会断开连接；之后可从启动应用的位置重新打开工作台。'
+              : '服务停止后，工作台页面将无法继续连接，直到你从系统服务或命令行重新启动它。'
             : '工作台会短暂断开，服务恢复后可重新打开页面。'
         }
         confirmLabel={

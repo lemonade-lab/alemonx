@@ -100,7 +100,7 @@ func TestRobotTasksStartBlockedByForeignPort(t *testing.T) {
 	writeFixture(t, root, "package.json", `{"name":"demo","version":"1.0.0","scripts":{"dev":"node index.js"}}`)
 	writeFixture(t, root, "alemon.config.yaml", "serverPort: "+strconv.Itoa(port)+"\n")
 	s := newStatefulTestServer()
-	body := strings.NewReader(`{"root":` + strconv.Quote(root) + `,"action":"dev"}`)
+	body := strings.NewReader(`{"root":` + strconv.Quote(root) + `,"action":"dev","ready":"app"}`)
 	recorder := httptest.NewRecorder()
 	s.robotTasksHandler(recorder, httptest.NewRequest(http.MethodPost, "/api/v1/robot/tasks", body))
 	if recorder.Code != http.StatusConflict {
@@ -120,7 +120,40 @@ func TestRobotStartPortBlockersAllowFreePorts(t *testing.T) {
 	writeFixture(t, root, "package.json", `{"name":"demo","version":"1.0.0"}`)
 	writeFixture(t, root, "alemon.config.yaml", "serverPort: "+strconv.Itoa(appPort)+"\nport: "+strconv.Itoa(testPort)+"\n")
 	s := newStatefulTestServer()
-	if blockers := s.robotStartPortBlockers(root); len(blockers) != 0 {
+	if blockers := s.robotStartPortBlockers(root, "app"); len(blockers) != 0 {
 		t.Fatalf("free ports reported blocked: %v", blockers)
+	}
+}
+
+func TestRobotProxiesRejectUnconfiguredPorts(t *testing.T) {
+	root := t.TempDir()
+	writeFixture(t, root, "package.json", `{"name":"demo","version":"1.0.0"}`)
+	s := newStatefulTestServer()
+	query := url.Values{"root": []string{root}}.Encode()
+
+	app := httptest.NewRecorder()
+	s.robotAppHandler(app, httptest.NewRequest(http.MethodGet, "/api/v1/robot/app/?"+query, nil))
+	if app.Code != http.StatusConflict || !strings.Contains(app.Body.String(), "serverPort") {
+		t.Fatalf("unconfigured app proxy = %d, %s", app.Code, app.Body.String())
+	}
+
+	test := httptest.NewRecorder()
+	s.robotTestHandler(test, httptest.NewRequest(http.MethodGet, "/api/v1/robot/test/?"+query, nil))
+	if test.Code != http.StatusConflict || !strings.Contains(test.Body.String(), "测试端口") {
+		t.Fatalf("unconfigured test proxy = %d, %s", test.Code, test.Body.String())
+	}
+}
+
+func TestWaitPortFreeOnDetectsNonHTTPListener(t *testing.T) {
+	listener, port := testListenerPort(t)
+	s := newStatefulTestServer()
+	if s.waitPortFreeOn(port, 1) {
+		t.Fatalf("TCP listener on %d reported free", port)
+	}
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if !s.waitPortFreeOn(port, 1) {
+		t.Fatalf("closed port %d reported occupied", port)
 	}
 }

@@ -23,12 +23,12 @@ import (
 // selected robot. A desktop.sidebar is used only as its registration point;
 // setup never runs its desktop command.
 type WebViewEntry struct {
-	ID                string `json:"id"`
-	Package           string `json:"package"`
-	Name              string `json:"name"`
-	Description       string `json:"description,omitempty"`
-	Logo              string `json:"logo,omitempty"`
-	RequiresServerPort bool  `json:"requiresServerPort,omitempty"`
+	ID                 string `json:"id"`
+	Package            string `json:"package"`
+	Name               string `json:"name"`
+	Description        string `json:"description,omitempty"`
+	Logo               string `json:"logo,omitempty"`
+	RequiresServerPort bool   `json:"requiresServerPort,omitempty"`
 }
 
 type webViewManifest struct {
@@ -258,7 +258,7 @@ func (Manager) AppPort(root string) (AppPortInfo, error) {
 	if err != nil {
 		return AppPortInfo{Port: defaultAppPort}, nil
 	}
-	if match := regexp.MustCompile(`(?m)^\s*serverPort\s*:\s*['\"]?(\d+)`).FindStringSubmatch(string(data)); len(match) == 2 {
+	if match := regexp.MustCompile(`(?m)^serverPort\s*:\s*['\"]?(\d+)`).FindStringSubmatch(string(data)); len(match) == 2 {
 		if configured, parseErr := strconv.Atoi(match[1]); parseErr == nil && configured > 0 && configured < 65536 {
 			return AppPortInfo{Port: configured, Configured: true}, nil
 		}
@@ -283,7 +283,7 @@ func (Manager) SaveAppPort(root string, port int) (Result, error) {
 	}
 	text := string(content)
 	value := "serverPort: " + strconv.Itoa(port)
-	pattern := regexp.MustCompile(`(?m)^\s*serverPort\s*:\s*['\"]?\d+['\"]?\s*$`)
+	pattern := regexp.MustCompile(`(?m)^serverPort\s*:\s*['\"]?\d+['\"]?\s*$`)
 	if pattern.MatchString(text) {
 		text = pattern.ReplaceAllString(text, value)
 	} else {
@@ -438,13 +438,12 @@ func (m Manager) WebViewAPIURL(root, id, requestPath string) (string, error) {
 	if clean == "/" || strings.HasPrefix(clean, "/../") {
 		return "", errors.New("插件 API 路径无效")
 	}
-	port := 18110
-	if data, readErr := os.ReadFile(filepath.Join(project, "alemon.config.yaml")); readErr == nil {
-		if match := regexp.MustCompile(`(?m)^\s*serverPort\s*:\s*['\"]?(\d+)`).FindStringSubmatch(string(data)); len(match) == 2 {
-			if configured, parseErr := strconv.Atoi(match[1]); parseErr == nil && configured > 0 && configured < 65536 {
-				port = configured
-			}
-		}
+	info, err := m.AppPort(project)
+	if err != nil {
+		return "", err
 	}
-	return "http://127.0.0.1:" + strconv.Itoa(port) + "/api" + clean, nil
+	if !info.Configured {
+		return "", errors.New("插件 API 需要先配置应用端口（serverPort）")
+	}
+	return "http://127.0.0.1:" + strconv.Itoa(info.Port) + "/api" + clean, nil
 }

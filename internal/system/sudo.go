@@ -1,10 +1,10 @@
 package system
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -20,7 +20,51 @@ const NapCatAPTDependencyAction = "napcat-install-dependencies"
 // password guesses and must remain retryable after the user fixes the cause.
 var ErrSudoPasswordInvalid = errors.New("sudo 密码无效，请确认后重试")
 
-var napCatAPTDependencies = []string{"xvfb", "libnss3", "libgbm1"}
+// These lists are reviewed host policy, not plugin or browser input. They
+// cover the Linux QQ runtime, the NapCat Shell files and the user-space
+// launcher managed by the Go runner.
+var napCatAPTDependencies = []string{
+	"xvfb",
+	"libnss3", "libgbm1", "libglib2.0-0", "libatk1.0-0", "libatspi2.0-0", "libgtk-3-0", "libasound2",
+}
+
+var napCatDNFDependencies = []string{
+	"xorg-x11-server-Xvfb",
+	"nss", "mesa-libgbm", "glib2", "atk", "at-spi2-atk", "gtk3", "alsa-lib",
+}
+
+// sudoPasswordReader keeps the one-time password out of strings and wipes the
+// temporary newline-terminated input buffer as soon as sudo has consumed it.
+type sudoPasswordReader struct {
+	secret []byte
+	offset int
+}
+
+func newSudoPasswordReader(password []byte) *sudoPasswordReader {
+	secret := make([]byte, len(password)+1)
+	copy(secret, password)
+	secret[len(password)] = '\n'
+	return &sudoPasswordReader{secret: secret}
+}
+
+func (reader *sudoPasswordReader) Read(target []byte) (int, error) {
+	if reader.offset >= len(reader.secret) {
+		reader.clear()
+		return 0, io.EOF
+	}
+	count := copy(target, reader.secret[reader.offset:])
+	reader.offset += count
+	if reader.offset >= len(reader.secret) {
+		reader.clear()
+	}
+	return count, nil
+}
+
+func (reader *sudoPasswordReader) clear() {
+	for index := range reader.secret {
+		reader.secret[index] = 0
+	}
+}
 
 // napcatAPTCommand keeps the entire privileged invocation in host code. It is
 // deliberately not assembled from a plugin manifest, browser input, or shell
@@ -29,12 +73,15 @@ func napcatAPTCommand(ctx context.Context, password []byte) *exec.Cmd {
 	args := []string{"-S", "-k", "-p", "", "--", "apt-get", "install", "-y"}
 	args = append(args, napCatAPTDependencies...)
 	command := exec.CommandContext(ctx, "sudo", args...)
-	// Allocate a separate buffer so the newline is never retained in the
-	// caller's password slice.
-	stdin := make([]byte, len(password)+1)
-	copy(stdin, password)
-	stdin[len(password)] = '\n'
-	command.Stdin = bytes.NewReader(stdin)
+	command.Stdin = newSudoPasswordReader(password)
+	return command
+}
+
+func napcatDNFCommand(ctx context.Context, password []byte) *exec.Cmd {
+	args := []string{"-S", "-k", "-p", "", "--", "dnf", "install", "--allowerasing", "-y"}
+	args = append(args, napCatDNFDependencies...)
+	command := exec.CommandContext(ctx, "sudo", args...)
+	command.Stdin = newSudoPasswordReader(password)
 	return command
 }
 
@@ -42,6 +89,13 @@ func napcatAPTCommand(ctx context.Context, password []byte) *exec.Cmd {
 // invokes a shell and never accepts command arguments from a browser or plugin.
 var sudoCommand = func(ctx context.Context, password []byte) ([]byte, error) {
 	command := napcatAPTCommand(ctx, password)
+	if _, err := exec.LookPath("apt-get"); err != nil {
+		command = napcatDNFCommand(ctx, password)
+	}
+	reader, _ := command.Stdin.(*sudoPasswordReader)
+	if reader != nil {
+		defer reader.clear()
+	}
 	return command.CombinedOutput()
 }
 
@@ -55,8 +109,10 @@ func InstallNapCatAPTDependencies(ctx context.Context, password []byte) (string,
 	if len(password) == 0 {
 		return "", errors.New("请输入当前系统账户的 sudo 密码")
 	}
-	if _, err := exec.LookPath("apt-get"); err != nil {
-		return "", errors.New("当前 Linux 发行版未检测到 APT。首版仅支持 Debian/Ubuntu；请在终端安装 xvfb、libnss3 和 libgbm1 后重试")
+	if _, aptErr := exec.LookPath("apt-get"); aptErr != nil {
+		if _, dnfErr := exec.LookPath("dnf"); dnfErr != nil {
+			return "", errors.New("当前 Linux 未检测到 APT 或 DNF；工作台暂不能自动安装 NapCat 系统依赖")
+		}
 	}
 	if _, err := exec.LookPath("sudo"); err != nil {
 		return "", errors.New("当前系统未安装 sudo，无法使用工作台密码授权。请由系统管理员安装 sudo 或在终端完成依赖安装")
@@ -64,7 +120,7 @@ func InstallNapCatAPTDependencies(ctx context.Context, password []byte) (string,
 	output, err := sudoCommand(ctx, password)
 	text := strings.TrimSpace(string(output))
 	if err == nil {
-		return "✓ 已安装 NapCat Linux 系统依赖（xvfb、libnss3、libgbm1）。", nil
+		return "✓ 已安装 NapCat Linux 系统依赖，正在继续自动安装。", nil
 	}
 	lower := strings.ToLower(text)
 	switch {
@@ -73,9 +129,9 @@ func InstallNapCatAPTDependencies(ctx context.Context, password []byte) (string,
 	case strings.Contains(lower, "not in the sudoers"), strings.Contains(lower, "is not allowed to run sudo"):
 		return "", errors.New("当前系统账户没有 sudo 权限，请联系系统管理员或在终端完成依赖安装")
 	case strings.Contains(lower, "could not get lock"), strings.Contains(lower, "unable to acquire the dpkg frontend lock"), strings.Contains(lower, "dpkg was interrupted"):
-		return "", errors.New("APT 正被其他软件包操作占用。请等待系统更新完成后重试")
+		return "", errors.New("系统包管理器正被其他操作占用。请等待系统更新完成后重试")
 	case errors.Is(ctx.Err(), context.DeadlineExceeded):
-		return "", errors.New("安装系统依赖超时，请检查网络和 APT 状态后重试")
+		return "", errors.New("安装系统依赖超时，请检查网络和系统包管理器状态后重试")
 	default:
 		return "", fmt.Errorf("安装 NapCat 系统依赖失败%s", limitedSudoDiagnostic(text))
 	}

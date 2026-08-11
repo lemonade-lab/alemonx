@@ -3,6 +3,7 @@ package system
 import (
 	"context"
 	"errors"
+	"io"
 	"reflect"
 	"runtime"
 	"testing"
@@ -10,9 +11,30 @@ import (
 
 func TestNapcatAPTCommandIsFixed(t *testing.T) {
 	command := napcatAPTCommand(context.Background(), []byte("not-used"))
-	want := []string{"sudo", "-S", "-k", "-p", "", "--", "apt-get", "install", "-y", "xvfb", "libnss3", "libgbm1"}
+	want := []string{"sudo", "-S", "-k", "-p", "", "--", "apt-get", "install", "-y", "xvfb", "libnss3", "libgbm1", "libglib2.0-0", "libatk1.0-0", "libatspi2.0-0", "libgtk-3-0", "libasound2"}
 	if !reflect.DeepEqual(command.Args, want) {
 		t.Fatalf("sudo command = %#v, want %#v", command.Args, want)
+	}
+}
+
+func TestNapcatDNFCommandIsFixed(t *testing.T) {
+	command := napcatDNFCommand(context.Background(), []byte("not-used"))
+	want := []string{"sudo", "-S", "-k", "-p", "", "--", "dnf", "install", "--allowerasing", "-y", "xorg-x11-server-Xvfb", "nss", "mesa-libgbm", "glib2", "atk", "at-spi2-atk", "gtk3", "alsa-lib"}
+	if !reflect.DeepEqual(command.Args, want) {
+		t.Fatalf("sudo command = %#v, want %#v", command.Args, want)
+	}
+}
+
+func TestSudoPasswordReaderClearsTemporaryBuffer(t *testing.T) {
+	reader := newSudoPasswordReader([]byte("correct"))
+	output, err := io.ReadAll(reader)
+	if err != nil || string(output) != "correct\n" {
+		t.Fatalf("password input = %q, err=%v", output, err)
+	}
+	for _, value := range reader.secret {
+		if value != 0 {
+			t.Fatal("temporary password buffer was not cleared")
+		}
 	}
 }
 
