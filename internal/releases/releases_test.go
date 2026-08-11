@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -47,6 +48,23 @@ func TestMatchingAssetForRequiresExactPlatformAndArchitecture(t *testing.T) {
 	assets := []Asset{{Name: "alx-darwin-arm64.zip", URL: "mac-arm"}}
 	if got := matchingAssetFor(assets, "windows", "amd64"); got.Name != "" {
 		t.Fatalf("Windows should not receive unmatched asset: %#v", got)
+	}
+}
+
+func TestUpdateForReleaseUsesIndexChecksum(t *testing.T) {
+	checksum := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	item := Item{
+		Tag: "v9.9.9",
+		URL: "https://example.invalid/release",
+		Assets: []Asset{{
+			Name:   "alx-" + runtime.GOOS + "-" + runtime.GOARCH + ".zip",
+			URL:    "https://example.invalid/alx.zip",
+			SHA256: checksum,
+		}},
+	}
+	update, err := updateForRelease(Update{Current: "v1.0.0"}, item)
+	if err != nil || !update.Available || update.SHA256 != checksum || !update.IntegrityReady {
+		t.Fatalf("indexed update = %#v, %v", update, err)
 	}
 }
 

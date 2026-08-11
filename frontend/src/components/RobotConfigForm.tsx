@@ -275,14 +275,14 @@ export function RobotConfigForm({ content, toolbar, onChange }: Props) {
           ›
         </i>
       </summary>
-      <div className="grid grid-cols-2 gap-3 border-t border-slate-100 p-3 max-sm:grid-cols-1">
+      <div className="robot-config-fields grid grid-cols-2 gap-3 border-t border-slate-100 p-3">
         {children}
       </div>
     </details>
   )
   return (
     <RobotPanel
-      className="max-w-190"
+      className="robot-config-form max-w-190"
       icon={<Settings className="size-4" />}
       title="机器人配置"
       description="管理当前机器人的运行与连接参数"

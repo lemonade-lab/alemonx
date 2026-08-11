@@ -77,7 +77,7 @@ export function AccountManagementPage() {
   }
   return (
     <RobotPanel
-      className="max-w-250"
+      className="account-management max-w-250"
       icon={<ShieldCheck className="size-4" />}
       title="账户"
       description="管理登录账户、角色及系统权限"
@@ -99,7 +99,7 @@ export function AccountManagementPage() {
                 新账户必须归属至少一个已创建的角色。
               </p>
             </div>
-            <div className="grid gap-3 sm:grid-cols-3">
+            <div className="account-create-fields grid gap-3">
               <input
                 className="min-h-9 rounded-md border border-slate-300 px-2.5 text-sm"
                 placeholder="账户名"
@@ -169,7 +169,7 @@ export function AccountManagementPage() {
             <div className="grid gap-2">
               {data.accounts.map(item => (
                 <article
-                  className="grid gap-2 rounded-lg border border-slate-200 p-3 sm:grid-cols-[minmax(9rem,1fr)_minmax(15rem,2fr)_auto] sm:items-center"
+                  className="account-row grid gap-2 rounded-lg border border-slate-200 p-3"
                   key={item.account}
                 >
                   <div>
@@ -230,7 +230,7 @@ export function AccountManagementPage() {
                 一个账户可以同时拥有多个角色，最终权限为各角色权限的并集。
               </p>
             </div>
-            <div className="grid gap-3 sm:grid-cols-2">
+            <div className="account-role-fields grid gap-3">
               <input
                 className="min-h-9 rounded-md border border-slate-300 px-2.5 text-sm"
                 placeholder="角色标识，例如 release-manager"
@@ -365,7 +365,7 @@ function PermissionPicker({
   onChange: (permissions: string[]) => void
 }) {
   return (
-    <div className="grid gap-2 rounded-md border border-slate-200 bg-slate-50 p-3 sm:grid-cols-2">
+    <div className="account-permission-grid grid gap-2 rounded-md border border-slate-200 bg-slate-50 p-3">
       {permissions.map(permission => (
         <label
           className="flex cursor-pointer items-center gap-2 text-xs text-slate-700"

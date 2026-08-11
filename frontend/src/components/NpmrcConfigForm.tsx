@@ -60,7 +60,7 @@ export function NpmrcConfigForm({ content, onChange }: Props) {
     'min-h-9 w-full rounded-md border border-slate-300 bg-white px-2.5 text-sm font-normal text-slate-800 outline-none transition focus:border-brand-600 focus:ring-2 focus:ring-brand-100'
   return (
     <RobotPanel
-      className="max-w-190"
+      className="npmrc-config-form max-w-190"
       icon={<Package className="size-4" />}
       title="npm 源"
       description="配置当前机器人的包下载源"
@@ -68,7 +68,7 @@ export function NpmrcConfigForm({ content, onChange }: Props) {
     >
       {editor === 'visual' ? (
         <>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div className="npmrc-config-fields grid grid-cols-1 gap-3">
             <label className="grid gap-1 text-xs font-semibold text-slate-600">
               Registry
               <select

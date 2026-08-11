@@ -1,6 +1,7 @@
 package system
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -10,6 +11,70 @@ import (
 	"strconv"
 	"strings"
 )
+
+// RunWithSudoInput is reserved for a host-approved macOS operation. The
+// caller has already matched the exact installed runner to host policy; this
+// function only provides the one-time password transport and never accepts a
+// browser-controlled command or argument list.
+func RunWithSudoInput(directory, name string, args []string, input, password []byte) ([]byte, error) {
+	defer clearSecret(password)
+	if runtime.GOOS != "darwin" {
+		return nil, fmt.Errorf("当前系统不支持工作台密码授权：%s", runtime.GOOS)
+	}
+	inputFile, err := os.CreateTemp("", "alx-sudo-input-*.json")
+	if err != nil {
+		return nil, fmt.Errorf("无法准备权限操作：%w", err)
+	}
+	inputPath := inputFile.Name()
+	defer os.Remove(inputPath)
+	if _, err = inputFile.Write(input); err != nil {
+		_ = inputFile.Close()
+		return nil, fmt.Errorf("无法准备权限操作：%w", err)
+	}
+	if err = inputFile.Close(); err != nil {
+		return nil, fmt.Errorf("无法准备权限操作：%w", err)
+	}
+	outputFile, err := os.CreateTemp("", "alx-sudo-output-*.json")
+	if err != nil {
+		return nil, fmt.Errorf("无法准备权限操作：%w", err)
+	}
+	outputPath := outputFile.Name()
+	_ = outputFile.Close()
+	defer os.Remove(outputPath)
+	errorFile, err := os.CreateTemp("", "alx-sudo-error-*.txt")
+	if err != nil {
+		return nil, fmt.Errorf("无法准备权限操作：%w", err)
+	}
+	errorPath := errorFile.Name()
+	_ = errorFile.Close()
+	defer os.Remove(errorPath)
+	stdin := append(append([]byte(nil), password...), '\n')
+	script := privilegedIOScript(directory, name, args, inputPath, outputPath, errorPath)
+	command := exec.Command("sudo", "-S", "-k", "-p", "", "--", "/bin/sh", "-lc", script)
+	command.Stdin = bytes.NewReader(stdin)
+	diagnostics, runErr := command.CombinedOutput()
+	clearSecret(stdin)
+	output, readErr := os.ReadFile(outputPath)
+	if readErr != nil {
+		return nil, fmt.Errorf("无法读取权限操作结果：%w", readErr)
+	}
+	if runErr != nil {
+		runnerDiagnostics, _ := os.ReadFile(errorPath)
+		message := strings.TrimSpace(string(runnerDiagnostics))
+		if message == "" {
+			message = strings.TrimSpace(string(diagnostics))
+		}
+		lower := strings.ToLower(message)
+		if strings.Contains(lower, "sorry, try again") || strings.Contains(lower, "incorrect password") || strings.Contains(lower, "authentication failure") {
+			return output, ErrSudoPasswordInvalid
+		}
+		if message == "" {
+			message = "管理员密码错误、用户取消，或系统拒绝了本次授权。"
+		}
+		return output, fmt.Errorf("需要管理员权限才能完成此操作：%s", message)
+	}
+	return output, nil
+}
 
 // RunWithPrivileges runs one already-approved local operation with the
 // operating system's native administrator prompt.  It never changes ownership

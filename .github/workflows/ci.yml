@@ -54,6 +54,7 @@ jobs:
       - run: |
           mkdir -p bundle release
           CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -trimpath -ldflags "-s -w -X main.Version=${GITHUB_REF_NAME}" -o "bundle/${{ matrix.binary }}" .
+          printf '{"version":"%s","platform":"%s","architecture":"%s"}\n' "${GITHUB_REF_NAME}" "${{ matrix.goos }}" "${{ matrix.goarch }}" > bundle/alx-update.json
           (cd bundle && zip -r "../release/${{ matrix.bundle }}" .)
           (cd release && sha256sum "${{ matrix.bundle }}" > "${{ matrix.bundle }}.sha256")
       - uses: actions/upload-artifact@v4
@@ -74,7 +75,10 @@ jobs:
           path: release
           merge-multiple: true
       - run: |
+          release_base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}"
+          checksum() { awk -v name="$1" '$2 == name { print $1 }' release/SHA256SUMS; }
           cat release/*.sha256 > release/SHA256SUMS
+          printf '{"tag":"%s","name":"AlemonX %s","url":"https://github.com/%s/releases/tag/%s","assets":[{"name":"alx-windows-amd64.zip","url":"%s/alx-windows-amd64.zip","sha256":"%s"},{"name":"alx-darwin-arm64.zip","url":"%s/alx-darwin-arm64.zip","sha256":"%s"},{"name":"alx-darwin-amd64.zip","url":"%s/alx-darwin-amd64.zip","sha256":"%s"},{"name":"alx-linux-amd64.zip","url":"%s/alx-linux-amd64.zip","sha256":"%s"},{"name":"SHA256SUMS","url":"%s/SHA256SUMS"}]}' "${GITHUB_REF_NAME}" "${GITHUB_REF_NAME}" "${GITHUB_REPOSITORY}" "${GITHUB_REF_NAME}" "$release_base" "$(checksum alx-windows-amd64.zip)" "$release_base" "$(checksum alx-darwin-arm64.zip)" "$release_base" "$(checksum alx-darwin-amd64.zip)" "$release_base" "$(checksum alx-linux-amd64.zip)" "$release_base" > release/alx-update-index.json
           rm release/*.sha256
           gh release create "${GITHUB_REF_NAME}" release/* --generate-notes
         env:

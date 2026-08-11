@@ -1315,6 +1315,9 @@ button {
 }
 
 .dashboard-window {
+  /* This surface can be narrow even on a wide browser canvas. */
+  container-name: workbench-window;
+  container-type: inline-size;
   max-width: 1240px;
   position: relative;
 }
@@ -1507,6 +1510,10 @@ button {
 }
 
 .floating-window {
+  /* Floating application windows respond to their own inline size, not the
+   * browser viewport. */
+  container-name: desktop-window;
+  container-type: inline-size;
   max-width: none;
   pointer-events: auto;
   position: fixed;
@@ -5776,6 +5783,8 @@ textarea:hover {
   opacity: 1;
 }
 .setup-plugin-page {
+  container-name: setup-plugin;
+  container-type: inline-size;
   align-content: start;
   max-width: 900px;
 }
@@ -6054,6 +6063,8 @@ button > svg,
 /* Shared shell for system features opened from the workspace sidebar. Keep
  * these pages quiet and border-light so they read as one robot control center. */
 .system-feature-page {
+  container-name: system-feature;
+  container-type: inline-size;
   max-width: 860px;
 }
 .system-feature-header {
@@ -6355,6 +6366,7 @@ button > svg,
   position: relative;
   min-width: 0;
   width: 100%;
+  container-name: agent-workspace;
   container-type: inline-size;
 }
 .agent-workspace > .agent-body {
@@ -9102,4 +9114,276 @@ button > svg,
 .git-workspace-header:active,
 .app-embed-header:active {
   cursor: grabbing;
+}
+
+/* Keep these declarations last: the legacy stylesheet was assembled in
+ * feature order, while container queries must win over its viewport rules. */
+.git-commit-heading {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+.git-commit-summary {
+  grid-column: auto;
+}
+
+.git-tag-form {
+  grid-template-columns: 1fr 1.4fr auto;
+}
+
+/* Operations appears both in a desktop window and as a system page. Give the
+ * component its own query boundary so its layout never depends on the browser
+ * viewport or on which host surface rendered it. */
+.ops-panel {
+  container-name: ops-panel;
+  container-type: inline-size;
+}
+
+.ops-metrics {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.ops-lease-grid,
+.ops-policy-fields {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.ops-event-grid,
+.ops-policy-grid,
+.ops-audit-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.ops-readiness-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+/* RobotPanel is used by workbench pages as well as system windows. These
+ * controls must react to the panel they live in, not to the desktop canvas. */
+.robot-panel {
+  container-name: robot-panel;
+  container-type: inline-size;
+}
+
+.account-create-fields {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.account-row {
+  align-items: center;
+  grid-template-columns: minmax(9rem, 1fr) minmax(15rem, 2fr) auto;
+}
+
+.account-role-fields,
+.account-permission-grid,
+.npmrc-config-fields {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.env-config-entry {
+  grid-template-columns: minmax(150px, 0.85fr) auto minmax(180px, 1.4fr) auto;
+}
+
+.env-config-equals {
+  display: inline;
+}
+
+.env-config-remove {
+  justify-self: auto;
+}
+
+@container robot-panel (max-width: 1179px) {
+  .account-create-fields {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@container robot-panel (max-width: 759px) {
+  .account-create-fields,
+  .account-row,
+  .account-role-fields,
+  .account-permission-grid,
+  .npmrc-config-fields,
+  .env-config-entry,
+  .robot-config-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .env-config-equals {
+    display: none;
+  }
+
+  .env-config-remove {
+    justify-self: end;
+  }
+}
+
+@container ops-panel (max-width: 1179px) {
+  .ops-metrics {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .ops-event-grid,
+  .ops-policy-grid,
+  .ops-audit-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@container ops-panel (max-width: 759px) {
+  .ops-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .ops-lease-grid,
+  .ops-policy-fields,
+  .ops-readiness-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@container desktop-window (max-width: 759px) {
+  .git-commit-heading,
+  .git-tag-form {
+    grid-template-columns: 1fr;
+  }
+
+  .git-commit-summary {
+    grid-column: auto;
+  }
+
+  .git-commit-heading .primary-button,
+  .git-tag-form .secondary-button {
+    width: 100%;
+  }
+
+  .git-remote-form {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .git-remote-form > input:first-child,
+  .git-remote-actions {
+    width: 100%;
+  }
+
+  .git-remote-actions > button {
+    flex: 1 1 0;
+  }
+}
+
+@container workbench-window (max-width: 1179px) {
+  .console-page { grid-template-columns: minmax(0, 1fr) 248px; }
+  .control-dock { padding: 14px; }
+  .dashboard-toolbar { gap: 8px; }
+  .dashboard-toolbar .header-global-actions { gap: 6px; }
+  .dashboard-toolbar .developer-mode-toggle span,
+  .dashboard-toolbar .environment-control span { display: none; }
+  .dashboard-toolbar .developer-mode-toggle,
+  .dashboard-toolbar .environment-control { padding-left: 7px; padding-right: 7px; }
+}
+
+@container workbench-window (max-width: 759px) {
+  .console-layout { grid-template-columns: minmax(0, 1fr); }
+  .console-layout .project-rail {
+    border-bottom: 1px solid var(--theme-border-default);
+    border-right: 0;
+    display: flex;
+    flex-direction: column;
+    max-height: 40vh;
+    min-width: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+  .console-page { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+  .console-page .control-dock { grid-column: 1; grid-row: 1; padding: 12px 16px 0; position: static; }
+  .console-page .control-card { margin: 0 auto; max-width: 720px; width: 100%; }
+  .console-page .control-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .console-page .workspace-content { grid-row: 2; padding: 20px 16px 32px; }
+  .guide-goals,
+  .summary-grid,
+  .form-grid,
+  .catalog-items,
+  .robot-actions { grid-template-columns: 1fr; }
+  .wizard { grid-template-columns: 1fr; grid-template-rows: 48px 1fr; margin: 0; }
+  .wizard-steps { display: flex; gap: 5px; overflow-x: auto; overflow-y: hidden; padding: 10px 12px; }
+  .wizard-steps > p { display: none; }
+  .wizard-steps > :is(div, button) { flex: 0 0 auto; font-size: 0; margin: 0; padding: 1px; }
+  .detail-heading,
+  .guide-bar,
+  .publish-heading { align-items: flex-start; }
+  .detail-heading,
+  .release-action-row { flex-direction: column; }
+}
+
+@container desktop-window (max-width: 1179px) {
+  .floating-window-header { gap: 8px; padding-left: 12px; padding-right: 12px; }
+  .floating-window-header > div:last-child { flex: 0 0 auto; }
+  .git-workspace-content { padding: 12px 14px 16px; }
+  .setup-plugin-webview-frame { min-height: 420px; }
+}
+
+@container desktop-window (max-width: 759px) {
+  .git-workspace-summary,
+  .git-workspace-secondary,
+  .git-remote-content,
+  .git-form-grid { grid-template-columns: 1fr; }
+  .git-workspace-secondary .git-tags-panel { grid-column: auto; }
+  .git-sync-row,
+  .git-commit-panel > footer,
+  .git-commit-heading,
+  .git-commit-heading > .git-commit-actions,
+  .git-form-row,
+  .git-remote-heading { align-items: stretch; flex-direction: column; }
+  .git-sync-row > div:last-child,
+  .git-remote-heading > .git-sync-actions,
+  .git-remote-editor > div,
+  .git-remote-form > div { justify-content: flex-end; }
+  .git-commit-heading > .git-commit-actions { max-width: none; width: 100%; }
+  .git-commit-panel .primary-button,
+  .git-commit-actions .primary-button,
+  .git-form-row .primary-button,
+  .git-form-row .secondary-button { width: 100%; }
+  .git-remote-editor { border-left: 0; border-top: 1px solid var(--line); }
+  .floating-window > iframe,
+  .floating-window iframe { min-width: 0; width: 100%; }
+}
+
+@container system-feature (max-width: 759px) {
+  .system-feature-header { align-items: flex-start; flex-wrap: wrap; margin: 8px 8px 12px; padding: 10px 12px; }
+  .system-feature-row { align-items: flex-start; flex-wrap: wrap; }
+  .system-feature-actions { margin-left: 42px; }
+  .setup-plugin-description { display: none; }
+  .system-feature-empty { min-height: 140px; padding: 24px 16px; }
+}
+
+@container setup-plugin (max-width: 759px) {
+  .setup-plugin-layout { grid-template-columns: 1fr; }
+  .setup-plugin-layout nav {
+    border-bottom: 1px solid var(--theme-border-default);
+    border-right: 0;
+    display: flex;
+    overflow-x: auto;
+    padding: 0 0 10px;
+  }
+  .setup-plugin-layout nav button { flex: 0 0 auto; }
+  .setup-plugin-layout nav b,
+  .setup-plugin-page > header p,
+  .setup-plugin-page > header span { display: none; }
+  .setup-plugin-action-row { align-items: stretch; flex-direction: column; }
+}
+
+@container agent-workspace (max-width: 759px) {
+  .agent-header { margin: 10px 10px 0; min-height: 48px; padding: 0 11px; }
+  .agent-header-root { max-width: 170px; }
+  .agent-thread { gap: 16px; padding: 0 14px 12px; }
+  .agent-message-user,
+  .agent-message-assistant,
+  .agent-timeline,
+  .agent-timeline-wrap,
+  .agent-plan-card { max-width: 100%; }
+  .agent-message-assistant { grid-template-columns: 30px minmax(0, 1fr); gap: 9px; }
+  .agent-composer { padding: 8px 10px 12px; }
+  .agent-composer-hint { display: none; }
+  .agent-body:has(.agent-sessions) { display: block; }
+  .agent-sessions { border-bottom: 1px solid var(--theme-border-default); border-right: 0; max-height: 230px; }
 }

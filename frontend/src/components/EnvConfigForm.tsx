@@ -72,7 +72,7 @@ export function EnvConfigForm({ content, onChange }: Props) {
   if (mode === 'text')
     return (
       <RobotPanel
-        className="max-w-190"
+        className="env-config-form max-w-190"
         icon={<KeyRound className="size-4" />}
         title="环境变量"
         description="管理密钥、端口和第三方服务地址"
@@ -88,7 +88,7 @@ export function EnvConfigForm({ content, onChange }: Props) {
     )
   return (
     <RobotPanel
-      className="max-w-190"
+      className="env-config-form max-w-190"
       icon={<KeyRound className="size-4" />}
       title="环境变量"
       description="管理密钥、端口和第三方服务地址"
@@ -97,7 +97,7 @@ export function EnvConfigForm({ content, onChange }: Props) {
       <div className="grid gap-2">
         {entries.map((entry, index) => (
           <div
-            className="grid grid-cols-1 items-center gap-2 sm:grid-cols-[minmax(150px,.85fr)_auto_minmax(180px,1.4fr)_auto]"
+            className="env-config-entry grid grid-cols-1 items-center gap-2"
             key={`${index}-${entry.key}`}
           >
             <input
@@ -106,7 +106,7 @@ export function EnvConfigForm({ content, onChange }: Props) {
               onChange={event => update(index, 'key', event.target.value)}
               placeholder="变量名，例如 BOT_TOKEN"
             />
-            <span className="hidden justify-self-center font-mono text-slate-400 sm:inline">
+            <span className="env-config-equals hidden justify-self-center font-mono text-slate-400">
               =
             </span>
             <input
@@ -118,7 +118,7 @@ export function EnvConfigForm({ content, onChange }: Props) {
               autoComplete="off"
             />
             <button
-              className="inline-flex size-8 items-center justify-center justify-self-end rounded-md border border-slate-300 bg-white text-slate-400 hover:bg-slate-50 hover:text-red-700 sm:justify-self-auto"
+              className="env-config-remove inline-flex size-8 items-center justify-center justify-self-end rounded-md border border-slate-300 bg-white text-slate-400 hover:bg-slate-50 hover:text-red-700"
               onClick={() => {
                 const next = entries.filter((_, position) => position !== index)
                 setEntries(next)

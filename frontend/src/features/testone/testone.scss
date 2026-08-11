@@ -118,6 +118,61 @@
   min-width: 0;
 }
 
+/* TestOne is rendered inside a draggable DesktopWindow. Tailwind's responsive
+ * variants follow the browser viewport, which left a narrow test window with
+ * both 224px sidebars visible. Keep its density tied to the actual window. */
+.testone-window {
+  container-name: testone-window;
+  container-type: inline-size;
+}
+
+.testone-mobile-user,
+.testone-timer-tip {
+  display: none;
+}
+
+.testone-channel-rail,
+.testone-task-rail {
+  display: flex;
+}
+
+.testone-special-events {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.testone-media {
+  max-width: min(20rem, 56cqi);
+}
+
+@container testone-window (max-width: 1179px) {
+  .testone-channel-rail {
+    display: none;
+  }
+
+  .testone-task-rail {
+    width: 12rem;
+  }
+}
+
+@container testone-window (max-width: 759px) {
+  .testone-task-rail {
+    display: none;
+  }
+
+  .testone-mobile-user,
+  .testone-timer-tip {
+    display: flex;
+  }
+
+  .testone-special-events {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .testone-media {
+    max-width: min(15rem, 82cqi);
+  }
+}
+
 /* antd 静态消息（Message.info 等）提升到浮窗之上，避免被桌面窗口遮挡 */
 .testone-message {
   z-index: 3000;

@@ -79,3 +79,49 @@ func TestPrivilegeStorePersistsSudoRateLimit(t *testing.T) {
 		t.Fatal("sudo rate limit must survive restart")
 	}
 }
+
+func TestPrivilegeIntentBindsAccountSourceOperationAndSingleUse(t *testing.T) {
+	store, err := newPrivilegeStoreAt(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.close()
+	intent, err := store.createIntent("alemonx-qq", "napcat-install-dependencies", "", "root", "127.0.0.1", "password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.validateIntent(intent.ID, "alemonx-qq", "napcat-install-dependencies", "", "other", "127.0.0.1", "password"); err == nil {
+		t.Fatal("another account must not use an authorization intent")
+	}
+	if _, err := store.validateIntent(intent.ID, "alemonx-qq", "napcat-install-dependencies", "", "root", "::1", "password"); err == nil {
+		t.Fatal("another source must not use an authorization intent")
+	}
+	validated, err := store.validateIntent(intent.ID, "alemonx-qq", "napcat-install-dependencies", "", "root", "127.0.0.1", "password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.consumeIntent(validated); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.validateIntent(intent.ID, "alemonx-qq", "napcat-install-dependencies", "", "root", "127.0.0.1", "password"); err == nil {
+		t.Fatal("consumed authorization intent must not be reusable")
+	}
+}
+
+func TestPrivilegeIntentExpires(t *testing.T) {
+	store, err := newPrivilegeStoreAt(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.close()
+	intent, err := store.createIntent("alemonx-qq", "napcat-install-dependencies", "", "root", "127.0.0.1", "password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`UPDATE privilege_intents SET expires_at=? WHERE id=?`, "2000-01-01T00:00:00Z", intent.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.validateIntent(intent.ID, "alemonx-qq", "napcat-install-dependencies", "", "root", "127.0.0.1", "password"); err == nil {
+		t.Fatal("expired intent must be rejected")
+	}
+}

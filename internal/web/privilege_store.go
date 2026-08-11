@@ -46,6 +46,20 @@ type privilegeAuditStatus struct {
 	Reason         string `json:"reason,omitempty"`
 }
 
+// privilegeIntent is an ephemeral, host-issued authorization ticket. It binds
+// a browser's confirmed operation to the authenticated account and loopback
+// source without ever storing a password.
+type privilegeIntent struct {
+	ID            string
+	PluginID      string
+	Action        string
+	PlanID        string
+	Account       string
+	Source        string
+	Authorization string
+	ExpiresAt     time.Time
+}
+
 func newPrivilegeStoreAt(directory string) (*privilegeStore, error) {
 	if err := os.MkdirAll(directory, 0o700); err != nil {
 		return nil, err
@@ -72,6 +86,7 @@ func newPrivilegeStoreAt(directory string) (*privilegeStore, error) {
 CREATE TABLE IF NOT EXISTS privilege_plans(id TEXT PRIMARY KEY, operation TEXT NOT NULL, params BLOB NOT NULL, fingerprint TEXT NOT NULL, risk TEXT NOT NULL, impact TEXT NOT NULL, verification BLOB NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL, account TEXT NOT NULL, used_at TEXT);
 CREATE TABLE IF NOT EXISTS privilege_audit(sequence INTEGER PRIMARY KEY AUTOINCREMENT, operation TEXT NOT NULL, params BLOB NOT NULL, output TEXT NOT NULL, account TEXT NOT NULL, created_at TEXT NOT NULL, previous_hash TEXT NOT NULL, chain_hash TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS sudo_attempts(key TEXT PRIMARY KEY, failures INTEGER NOT NULL, locked_until TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS privilege_intents(id TEXT PRIMARY KEY, plugin_id TEXT NOT NULL, action TEXT NOT NULL, plan_id TEXT NOT NULL, account TEXT NOT NULL, source TEXT NOT NULL, authorization TEXT NOT NULL, expires_at TEXT NOT NULL, used_at TEXT);
 CREATE TABLE IF NOT EXISTS privilege_meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);`); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -79,6 +94,58 @@ CREATE TABLE IF NOT EXISTS privilege_meta(key TEXT PRIMARY KEY, value TEXT NOT N
 	store := &privilegeStore{db: db, key: key}
 	store.migrateLegacyNetworkAudit()
 	return store, nil
+}
+
+func (s *privilegeStore) createIntent(pluginID, action, planID, account, source, authorization string) (privilegeIntent, error) {
+	if s == nil || s.db == nil {
+		return privilegeIntent{}, errors.New("权限审计存储不可用")
+	}
+	bytes := make([]byte, 16)
+	if _, err := rand.Read(bytes); err != nil {
+		return privilegeIntent{}, err
+	}
+	intent := privilegeIntent{ID: hex.EncodeToString(bytes), PluginID: pluginID, Action: action, PlanID: planID, Account: account, Source: source, Authorization: authorization, ExpiresAt: time.Now().Add(5 * time.Minute).UTC()}
+	if _, err := s.db.Exec(`DELETE FROM privilege_intents WHERE expires_at < ? OR used_at IS NOT NULL`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		return privilegeIntent{}, err
+	}
+	_, err := s.db.Exec(`INSERT INTO privilege_intents(id,plugin_id,action,plan_id,account,source,authorization,expires_at) VALUES(?,?,?,?,?,?,?,?)`, intent.ID, intent.PluginID, intent.Action, intent.PlanID, intent.Account, intent.Source, intent.Authorization, intent.ExpiresAt.Format(time.RFC3339Nano))
+	return intent, err
+}
+
+func (s *privilegeStore) validateIntent(id, pluginID, action, planID, account, source, authorization string) (privilegeIntent, error) {
+	if s == nil || s.db == nil || strings.TrimSpace(id) == "" {
+		return privilegeIntent{}, errors.New("请先在工作台确认系统权限请求")
+	}
+	var intent privilegeIntent
+	var expires string
+	var used sql.NullString
+	err := s.db.QueryRow(`SELECT plugin_id,action,plan_id,account,source,authorization,expires_at,used_at FROM privilege_intents WHERE id=?`, id).Scan(&intent.PluginID, &intent.Action, &intent.PlanID, &intent.Account, &intent.Source, &intent.Authorization, &expires, &used)
+	if err != nil {
+		return privilegeIntent{}, errors.New("权限请求已失效，请重新确认")
+	}
+	intent.ID = id
+	intent.ExpiresAt, err = time.Parse(time.RFC3339Nano, expires)
+	if err != nil || used.Valid || time.Now().After(intent.ExpiresAt) {
+		return privilegeIntent{}, errors.New("权限请求已过期或已使用，请重新确认")
+	}
+	if intent.PluginID != pluginID || intent.Action != action || intent.PlanID != planID || intent.Account != account || intent.Source != source || intent.Authorization != authorization {
+		return privilegeIntent{}, errors.New("权限请求与当前操作不匹配，请重新确认")
+	}
+	return intent, nil
+}
+
+func (s *privilegeStore) consumeIntent(intent privilegeIntent) error {
+	if s == nil || s.db == nil {
+		return errors.New("权限审计存储不可用")
+	}
+	result, err := s.db.Exec(`UPDATE privilege_intents SET used_at=? WHERE id=? AND used_at IS NULL AND expires_at >= ?`, time.Now().UTC().Format(time.RFC3339Nano), intent.ID, time.Now().UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return err
+	}
+	if changed, _ := result.RowsAffected(); changed != 1 {
+		return errors.New("权限请求已过期或已使用，请重新确认")
+	}
+	return nil
 }
 
 func (s *privilegeStore) migrateLegacyNetworkAudit() {
@@ -238,6 +305,38 @@ func (s *privilegeStore) consumeNetworkPlan(id, account string) (networkPlan, er
 		return plan, err
 	}
 	return plan, nil
+}
+
+// peekNetworkPlan validates a plan for a preflight without consuming it. The
+// actual network mutation still consumes the plan only after authorization.
+func (s *privilegeStore) peekNetworkPlan(id, account string) (networkPlan, error) {
+	var plan networkPlan
+	if s == nil || s.db == nil || strings.TrimSpace(id) == "" {
+		return plan, errors.New("未找到宿主签发的网络变更计划")
+	}
+	var params, verification []byte
+	var expiresAt, owner string
+	var usedAt sql.NullString
+	err := s.db.QueryRow(`SELECT operation,params,fingerprint,risk,impact,verification,created_at,expires_at,account,used_at FROM privilege_plans WHERE id=?`, id).Scan(&plan.Operation, &params, &plan.Fingerprint, &plan.Risk, &plan.Impact, &verification, &plan.CreatedAt, &expiresAt, &owner, &usedAt)
+	if err != nil || owner != account || (usedAt.Valid && usedAt.String != "") {
+		return plan, errors.New("未找到可用的宿主签发网络变更计划")
+	}
+	expires, parseErr := time.Parse(time.RFC3339, expiresAt)
+	if parseErr != nil || time.Now().After(expires) || json.Unmarshal(params, &plan.Params) != nil || json.Unmarshal(verification, &plan.Verification) != nil || !allowedNetworkOperation(plan.Operation) {
+		return plan, errors.New("网络变更计划已过期或损坏，请重新预演")
+	}
+	plan.ID, plan.ExpiresAt = id, expiresAt
+	return plan, nil
+}
+
+// releaseNetworkPlan is used only when sudo rejects a password before the
+// reviewed runner starts. Other execution failures may have changed the
+// system and therefore intentionally keep the plan consumed.
+func (s *privilegeStore) releaseNetworkPlan(id, account string) {
+	if s == nil || s.db == nil || id == "" {
+		return
+	}
+	_, _ = s.db.Exec(`UPDATE privilege_plans SET used_at=NULL WHERE id=? AND account=?`, id, account)
 }
 
 func inverseNetworkOperation(operation string) string {

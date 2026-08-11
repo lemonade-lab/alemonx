@@ -34,7 +34,7 @@ const Footer = ({ children }: { children: React.ReactNode }) => {
           {statusText}
         </span>
         {children}
-        <div className="flex md:hidden gap-2">
+        <div className="testone-mobile-user flex gap-2">
           <Select
             className="py-0 px-0"
             value={user?.UserId || ''}

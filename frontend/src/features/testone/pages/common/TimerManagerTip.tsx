@@ -17,7 +17,7 @@ const TimerManagerTip = ({
   return (
     <div className="absolute z-10 left-1/2 transform -translate-x-1/2 top-[3.2rem] animate__animated animate__fadeIn">
       {open && (
-        <div className="flex sm:hidden items-center gap-2 text-xs text-green-500 justify-center animate__animated animate__zoomIn hover-lift">
+        <div className="testone-timer-tip flex items-center gap-2 text-xs text-green-500 justify-center animate__animated animate__zoomIn hover-lift">
           <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
           <div>任务运行中 ({count})</div>
           <div className="cursor-pointer text-yellow-200 flex items-center">

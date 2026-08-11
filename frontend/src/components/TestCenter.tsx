@@ -87,7 +87,7 @@ export function TestCenter({ root }: { root: string }) {
   }, [loadTestPort, root, wsUrl])
 
   return (
-    <div className="testone-root flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+    <div className="testone-root testone-window flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
       <Provider store={testoneStore}>
         <ConfigProvider
           theme={{

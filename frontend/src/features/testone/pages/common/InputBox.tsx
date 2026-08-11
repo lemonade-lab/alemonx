@@ -349,7 +349,7 @@ const InputBox = ({
               onChange={e => setEventText(e.target.value)}
             />
           </div>
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 p-2 max-h-48 overflow-y-auto scrollbar">
+          <div className="testone-special-events grid gap-1.5 p-2 max-h-48 overflow-y-auto scrollbar">
             {filteredEvents.map(ev => (
               <button
                 key={ev.name}

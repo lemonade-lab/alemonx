@@ -357,10 +357,27 @@ type sudoAttempt struct {
 }
 
 type setupPluginActionRequest struct {
-	Action       string            `json:"action"`
-	Confirm      bool              `json:"confirm"`
-	Params       map[string]string `json:"params"`
-	SudoPassword *string           `json:"sudoPassword"`
+	Action          string            `json:"action"`
+	Confirm         bool              `json:"confirm"`
+	Params          map[string]string `json:"params"`
+	SudoPassword    *string           `json:"sudoPassword"`
+	AuthorizationID string            `json:"authorizationId"`
+}
+
+type privilegePreflightRequest struct {
+	PluginID string `json:"pluginId"`
+	Action   string `json:"action"`
+	PlanID   string `json:"planId,omitempty"`
+}
+
+type privilegePreflightResponse struct {
+	Available     bool   `json:"available"`
+	Authorization string `json:"authorization"`
+	Title         string `json:"title"`
+	Description   string `json:"description"`
+	Reason        string `json:"reason,omitempty"`
+	IntentID      string `json:"intentId,omitempty"`
+	ExpiresAt     string `json:"expiresAt,omitempty"`
 }
 
 type updateStatusState struct {
@@ -842,6 +859,7 @@ func NewServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	mux.HandleFunc("/api/v1/system/mcp", s.systemMCPHandler)
 	mux.HandleFunc("/api/v1/system/events", s.systemEventsHandler)
 	mux.HandleFunc("/api/v1/system/privileged/status", s.privilegedStatusHandler)
+	mux.HandleFunc("/api/v1/system/privileged/preflight", s.privilegedPreflightHandler)
 	mux.HandleFunc("/api/v1/system/privileged/audit", s.privilegedAuditHandler)
 	mux.HandleFunc("/api/v1/system/privileged/napcat-dependencies", s.napcatDependenciesHandler)
 	mux.HandleFunc("/api/v1/directories", s.directoryHandler)
@@ -1643,7 +1661,7 @@ func (s *server) setupPluginActionHandler(w http.ResponseWriter, r *http.Request
 }
 
 func (s *server) handleNetworkPrivilegedAction(w http.ResponseWriter, r *http.Request, input setupPluginActionRequest) {
-	if input.SudoPassword != nil || !input.Confirm || !s.localPrivilegeRequest(r) {
+	if !input.Confirm || !s.localPrivilegeRequest(r) {
 		writeError(w, http.StatusForbidden, "网络系统变更仅允许已确认的本机桌面权限操作。")
 		return
 	}
@@ -1658,24 +1676,67 @@ func (s *server) handleNetworkPrivilegedAction(w http.ResponseWriter, r *http.Re
 	}
 	var plan networkPlan
 	policyAction := input.Action
+	planID := ""
+	authorization := ""
+	switch runtime.GOOS {
+	case "darwin":
+		authorization = "password"
+	case "windows":
+		authorization = "native-uac"
+	case "linux":
+		authorization = "polkit"
+	default:
+		writeError(w, http.StatusBadRequest, "当前平台没有可用的系统授权方式。")
+		return
+	}
 	if input.Action == "apply-plan" {
 		if len(input.Params) != 1 {
 			writeError(w, http.StatusBadRequest, "网络应用仅接受宿主签发的计划 ID。")
 			return
 		}
-		if err := s.plugins.PrivilegeAvailability("alemonx-network", "apply-plan"); err != nil {
-			writeError(w, http.StatusForbidden, err.Error())
-			return
-		}
-		plan, err = s.privilegeStore.consumeNetworkPlan(input.Params["planID"], status.Account)
+		planID = input.Params["planID"]
 	} else {
-		if err := s.plugins.PrivilegeAvailability("alemonx-network", "undo-last"); err != nil {
-			writeError(w, http.StatusForbidden, err.Error())
+		if len(input.Params) != 0 {
+			writeError(w, http.StatusBadRequest, "撤销操作不接受额外参数。")
 			return
 		}
+	}
+	intent, err := s.privilegeStore.validateIntent(input.AuthorizationID, "alemonx-network", policyAction, planID, status.Account, privilegeRequestSource(r), authorization)
+	if err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	if err := s.plugins.PrivilegeAvailability("alemonx-network", policyAction); err != nil {
+		writeError(w, http.StatusForbidden, err.Error())
+		return
+	}
+	var password []byte
+	if authorization == "password" {
+		if input.SudoPassword == nil || strings.TrimSpace(*input.SudoPassword) == "" {
+			writeError(w, http.StatusBadRequest, "请输入当前系统账户的管理员密码。")
+			return
+		}
+		password = []byte(*input.SudoPassword)
+		*input.SudoPassword = ""
+		input.SudoPassword = nil
+	} else if input.SudoPassword != nil {
+		writeError(w, http.StatusBadRequest, "当前平台请在系统原生授权窗口中确认，不接受工作台密码。")
+		return
+	}
+	if authorization != "password" {
+		if err := s.privilegeStore.consumeIntent(intent); err != nil {
+			clearSudoPassword(password)
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+	}
+	if input.Action == "apply-plan" {
+		plan, err = s.privilegeStore.consumeNetworkPlan(planID, status.Account)
+	} else {
 		plan, err = s.privilegeStore.latestUndoPlan()
 	}
 	if err != nil {
+		clearSudoPassword(password)
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -1694,12 +1755,27 @@ func (s *server) handleNetworkPrivilegedAction(w http.ResponseWriter, r *http.Re
 	}
 	s.mu.Unlock()
 	go func() {
-		result, runErr := s.plugins.RunPrivilegedApproved("alemonx-network", policyAction, "apply-approved-plan", params, func(event setupplugin.Progress) {
-			s.updateOperation(created.ID, event.Percent, event.Message, "", false)
-		})
+		var result setupplugin.ActionResult
+		var runErr error
+		if authorization == "password" {
+			result, runErr = s.plugins.RunPrivilegedApprovedWithPassword("alemonx-network", policyAction, "apply-approved-plan", params, password)
+		} else {
+			result, runErr = s.plugins.RunPrivilegedApproved("alemonx-network", policyAction, "apply-approved-plan", params, func(event setupplugin.Progress) {
+				s.updateOperation(created.ID, event.Percent, event.Message, "", false)
+			})
+		}
 		if runErr != nil {
+			if authorization == "password" && errors.Is(runErr, system.ErrSudoPasswordInvalid) {
+				s.privilegeStore.releaseNetworkPlan(planID, status.Account)
+			}
 			s.updateOperationData(created.ID, 100, result.Output, runErr.Error(), result.Data, true)
 			return
+		}
+		if authorization == "password" {
+			if consumeErr := s.privilegeStore.consumeIntent(intent); consumeErr != nil {
+				s.updateOperationData(created.ID, 100, result.Output, consumeErr.Error(), result.Data, true)
+				return
+			}
 		}
 		if auditErr := s.privilegeStore.appendAudit(plan.Operation, plan.Params, result.Output, status.Account); auditErr != nil {
 			s.updateOperationData(created.ID, 100, result.Output, auditErr.Error(), result.Data, true)
@@ -1913,6 +1989,115 @@ func isApprovedSudoAction(pluginID, action string) bool {
 	return pluginID == "alemonx-qq" && action == system.NapCatAPTDependencyAction
 }
 
+func (s *server) privilegedPreflightHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
+		return
+	}
+	var input privilegePreflightRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&input); err != nil || input.PluginID == "" || input.Action == "" {
+		writeError(w, http.StatusBadRequest, "请选择需要授权的系统操作。")
+		return
+	}
+	response, account, source := s.buildPrivilegePreflight(r, input)
+	if !response.Available {
+		writeJSON(w, http.StatusOK, response)
+		return
+	}
+	intent, err := s.privilegeStore.createIntent(input.PluginID, input.Action, input.PlanID, account, source, response.Authorization)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	response.IntentID = intent.ID
+	response.ExpiresAt = intent.ExpiresAt.Format(time.RFC3339)
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (s *server) buildPrivilegePreflight(r *http.Request, input privilegePreflightRequest) (privilegePreflightResponse, string, string) {
+	response := privilegePreflightResponse{Authorization: "unavailable", Title: "系统权限请求"}
+	status, err := s.auth.Status(s.authToken(r))
+	if err != nil {
+		response.Reason = "无法读取当前账户权限"
+		return response, "", ""
+	}
+	account := status.Account
+	if account == "" {
+		account = "local"
+	}
+	source := privilegeRequestSource(r)
+	if !s.localPrivilegeRequest(r) {
+		response.Description = "系统权限只能在本机桌面工作台中请求。"
+		response.Reason = "当前访问不是受信任的本机回环连接，或工作台已禁用系统权限。请在运行 AlemonX 的设备上打开工作台后重试。"
+		return response, account, source
+	}
+	if status.Enabled && (!status.Authenticated || !s.auth.Authorize(s.authToken(r), "system.manage")) {
+		response.Reason = "当前账户没有系统变更权限。"
+		return response, account, source
+	}
+	switch {
+	case input.PluginID == "alemonx-qq" && input.Action == system.NapCatAPTDependencyAction:
+		response.Title = "授权安装 NapCat Linux 系统依赖"
+		response.Description = "将以当前系统账户通过 APT 安装固定的 xvfb、libnss3 和 libgbm1。密码仅用于本次授权。"
+		if !status.Enabled || !status.Authenticated || !status.SuperAdmin {
+			response.Reason = "只有已登录的超级管理员可以安装系统依赖。"
+			return response, account, source
+		}
+		if runtime.GOOS != "linux" {
+			response.Reason = "NapCat 工作台密码授权仅适用于 Debian/Ubuntu Linux；当前平台请使用对应的系统安装方式。"
+			return response, account, source
+		}
+		plugin, findErr := s.plugins.Find(input.PluginID)
+		if findErr != nil || plugin.Online || !plugin.Enabled {
+			response.Reason = "NapCat QQ 系统插件未安装或已停用。"
+			return response, account, source
+		}
+		response.Available, response.Authorization = true, "password"
+	case input.PluginID == "alemonx-network" && (input.Action == "apply-plan" || input.Action == "undo-last"):
+		response.Title = "授权网络系统变更"
+		response.Description = "工作台将按已确认的网络变更计划请求系统授权。"
+		if input.Action == "apply-plan" {
+			if input.PlanID == "" {
+				response.Reason = "请选择工作台签发的网络变更计划。"
+				return response, account, source
+			}
+			if _, planErr := s.privilegeStore.peekNetworkPlan(input.PlanID, account); planErr != nil {
+				response.Reason = planErr.Error()
+				return response, account, source
+			}
+		}
+		if availabilityErr := s.plugins.PrivilegeAvailability(input.PluginID, input.Action); availabilityErr != nil {
+			response.Reason = availabilityErr.Error()
+			return response, account, source
+		}
+		response.Available = true
+		switch runtime.GOOS {
+		case "darwin":
+			response.Authorization = "password"
+			response.Description += " 将在工作台中要求输入一次 macOS 管理员密码。"
+		case "windows":
+			response.Authorization = "native-uac"
+			response.Description += " 确认后 Windows 将显示原生 UAC 授权窗口。"
+		case "linux":
+			response.Authorization = "polkit"
+			response.Description += " 确认后 Linux 将显示原生 Polkit 授权窗口。"
+		default:
+			response.Available, response.Authorization, response.Reason = false, "unavailable", "当前平台没有可用的系统授权方式。"
+		}
+	default:
+		response.Reason = "该操作没有宿主审核的系统权限策略。"
+	}
+	return response, account, source
+}
+
+func privilegeRequestSource(r *http.Request) string {
+	host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
+	if err != nil {
+		return ""
+	}
+	return host
+}
+
 func (s *server) privilegedStatusHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
@@ -1986,6 +2171,11 @@ func (s *server) handleApprovedSudoAction(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, "NapCat QQ 系统插件未安装或已停用。")
 		return
 	}
+	intent, err := s.privilegeStore.validateIntent(input.AuthorizationID, pluginID, input.Action, "", status.Account, privilegeRequestSource(r), "password")
+	if err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
 	key := sudoAttemptKey(status.Account, r, pluginID, input.Action)
 	if err := s.checkSudoAttempt(key); err != nil {
 		writeError(w, http.StatusTooManyRequests, err.Error())
@@ -2015,6 +2205,10 @@ func (s *server) handleApprovedSudoAction(w http.ResponseWriter, r *http.Request
 			s.recordSudoPasswordFailure(key)
 		} else if runErr == nil {
 			s.clearSudoAttempts(key)
+			if consumeErr := s.privilegeStore.consumeIntent(intent); consumeErr != nil {
+				s.updateOperation(created.ID, 100, "", consumeErr.Error(), true)
+				return
+			}
 		}
 		if runErr != nil {
 			s.updateOperation(created.ID, 100, "", runErr.Error(), true)
@@ -2131,9 +2325,12 @@ func sameUpdateStatus(left, right updateStatusState) bool {
 	return left.Update == right.Update && left.Error == right.Error
 }
 
-func (s *server) refreshUpdateStatus() updateStatusState {
+func (s *server) refreshUpdateStatus(force ...bool) updateStatusState {
 	next := updateStatusState{Update: releases.Update{Current: s.version}, CheckedAt: time.Now().UTC()}
 	update, err := releases.SetupUpdate(s.version)
+	if len(force) > 0 && force[0] {
+		update, err = releases.SetupUpdateFresh(s.version)
+	}
 	if err != nil {
 		next.Error = safeStoreError(err)
 	} else {
@@ -2484,7 +2681,7 @@ func (s *server) updateHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	status := s.currentUpdateStatus()
 	if r.URL.Query().Get("refresh") == "1" {
-		status = s.refreshUpdateStatus()
+		status = s.refreshUpdateStatus(true)
 	}
 	transaction, exists, transactionErr := system.ReadUpdateTransaction()
 	if transactionErr != nil {
@@ -2630,8 +2827,11 @@ func (s *server) downloadUpdateHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "未找到当前系统对应的更新包，请使用手动更新。")
 		return
 	}
-	transaction := system.UpdateTransaction{Phase: system.UpdatePhaseDownloading, TargetVersion: update.Latest, PreviousVersion: s.version, Port: updateRequestPort(r)}
-	_ = system.SaveUpdateTransaction(transaction)
+	transaction := system.UpdateTransaction{Phase: system.UpdatePhaseDownloading, TargetVersion: update.Latest, PreviousVersion: s.version, Port: updateRequestPort(r), Runtime: system.UpdateRuntime()}
+	if err := system.SaveUpdateTransaction(transaction); err != nil {
+		writeError(w, http.StatusInternalServerError, "无法保存更新事务："+err.Error())
+		return
+	}
 	path, err := system.DownloadUpdate(update.DownloadURL, update.AssetName, update.SHA256, update.Latest)
 	if err != nil {
 		transaction.Phase, transaction.Error = system.UpdatePhaseFailed, err.Error()
@@ -2666,8 +2866,11 @@ func (s *server) applyUpdateHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "更新包尚未下载完成，请先下载。")
 		return
 	}
-	transaction := system.UpdateTransaction{Phase: system.UpdatePhaseApplying, TargetVersion: update.Version, PreviousVersion: s.version, ArchivePath: path, Port: updateRequestPort(r)}
-	_ = system.SaveUpdateTransaction(transaction)
+	transaction := system.UpdateTransaction{Phase: system.UpdatePhaseApplying, TargetVersion: update.Version, PreviousVersion: s.version, ArchivePath: path, Port: updateRequestPort(r), Runtime: system.UpdateRuntime()}
+	if err := system.SaveUpdateTransaction(transaction); err != nil {
+		writeError(w, http.StatusInternalServerError, "无法保存更新事务："+err.Error())
+		return
+	}
 	applied, err := system.ApplyUpdateFile(path)
 	if err != nil {
 		transaction.Phase, transaction.Error = system.UpdatePhaseFailed, err.Error()
@@ -2677,7 +2880,15 @@ func (s *server) applyUpdateHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	transaction.Executable, transaction.BackupPath = applied.Executable, applied.BackupPath
 	transaction.Phase, transaction.Error = system.UpdatePhaseRestarting, ""
-	_ = system.SaveUpdateTransaction(transaction)
+	if err := system.SaveUpdateTransaction(transaction); err != nil {
+		rollbackErr := system.RollbackAppliedUpdate(transaction, err)
+		if rollbackErr != nil {
+			writeError(w, http.StatusInternalServerError, "更新事务无法保存且回滚失败："+rollbackErr.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "更新事务无法保存，已恢复旧版本："+err.Error())
+		return
+	}
 	if err := system.ScheduleRestart(); err != nil {
 		if rollbackErr := system.RollbackAppliedUpdate(transaction, err); rollbackErr != nil {
 			writeError(w, http.StatusInternalServerError, "更新已完成，但无法自动重启且回滚失败："+rollbackErr.Error())
@@ -2744,7 +2955,7 @@ func (s *server) loadUpdateHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 	if !isSupportedUpdateArchive(header.Filename) {
-		writeError(w, http.StatusBadRequest, "更新包应为 GitHub Release 下载的 .zip、.tgz 或 .tar.gz 文件。")
+		writeError(w, http.StatusBadRequest, "更新包应为 GitHub Release 下载的 .zip 文件。")
 		return
 	}
 	if header.Size <= 0 {
@@ -2771,16 +2982,23 @@ func (s *server) loadUpdateHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	// Upload only stages the archive; the operator confirms installation via
 	// /api/v1/update/apply, which reuses the verified apply+restart path.
-	if _, err := system.StageUploadedUpdate(path, header.Filename); err != nil {
+	staged, err := system.StageUploadedUpdate(path, header.Filename, r.FormValue("version"))
+	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"staged": "true", "filename": filepath.Base(header.Filename), "output": "更新包已上传，确认后才会安装并重启。"})
+	transaction := system.UpdateTransaction{Phase: system.UpdatePhaseStaged, TargetVersion: staged.Version, PreviousVersion: s.version, ArchivePath: staged.Path, Port: updateRequestPort(r), Runtime: system.UpdateRuntime()}
+	if err := system.SaveUpdateTransaction(transaction); err != nil {
+		_ = system.ClearPendingUpdate()
+		writeError(w, http.StatusInternalServerError, "无法保存更新事务："+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"staged": "true", "filename": filepath.Base(header.Filename), "version": staged.Version, "output": "更新包已上传并通过平台校验，确认后才会安装并重启。"})
 }
 
 func isSupportedUpdateArchive(name string) bool {
 	lower := strings.ToLower(strings.TrimSpace(name))
-	return strings.HasSuffix(lower, ".zip") || strings.HasSuffix(lower, ".tar.gz") || strings.HasSuffix(lower, ".tgz")
+	return strings.HasSuffix(lower, ".zip")
 }
 
 func (s *server) robotHandler(w http.ResponseWriter, r *http.Request) {

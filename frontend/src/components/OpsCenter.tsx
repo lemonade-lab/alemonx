@@ -217,7 +217,7 @@ export function OpsCenter({ root, onBack }: { root: string; onBack?: () => void 
   }
   return (
     <section
-      className="workspace-content system-feature-page mx-auto max-w-215"
+      className="workspace-content system-feature-page ops-panel mx-auto max-w-215"
       aria-label="运维中心"
     >
       <header className="system-feature-header">
@@ -259,7 +259,7 @@ export function OpsCenter({ root, onBack }: { root: string; onBack?: () => void 
         </div>
       </header>
       {metrics && (
-        <div className="mx-2.5 mb-4 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+        <div className="ops-metrics mx-2.5 mb-4 grid grid-cols-2 gap-3">
           {METRIC_ITEMS.map(({ key, label }) => (
             <div
               className="rounded-lg border border-(--theme-border-default) bg-(--theme-surface-panel) p-3"
@@ -280,7 +280,7 @@ export function OpsCenter({ root, onBack }: { root: string; onBack?: () => void 
           <strong className="text-(--theme-text-strong)">执行租约</strong>
           <span>{leases.length ? `${leases.length} 个活动租约` : '暂无租约'}</span>
         </div>
-        <div className="grid gap-2 sm:grid-cols-2">
+        <div className="ops-lease-grid grid gap-2">
           {leases.slice(0, 4).map(lease => (
             <div className="rounded border border-(--theme-border-subtle) px-2 py-1.5" key={lease.key}>
               <div className="flex items-center justify-between gap-2">
@@ -292,7 +292,7 @@ export function OpsCenter({ root, onBack }: { root: string; onBack?: () => void 
           ))}
         </div>
       </div>
-      <div className="mx-2.5 grid gap-4 lg:grid-cols-2">
+      <div className="ops-event-grid mx-2.5 grid gap-4">
         <section className="rounded-lg border border-(--theme-border-default) bg-(--theme-surface-panel) p-4">
           <h2 className="mb-3 text-sm font-semibold text-(--theme-text-strong)">
             实时事件
@@ -428,7 +428,7 @@ export function OpsCenter({ root, onBack }: { root: string; onBack?: () => void 
 			  <strong className="text-xs text-(--theme-text-strong)">Canary 准入检查</strong>
 			  <Badge text={readiness.ready ? 'ready' : 'blocked'} tone={readiness.ready ? 'success' : 'warning'} />
 			</div>
-			<div className="mt-2 grid gap-1 sm:grid-cols-2">
+			<div className="ops-readiness-grid mt-2 grid gap-1">
 			  {readiness.checks.map(check => (
 				<div className="flex items-center gap-1.5 text-[11px] text-(--theme-text-secondary)" key={check.name} title={check.detail}>
 				  <span className={check.passed ? 'text-(--theme-success-text)' : 'text-(--theme-warning-text)'}>{check.passed ? '✓' : '!'}</span>
@@ -450,8 +450,8 @@ export function OpsCenter({ root, onBack }: { root: string; onBack?: () => void 
             保存策略
           </button>
         </header>
-        <div className="grid gap-6 lg:grid-cols-2">
-          <div className="grid content-start gap-4 sm:grid-cols-2">
+        <div className="ops-policy-grid grid gap-6">
+          <div className="ops-policy-fields grid content-start gap-4">
             <label className="grid gap-1.5 text-xs text-(--theme-text-secondary)">
               模式
               <select
@@ -546,7 +546,7 @@ export function OpsCenter({ root, onBack }: { root: string; onBack?: () => void 
         </div>
       </section>
       {(alerts.length > 0 || audits.length > 0) && (
-        <div className="mx-2.5 mt-4 grid gap-4 lg:grid-cols-2">
+        <div className="ops-audit-grid mx-2.5 mt-4 grid gap-4">
           <section className="rounded-lg border border-(--theme-border-default) bg-(--theme-surface-panel) p-4">
             <h2 className="mb-3 text-sm font-semibold text-(--theme-text-strong)">
               告警中心

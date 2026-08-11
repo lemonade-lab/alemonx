@@ -3,7 +3,7 @@ import { useAutoSave } from '../hooks/useAutoSave'
 import {
   useCallback,
   useEffect,
-  useLayoutEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -16,6 +16,15 @@ import {
   type SyntheticEvent
 } from 'react'
 import { useDispatch, useSelector } from 'react-redux'
+import { useLocation, useNavigate } from 'react-router-dom'
+import {
+  readDashboardNavigation,
+  writeDashboardNavigation,
+  type DashboardBuildMode,
+  type DashboardConfigEditor,
+  type DashboardPage,
+  type DashboardSection
+} from '../lib/dashboardNavigation'
 import cn from 'classnames'
 import Markdown from 'markdown-to-jsx'
 import {
@@ -78,7 +87,6 @@ import {
   Waypoints,
   Wifi,
   X,
-  Minus,
   type LucideIcon
 } from 'lucide-react'
 import { RobotConfigForm } from './RobotConfigForm'
@@ -102,11 +110,7 @@ import { AccountManagementPage } from './AccountManagement'
 import { RobotGitControl } from './RobotGitControl'
 import { useIsMobileViewport } from '../hooks/useIsMobileViewport'
 import { TestCenter } from './TestCenter'
-import {
-  DesktopWindow,
-  WindowResizeHandles,
-  type ResizeCorner
-} from './DesktopWindow'
+import { DesktopWindow } from './DesktopWindow'
 import { SSHControl } from './SSHControl'
 import { ConfigFieldsEditor, ConfigSourceLinks } from './PackageConfigFields'
 import { sameConfigValues } from './configFieldUtils'
@@ -196,11 +200,12 @@ type CatalogItem = {
   install: string
 }
 type CatalogGroup = { title: string; items: CatalogItem[] }
-type Page = 'robot' | 'build' | 'plugins' | 'connections'
-type Section = 'backpack' | 'config' | 'npmrc' | 'env' | 'runtime'
+type Page = DashboardPage
+type Section = DashboardSection
 type Project = { id: string; path: string; name: string; pinned?: boolean }
 type SystemFeature = string
 type SystemWindowState = { minimized: boolean }
+
 type FloatingWindowID =
   | 'terminal'
   | 'git'
@@ -922,7 +927,15 @@ export function Dashboard({
   onWindowStateChange
 }: Props) {
   const dispatch = useDispatch()
-  const [page, setPage] = useStoreState<Page>('robot')
+  const navigate = useNavigate()
+  const location = useLocation()
+  const navigationFromURL = useMemo(
+    () => readDashboardNavigation(location.search),
+    [location.search]
+  )
+  const [page, setPage] = useStoreState<Page>(
+    () => navigationFromURL.page
+  )
   const [sidebarCollapsed, setSidebarCollapsed] = useStoreState(false)
   const [robotNavigationHidden, setRobotNavigationHidden] = useStoreState(false)
   const [systemFeature, setSystemFeature] = useStoreState<SystemFeature | null>(
@@ -933,7 +946,9 @@ export function Dashboard({
   const [systemWindows, setSystemWindows] = useStoreState<
     Record<SystemFeature, SystemWindowState>
   >({})
-  const [section, setSection] = useStoreState<Section>('runtime')
+  const [section, setSection] = useStoreState<Section>(
+    () => navigationFromURL.section
+  )
   const [file, setFile] = useStoreState('.npmrc')
   const [output, setOutput] = useStoreState('')
   const [outputFailed, setOutputFailed] = useStoreState(false)
@@ -942,12 +957,10 @@ export function Dashboard({
   const [busy, setBusy] = useStoreState(false)
   const [catalogTitle, setCatalogTitle] = useStoreState('')
   const [catalogItem, setCatalogItem] = useStoreState<CatalogItem | null>(null)
-  const [configEditor, setConfigEditor] = useStoreState<'visual' | 'text'>(
-    'visual'
-  )
-  const [buildMode, setBuildMode] = useStoreState<'manifest' | 'npm' | 'git'>(
-    'git'
-  )
+  const [configEditor, setConfigEditor] =
+    useStoreState<DashboardConfigEditor>(() => navigationFromURL.configEditor)
+  const [buildMode, setBuildMode] =
+    useStoreState<DashboardBuildMode>(() => navigationFromURL.buildMode)
   const [releaseVersion, setReleaseVersion] = useStoreState('')
   const [directoryPickerOpen, setDirectoryPickerOpen] = useStoreState(false)
   const [cloneProgress, setCloneProgress] = useStoreState(0)
@@ -997,11 +1010,15 @@ export function Dashboard({
   const [pendingProjectRemoval, setPendingProjectRemoval] = useStoreState<
     string | null
   >(null)
-  const [aiOpen, setAIOpen] = useStoreState(false)
+  const [aiOpen, setAIOpen] = useStoreState(
+    () => navigationFromURL.agentOpen
+  )
   const [agentSessions, setAgentSessions] = useStoreState<
     Array<{ id: string; title: string; root: string; updated: string }>
   >([])
-  const [agentSessionId, setAgentSessionId] = useStoreState('')
+  const [agentSessionId, setAgentSessionId] = useStoreState(
+    () => navigationFromURL.sessionID
+  )
   const [renameTarget, setRenameTarget] = useStoreState<{
     id: string
     title: string
@@ -1122,7 +1139,7 @@ export function Dashboard({
     }
   }, [loadAgentSessions, setAgentSessionId])
   const environmentChecked = useRef(false)
-  const rootParamHandled = useRef(false)
+  const pendingRootValidation = useRef<string | null>(null)
   const eventsRef = useRef<EventSource | null>(null)
   const opsRefreshTimer = useRef<number | null>(null)
   const rawProjects = useSelector(
@@ -1143,6 +1160,106 @@ export function Dashboard({
   const activeProject = projects.find(item => item.id === activeProjectID)
   const root = activeProject?.path ?? ''
   const draftKey = `${root}:${file}`
+  const applyingURLNavigation = useRef(false)
+  const lastURLNavigationSearch = useRef(location.search)
+  const pendingHistoryNavigation = useRef(false)
+
+  // User-initiated page changes should behave like ordinary browser navigation;
+  // defaults, capability checks and URL normalisation intentionally replace.
+  const markUserNavigation = useCallback(() => {
+    pendingHistoryNavigation.current = true
+  }, [])
+
+  // URL is the durable source for navigation only. Effects triggered by a
+  // browser back/forward action update state first; the following state-to-URL
+  // effect then deliberately skips one turn to avoid replacing that history
+  // entry with stale state.
+  useEffect(() => {
+    if (lastURLNavigationSearch.current === location.search) return
+    lastURLNavigationSearch.current = location.search
+    let changed = false
+    if (page !== navigationFromURL.page) {
+      setPage(navigationFromURL.page)
+      changed = true
+    }
+    if (section !== navigationFromURL.section) {
+      setSection(navigationFromURL.section)
+      changed = true
+    }
+    if (buildMode !== navigationFromURL.buildMode) {
+      setBuildMode(navigationFromURL.buildMode)
+      changed = true
+    }
+    if (configEditor !== navigationFromURL.configEditor) {
+      setConfigEditor(navigationFromURL.configEditor)
+      changed = true
+    }
+    if (aiOpen !== navigationFromURL.agentOpen) {
+      setAIOpen(navigationFromURL.agentOpen)
+      changed = true
+    }
+    if (agentSessionId !== navigationFromURL.sessionID) {
+      setAgentSessionId(navigationFromURL.sessionID)
+      changed = true
+    }
+    if (changed) applyingURLNavigation.current = true
+  }, [
+    agentSessionId,
+    aiOpen,
+    buildMode,
+    configEditor,
+    location.search,
+    navigationFromURL,
+    page,
+    section,
+    setAgentSessionId,
+    setAIOpen,
+    setBuildMode,
+    setConfigEditor,
+    setPage,
+    setSection
+  ])
+
+  useEffect(() => {
+    if (applyingURLNavigation.current) {
+      applyingURLNavigation.current = false
+      return
+    }
+    // Do not replace an incoming root before its project has been selected or
+    // validated. This makes direct links and browser back/forward deterministic.
+    if (navigationFromURL.root && navigationFromURL.root !== root) return
+    const search = writeDashboardNavigation(location.search, {
+      root,
+      page,
+      section,
+      buildMode,
+      configEditor,
+      agentOpen: aiOpen,
+      sessionID: agentSessionId
+    })
+    if (search === location.search) {
+      pendingHistoryNavigation.current = false
+      return
+    }
+    navigate(
+      { pathname: location.pathname, search, hash: location.hash },
+      { replace: !pendingHistoryNavigation.current }
+    )
+    pendingHistoryNavigation.current = false
+  }, [
+    agentSessionId,
+    aiOpen,
+    buildMode,
+    configEditor,
+    location.hash,
+    location.pathname,
+    location.search,
+    navigate,
+    navigationFromURL.root,
+    page,
+    root,
+    section
+  ])
   const content = useSelector((state: RootState) =>
     file === 'alemon.config.yaml'
       ? (state.workspace.robotConfigs[root] ?? '')
@@ -1710,8 +1827,9 @@ export function Dashboard({
   }
 
   useEffect(() => {
-    if (defaultPage === 'robot') setPage('robot')
-  }, [defaultPage, setPage])
+    if (defaultPage === 'robot' && !navigationFromURL.hasPage)
+      setPage('robot')
+  }, [defaultPage, navigationFromURL.hasPage, setPage])
   // One durable event gateway owns the Dashboard's robot, ops, system and
   // plugin notifications. Its cursor is carried in the reconnect URL so a
   // temporary network loss replays persisted events before live delivery.
@@ -1924,19 +2042,21 @@ export function Dashboard({
     }
   }, [dispatch])
 
-  // Open /dashboard/robot?root=<path> links by adding that directory (if it is
-  // not already listed) and selecting it, restoring the pre-refactor behaviour
-  // of the "前往管理机器人" links generated after project creation.
+  // A root link may arrive during initial hydration, after a browser back/
+  // forward action, or from an edited address bar. Resolve it every time the
+  // query changes instead of treating it as a one-shot bootstrap parameter.
   useEffect(() => {
-    if (rootParamHandled.current || !projects) return
-    rootParamHandled.current = true
-    const param = new URLSearchParams(window.location.search).get('root')
-    if (!param) return
-    const path = param
+    const path = navigationFromURL.root
+    if (!path || path === root) {
+      pendingRootValidation.current = null
+      return
+    }
     if (projects.some(item => item.path === path)) {
       dispatch(selectProject(projects.find(item => item.path === path)!.id))
       return
     }
+    if (pendingRootValidation.current === path) return
+    pendingRootValidation.current = path
     void (async () => {
       try {
         const response = await fetch(
@@ -1945,12 +2065,26 @@ export function Dashboard({
         const data = (await response.json()) as { valid?: boolean }
         if (response.ok && data.valid === true) {
           dispatch(addProjects([{ id: path, path, name: projectName(path) }]))
+          return
         }
       } catch {
         // A missing/invalid directory must not break the dashboard render.
       }
+      if (pendingRootValidation.current !== path) return
+      pendingRootValidation.current = null
+      const parameters = new URLSearchParams(location.search)
+      parameters.delete('root')
+      const search = parameters.toString()
+      navigate(
+        {
+          pathname: location.pathname,
+          search: search ? `?${search}` : '',
+          hash: location.hash
+        },
+        { replace: true }
+      )
     })()
-  }, [dispatch, projects])
+  }, [dispatch, location.hash, location.pathname, location.search, navigate, navigationFromURL.root, projects, root])
   useEffect(() => {
     if (report || checking || environmentChecked.current) return
     environmentChecked.current = true
@@ -2178,6 +2312,7 @@ export function Dashboard({
       setInvalidDirectory(invalid)
       return
     }
+    markUserNavigation()
     setPage('robot')
     setSection('config')
     setOutput('')
@@ -2265,6 +2400,7 @@ export function Dashboard({
   }
 
   function openSection(nextSection: Section) {
+    markUserNavigation()
     closeTemporaryContentPage()
     setSection(nextSection)
     setOutput('')
@@ -2278,10 +2414,16 @@ export function Dashboard({
     }
   }
   function openTextConfig() {
+    markUserNavigation()
     setConfigEditor('text')
     setFile('alemon.config.yaml')
   }
+  function openVisualConfig() {
+    markUserNavigation()
+    setConfigEditor('visual')
+  }
   function selectPage(nextPage: Page) {
+    markUserNavigation()
     closeTemporaryContentPage()
     setSystemFeature(null)
     setSystemWindowFeature(null)
@@ -2291,6 +2433,7 @@ export function Dashboard({
     setOutput('')
   }
   function openAI(sessionID?: string) {
+    markUserNavigation()
     closeTemporaryContentPage()
     setSystemFeature(null)
     setPage('robot')
@@ -2407,7 +2550,7 @@ export function Dashboard({
                 toolbar={
                   <EditorMode
                     active={configEditor}
-                    onVisual={() => setConfigEditor('visual')}
+                    onVisual={openVisualConfig}
                     onText={openTextConfig}
                   />
                 }
@@ -2423,7 +2566,7 @@ export function Dashboard({
               toolbar={
                 <EditorMode
                   active={configEditor}
-                  onVisual={() => setConfigEditor('visual')}
+                  onVisual={openVisualConfig}
                   onText={openTextConfig}
                 />
               }
@@ -2582,6 +2725,7 @@ export function Dashboard({
       <OpsOverview
         projects={projects}
         onOpenProject={id => {
+          markUserNavigation()
           dispatch(selectProject(id))
           closeSystemWindow(feature)
           setPage('robot')
@@ -2617,6 +2761,7 @@ export function Dashboard({
       <OpsOverview
         projects={projects}
         onOpenProject={id => {
+          markUserNavigation()
           dispatch(selectProject(id))
           setSystemFeature(null)
           setPage('robot')
@@ -2714,7 +2859,11 @@ export function Dashboard({
   return (
     <>
       <main className="guide-shell">
-        <section className="guide-window dashboard-window" style={windowStyle}>
+        <section
+          className="guide-window dashboard-window"
+          style={windowStyle}
+          data-window-container="workbench"
+        >
           <header className="topbar flex min-h-11 min-w-0 items-center justify-between gap-2 border-b border-slate-200 bg-white/90 px-3 dark:border-slate-700">
             <div className="flex min-w-0 flex-1 items-center gap-1.5">
               <SetupUpdateButton />
@@ -3030,6 +3179,7 @@ export function Dashboard({
               onAdd={chooseDirectories}
               onClone={() => setGitCloneOpen(true)}
               onSelect={id => {
+                markUserNavigation()
                 dispatch(selectProject(id))
                 // Selecting a robot directory always returns to its runtime.
                 setAIOpen(false)
@@ -3074,6 +3224,7 @@ export function Dashboard({
                     onPage={selectPage}
                     onSection={openSection}
                     onBuildMode={mode => {
+                      markUserNavigation()
                       setBuildMode(mode)
                       setOutput('')
                     }}
@@ -5269,7 +5420,7 @@ function SystemPluginCenter({
                       {plugin.name}
                     </strong>
                     {plugin.description && (
-                      <span className="hidden truncate text-xs text-slate-400 sm:inline dark:text-slate-500">
+                      <span className="setup-plugin-description hidden truncate text-xs text-slate-400 sm:inline dark:text-slate-500">
                         · {plugin.description}
                       </span>
                     )}
@@ -5325,7 +5476,7 @@ function SystemPluginCenter({
                     size="sm"
                     disabled={installing}
                     onClick={() => void install(plugin)}
-                    className="h-7 shrink-0 rounded-md px-3 text-xs font-medium"
+                    className="system-feature-actions h-7 shrink-0 rounded-md px-3 text-xs font-medium"
                   >
                     {installing ? (
                       <>
@@ -5337,7 +5488,7 @@ function SystemPluginCenter({
                     )}
                   </Button>
                 ) : (
-                  <div className="flex shrink-0 gap-1.5">
+                  <div className="system-feature-actions flex shrink-0 gap-1.5">
                     <Button
                       variant="secondary"
                       size="sm"
@@ -8355,7 +8506,8 @@ function ReadonlyConsole({
   )
 }
 
-// Kept as an exported compatibility surface while internal callers use DesktopWindow.
+// Kept as an exported compatibility surface while every caller uses the
+// shared window chrome, geometry and container-query contract.
 export function FloatingWindow({
   open,
   minimized,
@@ -8387,299 +8539,26 @@ export function FloatingWindow({
   height?: number
   children: ReactNode
 }) {
-  const [windowRect, setWindowRect] = useState(() => ({
-    left: initialPosition?.left ?? 64,
-    top: initialPosition?.top ?? 56,
-    width,
-    height
-  }))
-  const [maximized, setMaximized] = useState(false)
-  const restoreRect = useRef<typeof windowRect | null>(null)
-  const windowRef = useRef<HTMLElement>(null)
-  const dragStart = useRef<{
-    x: number
-    y: number
-    left: number
-    top: number
-  } | null>(null)
-  const resizeStart = useRef<{
-    corner: ResizeCorner
-    x: number
-    y: number
-    width: number
-    height: number
-    left: number
-    top: number
-  } | null>(null)
-  useLayoutEffect(() => {
-    if (!open) return
-    const clamp = () => {
-      setWindowRect(current => ({
-        ...current,
-        width: Math.min(
-          Math.max(320, window.innerWidth - 48),
-          Math.max(440, current.width)
-        ),
-        height: Math.min(
-          Math.max(280, window.innerHeight - 48),
-          Math.max(320, current.height)
-        ),
-        left: Math.max(
-          16,
-          Math.min(
-            window.innerWidth -
-              Math.min(
-                Math.max(320, window.innerWidth - 48),
-                Math.max(440, current.width)
-              ) -
-              16,
-            current.left
-          )
-        ),
-        top: Math.max(
-          16,
-          Math.min(
-            window.innerHeight -
-              Math.min(
-                Math.max(280, window.innerHeight - 48),
-                Math.max(320, current.height)
-              ) -
-              16,
-            current.top
-          )
-        )
-      }))
-    }
-    clamp()
-    window.addEventListener('resize', clamp)
-    return () => window.removeEventListener('resize', clamp)
-  }, [height, open, width])
-  const previewMove = (event: ReactPointerEvent<HTMLElement>) => {
-    const start = dragStart.current
-    if (!start) return
-    const left = Math.max(
-      16,
-      Math.min(
-        window.innerWidth - windowRect.width - 16,
-        start.left + event.clientX - start.x
-      )
-    )
-    const top = Math.max(
-      16,
-      Math.min(
-        window.innerHeight - windowRect.height - 16,
-        start.top + event.clientY - start.y
-      )
-    )
-    windowRef.current?.style.setProperty('left', `${left}px`)
-    windowRef.current?.style.setProperty('top', `${top}px`)
-  }
-  const commitMove = (event: ReactPointerEvent<HTMLElement>) => {
-    const start = dragStart.current
-    if (!start) return
-    const left = Math.max(
-      16,
-      Math.min(
-        window.innerWidth - windowRect.width - 16,
-        start.left + event.clientX - start.x
-      )
-    )
-    const top = Math.max(
-      16,
-      Math.min(
-        window.innerHeight - windowRect.height - 16,
-        start.top + event.clientY - start.y
-      )
-    )
-    setWindowRect(current => ({ ...current, left, top }))
-    dragStart.current = null
-  }
-  const cancelMove = () => {
-    const start = dragStart.current
-    if (start) {
-      windowRef.current?.style.setProperty('left', `${start.left}px`)
-      windowRef.current?.style.setProperty('top', `${start.top}px`)
-    }
-    dragStart.current = null
-  }
-  const getResizedRect = (event: ReactPointerEvent<HTMLElement>) => {
-    const start = resizeStart.current
-    if (!start) return null
-    const horizontal = start.corner.endsWith('e') ? 1 : -1
-    const vertical = start.corner.startsWith('s') ? 1 : -1
-    const width = Math.max(
-      440,
-      Math.min(
-        start.corner.endsWith('e')
-          ? window.innerWidth - start.left - 16
-          : start.width + start.left - 16,
-        start.width + horizontal * (event.clientX - start.x)
-      )
-    )
-    const height = Math.max(
-      320,
-      Math.min(
-        start.corner.startsWith('s')
-          ? window.innerHeight - start.top - 16
-          : start.height + start.top - 16,
-        start.height + vertical * (event.clientY - start.y)
-      )
-    )
-    return {
-      width,
-      height,
-      left: start.corner.endsWith('w')
-        ? start.left + start.width - width
-        : start.left,
-      top: start.corner.startsWith('n')
-        ? start.top + start.height - height
-        : start.top
-    }
-  }
-  const previewResize = (event: ReactPointerEvent<HTMLElement>) => {
-    const rect = getResizedRect(event)
-    if (!rect) return
-    windowRef.current?.style.setProperty('width', `${rect.width}px`)
-    windowRef.current?.style.setProperty('height', `${rect.height}px`)
-    windowRef.current?.style.setProperty('left', `${rect.left}px`)
-    windowRef.current?.style.setProperty('top', `${rect.top}px`)
-  }
-  const commitResize = (event: ReactPointerEvent<HTMLElement>) => {
-    const rect = getResizedRect(event)
-    if (!rect) return
-    setWindowRect(current => ({ ...current, ...rect }))
-    resizeStart.current = null
-  }
-  const cancelResize = () => {
-    windowRef.current?.style.removeProperty('width')
-    windowRef.current?.style.removeProperty('height')
-    windowRef.current?.style.removeProperty('left')
-    windowRef.current?.style.removeProperty('top')
-    resizeStart.current = null
-  }
-  const toggleMaximize = () => {
-    if (maximized) {
-      if (restoreRect.current) setWindowRect(restoreRect.current)
-      setMaximized(false)
-      return
-    }
-    restoreRect.current = windowRect
-    setWindowRect({
-      left: 16,
-      top: 16,
-      width: Math.max(440, window.innerWidth - 32),
-      height: Math.max(320, window.innerHeight - 32)
-    })
-    setMaximized(true)
-  }
-  if (!open) return null
+  const id = useId()
   return (
-    <Modal
-      open
+    <DesktopWindow
+      id={`legacy-window-${id}`}
+      open={open}
+      minimized={minimized}
+      title={title}
+      subtitle={subtitle}
+      icon={icon}
+      actions={actions}
+      onClose={onClose}
+      onMinimize={onMinimize}
       zIndex={zIndex}
-      className="floating-window-backdrop"
-      ariaLabel={title}
+      onActivate={onActivate}
+      initialPosition={initialPosition}
+      width={width}
+      height={height}
     >
-      <section
-        ref={windowRef}
-        className="floating-window grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900"
-        style={{ ...windowRect, display: minimized ? 'none' : undefined }}
-        role="dialog"
-        aria-modal="true"
-        aria-label={title}
-        onPointerDownCapture={onActivate}
-        onDoubleClickCapture={event => {
-          const target = event.target as HTMLElement
-          if (
-            !target.closest('.floating-window-header') ||
-            target.closest('button, a, input, select, textarea')
-          )
-            return
-          toggleMaximize()
-        }}
-      >
-        <header
-          className="floating-window-header flex min-h-12 items-center justify-between gap-3 border-b border-slate-200 px-4 dark:border-slate-700"
-          onPointerDown={event => {
-            event.stopPropagation()
-            if ((event.target as HTMLElement).closest('button')) return
-            dragStart.current = {
-              x: event.clientX,
-              y: event.clientY,
-              left: windowRect.left,
-              top: windowRect.top
-            }
-            event.currentTarget.setPointerCapture(event.pointerId)
-          }}
-          onPointerMove={event => {
-            event.stopPropagation()
-            previewMove(event)
-          }}
-          onPointerUp={event => {
-            event.stopPropagation()
-            commitMove(event)
-          }}
-          onPointerCancel={event => {
-            event.stopPropagation()
-            cancelMove()
-          }}
-        >
-          <div className="flex min-w-0 items-center gap-2">
-            {icon}
-            <span className="grid min-w-0 gap-0.5">
-              <strong className="truncate text-sm font-semibold text-slate-900 dark:text-slate-100">
-                {title}
-              </strong>
-              {subtitle && (
-                <small className="truncate text-xs text-slate-400">
-                  {subtitle}
-                </small>
-              )}
-            </span>
-          </div>
-          <div className="flex items-center gap-1">
-            {actions}
-            <button
-              className="icon-button size-8 p-0"
-              onClick={onMinimize}
-              aria-label={`最小化${title}`}
-              title="最小化"
-            >
-              <Minus className="size-4" />
-            </button>
-            <button
-              className="icon-button size-8 p-0"
-              onClick={onClose}
-              aria-label={`关闭${title}`}
-              title="关闭"
-            >
-              <X className="size-4" />
-            </button>
-          </div>
-        </header>
-        {children}
-        <WindowResizeHandles
-          label={title}
-          onStart={(corner, event) => {
-            event.preventDefault()
-            event.stopPropagation()
-            resizeStart.current = {
-              corner,
-              x: event.clientX,
-              y: event.clientY,
-              width: windowRect.width,
-              height: windowRect.height,
-              left: windowRect.left,
-              top: windowRect.top
-            }
-            event.currentTarget.setPointerCapture(event.pointerId)
-          }}
-          onMove={previewResize}
-          onEnd={commitResize}
-          onCancel={cancelResize}
-        />
-      </section>
-    </Modal>
+      {children}
+    </DesktopWindow>
   )
 }
 

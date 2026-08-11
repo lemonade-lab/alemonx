@@ -334,7 +334,7 @@ export default function ChatWindow({
         // 消息管理
       }
       {pageType === 'public' && (
-        <section className="w-56 hidden md:flex flex-col bg-[var(--editorWidget-background)] border-r border-[--panel-border] p-2 gradient-border">
+        <section className="testone-channel-rail w-56 flex flex-col bg-[var(--editorWidget-background)] border-r border-[--panel-border] p-2 gradient-border">
           <div className="flex-1 flex-col overflow-y-auto scrollbar gap-2">
             {Array.isArray(channels) &&
               channels.map((c, index) => (
@@ -583,7 +583,7 @@ export default function ChatWindow({
         </Suspense>
       </section>
       {/* 桌面端任务管理（移动端隐藏） */}
-      <section className="w-56 hidden sm:flex flex-col bg-[var(--editorWidget-background)] border-l border-[--panel-border] p-2 gradient-border">
+      <section className="testone-task-rail w-56 flex flex-col bg-[var(--editorWidget-background)] border-l border-[--panel-border] p-2 gradient-border">
         <TimerManager
           commandTasksInfo={commandTasksInfo}
           onDel={t => setTaskToDelete(t)}

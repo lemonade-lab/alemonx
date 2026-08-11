@@ -166,19 +166,30 @@ func newSudoActionTestServer(t *testing.T, run func(context.Context, []byte) (st
 	if err != nil {
 		t.Fatal(err)
 	}
+	store, err := newPrivilegeStoreAt(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(store.close)
 	return &server{
 		plugins:                  setupplugin.NewRegistry(root),
 		auth:                     identity,
 		operations:               []operationTask{},
 		events:                   newRobotEventHub(),
 		sudoAttempts:             map[string]sudoAttempt{},
+		privilegeStore:           store,
 		runNapcatAPTDependencies: run,
 	}, token
 }
 
-func sudoActionRequest(t *testing.T, token, remote, password string, confirm bool) *http.Request {
+func sudoActionRequest(t *testing.T, s *server, token, remote, password string, confirm bool) *http.Request {
 	t.Helper()
-	body := fmt.Sprintf(`{"action":"napcat-install-dependencies","confirm":%t,"sudoPassword":%q}`, confirm, password)
+	host, _, _ := net.SplitHostPort(remote)
+	intent, err := s.privilegeStore.createIntent("alemonx-qq", system.NapCatAPTDependencyAction, "", "root", host, "password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := fmt.Sprintf(`{"action":"napcat-install-dependencies","confirm":%t,"sudoPassword":%q,"authorizationId":%q}`, confirm, password, intent.ID)
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/setup/plugins/alemonx-qq/actions", strings.NewReader(body))
 	request.RemoteAddr = remote
 	request.AddCookie(&http.Cookie{Name: authCookieName, Value: token})
@@ -215,10 +226,10 @@ func TestNapcatSudoActionRequiresLocalSuperAdminAndConfirmation(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, request := range map[string]*http.Request{
-		"remote":           sudoActionRequest(t, token, "203.0.113.10:4242", "password", true),
-		"unconfirmed":      sudoActionRequest(t, token, "127.0.0.1:4242", "password", false),
-		"unauthenticated":  sudoActionRequest(t, "", "127.0.0.1:4242", "password", true),
-		"ordinary-account": sudoActionRequest(t, operatorToken, "127.0.0.1:4242", "password", true),
+		"remote":           sudoActionRequest(t, s, token, "203.0.113.10:4242", "password", true),
+		"unconfirmed":      sudoActionRequest(t, s, token, "127.0.0.1:4242", "password", false),
+		"unauthenticated":  sudoActionRequest(t, s, "", "127.0.0.1:4242", "password", true),
+		"ordinary-account": sudoActionRequest(t, s, operatorToken, "127.0.0.1:4242", "password", true),
 	} {
 		t.Run(name, func(t *testing.T) {
 			recorder := httptest.NewRecorder()
@@ -238,7 +249,7 @@ func TestNapcatSudoActionUsesTransientPasswordAndLocksAfterThreeFailures(t *test
 	})
 	for attempt := 0; attempt < 3; attempt++ {
 		recorder := httptest.NewRecorder()
-		s.setupPluginActionHandler(recorder, sudoActionRequest(t, token, "127.0.0.1:4242", "only-once", true))
+		s.setupPluginActionHandler(recorder, sudoActionRequest(t, s, token, "127.0.0.1:4242", "only-once", true))
 		if recorder.Code != http.StatusAccepted {
 			t.Fatalf("attempt %d status = %d, body=%s", attempt+1, recorder.Code, recorder.Body.String())
 		}
@@ -256,9 +267,37 @@ func TestNapcatSudoActionUsesTransientPasswordAndLocksAfterThreeFailures(t *test
 		}
 	}
 	recorder := httptest.NewRecorder()
-	s.setupPluginActionHandler(recorder, sudoActionRequest(t, token, "127.0.0.1:4242", "only-once", true))
+	s.setupPluginActionHandler(recorder, sudoActionRequest(t, s, token, "127.0.0.1:4242", "only-once", true))
 	if recorder.Code != http.StatusTooManyRequests {
 		t.Fatalf("locked attempt status = %d, body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestNapcatSudoActionRequiresAuthorizationIntent(t *testing.T) {
+	s, token := newSudoActionTestServer(t, func(context.Context, []byte) (string, error) {
+		t.Fatal("sudo executor must not run without a preflight intent")
+		return "", nil
+	})
+	body := `{"action":"napcat-install-dependencies","confirm":true,"sudoPassword":"not-forwarded"}`
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/setup/plugins/alemonx-qq/actions", strings.NewReader(body))
+	request.RemoteAddr = "127.0.0.1:4242"
+	request.AddCookie(&http.Cookie{Name: authCookieName, Value: token})
+	recorder := httptest.NewRecorder()
+	s.setupPluginActionHandler(recorder, request)
+	if recorder.Code != http.StatusConflict || !strings.Contains(recorder.Body.String(), "工作台确认") {
+		t.Fatalf("missing intent = %d %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestPrivilegePreflightExplainsRemoteRestriction(t *testing.T) {
+	s, token := newSudoActionTestServer(t, func(context.Context, []byte) (string, error) { return "", nil })
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/system/privileged/preflight", strings.NewReader(`{"pluginId":"alemonx-qq","action":"napcat-install-dependencies"}`))
+	request.RemoteAddr = "203.0.113.10:4242"
+	request.AddCookie(&http.Cookie{Name: authCookieName, Value: token})
+	recorder := httptest.NewRecorder()
+	s.privilegedPreflightHandler(recorder, request)
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"available":false`) || !strings.Contains(recorder.Body.String(), "本机") {
+		t.Fatalf("remote preflight = %d %s", recorder.Code, recorder.Body.String())
 	}
 }
 

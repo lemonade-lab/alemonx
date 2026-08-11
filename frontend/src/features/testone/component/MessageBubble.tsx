@@ -148,7 +148,7 @@ const MARKDOWN_RENDERERS: Record<string, (mdItem: any) => React.ReactNode> = {
       <>
         <Zoom
           style={{ width: `${w}px`, height: `${h}px` }}
-          className="max-w-[15rem] xl:max-w-[20rem] rounded-md"
+          className="testone-media rounded-md"
           src={url}
           alt="image"
         />
@@ -225,7 +225,7 @@ const renderAudio = (item: any): React.ReactNode => {
       <audio
         controls
         preload="metadata"
-        className="max-w-[15rem] xl:max-w-[20rem]"
+        className="testone-media"
         src={src}
       />
     );
@@ -249,7 +249,7 @@ const renderVideo = (item: any): React.ReactNode => {
       <video
         controls
         preload="metadata"
-        className="max-w-[15rem] xl:max-w-[20rem] rounded-md"
+        className="testone-media rounded-md"
         src={src}
       />
     );
@@ -314,7 +314,7 @@ const renderImage = (item: any): React.ReactNode => {
     const url = `data:image/png;base64,${base64String}`;
     return (
       <Zoom
-        className="max-w-[15rem] xl:max-w-[20rem] rounded-md"
+        className="testone-media rounded-md"
         src={url}
         alt="Image"
       />
@@ -334,7 +334,7 @@ const renderImageURL = (item: any): React.ReactNode => {
       const src = `data:${mime};base64,${raw.replace('base64://', '')}`;
       return (
         <Zoom
-          className="max-w-[15rem] xl:max-w-[20rem] rounded-md"
+          className="testone-media rounded-md"
           src={src}
           alt="ImageURL"
         />
@@ -343,7 +343,7 @@ const renderImageURL = (item: any): React.ReactNode => {
     if (!isHttpUrl(raw)) return null;
     return (
       <Zoom
-        className="max-w-[15rem] xl:max-w-[20rem] rounded-md"
+        className="testone-media rounded-md"
         src={raw}
         alt="ImageURL"
       />
@@ -604,7 +604,7 @@ const COMPONENT_RENDERERS: Record<string, RendererFunction> = {
       if (!url) return <span>图片已释放</span>;
       return (
         <Zoom
-          className="max-w-[15rem] xl:max-w-[20rem] rounded-md"
+        className="testone-media rounded-md"
           src={url}
           alt="ImageRef"
         />

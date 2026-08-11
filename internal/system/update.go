@@ -25,6 +25,8 @@ import (
 const maxUpdateSize int64 = 200 << 20
 const updateDownloadTimeout = 10 * time.Minute
 
+var errUpdatePackageManifestMissing = errors.New("更新包缺少版本清单")
+
 type UpdatePhase string
 
 const (
@@ -49,15 +51,56 @@ type UpdateTransaction struct {
 	Executable      string      `json:"executable,omitempty"`
 	BackupPath      string      `json:"backupPath,omitempty"`
 	Port            string      `json:"port,omitempty"`
+	Runtime         string      `json:"runtime,omitempty"`
 	PluginError     string      `json:"pluginError,omitempty"`
 	Error           string      `json:"error,omitempty"`
 	UpdatedAt       time.Time   `json:"updatedAt"`
+}
+
+const (
+	updateRuntimeDirect      = "direct"
+	updateRuntimeSystemd     = "systemd-user"
+	updateRuntimeLaunchAgent = "launch-agent"
+	updateRuntimeTask        = "scheduled-task"
+)
+
+// UpdateRuntime records the supervisor while the old service is still alive.
+// The restart watcher runs after shutdown, when probing the active state would
+// otherwise incorrectly classify a managed service as a direct process.
+func UpdateRuntime() string {
+	switch runtime.GOOS {
+	case "linux":
+		if exec.Command("systemctl", "--user", "is-active", "--quiet", "alx.service").Run() == nil {
+			return updateRuntimeSystemd
+		}
+	case "darwin":
+		target := fmt.Sprintf("gui/%d/%s", os.Getuid(), serviceName)
+		if exec.Command("launchctl", "print", target).Run() == nil {
+			return updateRuntimeLaunchAgent
+		}
+	case "windows":
+		if windowsScheduledTaskInstalled() {
+			return updateRuntimeTask
+		}
+	}
+	return updateRuntimeDirect
 }
 
 type PendingUpdate struct {
 	AssetName string `json:"assetName"`
 	SHA256    string `json:"sha256"`
 	Version   string `json:"version"`
+}
+
+type UpdatePackageManifest struct {
+	Version      string `json:"version"`
+	Platform     string `json:"platform"`
+	Architecture string `json:"architecture"`
+}
+
+type StagedUpdate struct {
+	Path    string
+	Version string
 }
 
 type AppliedUpdate struct {
@@ -251,6 +294,9 @@ func updateCacheBase() (string, error) {
 	if dir := os.Getenv("ALX_TEST_CACHE_DIR"); dir != "" {
 		return dir, nil
 	}
+	if dir := os.Getenv("XDG_CACHE_HOME"); dir != "" {
+		return dir, nil
+	}
 	return os.UserCacheDir()
 }
 
@@ -302,51 +348,115 @@ func ClearPendingUpdate() error {
 // StageUploadedUpdate moves a just-uploaded archive into the verified update
 // cache and records it as pending. Applying it later reuses the exact same
 // apply path as an auto-downloaded release.
-func StageUploadedUpdate(source, filename string) (string, error) {
+func StageUploadedUpdate(source, filename, expectedVersion string) (StagedUpdate, error) {
 	filename = filepath.Base(filename)
 	if filename == "." || filename == "" {
-		return "", errors.New("更新包名称无效")
+		return StagedUpdate{}, errors.New("更新包名称无效")
+	}
+	manifest, err := inspectUpdatePackage(source, expectedVersion)
+	if err != nil {
+		return StagedUpdate{}, err
 	}
 	base, err := updateCacheBase()
 	if err != nil {
-		return "", fmt.Errorf("无法定位应用存储目录：%w", err)
+		return StagedUpdate{}, fmt.Errorf("无法定位应用存储目录：%w", err)
 	}
 	directory := filepath.Join(base, "alemonjs", "alx", "updates")
 	if err := os.MkdirAll(directory, 0700); err != nil {
-		return "", fmt.Errorf("无法创建更新存储目录：%w", err)
+		return StagedUpdate{}, fmt.Errorf("无法创建更新存储目录：%w", err)
 	}
 	path := filepath.Join(directory, filename)
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		return "", err
+		return StagedUpdate{}, err
 	}
 	input, err := os.Open(source)
 	if err != nil {
-		return "", err
+		return StagedUpdate{}, err
 	}
 	defer input.Close()
 	output, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 	if err != nil {
-		return "", err
+		return StagedUpdate{}, err
 	}
-	_, copyErr := io.Copy(output, io.LimitReader(input, maxUpdateSize+1))
+	copied, copyErr := io.Copy(output, io.LimitReader(input, maxUpdateSize+1))
 	closeErr := output.Close()
-	if copyErr != nil || closeErr != nil {
+	if copyErr != nil || closeErr != nil || copied > maxUpdateSize {
 		_ = os.Remove(path)
 		if copyErr != nil {
-			return "", copyErr
+			return StagedUpdate{}, copyErr
 		}
-		return "", closeErr
+		if copied > maxUpdateSize {
+			return StagedUpdate{}, errors.New("更新包超过 200 MB 限制")
+		}
+		return StagedUpdate{}, closeErr
 	}
 	sum, err := sha256File(path)
 	if err != nil {
 		_ = os.Remove(path)
-		return "", err
+		return StagedUpdate{}, err
 	}
-	if err := savePendingUpdate(PendingUpdate{AssetName: filename, SHA256: sum, Version: ""}); err != nil {
+	if err := savePendingUpdate(PendingUpdate{AssetName: filename, SHA256: sum, Version: manifest.Version}); err != nil {
 		_ = os.Remove(path)
-		return "", err
+		return StagedUpdate{}, err
 	}
-	return path, nil
+	return StagedUpdate{Path: path, Version: manifest.Version}, nil
+}
+
+func inspectUpdatePackage(source, expectedVersion string) (UpdatePackageManifest, error) {
+	temporary, err := os.MkdirTemp("", "alx-update-inspect-")
+	if err != nil {
+		return UpdatePackageManifest{}, err
+	}
+	defer os.RemoveAll(temporary)
+	binary, err := releaseBinary(source, temporary)
+	if err != nil {
+		return UpdatePackageManifest{}, fmt.Errorf("更新包无法解压：%w", err)
+	}
+	if err := verifyBinaryPlatform(binary); err != nil {
+		return UpdatePackageManifest{}, err
+	}
+	manifest, err := readUpdatePackageManifest(source)
+	if err != nil {
+		if errors.Is(err, errUpdatePackageManifestMissing) && strings.TrimSpace(expectedVersion) != "" {
+			// Legacy Release archives predate alx-update.json. They remain
+			// installable only when the operator explicitly selected a release
+			// version; post-restart health verification will enforce that target.
+			return UpdatePackageManifest{Version: strings.TrimSpace(expectedVersion), Platform: runtime.GOOS, Architecture: runtime.GOARCH}, nil
+		}
+		return UpdatePackageManifest{}, err
+	}
+	if strings.TrimSpace(manifest.Version) == "" || manifest.Platform != runtime.GOOS || manifest.Architecture != runtime.GOARCH {
+		return UpdatePackageManifest{}, errors.New("更新包版本、系统或架构信息与当前应用不匹配")
+	}
+	return manifest, nil
+}
+
+func readUpdatePackageManifest(source string) (UpdatePackageManifest, error) {
+	if !strings.HasSuffix(strings.ToLower(source), ".zip") {
+		return UpdatePackageManifest{}, errUpdatePackageManifestMissing
+	}
+	archive, err := zip.OpenReader(source)
+	if err != nil {
+		return UpdatePackageManifest{}, errors.New("更新包不是有效的 zip 文件")
+	}
+	defer archive.Close()
+	for _, entry := range archive.File {
+		if entry.FileInfo().IsDir() || filepath.Base(entry.Name) != "alx-update.json" || entry.UncompressedSize64 > 64<<10 {
+			continue
+		}
+		input, err := entry.Open()
+		if err != nil {
+			return UpdatePackageManifest{}, err
+		}
+		body, readErr := io.ReadAll(io.LimitReader(input, 64<<10))
+		_ = input.Close()
+		var manifest UpdatePackageManifest
+		if readErr != nil || json.Unmarshal(body, &manifest) != nil {
+			return UpdatePackageManifest{}, errors.New("更新包版本清单无效")
+		}
+		return manifest, nil
+	}
+	return UpdatePackageManifest{}, errUpdatePackageManifestMissing
 }
 
 func sha256File(path string) (string, error) {
@@ -473,20 +583,13 @@ func WatchUpdate(port string) error {
 }
 
 func restartForUpdate(transaction UpdateTransaction) (*exec.Cmd, error) {
-	switch runtime.GOOS {
-	case "linux":
-		if userSystemdServiceInstalled() {
-			return nil, exec.Command("systemctl", "--user", "restart", "alx.service").Run()
-		}
-	case "darwin":
-		if userLaunchAgentInstalled() {
-			target := fmt.Sprintf("gui/%d/%s", os.Getuid(), serviceName)
-			return nil, exec.Command("launchctl", "kickstart", "-k", target).Run()
-		}
-	case "windows":
-		if windowsScheduledTaskInstalled() {
-			return nil, exec.Command("schtasks", "/Run", "/TN", "ALemonX").Run()
-		}
+	switch transaction.Runtime {
+	case updateRuntimeSystemd:
+		return nil, exec.Command("systemctl", "--user", "restart", "alx.service").Run()
+	case updateRuntimeLaunchAgent:
+		return nil, restartLaunchAgent()
+	case updateRuntimeTask:
+		return nil, exec.Command("schtasks", "/Run", "/TN", "ALemonX").Run()
 	}
 	if transaction.Executable == "" {
 		return nil, errors.New("更新事务缺少可执行文件路径")
@@ -500,6 +603,26 @@ func restartForUpdate(transaction UpdateTransaction) (*exec.Cmd, error) {
 		return nil, err
 	}
 	return command, nil
+}
+
+func restartLaunchAgent() error {
+	path, err := launchAgentPath()
+	if err != nil {
+		return err
+	}
+	target := fmt.Sprintf("gui/%d/%s", os.Getuid(), serviceName)
+	// rollbackUpdate calls bootout to stop the unhealthy service. A plist still
+	// exists after bootout, so kickstart alone would target a service that is no
+	// longer loaded. Bootstrap it again before asking launchd to start it.
+	if exec.Command("launchctl", "print", target).Run() != nil {
+		if output, err := exec.Command("launchctl", "bootstrap", fmt.Sprintf("gui/%d", os.Getuid()), path).CombinedOutput(); err != nil {
+			return fmt.Errorf("重新加载 LaunchAgent 失败：%s", strings.TrimSpace(string(output)))
+		}
+	}
+	if output, err := exec.Command("launchctl", "kickstart", "-k", target).CombinedOutput(); err != nil {
+		return fmt.Errorf("重启 LaunchAgent 失败：%s", strings.TrimSpace(string(output)))
+	}
+	return nil
 }
 
 func waitForUpdateHealth(transaction UpdateTransaction) bool {
@@ -538,7 +661,7 @@ func rollbackUpdate(transaction UpdateTransaction, cause error) error {
 		_ = SaveUpdateTransaction(transaction)
 		return scheduleWindowsRollback(transaction)
 	}
-	_ = stopManagedUpdateService()
+	_ = stopManagedUpdateService(transaction.Runtime)
 	rollback := transaction.Executable + ".rollback"
 	if err := copyExecutable(transaction.BackupPath, rollback); err != nil {
 		transaction.Phase, transaction.Error = UpdatePhaseFailed, err.Error()
@@ -591,21 +714,15 @@ func RollbackAppliedUpdate(transaction UpdateTransaction, cause error) error {
 	return nil
 }
 
-func stopManagedUpdateService() error {
-	switch runtime.GOOS {
-	case "linux":
-		if userSystemdServiceInstalled() {
-			return exec.Command("systemctl", "--user", "stop", "alx.service").Run()
-		}
-	case "darwin":
-		if userLaunchAgentInstalled() {
-			target := fmt.Sprintf("gui/%d/%s", os.Getuid(), serviceName)
-			return exec.Command("launchctl", "bootout", target).Run()
-		}
-	case "windows":
-		if windowsScheduledTaskInstalled() {
-			return exec.Command("schtasks", "/End", "/TN", "ALemonX").Run()
-		}
+func stopManagedUpdateService(mode string) error {
+	switch mode {
+	case updateRuntimeSystemd:
+		return exec.Command("systemctl", "--user", "stop", "alx.service").Run()
+	case updateRuntimeLaunchAgent:
+		target := fmt.Sprintf("gui/%d/%s", os.Getuid(), serviceName)
+		return exec.Command("launchctl", "bootout", target).Run()
+	case updateRuntimeTask:
+		return exec.Command("schtasks", "/End", "/TN", "ALemonX").Run()
 	}
 	return nil
 }
@@ -657,7 +774,7 @@ func ScheduleRestart() error {
 	// A child process of alx.service is terminated with the service's cgroup
 	// during graceful shutdown. Put the watcher in its own transient user unit
 	// so it can restart and verify the replacement after alx.service exits.
-	if runtime.GOOS == "linux" && userSystemdServiceInstalled() {
+	if transaction.Runtime == updateRuntimeSystemd {
 		unit := "alx-update-watch-" + strconv.FormatInt(time.Now().UnixNano(), 10)
 		return exec.Command("systemd-run", "--user", "--collect", "--unit", unit, executable, "update-watch", "--port", port).Run()
 	}
@@ -745,7 +862,17 @@ func releaseBinary(source, directory string) (string, error) {
 }
 func isBinaryName(name string) bool {
 	name = strings.ToLower(filepath.Base(name))
-	return name == "alx" || name == "alx.exe" || strings.HasPrefix(name, "alx-") || strings.HasPrefix(name, "alemonx")
+	if name == "alx" || name == "alx.exe" {
+		return true
+	}
+	if !strings.HasPrefix(name, "alx-") && !strings.HasPrefix(name, "alemonx") {
+		return false
+	}
+	// A release bundle also contains alx-update.json. Do not mistake metadata
+	// (or any other dotted asset) for the executable merely because it starts
+	// with the application name.
+	extension := filepath.Ext(name)
+	return extension == "" || extension == ".exe"
 }
 
 func verifyBinaryPlatform(path string) error {

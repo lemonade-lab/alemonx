@@ -33,15 +33,19 @@ type UpdateTransaction = {
   pluginError?: string
 }
 
-const acceptedUpdateArchiveExtensions = ['.zip', '.tgz', '.tar.gz']
+const acceptedUpdateArchiveExtensions = ['.zip']
+const maxUpdateArchiveSize = 200 * 1024 * 1024
 
 function updateArchiveValidationError(candidate: File): string | null {
   const name = candidate.name.trim().toLowerCase()
   if (!acceptedUpdateArchiveExtensions.some(extension => name.endsWith(extension))) {
-    return '请选择 .zip、.tgz 或 .tar.gz 格式的更新压缩包。'
+    return '请选择 GitHub Release 下载的 .zip 更新包。'
   }
   if (candidate.size === 0) {
     return '该更新包为空，请重新选择完整下载的安装包。'
+  }
+  if (candidate.size > maxUpdateArchiveSize) {
+    return '更新包超过 200MB 限制，请下载正确的 Release 安装包。'
   }
   return null
 }
@@ -147,7 +151,8 @@ export function SetupUpdateButton() {
   }
 
   const reconnectAfterRestart = () => {
-    const deadline = Date.now() + 40_000
+    const rollbackDeadline = Date.now() + 65_000
+    const healthDeadline = Date.now() + 40_000
     const retry = () => {
       void loadUpdateStatus()
         .then(status => {
@@ -160,16 +165,19 @@ export function SetupUpdateButton() {
             setMessage(status.error || updatePhaseLabels[status.phase])
             return
           }
-          if (Date.now() < deadline) window.setTimeout(retry, 500)
+          if (Date.now() > healthDeadline) {
+            setMessage('新版验证超时，正在恢复旧版本…')
+          }
+          if (Date.now() < rollbackDeadline) window.setTimeout(retry, 500)
           else {
             setBusy(false)
             setMessage(
-              '新版未在 40 秒内完成验证，请查看发布说明或使用手动安装。'
+              '未收到最终更新结果，请重新打开更新面板查看事务状态。'
             )
           }
         })
         .catch(() => {
-          if (Date.now() < deadline) window.setTimeout(retry, 500)
+          if (Date.now() < rollbackDeadline) window.setTimeout(retry, 500)
           else {
             setBusy(false)
             setMessage('无法确认新版是否已启动，请稍后重新检查。')
@@ -216,7 +224,7 @@ export function SetupUpdateButton() {
   const uploadUpdateArchive = (
     candidate: File,
     onProgress: (percent: number) => void
-  ): Promise<{ staged: boolean }> =>
+  ): Promise<{ staged: boolean; version?: string }> =>
     new Promise((resolve, reject) => {
       const request = new XMLHttpRequest()
       request.open('POST', '/api/v1/update/load')
@@ -226,7 +234,11 @@ export function SetupUpdateButton() {
       }
       request.onload = () => {
         if (request.status >= 200 && request.status < 300) {
-          resolve({ staged: true })
+          try {
+            resolve(JSON.parse(request.responseText) as { staged: boolean; version?: string })
+          } catch {
+            resolve({ staged: true })
+          }
           return
         }
         try {
@@ -240,6 +252,7 @@ export function SetupUpdateButton() {
       request.onerror = () => reject(new Error('上传失败，请检查网络。'))
       const form = new FormData()
       form.append('package', candidate)
+      if (selected?.tag) form.append('version', selected.tag)
       form.append('confirm', 'true')
       request.send(form)
     })
@@ -260,10 +273,14 @@ export function SetupUpdateButton() {
     setUploadProgress(0)
     setMessage('')
     try {
-      await uploadUpdateArchive(candidate, setUploadProgress)
+      const result = await uploadUpdateArchive(candidate, setUploadProgress)
       setStaged(true)
       setUploadProgress(100)
-      setMessage('更新包已上传，点击「确认安装并重启」应用。')
+      setMessage(
+        result.version
+          ? `已暂存 ${result.version}，点击「确认安装并重启」应用。`
+          : '更新包已上传，点击「确认安装并重启」应用。'
+      )
     } catch (reason) {
       setUploadProgress(null)
       setUploadError(reason instanceof Error ? reason.message : '上传失败。')
@@ -476,7 +493,7 @@ export function SetupUpdateButton() {
                   className="sr-only"
                   id={uploadInputID}
                   type="file"
-                  accept=".zip,.tgz,.tar.gz"
+                  accept=".zip,application/zip"
                   onChange={event => {
                     void selectUpdateArchive(event.target.files?.[0] ?? null)
                     event.currentTarget.value = ''
@@ -508,7 +525,7 @@ export function SetupUpdateButton() {
                         ? staged
                           ? '已上传，等待确认安装。'
                           : `正在上传 ${uploadProgress}%…`
-                        : '仅支持 .zip、.tgz 或 .tar.gz，也可拖到这里。'}
+                        : '仅支持 GitHub Release 下载的 .zip，也可拖到这里。'}
                     </small>
                   </span>
                 </label>

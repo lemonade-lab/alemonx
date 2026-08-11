@@ -26,9 +26,10 @@ type Item struct {
 	Assets      []Asset `json:"assets"`
 }
 type Asset struct {
-	Name string `json:"name"`
-	URL  string `json:"url"`
-	Size int64  `json:"size"`
+	Name   string `json:"name"`
+	URL    string `json:"url"`
+	Size   int64  `json:"size"`
+	SHA256 string `json:"sha256,omitempty"`
 }
 
 var allowed = map[string]string{"alemondesk": "lemonade-lab/alemondesk", "alemonapp": "lemonade-lab/alemonapp", "alx": "lemonade-lab/alx", "alemonx": "lemonade-lab/alemonx"}
@@ -36,6 +37,10 @@ var allowed = map[string]string{"alemondesk": "lemonade-lab/alemondesk", "alemon
 // githubReleasesURL is a package variable so tests can point it at an
 // unreachable host and exercise the offline cache fallback path.
 var githubReleasesURL = "https://api.github.com/repos/%s/releases?per_page=30"
+
+// latestIndexURL addresses a small release asset rather than the GitHub REST
+// API. GitHub serves /releases/latest/download without consuming API quota.
+var latestIndexURL = "https://github.com/%s/releases/latest/download/alx-update-index.json"
 
 const releaseListCacheTTL = 12 * time.Hour
 
@@ -69,27 +74,68 @@ type Update struct {
 }
 
 func SetupUpdate(current string) (Update, error) {
+	return setupUpdate(current, false)
+}
+
+// SetupUpdateFresh bypasses a still-valid local release cache. An explicit
+// user recheck should contact the release source when it is available.
+func SetupUpdateFresh(current string) (Update, error) {
+	return setupUpdate(current, true)
+}
+
+func setupUpdate(current string, fresh bool) (Update, error) {
 	result := Update{Current: current}
-	items, err := List("alemonx")
+	latest, err := latestRelease("alemonx")
+	if err == nil {
+		return updateForRelease(result, latest)
+	}
+	items, err := list("alemonx", fresh)
 	if err != nil {
 		return result, err
 	}
-	latest := items[0]
+	return updateForRelease(result, items[0])
+}
+
+func updateForRelease(result Update, latest Item) (Update, error) {
 	result.Latest, result.ReleaseURL = latest.Tag, latest.URL
-	result.Available = versionCompare(latest.Tag, current) > 0
+	result.Available = versionCompare(latest.Tag, result.Current) > 0
 	if !result.Available {
 		return result, nil
 	}
 	asset := matchingAsset(latest.Assets)
 	if asset.Name != "" {
 		result.DownloadURL, result.AssetName, result.PlatformMatched = asset.URL, asset.Name, true
-		result.SHA256, err = checksumForAsset(latest.Assets, asset.Name)
+		result.SHA256 = asset.SHA256
+		var err error
+		if result.SHA256 == "" {
+			result.SHA256, err = checksumForAsset(latest.Assets, asset.Name)
+		}
 		if err != nil {
 			result.IntegrityError = err.Error()
 		}
 		result.IntegrityReady = result.SHA256 != ""
 	}
 	return result, nil
+}
+
+func latestRelease(id string) (Item, error) {
+	repository, ok := allowed[id]
+	if !ok {
+		return Item{}, fmt.Errorf("不支持该下载项目")
+	}
+	response, err := (&http.Client{Timeout: 8 * time.Second}).Get(fmt.Sprintf(latestIndexURL, repository))
+	if err != nil {
+		return Item{}, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return Item{}, fmt.Errorf("更新索引不可用")
+	}
+	var item Item
+	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&item); err != nil || item.Tag == "" || item.URL == "" || len(item.Assets) == 0 {
+		return Item{}, fmt.Errorf("更新索引内容无效")
+	}
+	return item, nil
 }
 
 func matchingAsset(assets []Asset) Asset {
@@ -193,16 +239,22 @@ func checksumForAsset(assets []Asset, name string) (string, error) {
 }
 
 func List(id string) ([]Item, error) {
+	return list(id, false)
+}
+
+func list(id string, fresh bool) ([]Item, error) {
 	repository, ok := allowed[id]
 	if !ok {
 		return nil, fmt.Errorf("不支持该下载项目")
 	}
-	if items, ok := cachedReleaseItems(id); ok {
-		return items, nil
-	}
-	if items, fetchedAt, ok := readPersistedReleaseItems(id); ok && time.Since(fetchedAt) < releaseListCacheTTL {
-		cacheReleaseItemsUntil(id, items, fetchedAt.Add(releaseListCacheTTL))
-		return items, nil
+	if !fresh {
+		if items, ok := cachedReleaseItems(id); ok {
+			return items, nil
+		}
+		if items, fetchedAt, ok := readPersistedReleaseItems(id); ok && time.Since(fetchedAt) < releaseListCacheTTL {
+			cacheReleaseItemsUntil(id, items, fetchedAt.Add(releaseListCacheTTL))
+			return items, nil
+		}
 	}
 	client := &http.Client{Timeout: 8 * time.Second}
 	request, err := http.NewRequest(http.MethodGet, fmt.Sprintf(githubReleasesURL, repository), nil)
@@ -216,12 +268,18 @@ func List(id string) ([]Item, error) {
 		if items, ok := staleCachedReleaseItems(id); ok {
 			return items, nil
 		}
+		if item, indexErr := latestRelease(id); indexErr == nil {
+			return []Item{item}, nil
+		}
 		return nil, fmt.Errorf("无法获取版本列表，请检查网络后重试")
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
 		if items, ok := staleCachedReleaseItems(id); ok {
 			return items, nil
+		}
+		if item, indexErr := latestRelease(id); indexErr == nil {
+			return []Item{item}, nil
 		}
 		if response.StatusCode == http.StatusForbidden && response.Header.Get("X-RateLimit-Remaining") == "0" {
 			return nil, fmt.Errorf("GitHub API 请求次数已用尽，请稍后重试或直接选择本地安装包")

@@ -1,10 +1,13 @@
 package system
 
 import (
+	"archive/zip"
 	"crypto/sha256"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -71,41 +74,71 @@ func TestReadyPendingUpdateRejectsTamperedArchive(t *testing.T) {
 func TestStageUploadedUpdateRecordsPendingAndReady(t *testing.T) {
 	t.Setenv("ALX_TEST_CACHE_DIR", t.TempDir())
 	source := filepath.Join(t.TempDir(), "uploaded.zip")
-	if err := os.WriteFile(source, []byte("uploaded-archive"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	path, err := StageUploadedUpdate(source, "alx-linux-amd64.zip")
+	writeTestUpdatePackage(t, source, "v9.9.9")
+	staged, err := StageUploadedUpdate(source, "alx-"+runtime.GOOS+"-"+runtime.GOARCH+".zip", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	body, err := os.ReadFile(path)
-	if err != nil || string(body) != "uploaded-archive" {
-		t.Fatalf("staged archive = %q, %v", body, err)
+	if staged.Version != "v9.9.9" {
+		t.Fatalf("staged version = %q", staged.Version)
 	}
 	update, archive, ready, err := ReadyPendingUpdate()
 	if err != nil || !ready {
 		t.Fatalf("staged update must be ready: ready=%v err=%v", ready, err)
 	}
-	if update.AssetName != "alx-linux-amd64.zip" || len(update.SHA256) != 64 {
+	if update.AssetName != "alx-"+runtime.GOOS+"-"+runtime.GOARCH+".zip" || update.Version != "v9.9.9" || len(update.SHA256) != 64 {
 		t.Fatalf("pending update = %#v", update)
 	}
-	if archive != path {
-		t.Fatalf("ready archive = %q, want %q", archive, path)
+	if archive != staged.Path {
+		t.Fatalf("ready archive = %q, want %q", archive, staged.Path)
 	}
 }
 
 func TestStageUploadedUpdateRejectsPathTraversalFilename(t *testing.T) {
 	t.Setenv("ALX_TEST_CACHE_DIR", t.TempDir())
 	source := filepath.Join(t.TempDir(), "pkg.zip")
-	if err := os.WriteFile(source, []byte("data"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	path, err := StageUploadedUpdate(source, "../../evil.zip")
+	writeTestUpdatePackage(t, source, "v1.0.0")
+	staged, err := StageUploadedUpdate(source, "../../evil.zip", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if filepath.Base(path) != "evil.zip" || strings.Contains(path, "..") {
-		t.Fatalf("staged path must be confined to the cache dir, got %q", path)
+	if filepath.Base(staged.Path) != "evil.zip" || strings.Contains(staged.Path, "..") {
+		t.Fatalf("staged path must be confined to the cache dir, got %q", staged.Path)
+	}
+}
+
+func writeTestUpdatePackage(t *testing.T, path, version string) {
+	t.Helper()
+	output, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archive := zip.NewWriter(output)
+	manifest, err := archive.Create("alx-update.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fmt.Fprintf(manifest, `{"version":%q,"platform":%q,"architecture":%q}`, version, runtime.GOOS, runtime.GOARCH); err != nil {
+		t.Fatal(err)
+	}
+	binary, err := archive.Create(map[bool]string{true: "alx.exe", false: "alx"}[runtime.GOOS == "windows"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	binarySource := os.Args[0]
+	if runtime.GOOS != "windows" {
+		binarySource = filepath.Join(runtime.GOROOT(), "bin", "go")
+	}
+	executable, err := os.Open(binarySource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, copyErr := io.Copy(binary, executable)
+	_ = executable.Close()
+	closeErr := archive.Close()
+	fileErr := output.Close()
+	if copyErr != nil || closeErr != nil || fileErr != nil {
+		t.Fatalf("write test update package: copy=%v zip=%v file=%v", copyErr, closeErr, fileErr)
 	}
 }
 

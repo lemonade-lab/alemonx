@@ -633,6 +633,33 @@ func (r *Registry) RunPrivilegedApproved(id, policyAction, runnerAction string, 
 	return parseActionResult(output, runErr)
 }
 
+// RunPrivilegedApprovedWithPassword is the macOS variant of the host broker.
+// It intentionally remains separate so only a preflight-selected, policy-bound
+// operation can receive a one-time password.
+func (r *Registry) RunPrivilegedApprovedWithPassword(id, policyAction, runnerAction string, params map[string]string, password []byte) (ActionResult, error) {
+	plugin, err := r.Find(id)
+	if err != nil {
+		return ActionResult{}, err
+	}
+	if plugin.Online || !plugin.Enabled || !plugin.Runnable || !plugin.RequiresElevation(policyAction) {
+		return ActionResult{}, errors.New("当前插件没有可用的受控系统权限操作")
+	}
+	entry, err := plugin.entryPath()
+	if err != nil {
+		return ActionResult{}, err
+	}
+	identity := system.PluginPrivilegeIdentity{PluginID: plugin.ID, Action: policyAction, Tag: plugin.InstalledTag, Asset: plugin.InstalledAsset, ArchiveSHA256: plugin.ArchiveSHA256, RunnerPath: entry.name, RunnerArgs: entry.args, DeclaredActions: plugin.Permissions.ElevatedActions}
+	if err := system.AuthorizePluginPrivilege(identity); err != nil {
+		return ActionResult{}, err
+	}
+	payload, err := json.Marshal(request{Protocol: "alx/v1", Method: "run", Action: runnerAction, Params: params, Confirm: true})
+	if err != nil {
+		return ActionResult{}, err
+	}
+	output, runErr := system.RunWithSudoInput(plugin.Source, entry.name, entry.args, payload, password)
+	return parseActionResult(output, runErr)
+}
+
 // PrivilegeAvailability exposes only a safe readiness result for the host UI.
 // It lets a plugin show preview-only mode before a user reaches an OS prompt.
 func (r *Registry) PrivilegeAvailability(id, action string) error {

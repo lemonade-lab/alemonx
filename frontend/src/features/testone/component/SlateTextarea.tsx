@@ -907,7 +907,7 @@ export default function SlateTextarea({
         {/* Slate 编辑器 */}
         <Slate editor={editor} initialValue={EMPTY_VALUE} onChange={onChange}>
           <Editable
-            className="px-1 resize-none overflow-y-auto border-0 focus:border-0 bg-opacity-0 bg-[var(--editor-background)] rounded-md outline-none"
+            className="resize-none overflow-y-auto border-0 focus:border-0 bg-opacity-0 bg-[var(--editor-background)] rounded-md outline-none"
             placeholder="输入内容..."
             renderElement={renderElement}
             onKeyDown={onKeyDown}

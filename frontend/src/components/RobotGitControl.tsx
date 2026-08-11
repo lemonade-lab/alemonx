@@ -239,8 +239,8 @@ export function RobotGitControl({
 
   const commitPanel = (
     <section className="git-tab-panel grid content-start gap-3 rounded-lg border border-slate-200 bg-white p-4">
-      <div className="git-tab-heading grid grid-cols-[1fr_auto] items-center gap-3 border-b border-slate-200 pb-3 sm:grid-cols-[auto_minmax(0,1fr)_auto]">
-        <label className="col-span-2 grid gap-0.5 sm:col-span-1">
+      <div className="git-tab-heading git-commit-heading grid items-center gap-3 border-b border-slate-200 pb-3">
+        <label className="git-commit-summary grid gap-0.5">
           <small className="text-xs text-slate-500">
             {changes.length} 项待提交
           </small>
@@ -338,7 +338,7 @@ export function RobotGitControl({
           {data?.tags.length ?? 0} 个
         </small>
       </div>
-      <div className="grid gap-2 sm:grid-cols-[1fr_1.4fr_auto]">
+      <div className="git-tag-form grid gap-2">
         <input
           className="h-9 rounded-md border border-slate-300 px-2.5 text-xs outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
           value={tagName}
@@ -508,7 +508,7 @@ export function RobotGitControl({
     <section className="grid gap-3 rounded-lg border border-slate-200 bg-white p-4">
       <div className="grid gap-3">
         <section>
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="git-remote-form flex flex-wrap items-center gap-2">
             <input
               className="h-9 w-36 rounded-md border border-slate-300 bg-white px-2.5 text-xs outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
               value={remoteName}
@@ -523,7 +523,7 @@ export function RobotGitControl({
               placeholder="仓库地址，如 git@github.com:org/repo.git"
               aria-label="远程仓库地址"
             />
-            <div className="flex shrink-0 gap-2">
+            <div className="git-remote-actions flex shrink-0 gap-2">
               <button
                 className="primary-button"
                 disabled={isLoading || !remoteName.trim() || !remoteURL.trim()}
@@ -543,7 +543,7 @@ export function RobotGitControl({
           </div>
         </section>
         <section className="grid gap-2">
-          <header className="flex items-center justify-between gap-2">
+          <header className="git-remote-heading flex items-center justify-between gap-2">
             <strong className="text-sm font-semibold text-slate-700">
               已配置远程
             </strong>

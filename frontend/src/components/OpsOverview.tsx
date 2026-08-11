@@ -56,7 +56,7 @@ export function OpsOverview({
   }
   return (
     <section
-      className="workspace-content system-feature-page mx-auto max-w-215"
+      className="workspace-content system-feature-page ops-panel mx-auto max-w-215"
       aria-label="全局运维总览"
     >
       <header className="system-feature-header">
@@ -89,7 +89,7 @@ export function OpsOverview({
         </div>
       </header>
       {overview && (
-        <div className="mx-2.5 mb-4 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+        <div className="ops-metrics mx-2.5 mb-4 grid grid-cols-2 gap-3">
           {METRIC_ITEMS.map(({ key, label }) => (
             <div
               className="rounded-lg border border-(--theme-border-default) bg-(--theme-surface-panel) p-3"
