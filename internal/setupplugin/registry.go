@@ -9,6 +9,7 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"bufio"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
@@ -30,6 +31,7 @@ import (
 	"time"
 
 	"alemonx/internal/system"
+	"alemonx/internal/systemnetwork"
 
 	"github.com/fsnotify/fsnotify"
 )
@@ -55,27 +57,37 @@ type Navigation struct {
 // no file from its directory is executed during discovery. A plugin is usable
 // only when it declares a web root (its UI) and has an executor.
 type Plugin struct {
-	ID             string             `json:"id"`
-	Name           string             `json:"name"`
-	Version        string             `json:"version"`
-	Description    string             `json:"description,omitempty"`
-	Platforms      []string           `json:"platforms,omitempty"`
-	Navigation     Navigation         `json:"navigation"`
-	Runtime        string             `json:"runtime,omitempty"`
-	Entry          map[string]string  `json:"entry,omitempty"`
-	Development    *RuntimeSpec       `json:"development,omitempty"`
-	Web            *WebSpec           `json:"web,omitempty"`
-	Services       []ServiceSpec      `json:"services,omitempty"`
-	SystemPickers  []SystemPickerSpec `json:"systemPickers,omitempty"`
-	Permissions    Permissions        `json:"permissions,omitempty"`
-	Runnable       bool               `json:"runnable"`
-	Enabled        bool               `json:"enabled"`
-	Online         bool               `json:"online,omitempty"`
-	Source         string             `json:"source,omitempty"`
-	InstalledTag   string             `json:"installedTag,omitempty"`
-	InstalledAsset string             `json:"installedAsset,omitempty"`
-	ArchiveSHA256  string             `json:"archiveSha256,omitempty"`
-	Fingerprint    string             `json:"fingerprint,omitempty"`
+	ID            string             `json:"id"`
+	Name          string             `json:"name"`
+	Version       string             `json:"version"`
+	Description   string             `json:"description,omitempty"`
+	Platforms     []string           `json:"platforms,omitempty"`
+	Navigation    Navigation         `json:"navigation"`
+	Runtime       string             `json:"runtime,omitempty"`
+	Entry         map[string]string  `json:"entry,omitempty"`
+	Development   *RuntimeSpec       `json:"development,omitempty"`
+	Web           *WebSpec           `json:"web,omitempty"`
+	Services      []ServiceSpec      `json:"services,omitempty"`
+	SystemPickers []SystemPickerSpec `json:"systemPickers,omitempty"`
+	// HostCapabilities is an allowlist for host-owned features. A plugin never
+	// receives arbitrary OS or workbench access merely by being installed.
+	HostCapabilities []string    `json:"hostCapabilities,omitempty"`
+	Permissions      Permissions `json:"permissions,omitempty"`
+	Runnable         bool        `json:"runnable"`
+	Enabled          bool        `json:"enabled"`
+	Online           bool        `json:"online,omitempty"`
+	Source           string      `json:"source,omitempty"`
+	InstalledTag     string      `json:"installedTag,omitempty"`
+	InstalledAsset   string      `json:"installedAsset,omitempty"`
+	ArchiveSHA256    string      `json:"archiveSha256,omitempty"`
+	Fingerprint      string      `json:"fingerprint,omitempty"`
+	// DevelopmentSource is set only by the host for an explicitly started
+	// source-development session. It is never trusted from alx.json.
+	DevelopmentSource bool `json:"developmentSource,omitempty"`
+	// DevelopmentWebProxy is set by the host when the active source session is
+	// backed by a development server. Static source web roots continue through
+	// the ordinary plugin web handler.
+	DevelopmentWebProxy bool `json:"developmentWebProxy,omitempty"`
 }
 
 // Permissions explicitly opts a plugin into individually elevated actions.
@@ -108,8 +120,37 @@ type installMetadata struct {
 // a compiled binary. A source runner may be kept here so contributors can run
 // a plugin from a checkout without first producing every platform binary.
 type RuntimeSpec struct {
-	Runtime string            `json:"runtime"`
-	Entry   map[string]string `json:"entry"`
+	Runtime  string               `json:"runtime"`
+	Entry    map[string]string    `json:"entry"`
+	Command  *CommandSpec         `json:"command,omitempty"`
+	Web      *DevelopmentWeb      `json:"web,omitempty"`
+	Services []DevelopmentService `json:"services,omitempty"`
+}
+
+// CommandSpec is deliberately shell-free. Development commands run only after
+// the user selects and starts a local source session, but arguments still stay
+// structured so a manifest cannot smuggle shell syntax into the host.
+type CommandSpec struct {
+	Program string   `json:"program"`
+	Args    []string `json:"args,omitempty"`
+}
+
+type DevelopmentWeb struct {
+	Mode       string       `json:"mode,omitempty"` // static or dev-server
+	Root       string       `json:"root,omitempty"`
+	Build      *CommandSpec `json:"build,omitempty"`
+	Dev        *CommandSpec `json:"dev,omitempty"`
+	HealthPath string       `json:"healthPath,omitempty"`
+	HMR        bool         `json:"hmr,omitempty"`
+}
+
+// DevelopmentService attaches a supervised source command to an existing
+// manifest-declared loopback service. The service's host/port remain in the
+// normal services allowlist, so a development command cannot proxy elsewhere.
+type DevelopmentService struct {
+	ID      string      `json:"id"`
+	Command CommandSpec `json:"command"`
+	Restart string      `json:"restart,omitempty"` // never or on-failure
 }
 
 // WebSpec declares the plugin's web UI directory inside the plugin folder. alx
@@ -135,9 +176,9 @@ type ServiceSpec struct {
 	WebSocket   bool   `json:"websocket,omitempty"`
 }
 
-// SystemPickerSpec declares one named, host-owned native selection dialog.
-// A plugin requests only its ID; it never submits an arbitrary filesystem path
-// or a command to run.
+// SystemPickerSpec declares one named, host-owned Finder request. The
+// workbench renders it with its Web Finder; a plugin requests only its ID and
+// never submits an arbitrary filesystem path or a command to run.
 type SystemPickerSpec struct {
 	ID       string            `json:"id"`
 	Kind     system.PickerKind `json:"kind"`
@@ -152,6 +193,27 @@ func (p Plugin) SystemPicker(id string) (SystemPickerSpec, bool) {
 		}
 	}
 	return SystemPickerSpec{}, false
+}
+
+const (
+	HostCapabilityFinder         = "finder"
+	HostCapabilityRobotContext   = "robot-context"
+	HostCapabilityNetworkContext = "network-context"
+)
+
+func (p Plugin) AllowsHostCapability(capability string) bool {
+	// Existing picker declarations remain compatible while manifests migrate to
+	// the explicit capability list. New data capabilities always require a
+	// declaration.
+	if capability == HostCapabilityFinder && len(p.SystemPickers) > 0 {
+		return true
+	}
+	for _, item := range p.HostCapabilities {
+		if item == capability {
+			return true
+		}
+	}
+	return false
 }
 
 // Progress is an optional, structured stderr event emitted while a plugin
@@ -180,6 +242,31 @@ type Registry struct {
 	loaded            bool
 	lastFingerprint   string
 	listeners         map[chan struct{}]struct{}
+	development       map[string]Plugin
+	// runnerEnvironment is owned by the host. It is deliberately not a
+	// manifest feature: a downloaded plugin must never be able to request
+	// credentials or networking policy merely by adding a field to alx.json.
+	runnerEnvironment func(Plugin, string) []string
+}
+
+// SetRunnerEnvironmentProvider lets the host add narrowly scoped environment
+// values to an executor it has explicitly approved. It is used for trusted
+// built-in integrations such as the QQ release downloader; source sessions and
+// arbitrary manifests remain ineligible at the host policy layer.
+func (r *Registry) SetRunnerEnvironmentProvider(provider func(Plugin, string) []string) {
+	r.mu.Lock()
+	r.runnerEnvironment = provider
+	r.mu.Unlock()
+}
+
+func (r *Registry) environmentForRunner(plugin Plugin, action string) []string {
+	r.mu.RLock()
+	provider := r.runnerEnvironment
+	r.mu.RUnlock()
+	if provider == nil {
+		return nil
+	}
+	return append([]string(nil), provider(plugin, action)...)
 }
 
 // Subscribe returns a channel that receives a signal whenever the cached plugin
@@ -212,12 +299,13 @@ func NewRegistry(roots ...string) *Registry {
 			statePath:         defaultStatePath(),
 			cacheRoot:         defaultCacheRoot(),
 			onlineIndexURL:    onlineIndexURL,
-			httpClient:        &http.Client{Timeout: 5 * time.Second},
+			httpClient:        systemnetwork.DefaultClient(5 * time.Second),
 			onlineManifestURL: defaultOnlineManifestURL,
 			releaseURL:        defaultReleaseURL,
+			development:       map[string]Plugin{},
 		}
 	}
-	return &Registry{roots: uniqueRoots(roots)}
+	return &Registry{roots: uniqueRoots(roots), development: map[string]Plugin{}}
 }
 
 func defaultRoots() []string {
@@ -315,7 +403,82 @@ func (r *Registry) snapshot() []Plugin {
 	defer r.mu.RUnlock()
 	items := make([]Plugin, len(r.cached))
 	copy(items, r.cached)
+	if len(r.development) == 0 {
+		return items
+	}
+	byID := make(map[string]int, len(items))
+	for index, item := range items {
+		byID[item.ID] = index
+	}
+	for id, plugin := range r.development {
+		if index, exists := byID[id]; exists {
+			items[index] = plugin
+			continue
+		}
+		items = append(items, plugin)
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		if items[i].Navigation.Order != items[j].Navigation.Order {
+			return items[i].Navigation.Order < items[j].Navigation.Order
+		}
+		return items[i].Navigation.Label < items[j].Navigation.Label
+	})
 	return items
+}
+
+// LoadDevelopmentSource parses a user-selected source directory without
+// executing it. The caller must still explicitly start its declared commands.
+func LoadDevelopmentSource(directory string) (Plugin, error) {
+	directory = filepath.Clean(strings.TrimSpace(directory))
+	if !filepath.IsAbs(directory) {
+		return Plugin{}, errors.New("插件源码目录必须是绝对路径")
+	}
+	info, err := os.Stat(directory)
+	if err != nil || !info.IsDir() {
+		return Plugin{}, errors.New("插件源码目录不存在或不可访问")
+	}
+	plugin, err := load(directory)
+	if err != nil {
+		return Plugin{}, errors.New("源码目录不是有效的系统插件：" + err.Error())
+	}
+	plugin.DevelopmentSource = true
+	plugin.Enabled = true
+	return plugin, nil
+}
+
+// ActivateDevelopment overlays one explicitly running source session over an
+// installed Release with the same ID. It is intentionally in-memory only;
+// startup must never execute a source command implicitly.
+func (r *Registry) ActivateDevelopment(plugin Plugin) {
+	r.mu.Lock()
+	if r.development == nil {
+		r.development = map[string]Plugin{}
+	}
+	plugin.DevelopmentSource = true
+	plugin.Enabled = true
+	r.development[plugin.ID] = plugin
+	r.revision++
+	r.notifyLocked()
+	r.mu.Unlock()
+}
+
+func (r *Registry) DeactivateDevelopment(id string) {
+	r.mu.Lock()
+	if _, exists := r.development[id]; exists {
+		delete(r.development, id)
+		r.revision++
+		r.notifyLocked()
+	}
+	r.mu.Unlock()
+}
+
+func (r *Registry) notifyLocked() {
+	for ch := range r.listeners {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
 }
 
 // Rescan recomputes the full plugin set and replaces the cache. It bumps the
@@ -358,9 +521,10 @@ func pluginsEqual(a, b Plugin) bool {
 		a.Description == b.Description && a.Runnable == b.Runnable &&
 		a.Enabled == b.Enabled && a.Online == b.Online && a.InstalledTag == b.InstalledTag && a.InstalledAsset == b.InstalledAsset && a.ArchiveSHA256 == b.ArchiveSHA256 && a.Fingerprint == b.Fingerprint &&
 		strings.Join(a.Platforms, ",") == strings.Join(b.Platforms, ",") &&
+		strings.Join(a.HostCapabilities, ",") == strings.Join(b.HostCapabilities, ",") &&
 		a.Navigation.Label == b.Navigation.Label && a.Navigation.Icon == b.Navigation.Icon &&
 		a.Navigation.Order == b.Navigation.Order && webRootEqual(a.Web, b.Web) &&
-		entryEqual(a.Entry, b.Entry) && entryEqual(a.DevelopmentEntry(), b.DevelopmentEntry())
+		entryEqual(a.Entry, b.Entry) && developmentEqual(a.Development, b.Development)
 }
 
 func (p Plugin) DevelopmentEntry() map[string]string {
@@ -368,6 +532,15 @@ func (p Plugin) DevelopmentEntry() map[string]string {
 		return p.Development.Entry
 	}
 	return nil
+}
+
+func developmentEqual(a, b *RuntimeSpec) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	left, leftErr := json.Marshal(a)
+	right, rightErr := json.Marshal(b)
+	return leftErr == nil && rightErr == nil && bytes.Equal(left, right)
 }
 
 func webRootEqual(a, b *WebSpec) bool {
@@ -653,6 +826,9 @@ func (r *Registry) RunResultWithProgress(id, actionID string, params map[string]
 	}
 	command := exec.Command(entry.name, entry.args...)
 	command.Dir = plugin.Source
+	if environment := r.environmentForRunner(plugin, actionID); len(environment) > 0 {
+		command.Env = append(os.Environ(), environment...)
+	}
 	command.Stdin = strings.NewReader(string(payload))
 	stdout, err := command.StdoutPipe()
 	if err != nil {
@@ -713,6 +889,9 @@ func (r *Registry) RunPrivilegedApproved(id, policyAction, runnerAction string, 
 	if plugin.Online || !plugin.Enabled || !plugin.Runnable {
 		return ActionResult{}, errors.New("系统插件未安装、已停用或没有可用执行器")
 	}
+	if plugin.DevelopmentSource {
+		return ActionResult{}, errors.New("源码开发插件不允许执行系统权限操作")
+	}
 	if !plugin.RequiresElevation(policyAction) {
 		return ActionResult{}, errors.New("该操作未被插件声明为系统变更")
 	}
@@ -742,6 +921,9 @@ func (r *Registry) RunPrivilegedApprovedWithPassword(id, policyAction, runnerAct
 	if plugin.Online || !plugin.Enabled || !plugin.Runnable || !plugin.RequiresElevation(policyAction) {
 		return ActionResult{}, errors.New("当前插件没有可用的受控系统权限操作")
 	}
+	if plugin.DevelopmentSource {
+		return ActionResult{}, errors.New("源码开发插件不允许执行系统权限操作")
+	}
 	entry, err := plugin.entryPath()
 	if err != nil {
 		return ActionResult{}, err
@@ -767,6 +949,9 @@ func (r *Registry) PrivilegeAvailability(id, action string) error {
 	}
 	if plugin.Online || !plugin.Enabled || !plugin.Runnable || !plugin.RequiresElevation(action) {
 		return errors.New("当前插件没有可用的受控系统权限操作")
+	}
+	if plugin.DevelopmentSource {
+		return errors.New("源码开发插件不允许请求系统权限")
 	}
 	entry, err := plugin.entryPath()
 	if err != nil {
@@ -814,6 +999,14 @@ type executable struct {
 }
 
 func (p Plugin) entryPath() (executable, error) {
+	if p.DevelopmentSource && p.Development != nil {
+		if p.Development.Runtime == "command" && p.Development.Command != nil {
+			return executable{name: p.Development.Command.Program, args: append([]string(nil), p.Development.Command.Args...)}, nil
+		}
+		if entry, err := p.runtimeEntry(p.Development.Runtime, p.Development.Entry); err == nil {
+			return entry, nil
+		}
+	}
 	entry, err := p.runtimeEntry(p.Runtime, p.Entry)
 	if err == nil {
 		return entry, nil
@@ -836,6 +1029,13 @@ func (p Plugin) runtimeEntry(runtimeName string, entries map[string]string) (exe
 			return executable{}, errors.New("Go 插件缺少位于插件目录内的入口文件")
 		}
 		return executable{name: "go", args: []string{"run", filepath.Join(p.Source, relative)}}, nil
+	}
+	if runtimeName == "python" {
+		relative := entries["python"]
+		if relative == "" || filepath.IsAbs(relative) || strings.HasPrefix(filepath.Clean(relative), ".."+string(filepath.Separator)) {
+			return executable{}, errors.New("Python 插件缺少位于插件目录内的入口文件")
+		}
+		return executable{name: "python3", args: []string{filepath.Join(p.Source, relative)}}, nil
 	}
 	key := runtime.GOOS + "-" + runtime.GOARCH
 	relative := entries[key]
@@ -865,7 +1065,14 @@ func (p Plugin) WebRoot() (string, error) {
 	if p.Web == nil || strings.TrimSpace(p.Web.Root) == "" {
 		return "", errors.New("此插件未提供静态 Web 界面")
 	}
-	root := filepath.Join(p.Source, filepath.FromSlash(p.Web.Root))
+	webRoot := p.Web.Root
+	// A selected source session may keep its development output separate from
+	// the release web directory. Only static mode uses a directory here;
+	// dev-server mode is served by the host proxy instead.
+	if p.DevelopmentSource && p.Development != nil && p.Development.Web != nil && p.Development.Web.Mode != "dev-server" && strings.TrimSpace(p.Development.Web.Root) != "" {
+		webRoot = p.Development.Web.Root
+	}
+	root := filepath.Join(p.Source, filepath.FromSlash(webRoot))
 	resolved, err := filepath.EvalSymlinks(root)
 	if err != nil {
 		return "", errors.New("插件 Web 目录不存在或不可访问")
@@ -1007,15 +1214,107 @@ func decodeManifest(data []byte, source string) (Plugin, error) {
 		}
 		seenPickers[picker.ID] = true
 	}
+	allowedCapabilities := map[string]bool{
+		HostCapabilityFinder:         true,
+		HostCapabilityRobotContext:   true,
+		HostCapabilityNetworkContext: true,
+	}
+	seenCapabilities := map[string]bool{}
+	for index, capability := range plugin.HostCapabilities {
+		capability = strings.TrimSpace(capability)
+		if !allowedCapabilities[capability] || seenCapabilities[capability] {
+			return Plugin{}, errors.New("setup plugin hostCapabilities must contain unique supported capabilities")
+		}
+		plugin.HostCapabilities[index] = capability
+		seenCapabilities[capability] = true
+	}
 	if !validRuntime(plugin.Runtime) {
-		return Plugin{}, errors.New("setup plugin runtime must be binary, node or go")
+		return Plugin{}, errors.New("setup plugin runtime is invalid")
 	}
-	if plugin.Development != nil && (!validRuntime(plugin.Development.Runtime) || len(plugin.Development.Entry) == 0) {
-		return Plugin{}, errors.New("setup plugin development runner is invalid")
+	if plugin.Runtime == "command" {
+		return Plugin{}, errors.New("setup plugin command runtime is only available in development")
 	}
-	plugin.Runnable = len(plugin.Entry) > 0 || plugin.Development != nil
+	if plugin.Development != nil {
+		if plugin.Development.Runtime != "" && (!validRuntime(plugin.Development.Runtime) || (plugin.Development.Runtime == "command" && validateCommandSpec(plugin.Development.Command) != nil) || (plugin.Development.Runtime != "command" && len(plugin.Development.Entry) == 0)) {
+			return Plugin{}, errors.New("setup plugin development runner is invalid")
+		}
+		if err := validateDevelopmentSpec(plugin, plugin.Development); err != nil {
+			return Plugin{}, err
+		}
+	}
+	plugin.Runnable = true
 	plugin.Source = source
 	return plugin, nil
+}
+
+func validateDevelopmentSpec(plugin Plugin, spec *RuntimeSpec) error {
+	if spec.Web != nil {
+		web := spec.Web
+		if web.Mode == "" {
+			web.Mode = "static"
+		}
+		if web.Mode != "static" && web.Mode != "dev-server" {
+			return errors.New("setup plugin development web mode must be static or dev-server")
+		}
+		if web.Root != "" {
+			if err := validateRelativeDirectory(web.Root); err != nil {
+				return errors.New("setup plugin development web root is invalid")
+			}
+		}
+		if err := validateCommandSpec(web.Build); err != nil {
+			return errors.New("setup plugin development build command is invalid")
+		}
+		if web.Mode == "dev-server" && web.Dev == nil {
+			return errors.New("setup plugin development dev-server requires a dev command")
+		}
+		if err := validateCommandSpec(web.Dev); err != nil {
+			return errors.New("setup plugin development dev command is invalid")
+		}
+		path := strings.TrimSpace(web.HealthPath)
+		if path != "" && (!strings.HasPrefix(path, "/") || strings.Contains(path, "..") || strings.Contains(path, "\\")) {
+			return errors.New("setup plugin development health path is invalid")
+		}
+	}
+	services := map[string]bool{}
+	for _, service := range plugin.Services {
+		services[service.ID] = true
+	}
+	seen := map[string]bool{}
+	for _, service := range spec.Services {
+		if !validID.MatchString(service.ID) || seen[service.ID] || !services[service.ID] || (service.Restart != "" && service.Restart != "never" && service.Restart != "on-failure") || validateCommandSpec(&service.Command) != nil {
+			return errors.New("setup plugin development service is invalid")
+		}
+		seen[service.ID] = true
+	}
+	return nil
+}
+
+func validateRelativeDirectory(value string) error {
+	value = filepath.ToSlash(strings.TrimSpace(value))
+	if value == "" || filepath.IsAbs(value) || value == ".." {
+		return errors.New("invalid path")
+	}
+	for _, component := range strings.Split(value, "/") {
+		if component == ".." || component == "" {
+			return errors.New("invalid path")
+		}
+	}
+	return nil
+}
+
+func validateCommandSpec(command *CommandSpec) error {
+	if command == nil {
+		return nil
+	}
+	if strings.TrimSpace(command.Program) == "" || strings.ContainsAny(command.Program, "\x00\r\n") || strings.ContainsAny(command.Program, "/\\") {
+		return errors.New("invalid command")
+	}
+	for _, arg := range command.Args {
+		if strings.ContainsAny(arg, "\x00\r\n") || (strings.Contains(arg, "${") && !strings.Contains(arg, "${ALX_PLUGIN_DEV_PORT}")) {
+			return errors.New("invalid command argument")
+		}
+	}
+	return nil
 }
 
 func defaultOnlineManifestURL(repository string) string {
@@ -1120,7 +1419,7 @@ func (r *Registry) Releases(id string) ([]Release, error) {
 			release.Assets = append(release.Assets, ReleaseAsset{Name: asset.Name, URL: asset.URL, Size: asset.Size, Compatible: compatibleAsset(asset.Name)})
 		}
 		for index := range release.Assets {
-			if checksum := checksumAsset(release.Assets, release.Assets[index].Name); checksum != "" {
+			if checksum := r.checksumAsset(release.Assets, release.Assets[index].Name); checksum != "" {
 				release.Assets[index].SHA256 = checksum
 			}
 		}
@@ -1399,7 +1698,7 @@ func isArchiveName(name string) bool {
 	return strings.HasSuffix(lower, ".zip") || strings.HasSuffix(lower, ".tar.gz") || strings.HasSuffix(lower, ".tgz")
 }
 
-func checksumAsset(assets []ReleaseAsset, name string) string {
+func (r *Registry) checksumAsset(assets []ReleaseAsset, name string) string {
 	for _, asset := range assets {
 		upper := strings.ToUpper(asset.Name)
 		if upper != "SHA256SUMS" && upper != "SHA256SUMS.TXT" && upper != "CHECKSUMS.TXT" {
@@ -1411,7 +1710,11 @@ func checksumAsset(assets []ReleaseAsset, name string) string {
 		if err != nil {
 			continue
 		}
-		response, err := http.DefaultClient.Do(request)
+		client := r.httpClient
+		if client == nil {
+			client = systemnetwork.DefaultClient(5 * time.Second)
+		}
+		response, err := client.Do(request)
 		if err != nil {
 			continue
 		}
@@ -1649,7 +1952,7 @@ func (r *Registry) readOnlineFile(url string) ([]byte, error) {
 }
 
 func validRuntime(value string) bool {
-	return value == "" || value == "binary" || value == "node" || value == "go"
+	return value == "" || value == "binary" || value == "node" || value == "go" || value == "python" || value == "command"
 }
 
 func supportsCurrentPlatform(platforms []string) bool {

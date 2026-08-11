@@ -1,9 +1,15 @@
-import { ArrowUpRight, X } from 'lucide-react'
+import { ArrowUpRight, Download, Loader2, X } from 'lucide-react'
+import { useState } from 'react'
 import { Modal } from './Modal'
 
 type Check = { id: string; name: string; suggestion: string }
 
-type Props = { check: Check; onClose: () => void }
+type Props = {
+  check: Check
+  platform?: string
+  onClose: () => void
+  onInstalled?: () => void
+}
 
 const links: Record<
   string,
@@ -37,8 +43,42 @@ const links: Record<
   ]
 }
 
-export function EnvironmentFixDialog({ check, onClose }: Props) {
+export function EnvironmentFixDialog({
+  check,
+  platform = '',
+  onClose,
+  onInstalled
+}: Props) {
   const options = links[check.id] ?? []
+  const [installing, setInstalling] = useState(false)
+  const [message, setMessage] = useState('')
+  const canInstallOnServer =
+    (platform.startsWith('linux/') ||
+      platform.startsWith('darwin/') ||
+      platform.startsWith('windows/')) &&
+    ['node', 'git', 'docker'].includes(check.id)
+  const isMacOS = platform.startsWith('darwin/')
+  const isWindows = platform.startsWith('windows/')
+  const isManagedNode = check.id === 'node'
+  const installOnServer = async () => {
+    setInstalling(true)
+    setMessage('')
+    try {
+      const response = await fetch('/api/v1/system/environment/install', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ checkId: check.id, confirm: true })
+      })
+      const body = (await response.json()) as { output?: string; error?: string }
+      if (!response.ok) throw new Error(body.error || '服务器安装未完成。')
+      setMessage(body.output || '服务器安装已完成，请重新检查环境。')
+      onInstalled?.()
+    } catch (reason) {
+      setMessage(reason instanceof Error ? reason.message : '服务器安装未完成。')
+    } finally {
+      setInstalling(false)
+    }
+  }
   return (
     <Modal
       open
@@ -68,8 +108,41 @@ export function EnvironmentFixDialog({ check, onClose }: Props) {
         <p className="mt-2 text-sm leading-6 text-slate-500">
           {check.suggestion || '请选择官方安装包，完成后返回环境面板重新检查。'}
         </p>
-        <div className="mt-5 grid gap-2">
-          {options.map(option => (
+        {canInstallOnServer ? (
+          <div className="mt-5 grid gap-3 rounded-lg border border-brand-200 bg-brand-50/60 p-4">
+            <div className="grid gap-1">
+              <strong className="text-sm text-brand-900">在工作台内安装</strong>
+              <small className="text-xs leading-5 text-brand-800/75">
+                {isManagedNode
+                  ? 'Node.js 会使用“网络与镜像”中的 Node.js 环境包配置下载 LTS 版本，并校验 SHA-256 后缓存安装；不依赖 npm、Homebrew、WinGet 或系统包管理器。'
+                  : isMacOS
+                  ? '工作台会使用当前 macOS 服务账户的 Homebrew 安装固定依赖，不会打开浏览器。Docker 会安装 CLI 与无桌面运行时 Colima。'
+                  : isWindows
+                    ? '工作台会使用当前 Windows 主机的 WinGet（或 Chocolatey）静默安装固定依赖，不会打开浏览器或外部下载页。'
+                    : '工作台会在当前 Linux 服务器执行固定的包管理安装，不会打开浏览器，也不会传输 sudo 密码。'}
+              </small>
+            </div>
+            <button
+              className="primary-button inline-flex w-fit items-center gap-2"
+              disabled={installing}
+              onClick={() => void installOnServer()}
+            >
+              {installing ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}
+              {installing ? '正在服务器安装…' : `安装 ${check.name}`}
+            </button>
+            <small className="text-xs leading-5 text-slate-500">
+              {isManagedNode
+                ? <>可在“设置 → 网络与镜像 → Node.js 环境包”切换镜像、直连或自定义镜像。Linux/macOS 安装在 AlemonX 缓存目录；Windows 使用已校验的 MSI 静默安装。</>
+                : isMacOS
+                ? <>需要预先安装 Homebrew，且 AlemonX 必须以实际 macOS 用户运行，不能使用 root。</>
+                : isWindows
+                  ? <>需要预先安装 WinGet 或 Chocolatey，并以管理员账户运行服务。Docker Desktop 仅适用于带图形桌面的 Windows；Windows Server/Core 不会自动部署 Docker Desktop。</>
+                  : <>服务进程需以 root 运行，或已配置无交互的 <code>sudo -n</code>。若服务器要求输入密码，请由管理员配置后重试。</>}
+            </small>
+          </div>
+        ) : (
+          <div className="mt-5 grid gap-2">
+            {options.map(option => (
             <a
               className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 p-3 text-brand-700 transition hover:border-brand-200 hover:bg-brand-50"
               href={option.href}
@@ -87,8 +160,14 @@ export function EnvironmentFixDialog({ check, onClose }: Props) {
               </span>
               <ArrowUpRight className="size-4 shrink-0 text-slate-400" />
             </a>
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
+        {message && (
+          <p className="mt-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs leading-5 text-slate-600">
+            {message}
+          </p>
+        )}
         <footer className="mt-5 flex justify-end">
           <button className="primary-button" onClick={onClose}>
             完成

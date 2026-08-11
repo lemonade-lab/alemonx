@@ -19,6 +19,7 @@ import (
 
 	"alemonx/internal/httpcache"
 	"alemonx/internal/packageschema"
+	"alemonx/internal/systemnetwork"
 )
 
 type Item struct {
@@ -46,15 +47,15 @@ type PackageVersions struct {
 }
 
 type PackageConfig struct {
-	Package       string                    `json:"package"`
-	Namespace     string                    `json:"namespace"`
-	Fields        []packageschema.Field     `json:"fields"`
-	Values        map[string]any            `json:"values"`
+	Package       string                     `json:"package"`
+	Namespace     string                     `json:"namespace"`
+	Fields        []packageschema.Field      `json:"fields"`
+	Values        map[string]any             `json:"values"`
 	ConfigSource  packageschema.ConfigSource `json:"configSource,omitempty"`
-	Logo          string                    `json:"logo,omitempty"`
-	Commands      []packageschema.Command   `json:"commands,omitempty"`
-	Platforms     []packageschema.Platform  `json:"platforms,omitempty"`
-	WebServerPort bool                      `json:"webServerPort,omitempty"`
+	Logo          string                     `json:"logo,omitempty"`
+	Commands      []packageschema.Command    `json:"commands,omitempty"`
+	Platforms     []packageschema.Platform   `json:"platforms,omitempty"`
+	WebServerPort bool                       `json:"webServerPort,omitempty"`
 }
 
 var sources = map[string]string{
@@ -67,7 +68,7 @@ func Fetch(kind string) ([]Group, error) {
 	if !ok {
 		return nil, fmt.Errorf("不支持的生态目录")
 	}
-	client := &http.Client{Timeout: 8 * time.Second}
+	client := systemnetwork.DefaultClient(8 * time.Second)
 	var body []byte
 	if candidate := jsDelivrURL(raw); candidate != "" {
 		if response, err := httpcache.Get(client, candidate, 10*time.Minute); err == nil && response.Status == http.StatusOK {
@@ -301,7 +302,7 @@ func LoadPackageVersions(name string) (PackageVersions, error) {
 		return PackageVersions{}, fmt.Errorf("该目录条目不是可查询版本的 npm 包")
 	}
 	endpoint := "https://registry.npmjs.org/" + url.PathEscape(name)
-	client := &http.Client{Timeout: 8 * time.Second}
+	client := systemnetwork.DefaultClient(8 * time.Second)
 	response, err := httpcache.GetWithHeaders(client, endpoint, 15*time.Minute, map[string]string{"Accept": "application/vnd.github+json"})
 	if err != nil || response.Status != http.StatusOK {
 		return PackageVersions{}, fmt.Errorf("无法读取 npm 版本列表，请检查网络后重试")
@@ -343,7 +344,7 @@ func loadRepositoryReleases(source string) (PackageVersions, error) {
 	} else {
 		endpoint = "https://gitee.com/api/v5/repos/" + url.PathEscape(parts[0]) + "/" + url.PathEscape(parts[1]) + "/releases?per_page=100"
 	}
-	client := &http.Client{Timeout: 8 * time.Second}
+	client := systemnetwork.DefaultClient(8 * time.Second)
 	response, err := httpcache.Get(client, endpoint, 15*time.Minute)
 	if err != nil || response.Status != http.StatusOK {
 		return PackageVersions{}, fmt.Errorf("无法读取插件 Release，请检查网络后重试")
@@ -380,7 +381,7 @@ func loadRepositoryTags(host, owner, repository string) (PackageVersions, error)
 	if host == "github.com" {
 		endpoint = "https://api.github.com/repos/" + url.PathEscape(owner) + "/" + url.PathEscape(repository) + "/tags?per_page=100"
 	}
-	response, err := httpcache.GetWithHeaders(&http.Client{Timeout: 8 * time.Second}, endpoint, 15*time.Minute, map[string]string{"Accept": "application/vnd.github+json"})
+	response, err := httpcache.GetWithHeaders(systemnetwork.DefaultClient(8*time.Second), endpoint, 15*time.Minute, map[string]string{"Accept": "application/vnd.github+json"})
 	if err != nil || response.Status != http.StatusOK {
 		return PackageVersions{}, fmt.Errorf("无法读取插件版本，请检查网络后重试")
 	}
@@ -479,7 +480,7 @@ func loadRepositoryFile(source, filename string) ([]byte, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := systemnetwork.DefaultClient(10 * time.Second)
 	for _, candidate := range candidates {
 		response, fetchErr := httpcache.Get(client, candidate, 10*time.Minute)
 		if fetchErr != nil || response.Status != http.StatusOK {

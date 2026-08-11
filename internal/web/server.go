@@ -35,11 +35,13 @@ import (
 	"alemonx/internal/agent"
 	"alemonx/internal/ai"
 	"alemonx/internal/catalog"
+	"alemonx/internal/logging"
 	"alemonx/internal/project"
 	"alemonx/internal/releases"
 	"alemonx/internal/robot"
 	"alemonx/internal/setupplugin"
 	"alemonx/internal/system"
+	"alemonx/internal/systemnetwork"
 )
 
 var systemPickerIDPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{1,63}$`)
@@ -298,10 +300,12 @@ type server struct {
 	assets            fs.FS
 	static            http.Handler
 	checker           *system.Checker
+	network           *systemnetwork.Manager
 	creator           *project.Creator
 	robots            robot.Manager
 	plugins           *setupplugin.Registry
 	pluginWatcher     *setupplugin.Watcher
+	pluginDevelopment *pluginDevelopmentManager
 	auth              *access.Manager
 	ai                *ai.Manager
 	agentSessions     *agent.SessionStore
@@ -350,11 +354,14 @@ type server struct {
 	robotProjectsCache       robotProjectsSnapshot
 	pluginStatusMu           sync.Mutex
 	pluginStatusCache        map[string]*pluginStatusSnapshot
+	hostContextMu            sync.RWMutex
+	hostContexts             map[string]pluginHostContext
 	privilegeStore           *privilegeStore
+	pluginDownloadBroker     *pluginDownloadBroker
 	sudoAttemptMu            sync.Mutex
 	sudoAttempts             map[string]sudoAttempt
 	runNapcatAPTDependencies func(context.Context, []byte) (string, error)
-	chooseSystemPaths        func(system.PickerRequest) ([]string, error)
+	installEnvironment       func(context.Context, string) (string, error)
 }
 
 type pluginStatusSnapshot struct {
@@ -383,8 +390,8 @@ type privilegePreflightRequest struct {
 	PlanID   string `json:"planId,omitempty"`
 }
 
-// systemPickerRequest contains identifiers only. The native dialog's type,
-// title and multi-select policy come from the installed plugin manifest.
+// systemPickerRequest contains identifiers only. The Web Finder's type, title
+// and multi-select policy come from the installed plugin manifest.
 type systemPickerRequest struct {
 	PluginID string `json:"pluginId"`
 	PickerID string `json:"pickerId"`
@@ -442,6 +449,26 @@ type ServerRuntime struct {
 	updateRequested chan struct{}
 }
 
+// SetPluginDownloadBrokerEndpoint supplies the loopback address that plugin
+// runners can use to request host-managed official downloads. It is set by the
+// executable after it has chosen its listening port, never by a browser.
+func (r *ServerRuntime) SetPluginDownloadBrokerEndpoint(endpoint string) {
+	if r == nil || r.server == nil || r.server.pluginDownloadBroker == nil {
+		return
+	}
+	r.server.pluginDownloadBroker.setEndpoint(endpoint)
+}
+
+// PluginDownloadBrokerHandler is intentionally narrower than the main HTTP
+// handler. It is served only from a private loopback listener for runners, so
+// a non-loopback workbench deployment never has to weaken Broker validation.
+func (r *ServerRuntime) PluginDownloadBrokerHandler() http.Handler {
+	if r == nil || r.server == nil {
+		return http.NotFoundHandler()
+	}
+	return http.HandlerFunc(r.server.pluginDownloadBrokerHandler)
+}
+
 // RequestUpdateShutdown lets a completed update use the same graceful path as
 // SIGTERM instead of terminating the process from an HTTP handler.
 func (r *ServerRuntime) RequestUpdateShutdown() {
@@ -474,6 +501,9 @@ func (r *ServerRuntime) Shutdown(ctx context.Context) error {
 		s.stopGoalScheduler()
 		if s.pluginWatcher != nil {
 			s.pluginWatcher.Stop()
+		}
+		if s.pluginDevelopment != nil {
+			s.pluginDevelopment.close()
 		}
 		if s.mcpMonitorStop != nil {
 			select {
@@ -559,12 +589,13 @@ var goals = []goal{
 
 func githubMirrors(repository string) []mirror {
 	url := "https://github.com/lemonade-lab/" + repository + "/releases/latest"
-	return []mirror{
-		{Name: "GitHub 官方", URL: url},
-		{Name: "GitHub 加速（gh-proxy）", URL: "https://gh-proxy.com/" + url},
-		{Name: "GitHub 加速（v6 节点）", URL: "https://v6.gh-proxy.org/" + url},
-		{Name: "GitHub 加速（ghproxy.net）", URL: "https://ghproxy.net/" + url},
+	result := make([]mirror, 0, len(systemnetwork.MirrorPresets(systemnetwork.RouteGitHub))+1)
+	for _, preset := range systemnetwork.MirrorPresets(systemnetwork.RouteGitHub) {
+		if rewritten, err := systemnetwork.RewriteTemplate(preset.Value, url); err == nil {
+			result = append(result, mirror{Name: "GitHub 加速（" + preset.Label + "）", URL: rewritten})
+		}
 	}
+	return append(result, mirror{Name: "GitHub 官方", URL: url})
 }
 
 func NewServer(version string, staticFiles fs.FS, templateFiles ...fs.FS) http.Handler {
@@ -594,6 +625,12 @@ func NewServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	if err != nil {
 		panic(err)
 	}
+	networkManager, networkErr := systemnetwork.New()
+	if networkErr != nil {
+		log.Printf("系统联网配置不可用，已使用临时默认配置：%v", networkErr)
+		networkManager, _ = systemnetwork.NewAt("")
+	}
+	systemnetwork.SetDefault(networkManager)
 	sessionStore, err := agent.NewSessionStore()
 	if err != nil {
 		panic(err)
@@ -636,7 +673,11 @@ func NewServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	if privilegeErr != nil {
 		log.Printf("权限审计存储不可用：%v", privilegeErr)
 	}
-	s := &server{version: version, assets: assets, static: http.FileServer(http.FS(assets)), checker: system.NewChecker(), plugins: setupplugin.NewRegistry(), auth: identity, ai: aiManager, agentSessions: sessionStore, agentTaskStore: taskStore, agentTasks: tasks, taskService: &agent.TaskService{Manager: tasks}, goalStore: goalStore, opsStore: opsStore, opsPaused: opsStartupErr != nil, goalSchedulerStop: make(chan struct{}), goalRunning: map[string]bool{}, agentConfirms: newAgentConfirmManager(), development: map[string]developmentProcess{}, webviewRuntimes: map[string]*webViewRuntime{}, stopping: map[string]bool{}, consoleCache: map[string]consoleSnapshot{}, outputBuffers: map[string]*operationOutputBuffer{}, directoryRoots: managedDirectoryRoots(), events: newRobotEventHub(), eventGateway: newEventGateway(), operationEvents: operationEvents, operations: operationEvents.snapshot(), opsEvents: newOpsEventHub(), mcpEvents: newMCPEventHub(), mcpMonitorStop: make(chan struct{}), pluginEventsStop: make(chan struct{}), updateMonitorStop: make(chan struct{}), updateState: updateStatusState{Update: releases.Update{Current: version}}, nodeID: fmt.Sprintf("%s-%d", hostname(), os.Getpid()), pluginStatusCache: map[string]*pluginStatusSnapshot{}, privilegeStore: privileges, sudoAttempts: map[string]sudoAttempt{}, runNapcatAPTDependencies: system.InstallNapCatAPTDependencies, chooseSystemPaths: system.Choose}
+	plugins := setupplugin.NewRegistry()
+	downloadBroker := newPluginDownloadBroker(networkManager)
+	plugins.SetRunnerEnvironmentProvider(downloadBroker.environment)
+	s := &server{version: version, assets: assets, static: http.FileServer(http.FS(assets)), checker: system.NewChecker(), network: networkManager, plugins: plugins, auth: identity, ai: aiManager, agentSessions: sessionStore, agentTaskStore: taskStore, agentTasks: tasks, taskService: &agent.TaskService{Manager: tasks}, goalStore: goalStore, opsStore: opsStore, opsPaused: opsStartupErr != nil, goalSchedulerStop: make(chan struct{}), goalRunning: map[string]bool{}, agentConfirms: newAgentConfirmManager(), development: map[string]developmentProcess{}, webviewRuntimes: map[string]*webViewRuntime{}, stopping: map[string]bool{}, consoleCache: map[string]consoleSnapshot{}, outputBuffers: map[string]*operationOutputBuffer{}, directoryRoots: managedDirectoryRoots(), events: newRobotEventHub(), eventGateway: newEventGateway(), operationEvents: operationEvents, operations: operationEvents.snapshot(), opsEvents: newOpsEventHub(), mcpEvents: newMCPEventHub(), mcpMonitorStop: make(chan struct{}), pluginEventsStop: make(chan struct{}), updateMonitorStop: make(chan struct{}), updateState: updateStatusState{Update: releases.Update{Current: version}}, nodeID: fmt.Sprintf("%s-%d", hostname(), os.Getpid()), pluginStatusCache: map[string]*pluginStatusSnapshot{}, hostContexts: map[string]pluginHostContext{}, privilegeStore: privileges, pluginDownloadBroker: downloadBroker, sudoAttempts: map[string]sudoAttempt{}, runNapcatAPTDependencies: system.InstallNapCatAPTDependencies, installEnvironment: system.InstallEnvironment}
+	s.pluginDevelopment = newPluginDevelopmentManager(plugins, filepath.Join(filepath.Dir(taskStore.TasksDir()), "setup-plugins", "development.json"))
 	if opsStartupErr != nil {
 		log.Printf("AI 运维 SQLite 初始化失败，已回退 JSON 并暂停自动维护: %v", opsStartupErr)
 	}
@@ -877,9 +918,15 @@ func NewServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	mux.HandleFunc("/api/v1/events/diagnostics", s.eventsHandler)
 	mux.HandleFunc("/api/v1/system/ssh", s.sshHandler)
 	mux.HandleFunc("/api/v1/system/service", s.systemServiceHandler)
+	mux.HandleFunc("/api/v1/system/environment/install", s.environmentInstallHandler)
+	mux.HandleFunc("/api/v1/system/network", s.systemNetworkHandler)
+	mux.HandleFunc(pluginDownloadBrokerPath, s.pluginDownloadBrokerHandler)
 	mux.HandleFunc("/api/v1/system/mcp", s.systemMCPHandler)
 	mux.HandleFunc("/api/v1/system/events", s.systemEventsHandler)
 	mux.HandleFunc("/api/v1/system/picker", s.systemPickerHandler)
+	mux.HandleFunc("/api/v1/system/capabilities/finder", s.systemCapabilityFinderHandler)
+	mux.HandleFunc("/api/v1/system/capabilities/context", s.systemCapabilityContextHandler)
+	mux.HandleFunc("/api/v1/system/context/robot", s.systemCurrentRobotHandler)
 	mux.HandleFunc("/api/v1/system/privileged/status", s.privilegedStatusHandler)
 	mux.HandleFunc("/api/v1/system/privileged/preflight", s.privilegedPreflightHandler)
 	mux.HandleFunc("/api/v1/system/privileged/audit", s.privilegedAuditHandler)
@@ -894,6 +941,8 @@ func NewServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	mux.HandleFunc("/api/v1/setup/plugins/events", s.setupPluginEventsHandler)
 	mux.HandleFunc("/api/v1/setup/plugins/cache", s.setupPluginCacheHandler)
 	mux.HandleFunc("/api/v1/setup/plugins/releases/", s.setupPluginReleasesHandler)
+	mux.HandleFunc("/api/v1/setup/plugins/development", s.setupPluginDevelopmentHandler)
+	mux.HandleFunc("/api/v1/setup/plugins/development/", s.setupPluginDevelopmentHandler)
 	mux.HandleFunc("/api/v1/setup/plugins/", s.setupPluginActionHandler)
 	mux.HandleFunc("/api/v1/setup/plugins/web/", s.setupPluginWebHandler)
 	mux.HandleFunc("/api/v1/services", s.localServicesHandler)
@@ -1493,6 +1542,11 @@ func (s *server) startPluginEventBridge() {
 
 func (s *server) setupPluginActionHandler(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/v1/setup/plugins/"), "/")
+	if s.plugins != nil && len(parts) > 0 && parts[0] != "" {
+		if plugin, err := s.plugins.Find(parts[0]); err == nil && plugin.DevelopmentSource && !s.requirePluginDevelopment(w, r) {
+			return
+		}
+	}
 	if len(parts) == 2 && parts[1] == "status" && r.Method == http.MethodGet {
 		action := strings.TrimSpace(r.URL.Query().Get("action"))
 		if !setupPluginStatusAction(action) || len(r.URL.Query()) != 1 {
@@ -1904,6 +1958,9 @@ func (s *server) setupPluginWebHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "未找到插件 Web 界面。")
 		return
 	}
+	if plugin.DevelopmentSource && !s.requirePluginDevelopment(w, r) {
+		return
+	}
 	root, err := plugin.WebRoot()
 	if err != nil {
 		writeError(w, http.StatusNotFound, "插件 Web 界面不可用。")
@@ -1916,6 +1973,11 @@ func (s *server) setupPluginWebHandler(w http.ResponseWriter, r *http.Request) {
 	requestPath = strings.TrimPrefix(filepath.ToSlash(requestPath), "/")
 	if requestPath == "" {
 		requestPath = "index.html"
+	}
+	if requestPath == "finder-bridge.js" {
+		w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+		_, _ = io.WriteString(w, setupPluginFinderBridge())
+		return
 	}
 	clean := filepath.Clean(requestPath)
 	if clean == "." || filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
@@ -1947,9 +2009,55 @@ func (s *server) setupPluginWebHandler(w http.ResponseWriter, r *http.Request) {
 	// Same-origin UI that may call the plugin action API. The shipped plugin
 	// pages (e.g. alemonx-qq) use inline scripts, so script-src must allow
 	// 'unsafe-inline'. frame-ancestors keeps it embeddable only from the
-	// loopback management UI.
-	w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data: blob: https: http:; style-src 'self' 'unsafe-inline'; frame-ancestors http://localhost:* http://127.0.0.1:*; base-uri 'none'")
+	// same management origin, including a deployed server address.
+	w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data: blob: https: http:; style-src 'self' 'unsafe-inline'; frame-ancestors 'self'; base-uri 'none'")
+	if filepath.Ext(resolved) == ".html" {
+		content, readErr := os.ReadFile(resolved)
+		if readErr != nil {
+			writeError(w, http.StatusNotFound, "插件 Web 资源不存在。")
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = io.WriteString(w, rewriteSetupPluginWebHTML(string(content)))
+		return
+	}
 	http.ServeFile(w, r, resolved)
+}
+
+// rewriteSetupPluginWebHTML injects the deliberately narrow Finder bridge.
+// It preserves the plugin's existing fetch contract while keeping directory
+// selection in the host workbench's Web UI.
+func rewriteSetupPluginWebHTML(content string) string {
+	const bridge = `<script src="finder-bridge.js"></script>`
+	if strings.Contains(content, "</head>") {
+		return strings.Replace(content, "</head>", bridge+"</head>", 1)
+	}
+	return bridge + content
+}
+
+// injectSetupPluginFinderBridge applies the same bridge to an HTML document
+// coming from a source-plugin development server. It intentionally skips
+// compressed/non-HTML responses, which must remain byte-for-byte proxied.
+func injectSetupPluginFinderBridge(response *http.Response) {
+	if response.StatusCode != http.StatusOK || !strings.HasPrefix(response.Header.Get("Content-Type"), "text/html") {
+		return
+	}
+	if encoding := response.Header.Get("Content-Encoding"); encoding != "" && encoding != "identity" {
+		return
+	}
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		return
+	}
+	_ = response.Body.Close()
+	rewritten := []byte(rewriteSetupPluginWebHTML(string(body)))
+	response.Body = io.NopCloser(bytes.NewReader(rewritten))
+	response.ContentLength = int64(len(rewritten))
+	response.Header.Set("Content-Length", strconv.Itoa(len(rewritten)))
+}
+
+func setupPluginFinderBridge() string {
+	return `(function(){var nativeFetch=window.fetch;var serial=0;var pending={};function finderRequest(input,init){var url;try{url=new URL(input instanceof Request?input.url:input,location.href)}catch(_){return null}if(url.origin!==location.origin||(url.pathname!=='/api/v1/system/capabilities/finder'&&url.pathname!=='/api/v1/system/picker'))return null;var body=init&&init.body;if(typeof body!=='string')return null;var payload;try{payload=JSON.parse(body)}catch(_){return null}if(!payload||typeof payload.pluginId!=='string'||typeof payload.pickerId!=='string')return null;return payload}function response(status,body){return new Response(JSON.stringify(body),{status:status,headers:{'Content-Type':'application/json'}})}window.fetch=function(input,init){var payload=finderRequest(input,init);if(!payload)return nativeFetch.apply(this,arguments);var requestId='finder-'+Date.now().toString(36)+'-'+(++serial).toString(36);return new Promise(function(resolve){pending[requestId]=resolve;parent.postMessage({source:'alx-setup-plugin',type:'finder-request',requestId:requestId,pluginId:payload.pluginId,pickerId:payload.pickerId},location.origin);window.setTimeout(function(){if(!pending[requestId])return;delete pending[requestId];resolve(response(408,{error:'等待工作台 Finder 选择超时。'}))},10*60*1000)})};window.addEventListener('message',function(event){if(event.origin!==location.origin)return;var data=event.data;if(!data||data.source!=='alx-parent'||data.type!=='finder-result'||typeof data.requestId!=='string')return;var resolve=pending[data.requestId];if(!resolve)return;delete pending[data.requestId];resolve(response(data.error?400:200,data.error?{error:data.error}:{paths:Array.isArray(data.paths)?data.paths:[]}))})})();`
 }
 
 func (s *server) sshHandler(w http.ResponseWriter, r *http.Request) {
@@ -2156,55 +2264,6 @@ func (s *server) privilegedStatusHandler(w http.ResponseWriter, r *http.Request)
 		response["network"] = map[string]any{"enabled": false, "reason": networkReason.Error()}
 	}
 	writeJSON(w, http.StatusOK, response)
-}
-
-// systemPickerHandler is the single host boundary for native file and
-// directory selection. It deliberately rejects remote/reverse-proxied calls:
-// a server must never pop a desktop picker and disclose its paths to a remote
-// browser. Plugins can select only pickers declared in their own manifest.
-func (s *server) systemPickerHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
-		return
-	}
-	if !s.localSystemDialogRequest(r) {
-		writeError(w, http.StatusForbidden, "系统文件与目录选择器只能在本机桌面工作台中打开。")
-		return
-	}
-	status, err := s.auth.Status(s.authToken(r))
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	if status.Enabled && !status.Authenticated {
-		writeError(w, http.StatusUnauthorized, "请先登录工作台后再选择本机文件。")
-		return
-	}
-	var input systemPickerRequest
-	if err := json.NewDecoder(io.LimitReader(r.Body, 16<<10)).Decode(&input); err != nil || !systemPickerIDPattern.MatchString(strings.TrimSpace(input.PluginID)) || !systemPickerIDPattern.MatchString(strings.TrimSpace(input.PickerID)) {
-		writeError(w, http.StatusBadRequest, "请选择有效的系统文件或目录选择器。")
-		return
-	}
-	plugin, err := s.plugins.Find(input.PluginID)
-	if err != nil || plugin.Online || !plugin.Enabled {
-		writeError(w, http.StatusNotFound, "系统插件未安装或已停用。")
-		return
-	}
-	picker, ok := plugin.SystemPicker(input.PickerID)
-	if !ok {
-		writeError(w, http.StatusForbidden, "该插件未声明此系统选择器。")
-		return
-	}
-	choose := s.chooseSystemPaths
-	if choose == nil {
-		choose = system.Choose
-	}
-	paths, err := choose(system.PickerRequest{Kind: picker.Kind, Title: picker.Title, Multiple: picker.Multiple})
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"paths": paths})
 }
 
 func (s *server) localSystemDialogRequest(r *http.Request) bool {
@@ -2823,6 +2882,56 @@ func (s *server) updateStatusHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, transaction)
+}
+
+// systemNetworkHandler owns AlemonX-managed content networking. It
+// deliberately does not touch project git/npm settings, robot processes or
+// WebView traffic.
+func (s *server) systemNetworkHandler(w http.ResponseWriter, r *http.Request) {
+	if s.network == nil {
+		writeError(w, http.StatusServiceUnavailable, "系统联网配置暂不可用。")
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, http.StatusOK, s.network.Settings())
+	case http.MethodPut:
+		var input systemnetwork.Settings
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+			writeError(w, http.StatusBadRequest, "请求内容无法识别。")
+			return
+		}
+		saved, err := s.network.Save(input)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, saved)
+	case http.MethodPost:
+		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+		defer cancel()
+		route := systemnetwork.Route(strings.TrimSpace(r.URL.Query().Get("target")))
+		result := s.network.Test(ctx, route)
+		if !result.OK {
+			status := http.StatusBadGateway
+			if result.Target == "" {
+				status = http.StatusBadRequest
+			}
+			writeJSON(w, status, result)
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
+	}
+}
+
+func (s *server) pluginDownloadBrokerHandler(w http.ResponseWriter, r *http.Request) {
+	if s.pluginDownloadBroker == nil {
+		writeError(w, http.StatusServiceUnavailable, "插件官方下载服务不可用。")
+		return
+	}
+	s.pluginDownloadBroker.serveHTTP(w, r)
 }
 
 func (s *server) systemServiceHandler(w http.ResponseWriter, r *http.Request) {
@@ -5953,7 +6062,18 @@ func (s *server) health(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *server) listGoals(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, goals)
+	result := append([]goal(nil), goals...)
+	if s.network != nil {
+		for index := range result {
+			if result[index].DownloadURL == "" {
+				continue
+			}
+			if rewritten, err := s.network.RewriteURL(result[index].DownloadURL); err == nil {
+				result[index].DownloadURL = rewritten
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (s *server) checksHandler(w http.ResponseWriter, r *http.Request) {
@@ -5981,6 +6101,51 @@ func (s *server) checksHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, s.checker.CheckGoal(input.GoalID, input.Variant))
+}
+
+// environmentInstallHandler installs only a fixed prerequisite package set. It
+// supports a browser connected to a remote server: no desktop dialog and no
+// administrator password are involved.
+func (s *server) environmentInstallHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
+		return
+	}
+	var input struct {
+		CheckID string `json:"checkId"`
+		Confirm bool   `json:"confirm"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 16<<10)).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, "环境安装请求无效。")
+		return
+	}
+	if !input.Confirm {
+		writeError(w, http.StatusBadRequest, "请确认在服务器安装此环境。")
+		return
+	}
+	if s.auth != nil {
+		status, err := s.auth.Status(s.authToken(r))
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "无法读取当前账户权限。")
+			return
+		}
+		if status.Enabled && (!status.Authenticated || !status.SuperAdmin) {
+			writeError(w, http.StatusForbidden, "只有已登录的超级管理员可以安装服务器环境。")
+			return
+		}
+	}
+	install := s.installEnvironment
+	if install == nil {
+		install = system.InstallEnvironment
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
+	defer cancel()
+	output, installErr := install(ctx, input.CheckID)
+	if installErr != nil {
+		writeError(w, http.StatusBadRequest, installErr.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"output": output})
 }
 
 func findGoal(id string) (goal, bool) {
@@ -6013,6 +6178,7 @@ func (s *server) ginHeaders() gin.HandlerFunc {
 		if !strings.HasPrefix(c.Request.URL.Path, "/api/v1/robot/webview/") &&
 			!strings.HasPrefix(c.Request.URL.Path, "/api/v1/robot/app/") &&
 			!strings.HasPrefix(c.Request.URL.Path, "/api/v1/services/") &&
+			!strings.HasPrefix(c.Request.URL.Path, "/api/v1/setup/plugins/development/") &&
 			!strings.HasPrefix(c.Request.URL.Path, "/api/v1/setup/plugins/web/") {
 			c.Header("X-Frame-Options", "DENY")
 		}
@@ -6025,6 +6191,13 @@ func (s *server) ginHeaders() gin.HandlerFunc {
 func (s *server) ginAccess() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		path := c.Request.URL.Path
+		// A runner has no browser session. This isolated endpoint authenticates a
+		// short-lived loopback token in its own handler and never accepts cookies
+		// or a remote/reverse-proxied request.
+		if path == pluginDownloadBrokerPath {
+			c.Next()
+			return
+		}
 		if !strings.HasPrefix(path, "/api/v1/") || path == "/api/v1/auth/status" || path == "/api/v1/auth/setup" || path == "/api/v1/auth/login" || path == "/api/v1/auth/logout" || strings.HasPrefix(path, "/api/v1/robot/webview/") || strings.HasPrefix(path, "/api/v1/robot/app/") {
 			c.Next()
 			return
@@ -6066,6 +6239,12 @@ func requiredPermissionForRequest(r *http.Request) string {
 	if strings.HasPrefix(path, "/api/v1/auth/") {
 		return ""
 	}
+	// The main dashboard updates only its own validated active-project context
+	// here. This is safe for a viewer and lets a plugin later read the same
+	// narrow context only if its own capability and endpoint permissions allow.
+	if path == "/api/v1/system/context/robot" {
+		return "workbench.view"
+	}
 	if strings.HasPrefix(path, "/api/v1/ops") {
 		if r.Method == http.MethodGet || r.Method == http.MethodHead {
 			return "operations.view"
@@ -6086,15 +6265,20 @@ func (s *server) ginRequestLog() gin.HandlerFunc {
 		id := s.requestID.Add(1)
 		started := time.Now()
 		c.Set("requestID", id)
-		log.Printf("[GIN %06d] 开始 %s %s", id, c.Request.Method, c.Request.URL.Path)
-		if query := c.Request.URL.RawQuery; query != "" {
-			// The browser always sends query params (root, file, page, …); echo
-			// them so a front-end action is traceable from the console.
-			log.Printf("[GIN %06d] 参数 %s", id, query)
+		requestFields := logging.Fields{
+			"request_id":    id,
+			"method":        c.Request.Method,
+			"path":          c.Request.URL.Path,
+			"content_type":  c.GetHeader("Content-Type"),
+			"request_bytes": c.Request.ContentLength,
+		}
+		if query := loggableQuery(c.Request.URL.Query()); len(query) > 0 {
+			requestFields["query"] = query
 		}
 		if body := s.loggableRequestBody(c); body != "" {
-			log.Printf("[GIN %06d] 请求 %s", id, body)
+			requestFields["body"] = logging.RawJSON(body)
 		}
+		logging.InfoEvent("http.request.started", requestFields)
 		// Capture the response body so a failed request's error is visible in
 		// the console, not only pasted back to the browser. Only failed
 		// responses are logged, and only their body.
@@ -6102,15 +6286,51 @@ func (s *server) ginRequestLog() gin.HandlerFunc {
 		c.Writer = captured
 		c.Next()
 		status := c.Writer.Status()
-		label := "完成"
+		level := logging.Info
+		outcome := "success"
+		responseMessage := ""
 		if status >= http.StatusBadRequest {
-			label = "失败"
-			if msg := captured.message(); msg != "" {
-				log.Printf("[GIN %06d] 响应 %s", id, msg)
+			outcome = "client_error"
+			if status >= http.StatusInternalServerError {
+				outcome = "server_error"
+				level = logging.Error
+			} else {
+				level = logging.Warn
 			}
+			responseMessage = captured.message()
 		}
-		log.Printf("[GIN %06d] %s status=%d duration=%s response=%dB", id, label, status, time.Since(started).Round(time.Millisecond), c.Writer.Size())
+		responseFields := logging.Fields{
+			"request_id":     id,
+			"method":         c.Request.Method,
+			"path":           c.Request.URL.Path,
+			"status":         status,
+			"outcome":        outcome,
+			"duration_ms":    time.Since(started).Milliseconds(),
+			"response_bytes": c.Writer.Size(),
+		}
+		if responseMessage != "" {
+			responseFields["response"] = logging.RawJSON(responseMessage)
+		}
+		logging.Event(level, "http.request.completed", responseFields)
 	}
+}
+
+// loggableQuery returns query parameters as an object and redacts credentials
+// before they can reach a terminal, a CI transcript, or a service log.
+func loggableQuery(values url.Values) map[string]any {
+	result := make(map[string]any, len(values))
+	for key, values := range values {
+		if sensitiveLogField(key) {
+			result[key] = "[REDACTED]"
+			continue
+		}
+		if len(values) == 1 {
+			result[key] = values[0]
+		} else {
+			result[key] = values
+		}
+	}
+	return result
 }
 
 // captureWriter buffers the response body so request logging can surface the
@@ -6175,17 +6395,25 @@ func redactRequestFields(value any) {
 	switch item := value.(type) {
 	case map[string]any:
 		for key, child := range item {
-			switch strings.ToLower(strings.ReplaceAll(key, "-", "")) {
-			case "token", "password", "sudopassword", "confirmation", "content", "message", "values":
+			if sensitiveLogField(key) {
 				item[key] = "[REDACTED]"
-			default:
-				redactRequestFields(child)
+				continue
 			}
+			redactRequestFields(child)
 		}
 	case []any:
 		for _, child := range item {
 			redactRequestFields(child)
 		}
+	}
+}
+
+func sensitiveLogField(key string) bool {
+	switch strings.ToLower(strings.ReplaceAll(key, "-", "")) {
+	case "token", "password", "sudopassword", "confirmation", "content", "message", "values", "authorization", "apikey", "secret":
+		return true
+	default:
+		return false
 	}
 }
 

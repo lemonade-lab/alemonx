@@ -27,6 +27,7 @@ import (
 	"alemonx/internal/robot"
 	"alemonx/internal/setupplugin"
 	"alemonx/internal/system"
+	"alemonx/internal/systemnetwork"
 	"golang.org/x/net/websocket"
 )
 
@@ -67,6 +68,71 @@ func TestUpdateStatusReportsIdleAndPersistedTransaction(t *testing.T) {
 	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/update/status", nil))
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"phase":"staged"`) || !strings.Contains(response.Body.String(), `"targetVersion":"v1.2.3"`) {
 		t.Fatalf("staged update status = %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestSystemNetworkSettingsSaveWithoutLeakingProxyCredentials(t *testing.T) {
+	manager, err := systemnetwork.NewAt(filepath.Join(t.TempDir(), "network.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &server{network: manager}
+
+	update := httptest.NewRequest(
+		http.MethodPut,
+		"/api/v1/system/network",
+		strings.NewReader(`{"routes":{"github":{"mode":"manual","proxyUrl":"http://name:secret@127.0.0.1:7890"}}}`),
+	)
+	recorder := httptest.NewRecorder()
+	s.systemNetworkHandler(recorder, update)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("save network settings = %d %s", recorder.Code, recorder.Body.String())
+	}
+	if strings.Contains(recorder.Body.String(), "secret") {
+		t.Fatalf("proxy credential leaked from API: %s", recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), `"hasCredentials":true`) {
+		t.Fatalf("credential presence missing from API: %s", recorder.Body.String())
+	}
+
+	read := httptest.NewRecorder()
+	s.systemNetworkHandler(read, httptest.NewRequest(http.MethodGet, "/api/v1/system/network", nil))
+	if read.Code != http.StatusOK || strings.Contains(read.Body.String(), "secret") || !strings.Contains(read.Body.String(), `"proxyUrl":"http://127.0.0.1:7890"`) {
+		t.Fatalf("read network settings = %d %s", read.Code, read.Body.String())
+	}
+}
+
+func TestGoalsApplyOfficialDownloadMirror(t *testing.T) {
+	manager, err := systemnetwork.NewAt(filepath.Join(t.TempDir(), "network.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Save(systemnetwork.Settings{Routes: map[systemnetwork.Route]systemnetwork.RouteSettings{
+		systemnetwork.RouteOfficial: {Mode: systemnetwork.ModeCustomMirror, MirrorURL: "https://download-mirror.example/{url}"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	(&server{network: manager}).listGoals(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/goals", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("goals status = %d", recorder.Code)
+	}
+	if !strings.Contains(recorder.Body.String(), "https://download-mirror.example/https://download.alemonjs.com/application/alemonapp/app-universal-release.apk") {
+		t.Fatalf("official mirror missing from goals: %s", recorder.Body.String())
+	}
+}
+
+func TestGitHubDownloadGuideUsesSystemMirrorPresets(t *testing.T) {
+	presets := systemnetwork.MirrorPresets(systemnetwork.RouteGitHub)
+	mirrors := githubMirrors("alx")
+	if len(mirrors) != len(presets)+1 {
+		t.Fatalf("guide mirrors = %#v, presets = %#v", mirrors, presets)
+	}
+	if mirrors[0].Name != "GitHub 加速（"+presets[0].Label+"）" || !strings.Contains(mirrors[0].URL, "ghfast.top/") {
+		t.Fatalf("recommended guide mirror = %#v", mirrors[0])
+	}
+	if mirrors[len(mirrors)-1].Name != "GitHub 官方" {
+		t.Fatalf("official guide mirror = %#v", mirrors[len(mirrors)-1])
 	}
 }
 
@@ -117,6 +183,25 @@ func TestLoggableRequestBodyLeavesLargeBodyUntouched(t *testing.T) {
 	after, err := io.ReadAll(ginCtx.Request.Body)
 	if err != nil || !bytes.Equal(after, large) {
 		t.Fatalf("large body truncated: got %d bytes, want %d (err %v)", len(after), len(large), err)
+	}
+}
+
+func TestLoggableQueryRedactsCredentials(t *testing.T) {
+	values := url.Values{
+		"root":  {"/tmp/example"},
+		"token": {"sekrit"},
+		"tag":   {"stable", "latest"},
+	}
+	logged := loggableQuery(values)
+	if logged["token"] != "[REDACTED]" {
+		t.Fatalf("token = %#v", logged["token"])
+	}
+	if logged["root"] != "/tmp/example" {
+		t.Fatalf("root = %#v", logged["root"])
+	}
+	tags, ok := logged["tag"].([]string)
+	if !ok || len(tags) != 2 {
+		t.Fatalf("tag = %#v", logged["tag"])
 	}
 }
 
@@ -391,7 +476,7 @@ func newStatefulTestServer() *server {
 	}
 }
 
-func TestSystemPickerUsesOnlyDeclaredLocalPluginPicker(t *testing.T) {
+func TestSystemPickerUsesOnlyDeclaredWebFinderPicker(t *testing.T) {
 	root := t.TempDir()
 	pluginRoot := filepath.Join(root, "alemonx-qq")
 	if err := os.MkdirAll(pluginRoot, 0o755); err != nil {
@@ -405,37 +490,85 @@ func TestSystemPickerUsesOnlyDeclaredLocalPluginPicker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var selected system.PickerRequest
 	s := &server{
 		plugins: setupplugin.NewRegistry(root),
 		auth:    identity,
-		chooseSystemPaths: func(request system.PickerRequest) ([]string, error) {
-			selected = request
-			return []string{"/tmp/napcat"}, nil
-		},
 	}
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/system/picker", strings.NewReader(`{"pluginId":"alemonx-qq","pickerId":"napcat-directory"}`))
-	request.RemoteAddr = "127.0.0.1:1234"
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/system/capabilities/finder", strings.NewReader(`{"pluginId":"alemonx-qq","pickerId":"napcat-directory"}`))
 	response := httptest.NewRecorder()
-	s.systemPickerHandler(response, request)
-	if response.Code != http.StatusOK || selected.Kind != system.PickerDirectory || selected.Title != "选择现有 NapCat 安装目录" {
-		t.Fatalf("response=%d %s selected=%#v", response.Code, response.Body.String(), selected)
+	s.systemCapabilityFinderHandler(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"kind":"directory"`) || !strings.Contains(response.Body.String(), "选择现有 NapCat 安装目录") {
+		t.Fatalf("response=%d %s", response.Code, response.Body.String())
 	}
 
 	remote := httptest.NewRequest(http.MethodPost, "/api/v1/system/picker", strings.NewReader(`{"pluginId":"alemonx-qq","pickerId":"napcat-directory"}`))
-	remote.RemoteAddr = "203.0.113.9:1234"
 	response = httptest.NewRecorder()
 	s.systemPickerHandler(response, remote)
-	if response.Code != http.StatusForbidden {
-		t.Fatalf("remote picker = %d %s", response.Code, response.Body.String())
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"pickerId":"napcat-directory"`) {
+		t.Fatalf("compatibility picker = %d %s", response.Code, response.Body.String())
 	}
 
 	unknown := httptest.NewRequest(http.MethodPost, "/api/v1/system/picker", strings.NewReader(`{"pluginId":"alemonx-qq","pickerId":"anything-else"}`))
-	unknown.RemoteAddr = "127.0.0.1:1234"
 	response = httptest.NewRecorder()
-	s.systemPickerHandler(response, unknown)
+	s.systemCapabilityFinderHandler(response, unknown)
 	if response.Code != http.StatusForbidden {
 		t.Fatalf("undeclared picker = %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestEnvironmentInstallRequiresConfirmationAndUsesFixedCheckID(t *testing.T) {
+	called := ""
+	s := &server{
+		installEnvironment: func(_ context.Context, checkID string) (string, error) {
+			called = checkID
+			return "installed", nil
+		},
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/system/environment/install", strings.NewReader(`{"checkId":"node","confirm":true}`))
+	response := httptest.NewRecorder()
+	s.environmentInstallHandler(response, request)
+	if response.Code != http.StatusOK || called != "node" || !strings.Contains(response.Body.String(), "installed") {
+		t.Fatalf("response=%d %s called=%q", response.Code, response.Body.String(), called)
+	}
+
+	called = ""
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/system/environment/install", strings.NewReader(`{"checkId":"git","confirm":false}`))
+	response = httptest.NewRecorder()
+	s.environmentInstallHandler(response, request)
+	if response.Code != http.StatusBadRequest || called != "" {
+		t.Fatalf("unconfirmed response=%d %s called=%q", response.Code, response.Body.String(), called)
+	}
+}
+
+func TestPluginContextCapabilityIsDeclaredAndSanitized(t *testing.T) {
+	root := t.TempDir()
+	pluginRoot := filepath.Join(root, "context-plugin")
+	if err := os.MkdirAll(pluginRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := `{"id":"context-plugin","name":"Context","version":"1.0.0","web":{"root":"web"},"hostCapabilities":["robot-context","network-context"]}`
+	if err := os.WriteFile(filepath.Join(pluginRoot, "alx.json"), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	network, err := systemnetwork.NewAt(filepath.Join(t.TempDir(), "network.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := network.Save(systemnetwork.Settings{Routes: map[systemnetwork.Route]systemnetwork.RouteSettings{systemnetwork.RouteGitHub: {Mode: systemnetwork.ModeManual, ProxyURL: "http://name:secret@127.0.0.1:7890"}}}); err != nil {
+		t.Fatal(err)
+	}
+	s := &server{plugins: setupplugin.NewRegistry(root), network: network, hostContexts: map[string]pluginHostContext{"local": {RobotRoot: "/robots/demo"}}}
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/system/capabilities/context?pluginId=context-plugin&keys=robot,network", nil)
+	response := httptest.NewRecorder()
+	s.systemCapabilityContextHandler(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"root":"/robots/demo"`) || strings.Contains(response.Body.String(), "secret") {
+		t.Fatalf("context = %d %s", response.Code, response.Body.String())
+	}
+
+	denied := httptest.NewRecorder()
+	s.systemCapabilityContextHandler(denied, httptest.NewRequest(http.MethodGet, "/api/v1/system/capabilities/context?pluginId=context-plugin&keys=finder", nil))
+	if denied.Code != http.StatusBadRequest {
+		t.Fatalf("unsupported context = %d %s", denied.Code, denied.Body.String())
 	}
 }
 

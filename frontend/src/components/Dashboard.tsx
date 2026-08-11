@@ -154,6 +154,12 @@ import {
   useSwitchSetupPluginVersionMutation,
   useDeleteSetupPluginVersionMutation,
   useCleanupSetupPluginCacheMutation,
+  useSetupPluginDevelopmentQuery,
+  useRegisterSetupPluginDevelopmentMutation,
+  useRunSetupPluginDevelopmentMutation,
+  useRemoveSetupPluginDevelopmentMutation,
+  useLazySetupPluginDevelopmentLogsQuery,
+  useSetSystemCurrentRobotMutation,
   useSystemMcpQuery,
   useSetupPluginsQuery,
   useStartRobotTaskMutation,
@@ -167,7 +173,8 @@ import {
   type PackageConfigField,
   type SetupPlugin,
   type SetupPluginRelease,
-  type SetupPluginVersion
+  type SetupPluginVersion,
+  type SetupPluginDevelopment
 } from '../store/workspaceApi'
 import {
   addProjects,
@@ -367,6 +374,7 @@ function operationErrorMessage(reason: unknown, fallback: string) {
 
 export function DirectoryPicker({
   open,
+  title = '选择目录',
   multiple = true,
   priority = false,
   includeFiles = false,
@@ -378,6 +386,7 @@ export function DirectoryPicker({
   onSelect
 }: {
   open: boolean
+  title?: string
   multiple?: boolean
   priority?: boolean
   includeFiles?: boolean
@@ -571,12 +580,12 @@ export function DirectoryPicker({
       open
       zIndex={priority ? GLOBAL_MODAL_Z_INDEX + 1 : undefined}
       onBackdropClick={() => setContextMenu(null)}
-      ariaLabel="选择目录"
+      ariaLabel={title}
     >
       <section
         className="directory-picker finder-picker theme-finder grid h-[min(700px,calc(100vh-32px))] w-full max-w-5xl grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_24px_70px_rgb(28_26_23/0.26)]"
         role="dialog"
-        aria-label="选择上下文"
+        aria-label={title}
       >
         <header className="finder-header grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-4 border-b border-slate-200 px-4 py-3">
           <div className="finder-header-navigation flex flex-row items-center gap-2">
@@ -623,7 +632,7 @@ export function DirectoryPicker({
               ? /^[a-z]:[\\/]?$/i.test(data.path)
                 ? `本地磁盘（${data.path.slice(0, 2).toUpperCase()}）`
                 : data.path.split(/[\\/]/).filter(Boolean).pop() || '系统磁盘'
-              : '选择位置'}
+              : title}
           </strong>
           <div className="finder-context-tools flex items-center justify-end gap-2">
             {onModeChange && (
@@ -1158,6 +1167,13 @@ export function Dashboard({
   )
   const activeProject = projects.find(item => item.id === activeProjectID)
   const root = activeProject?.path ?? ''
+	const [setSystemCurrentRobot] = useSetSystemCurrentRobotMutation()
+	useEffect(() => {
+		void setSystemCurrentRobot({ root }).unwrap().catch(() => {
+			// The bridge is auxiliary: an unavailable host context must never
+			// interrupt ordinary project navigation.
+		})
+	}, [root, setSystemCurrentRobot])
   const draftKey = `${root}:${file}`
   const applyingURLNavigation = useRef(false)
   const lastURLNavigationSearch = useRef(location.search)
@@ -2984,10 +3000,10 @@ export function Dashboard({
           />
           <ConfirmDialog
             open={Boolean(pendingProjectRemoval)}
-            title="移除机器人目录"
+            title="移除项目"
             subtitle="仅从管理列表中移除，不会删除磁盘上的项目文件。"
             message={`确定将「${pendingProjectRemoval ? (projects.find(p => p.id === pendingProjectRemoval)?.name ?? pendingProjectRemoval) : ''}」从机器人目录移除吗？其磁盘文件保持不变，可随时重新添加。`}
-            confirmLabel="移除目录"
+            confirmLabel="移除"
             destructive
             onCancel={() => setPendingProjectRemoval(null)}
             onConfirm={confirmRemoveProject}
@@ -4602,7 +4618,7 @@ function ProjectItem({
             }}
           >
             <Bot className="size-3.5 text-slate-400" />
-            打开机器人
+            打开
           </button>
           <button
             className="flex min-h-8 items-center gap-2 rounded px-2 text-left text-xs text-slate-600 transition hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700"
@@ -5246,6 +5262,11 @@ function SystemPluginCenter({
   const [cleanupCache, { isLoading: cleaningCache }] =
     useCleanupSetupPluginCacheMutation()
   const { data: cacheSummary } = useSetupPluginCacheQuery()
+	const { data: developmentData, refetch: refetchDevelopment } = useSetupPluginDevelopmentQuery()
+	const [registerDevelopment, { isLoading: registeringDevelopment }] = useRegisterSetupPluginDevelopmentMutation()
+	const [runDevelopment, { isLoading: runningDevelopment }] = useRunSetupPluginDevelopmentMutation()
+	const [removeDevelopment, { isLoading: removingDevelopment }] = useRemoveSetupPluginDevelopmentMutation()
+	const [loadDevelopmentLogs] = useLazySetupPluginDevelopmentLogsQuery()
   const [installTarget, setInstallTarget] = useStoreState<SetupPlugin | null>(
     null
   )
@@ -5261,6 +5282,60 @@ function SystemPluginCenter({
     SetupPluginRelease[]
   >([])
   const [message, setMessage] = useStoreState('')
+	const [developmentLogTarget, setDevelopmentLogTarget] = useStoreState<SetupPluginDevelopment | null>(null)
+	const [developmentLog, setDevelopmentLog] = useStoreState('')
+	const [developmentFinderOpen, setDevelopmentFinderOpen] = useStoreState(false)
+	const developmentItems = developmentData?.items ?? []
+	const registerDevelopmentPath = async (paths: string[]) => {
+		const path = paths[0]
+		if (!path) return
+		try {
+			await registerDevelopment({ path }).unwrap()
+			setDevelopmentLog('')
+			setDevelopmentFinderOpen(false)
+			await refetchDevelopment()
+		} catch (reason) {
+			setMessage(operationErrorMessage(reason, '未能登记插件源码目录。'))
+		}
+	}
+	const runDevelopmentAction = async (session: SetupPluginDevelopment, action: 'build' | 'start' | 'stop' | 'restart') => {
+		if ((action === 'start' || action === 'restart') && !window.confirm(`将执行“${session.name}”源码目录中 alx.json 声明的本地开发命令，并临时覆盖同 ID 的正式插件。是否继续？`)) return
+		try {
+			await runDevelopment({ pluginID: session.id, action, confirm: action !== 'stop' }).unwrap()
+			await refetchDevelopment()
+			setMessage(action === 'stop' ? `已停止“${session.name}”源码开发。` : `“${session.name}”源码开发已${action === 'build' ? '构建' : '启动'}。`)
+		} catch (reason) {
+			setMessage(operationErrorMessage(reason, '源码开发操作未完成。'))
+			await refetchDevelopment()
+		}
+	}
+	const showDevelopmentLogs = async (session: SetupPluginDevelopment) => {
+		try {
+			const logs = await loadDevelopmentLogs(session.id).unwrap()
+			setDevelopmentLogTarget(session)
+			setDevelopmentLog(logs.output)
+		} catch (reason) {
+			setMessage(operationErrorMessage(reason, '读取源码开发日志失败。'))
+		}
+	}
+	const removeDevelopmentSession = async (session: SetupPluginDevelopment) => {
+		const detail = session.running
+			? '会先停止开发进程并恢复正式插件。'
+			: '会移除主应用保存的登记记录。'
+		if (!window.confirm(`移除“${session.name}”开发会话？${detail}不会删除源码目录。`)) return
+		try {
+			await removeDevelopment(session.id).unwrap()
+			if (developmentLogTarget?.id === session.id) {
+				setDevelopmentLogTarget(null)
+				setDevelopmentLog('')
+			}
+			await refetchDevelopment()
+			setMessage(`已移除“${session.name}”开发会话。源码目录未删除。`)
+		} catch (reason) {
+			setMessage(operationErrorMessage(reason, '移除源码开发会话失败。'))
+			await refetchDevelopment()
+		}
+	}
   const toggle = async (plugin: SetupPlugin) => {
     try {
       await setEnabled({
@@ -5385,7 +5460,33 @@ function SystemPluginCenter({
             管理系统级插件与扩展能力
           </span>
         </div>
+		<Button
+			variant="secondary"
+			size="sm"
+			disabled={registeringDevelopment}
+			onClick={() => setDevelopmentFinderOpen(true)}
+			className="shrink-0"
+		>
+			<Code2 className="mr-1 size-3.5" />
+			{registeringDevelopment ? '正在登记…' : '开发插件'}
+		</Button>
       </header>
+		{developmentItems.length > 0 && (
+			<section className="mb-3 grid gap-2 rounded-xl border border-violet-200 bg-violet-50/60 p-3 dark:border-violet-900/60 dark:bg-violet-950/20">
+				<div className="flex items-center gap-2 text-xs text-violet-800 dark:text-violet-200"><Code2 className="size-3.5" /><strong>源码开发会话</strong><span>已登记的本机源码目录</span></div>
+				{developmentItems.map(session => (
+					<div key={session.id} className="flex flex-wrap items-center gap-2 rounded-lg border border-violet-200/80 bg-white/70 px-3 py-2 text-xs dark:border-violet-900/60 dark:bg-slate-950/30">
+						<div className="min-w-0 flex-1"><strong className="text-slate-800 dark:text-slate-100">{session.name}</strong><span className={cn('ml-2', session.state === 'running' ? 'text-emerald-600 dark:text-emerald-400' : session.state === 'failed' ? 'text-red-600 dark:text-red-400' : 'text-slate-500')}>{session.busy ? `正在${session.state === 'starting' ? '启动' : session.state === 'stopping' ? '停止' : '构建'}` : session.state === 'running' ? '运行中' : session.state === 'failed' ? '操作失败' : '已登记，未启动'}</span><code className="mt-0.5 block truncate text-[11px] text-slate-500" title={session.source}>{session.source}</code>{session.lastError && <span className="mt-1 block truncate text-red-600" title={session.lastError}>{session.lastError}</span>}</div>
+						{session.running && <Button variant="primary" size="sm" onClick={() => onOpen(session.id)}>打开</Button>}
+						{session.buildAvailable && <Button variant="secondary" size="sm" disabled={runningDevelopment || session.busy} onClick={() => void runDevelopmentAction(session, 'build')}>构建</Button>}
+						<Button variant="secondary" size="sm" disabled={runningDevelopment || session.busy} onClick={() => void runDevelopmentAction(session, session.running ? 'restart' : 'start')}>{session.running ? '重启' : '启动开发'}</Button>
+						{session.running && <Button variant="secondary" size="sm" disabled={runningDevelopment || session.busy} onClick={() => void runDevelopmentAction(session, 'stop')}>停止</Button>}
+						<Button variant="secondary" size="sm" onClick={() => void showDevelopmentLogs(session)}>日志</Button>
+						<Button variant="secondary" size="sm" disabled={removingDevelopment || runningDevelopment || session.busy} onClick={() => void removeDevelopmentSession(session)}>移除</Button>
+					</div>
+				))}
+			</section>
+		)}
       {/* 插件列表 */}
       {plugins.length ? (
         <div className="grid gap-2">
@@ -5393,6 +5494,7 @@ function SystemPluginCenter({
             const isOnline = Boolean(plugin.online)
             const isEnabled = Boolean(plugin.enabled)
             const isManagedRelease = Boolean(plugin.source && plugin.installedTag)
+			const isDevelopment = Boolean(plugin.developmentSource)
             const hasWeb = Boolean(plugin.web)
             const canOpen = isEnabled && hasWeb
             return (
@@ -5446,11 +5548,13 @@ function SystemPluginCenter({
                       {plugin.installedTag ?? `v${plugin.version}`}
                     </span>
                     <span className="size-0.5 rounded-full bg-slate-300 dark:bg-slate-600" />
-                    {isOnline ? (
+						{isOnline ? (
                       <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
                         <Globe className="size-3" />
                         在线目录
                       </span>
+                    ) : isDevelopment ? (
+						<span className="inline-flex items-center gap-1 text-violet-600 dark:text-violet-400"><Code2 className="size-3" />源码开发中</span>
                     ) : isManagedRelease && !isEnabled ? (
                       <span className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400">
                         <Circle className="size-3" />
@@ -5508,6 +5612,8 @@ function SystemPluginCenter({
                       '下载'
                     )}
                   </Button>
+                ) : isDevelopment ? (
+					<div className="system-feature-actions flex shrink-0 gap-1.5"><Button variant="primary" size="sm" onClick={() => onOpen(plugin.id)} className="h-7 rounded-md px-2.5 text-xs font-medium">打开</Button><Button variant="secondary" size="sm" disabled={runningDevelopment} onClick={() => { const session = developmentItems.find(item => item.id === plugin.id); if (session) void runDevelopmentAction(session, 'stop') }} className="h-7 rounded-md px-2.5 text-xs font-medium">停止开发</Button></div>
                 ) : isManagedRelease ? (
                   <div className="system-feature-actions flex shrink-0 gap-1.5">
                     {!isEnabled ? (
@@ -5658,6 +5764,22 @@ function SystemPluginCenter({
           </div>
         </Modal>
       )}
+		<DirectoryPicker
+			open={developmentFinderOpen}
+			multiple={false}
+			priority
+			onClose={() => setDevelopmentFinderOpen(false)}
+			onSelect={paths => void registerDevelopmentPath(paths)}
+		/>
+		{developmentLogTarget && (
+			<Modal open onClose={() => { setDevelopmentLogTarget(null); setDevelopmentLog('') }} ariaLabel={`${developmentLogTarget.name}开发日志`}>
+				<div className="grid w-full max-w-2xl gap-3 rounded-xl bg-white p-5 shadow-xl dark:bg-slate-900">
+					<div><strong className="block text-base text-slate-900 dark:text-slate-100">{developmentLogTarget.name} · 开发日志</strong><code className="mt-1 block break-all text-xs text-slate-500">{developmentLogTarget.source}</code></div>
+					<pre className="max-h-[min(70vh,36rem)] overflow-auto rounded-lg bg-slate-950 p-3 text-[11px] leading-5 text-slate-100">{developmentLog || '暂无日志。'}</pre>
+					<div className="flex justify-end"><Button variant="secondary" size="sm" onClick={() => { setDevelopmentLogTarget(null); setDevelopmentLog('') }}>关闭</Button></div>
+				</div>
+			</Modal>
+		)}
       {versionTarget && (
         <Modal
           open
@@ -5781,7 +5903,89 @@ function SetupPluginCenter({ plugin }: { plugin: SetupPlugin }) {
   // action forward API itself.
   const hasWeb = Boolean(plugin.web && plugin.runnable && !plugin.online)
   const theme = document.documentElement.dataset.theme ?? 'light'
-  const webSrc = `/api/v1/setup/plugins/web/${plugin.id}/index.html?theme=${theme}`
+	const iframeRef = useRef<HTMLIFrameElement>(null)
+	const [finderRequest, setFinderRequest] = useState<{
+		requestId: string
+		kind: 'directory' | 'file'
+		title: string
+		multiple: boolean
+	} | null>(null)
+	const webSrc = plugin.developmentSource && plugin.developmentWebProxy
+		? `/api/v1/setup/plugins/development/${plugin.id}/web/?theme=${theme}`
+		: `/api/v1/setup/plugins/web/${plugin.id}/index.html?theme=${theme}`
+	const postFinderResult = useCallback(
+		(requestId: string, result: { paths?: string[]; error?: string }) => {
+			iframeRef.current?.contentWindow?.postMessage(
+				{
+					source: 'alx-parent',
+					type: 'finder-result',
+					requestId,
+					...result
+				},
+				window.location.origin
+			)
+		},
+		[]
+	)
+	useEffect(() => {
+		const receiveFinderRequest = (event: MessageEvent) => {
+			if (
+				event.origin !== window.location.origin ||
+				event.source !== iframeRef.current?.contentWindow
+			)
+				return
+			const value = event.data as {
+				source?: string
+				type?: string
+				requestId?: string
+				pluginId?: string
+				pickerId?: string
+			}
+			if (
+				value?.source !== 'alx-setup-plugin' ||
+				value.type !== 'finder-request' ||
+				!value.requestId ||
+				value.pluginId !== plugin.id ||
+				!value.pickerId
+			)
+				return
+			if (finderRequest) {
+				postFinderResult(value.requestId, {
+					error: '已有一个 Finder 选择正在进行。'
+				})
+				return
+			}
+			void fetch('/api/v1/system/capabilities/finder', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ pluginId: plugin.id, pickerId: value.pickerId })
+			})
+				.then(async response => {
+					const body = (await response.json()) as {
+						error?: string
+						kind?: 'directory' | 'file'
+						title?: string
+						multiple?: boolean
+					}
+					if (!response.ok || (body.kind !== 'directory' && body.kind !== 'file'))
+						throw new Error(body.error || 'Finder 请求无效。')
+					setFinderRequest({
+						requestId: value.requestId!,
+						kind: body.kind,
+						title: body.title || '选择位置',
+						multiple: body.multiple === true
+					})
+				})
+				.catch(reason =>
+					postFinderResult(value.requestId!, {
+						error:
+							reason instanceof Error ? reason.message : 'Finder 请求未完成。'
+					})
+				)
+		}
+		window.addEventListener('message', receiveFinderRequest)
+		return () => window.removeEventListener('message', receiveFinderRequest)
+	}, [finderRequest, plugin.id, postFinderResult])
   const applyScrollbarTheme = (event: SyntheticEvent<HTMLIFrameElement>) => {
     const document = event.currentTarget.contentDocument
     if (!document || document.head.querySelector('[data-alx-scrollbar-theme]'))
@@ -5803,6 +6007,7 @@ function SetupPluginCenter({ plugin }: { plugin: SetupPlugin }) {
     <section className="setup-plugin-webview">
       {hasWeb ? (
         <iframe
+			ref={iframeRef}
           className="setup-plugin-webview-frame"
           src={webSrc}
           title={`${plugin.name} 界面`}
@@ -5820,6 +6025,24 @@ function SetupPluginCenter({ plugin }: { plugin: SetupPlugin }) {
           </p>
         </div>
       )}
+		<DirectoryPicker
+			open={finderRequest !== null}
+			title={finderRequest?.title ?? '选择位置'}
+			multiple={finderRequest?.multiple ?? false}
+			priority
+			includeFiles={finderRequest?.kind === 'file'}
+			selectionMode={finderRequest?.kind === 'file' ? 'file' : 'directory'}
+			onClose={() => {
+				if (finderRequest)
+					postFinderResult(finderRequest.requestId, { error: '已取消选择。' })
+				setFinderRequest(null)
+			}}
+			onSelect={paths => {
+				if (finderRequest)
+					postFinderResult(finderRequest.requestId, { paths })
+				setFinderRequest(null)
+			}}
+		/>
     </section>
   )
 }

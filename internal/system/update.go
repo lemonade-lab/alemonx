@@ -20,6 +20,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"alemonx/internal/systemnetwork"
 )
 
 const maxUpdateSize int64 = 200 << 20
@@ -136,7 +138,7 @@ func DownloadUpdate(downloadURL, assetName, checksum, version string) (string, e
 		}
 		return path, nil
 	}
-	response, err := (&http.Client{Timeout: updateDownloadTimeout}).Get(downloadURL)
+	response, err := systemnetwork.DefaultClient(updateDownloadTimeout).Get(downloadURL)
 	if err != nil {
 		return "", fmt.Errorf("下载更新失败：%w", err)
 	}

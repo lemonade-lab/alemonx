@@ -97,6 +97,12 @@ func (c *Checker) commandPath(name string) (string, error) {
 	if path, err := exec.LookPath(name); err == nil {
 		return path, nil
 	}
+	if (name == "node" || name == "npm" || name == "npx") && ManagedNodeBin() != "" {
+		candidate := filepath.Join(ManagedNodeBin(), name)
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			return candidate, nil
+		}
+	}
 	if runtime.GOOS != "windows" {
 		return "", exec.ErrNotFound
 	}

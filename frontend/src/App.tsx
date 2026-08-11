@@ -690,6 +690,8 @@ export default function App() {
       {repairCheck && (
         <EnvironmentFixDialog
           check={repairCheck}
+          platform={report?.platform}
+          onInstalled={() => void checkEnvironment()}
           onClose={() => setRepairCheck(null)}
         />
       )}
@@ -1579,7 +1581,9 @@ function FlowView({
                 <small>
                   {mirror.name === 'GitHub 官方'
                     ? '从 GitHub 官方下载'
-                    : '下载速度可能更快'}
+                    : mirror.name.includes('推荐')
+                      ? '推荐的快捷下载入口'
+                      : '下载速度可能更快'}
                 </small>
               </button>
             ))}
@@ -1692,7 +1696,9 @@ function FlowView({
                 <small>
                   {mirror.name === 'GitHub 官方'
                     ? '从 GitHub 官方下载'
-                    : '下载速度可能更快'}
+                    : mirror.name.includes('推荐')
+                      ? '推荐的快捷下载入口'
+                      : '下载速度可能更快'}
                 </small>
               </button>
             ))}
@@ -1706,7 +1712,7 @@ function FlowView({
           <p>默认已选择最新正式版本。确认后继续选择安装包。</p>
           {releasePicker()}
           <p className="selected-download">
-            下载镜像：{selectedMirror?.name ?? 'GitHub 官方'}
+            下载镜像：{selectedMirror?.name ?? '尚未选择'}
           </p>
         </>
       )

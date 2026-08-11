@@ -114,6 +114,33 @@ export type PM2Process = {
   restarts: number
   script: string
 }
+export type SystemNetworkMode = 'system' | 'manual' | 'direct' | 'mirror' | 'custom-mirror'
+export type SystemNetworkRoute = 'github' | 'gitee' | 'npm' | 'node' | 'cdn' | 'official'
+export type SystemNetworkRouteSettings = {
+  mode: SystemNetworkMode
+  mirrorUrl?: string
+  proxyUrl?: string
+  hasCredentials?: boolean
+}
+export type SystemNetworkMirrorPreset = {
+  label: string
+  value: string
+}
+export type SystemNetworkSettings = {
+  routes: Record<SystemNetworkRoute, SystemNetworkRouteSettings>
+  mirrorPresets?: Partial<Record<SystemNetworkRoute, SystemNetworkMirrorPreset[]>>
+}
+export type SystemNetworkCheck = {
+  ok: boolean
+  target: string
+  status?: number
+  latencyMs?: number
+  message: string
+}
+export type SystemCurrentRobot = {
+  root: string
+  name: string
+} | null
 export type GitWorkspace = {
   root: string
   repository: boolean
@@ -192,6 +219,24 @@ export type SetupPlugin = {
   source?: string
   installedTag?: string
   fingerprint?: string
+  developmentSource?: boolean
+  developmentWebProxy?: boolean
+}
+export type SetupPluginDevelopment = {
+  id: string
+  name: string
+  source: string
+  registered: boolean
+  running: boolean
+  state: 'registered' | 'starting' | 'running' | 'stopping' | 'stopped' | 'building' | 'failed'
+  busy: boolean
+  runner?: string
+  webMode?: string
+  buildAvailable: boolean
+  webUrl?: string
+  webPort?: number
+  lastError?: string
+  updatedAt: string
 }
 export type SetupPluginRelease = {
   tag: string
@@ -239,7 +284,8 @@ export const workspaceApi = createApi({
     'OperationTasks',
     'SetupUpdate',
     'SetupPlugins',
-    'EnvironmentReport'
+    'EnvironmentReport',
+    'SystemNetwork'
   ],
   endpoints: build => ({
     goals: build.query<unknown[], void>({ query: () => 'goals' }),
@@ -354,8 +400,47 @@ export const workspaceApi = createApi({
       query: () => ({ url: 'setup/plugins/cache', method: 'POST' }),
       invalidatesTags: ['SetupPlugins']
     }),
+    setupPluginDevelopment: build.query<{ items: SetupPluginDevelopment[] }, void>({
+      query: () => 'setup/plugins/development',
+      providesTags: ['SetupPlugins']
+    }),
+    registerSetupPluginDevelopment: build.mutation<SetupPluginDevelopment, { path: string }>({
+      query: body => ({ url: 'setup/plugins/development', method: 'POST', body }),
+      invalidatesTags: ['SetupPlugins']
+    }),
+    runSetupPluginDevelopment: build.mutation<SetupPluginDevelopment, { pluginID: string; action: 'build' | 'start' | 'stop' | 'restart'; confirm?: boolean }>({
+      query: ({ pluginID, action, confirm = false }) => ({ url: `setup/plugins/development/${encodeURIComponent(pluginID)}/${action}`, method: 'POST', body: { confirm } }),
+      invalidatesTags: ['SetupPlugins']
+    }),
+    removeSetupPluginDevelopment: build.mutation<{ id: string; removed: boolean }, string>({
+      query: pluginID => ({
+        url: `setup/plugins/development/${encodeURIComponent(pluginID)}/remove`,
+        method: 'DELETE'
+      }),
+      invalidatesTags: ['SetupPlugins']
+    }),
+    setupPluginDevelopmentLogs: build.query<{ output: string }, string>({
+      query: pluginID => `setup/plugins/development/${encodeURIComponent(pluginID)}/logs`
+    }),
     systemMcp: build.query<{ running: boolean }, void>({
       query: () => 'system/mcp'
+    }),
+    systemNetwork: build.query<SystemNetworkSettings, void>({
+      query: () => 'system/network',
+      providesTags: ['SystemNetwork']
+    }),
+    saveSystemNetwork: build.mutation<
+      SystemNetworkSettings,
+      Pick<SystemNetworkSettings, 'routes'>
+    >({
+      query: body => ({ url: 'system/network', method: 'PUT', body }),
+      invalidatesTags: ['SystemNetwork']
+    }),
+    testSystemNetwork: build.mutation<SystemNetworkCheck, SystemNetworkRoute>({
+      query: target => ({ url: `system/network?${new URLSearchParams({ target })}`, method: 'POST' })
+    }),
+    setSystemCurrentRobot: build.mutation<SystemCurrentRobot, { root: string }>({
+      query: body => ({ url: 'system/context/robot', method: 'POST', body })
     }),
     startSetupPluginTask: build.mutation<
       RobotTask,
@@ -704,7 +789,16 @@ export const {
   useSwitchSetupPluginVersionMutation,
   useDeleteSetupPluginVersionMutation,
   useCleanupSetupPluginCacheMutation,
+  useSetupPluginDevelopmentQuery,
+  useRegisterSetupPluginDevelopmentMutation,
+  useRunSetupPluginDevelopmentMutation,
+  useRemoveSetupPluginDevelopmentMutation,
+  useLazySetupPluginDevelopmentLogsQuery,
   useSystemMcpQuery,
+  useSystemNetworkQuery,
+  useSaveSystemNetworkMutation,
+  useTestSystemNetworkMutation,
+  useSetSystemCurrentRobotMutation,
   useStartSetupPluginTaskMutation,
   useCatalogQuery,
   useCatalogVersionsQuery,

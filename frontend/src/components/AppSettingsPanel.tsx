@@ -1,10 +1,11 @@
 import { useState } from 'react'
-import { KeyRound, RefreshCw, UsersRound } from 'lucide-react'
+import { KeyRound, Network, RefreshCw, UsersRound } from 'lucide-react'
 import { AccountManagementPage } from './AccountManagement'
 import { AuthControl } from './AuthControl'
 import { SetupUpdateButton } from './SetupUpdateButton'
+import { NetworkSettingsPanel } from './NetworkSettingsPanel'
 
-type SettingsSection = 'update' | 'auth' | 'accounts'
+type SettingsSection = 'update' | 'network' | 'auth' | 'accounts'
 
 const sections: Array<{
   id: SettingsSection
@@ -15,6 +16,11 @@ const sections: Array<{
     id: 'update',
     label: '更新',
     icon: RefreshCw
+  },
+  {
+    id: 'network',
+    label: '网络',
+    icon: Network
   },
   {
     id: 'auth',
@@ -97,6 +103,7 @@ export function AppSettingsPanel() {
       >
         <div className="app-settings-body">
           {active === 'update' && <SetupUpdateButton embedded />}
+          {active === 'network' && <NetworkSettingsPanel />}
           {active === 'auth' && <AuthControl embedded />}
           {active === 'accounts' && <AccountManagementPage />}
         </div>

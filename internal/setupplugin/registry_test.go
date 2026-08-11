@@ -154,6 +154,42 @@ printf '{"output":"已检查"}'
 	}
 }
 
+func TestRegistryProvidesHostApprovedRunnerEnvironment(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture is Unix-only")
+	}
+	root := t.TempDir()
+	directory := filepath.Join(root, "fixture")
+	if err := os.MkdirAll(filepath.Join(directory, "web"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	key := runtime.GOOS + "-" + runtime.GOARCH
+	manifest := `{"id":"fixture","name":"Fixture","version":"1.0.0","entry":{"` + key + `":"runner"},"web":{"root":"web"}}`
+	if err := os.WriteFile(filepath.Join(directory, manifestName), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "runner"), []byte(`#!/bin/sh
+cat >/dev/null
+printf '{"output":"%s"}' "$ALX_TEST_HOST_VALUE"
+`), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	registry := NewRegistry(root)
+	registry.SetRunnerEnvironmentProvider(func(plugin Plugin, action string) []string {
+		if plugin.ID != "fixture" {
+			t.Fatalf("provider plugin = %#v", plugin)
+		}
+		if action != "check" {
+			t.Fatalf("provider action = %q", action)
+		}
+		return []string{"ALX_TEST_HOST_VALUE=host-approved"}
+	})
+	output, err := registry.Run("fixture", "check", nil, false)
+	if err != nil || output != "host-approved" {
+		t.Fatalf("run = %q, %v", output, err)
+	}
+}
+
 func TestRegistryRunWithProgressForwardsStructuredStderr(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell fixture is Unix-only")

@@ -1695,6 +1695,284 @@ button {
   order: 10;
 }
 
+.settings-network-panel {
+  color: var(--theme-text-primary);
+  display: grid;
+  gap: 16px;
+  margin: 0 auto;
+  max-width: 640px;
+}
+
+.settings-network-intro,
+.settings-network-scope {
+  align-items: flex-start;
+  background: var(--theme-surface-raised);
+  border: 1px solid var(--theme-border-default);
+  border-radius: 9px;
+  color: var(--theme-text-secondary);
+  display: flex;
+  font-size: 12px;
+  gap: 9px;
+  line-height: 1.55;
+  padding: 10px 11px;
+}
+
+.settings-network-intro > span {
+  align-items: center;
+  background: var(--theme-accent-soft);
+  border: 1px solid var(--theme-accent-soft-border);
+  border-radius: 7px;
+  color: var(--theme-accent-text);
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 28px;
+  justify-content: center;
+  margin-top: 1px;
+  width: 28px;
+}
+
+.settings-network-intro p,
+.settings-network-scope span {
+  margin: 0;
+}
+
+.settings-network-scope {
+  background: transparent;
+  border-style: dashed;
+  font-size: 11px;
+}
+
+.settings-network-scope > svg {
+  color: var(--theme-success);
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.settings-network-routes {
+  border: 0;
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+}
+
+.settings-network-toolbar {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  min-height: 32px;
+}
+
+.settings-network-toolbar-actions {
+  align-items: center;
+  display: flex;
+  gap: 7px;
+}
+
+.settings-network-toolbar > span,
+.settings-network-input > span {
+  color: var(--theme-text-strong);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.settings-network-save {
+  flex: 0 0 auto;
+  min-height: 30px !important;
+  padding: 0 10px !important;
+}
+
+.settings-network-restore {
+  min-height: 30px !important;
+  padding: 0 9px !important;
+}
+
+.settings-network-route {
+  align-items: flex-start;
+  border: 1px solid var(--theme-border-default);
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  min-height: 64px;
+  padding: 10px 11px;
+}
+
+.settings-network-route:hover {
+  background: var(--theme-surface-hover);
+}
+
+.settings-network-route-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.settings-network-route-icon {
+  align-items: center;
+  background: var(--theme-accent-soft);
+  border: 1px solid var(--theme-accent-soft-border);
+  border-radius: 7px;
+  color: var(--theme-accent-text);
+  display: inline-flex;
+  height: 28px;
+  justify-content: center;
+  margin-top: 1px;
+  width: 28px;
+}
+
+.settings-network-route strong {
+  color: var(--theme-text-strong);
+  font-size: 12px;
+}
+
+.settings-network-route small,
+.settings-network-input small {
+  color: var(--theme-text-muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.settings-network-route code {
+  color: var(--theme-text-faint);
+  font-family: inherit;
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-network-route-actions {
+  display: grid;
+  gap: 6px;
+  justify-items: end;
+}
+
+.settings-network-route-actions select {
+  appearance: none;
+  background: var(--theme-surface-panel);
+  border: 1px solid var(--theme-border-default);
+  border-radius: 6px;
+  color: var(--theme-text-secondary);
+  font: inherit;
+  font-size: 11px;
+  min-height: 28px;
+  outline: 0;
+  padding: 0 26px 0 8px;
+}
+
+.settings-network-route-actions select:focus {
+  border-color: var(--theme-accent);
+  box-shadow: 0 0 0 2px var(--theme-accent-soft-border);
+}
+
+.settings-network-test {
+  min-height: 26px !important;
+  padding: 0 8px !important;
+}
+
+.settings-network-route-input {
+  align-items: center;
+  display: grid;
+  gap: 7px;
+  grid-column: 2 / -1;
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+.settings-network-route-input > span {
+  color: var(--theme-text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.settings-network-route-input input,
+.settings-network-route-input select {
+  background: var(--theme-surface-raised);
+  border: 1px solid var(--theme-border-default);
+  border-radius: 6px;
+  color: var(--theme-text-primary);
+  font: inherit;
+  font-size: 11px;
+  min-height: 29px;
+  min-width: 0;
+  outline: 0;
+  padding: 0 8px;
+}
+
+.settings-network-route-input input:focus,
+.settings-network-route-input select:focus {
+  border-color: var(--theme-accent);
+  box-shadow: 0 0 0 2px var(--theme-accent-soft-border);
+}
+
+.settings-network-route-input small {
+  color: var(--theme-text-muted);
+  font-size: 10px;
+  grid-column: 2;
+  line-height: 1.4;
+}
+
+.settings-network-mirror-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  grid-column: 2;
+}
+
+.settings-network-mirror-presets button {
+  background: var(--theme-surface-hover);
+  border: 1px solid var(--theme-border-default);
+  border-radius: 5px;
+  color: var(--theme-text-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 10px;
+  min-height: 22px;
+  padding: 0 6px;
+}
+
+.settings-network-mirror-presets button:hover,
+.settings-network-mirror-presets button:focus-visible {
+  border-color: var(--theme-accent-soft-border);
+  color: var(--theme-accent-text);
+}
+
+.settings-network-input {
+  display: grid;
+  gap: 7px;
+}
+
+.settings-network-input input {
+  background: var(--theme-surface-raised);
+  border: 1px solid var(--theme-border-default);
+  border-radius: 7px;
+  color: var(--theme-text-primary);
+  font: inherit;
+  font-size: 12px;
+  min-height: 34px;
+  outline: 0;
+  padding: 0 9px;
+}
+
+.settings-network-input input:focus {
+  border-color: var(--theme-accent);
+  box-shadow: 0 0 0 2px var(--theme-accent-soft-border);
+}
+
+.settings-network-message {
+  align-items: center;
+  color: var(--theme-danger);
+  display: flex;
+  font-size: 11px;
+  gap: 6px;
+  line-height: 1.45;
+  margin: -5px 0 0;
+}
+
+.settings-network-message.is-success {
+  color: var(--theme-success);
+}
+
 .app-settings-body .account-management {
   margin: 0 auto;
   max-width: 760px;
@@ -1713,6 +1991,10 @@ button {
   .app-settings-nav button { flex: 0 0 auto; }
   .app-settings-body { padding: 16px; }
   .settings-service-card > footer > button { flex: 1 1 0; }
+  .settings-network-route { grid-template-columns: auto minmax(0, 1fr); }
+  .settings-network-route-actions { grid-column: 2; grid-row: 2; grid-template-columns: minmax(0, 1fr) auto; justify-items: stretch; }
+  .settings-network-route-actions select { width: 100%; }
+  .settings-network-route-input { grid-column: 1 / -1; }
 }
 
 /* A custom header still lives in the shared window chrome. Terminal tabs are

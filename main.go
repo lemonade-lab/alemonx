@@ -5,6 +5,7 @@ import (
 	"embed"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"alemonx/internal/access"
+	"alemonx/internal/logging"
 	"alemonx/internal/mcp"
 	"alemonx/internal/releases"
 	"alemonx/internal/robot"
@@ -34,6 +36,7 @@ var templateFiles embed.FS
 var Version = "dev"
 
 func main() {
+	logging.ConfigureStandardLogger(os.Stderr)
 	defer robot.CleanupGitBuildSessions()
 	arguments := normalizeArgs(os.Args[1:])
 	port, arguments, err := option(arguments, "--port", env("PORT", "17390"))
@@ -270,8 +273,23 @@ func authCommand(arguments []string, confirmed bool, account, password, confirma
 
 func serve(host, port string) {
 	runtime := web.NewServerRuntime(Version, staticFiles, templateFiles)
+	listener, err := net.Listen("tcp", host+":"+port)
+	if err != nil {
+		log.Fatal(err)
+	}
+	brokerListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		_ = listener.Close()
+		log.Fatal(err)
+	}
+	runtime.SetPluginDownloadBrokerEndpoint("http://" + brokerListener.Addr().String())
+	brokerServer := &http.Server{Handler: runtime.PluginDownloadBrokerHandler(), ReadHeaderTimeout: 10 * time.Second}
+	go func() {
+		if brokerErr := brokerServer.Serve(brokerListener); brokerErr != nil && brokerErr != http.ErrServerClosed {
+			log.Printf("插件官方下载 Broker 已停止：%v", brokerErr)
+		}
+	}()
 	server := &http.Server{
-		Addr:              host + ":" + port,
 		Handler:           runtime.Handler,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
@@ -285,11 +303,12 @@ func serve(host, port string) {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = runtime.Shutdown(shutdownCtx)
+		_ = brokerServer.Shutdown(shutdownCtx)
 		_ = server.Shutdown(shutdownCtx)
 	}()
 
 	fmt.Print(startupMessage(Version, host, port))
-	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+	if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
 }

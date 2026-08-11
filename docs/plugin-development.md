@@ -53,11 +53,63 @@ plugins/
 | `navigation` | 否 | 全局功能栏入口；`label` 默认取 `name`，`icon` 默认 `◈`，`order` 越小越靠前。 |
 | `runtime` | 否 | `binary`、`node` 或 `go`；省略时为 `binary`。 |
 | `entry` | 是* | 执行器映射。键为 `GOOS-GOARCH`（例如 `linux-amd64`），也可仅用 `GOOS` 作为回退。 |
-| `development` | 否 | 开发回退执行器，结构与 `runtime`/`entry` 相同。 |
+| `development` | 否 | 源码开发声明：可提供开发 runner、前端构建/开发服务和受管本地服务。 |
 | `web` | **是** | 插件的 Web 界面目录（如 `web`），不能是绝对路径或含 `..`。无 `web` 的插件不可用。 |
 | `permissions.elevatedActions` | 否 | 需要系统管理员权限的 action 白名单。宿主只会对该列表中的已确认操作请求原生授权。 |
 
-`entry` 路径必须是插件目录内的普通文件，不能使用绝对路径、`..` 越界路径或符号链接。`node` 会以 `node <entry>` 启动；`binary` 直接执行该文件；`go` 只读取 `entry.go`，并以 `go run <entry.go>` 启动。`Runnable = web 存在且 (entry 或 development 存在)`。
+`entry` 路径必须是插件目录内的普通文件，不能使用绝对路径、`..` 越界路径或符号链接。`node` 会以 `node <entry>` 启动；`binary` 直接执行该文件；`go` 只读取 `entry.go`，并以 `go run <entry.go>` 启动；`python` 读取 `entry.python` 并以 `python3 <entry>` 启动。源码 `development.runtime` 还可使用 `command`，并通过结构化 `command.program` / `command.args` 启动任意本机语言工具链。纯静态插件只需声明 `web`，不能调用 actions。
+
+## 源码开发会话
+
+插件中心的“开发插件”会打开工作台内置 Finder，选择含 `alx.json` 的源码目录。选择后仅登记目录；点击“启动开发”才会执行其中声明的本地命令。启动中的源码会话会临时覆盖同 ID 的正式 Release，停止后立即恢复 Release；工作台重启后不会自动执行源码命令。
+
+开发配置放在 `development` 中。命令使用 `program` 与 `args`，主机不经过 shell；`${ALX_PLUGIN_DEV_PORT}` 是唯一可替换变量，会被替换为主机分配的回环端口：
+
+```json
+{
+  "development": {
+    "runtime": "go",
+    "entry": { "go": "runner/main.go" },
+    "web": {
+      "mode": "dev-server",
+      "root": "web",
+      "build": { "program": "yarn", "args": ["--cwd", "frontend", "build"] },
+      "dev": { "program": "yarn", "args": ["--cwd", "frontend", "dev", "--host", "127.0.0.1", "--port", "${ALX_PLUGIN_DEV_PORT}"] },
+      "healthPath": "/",
+      "hmr": true
+    }
+  }
+}
+```
+
+`web.mode` 可为 `static` 或 `dev-server`。静态模式优先托管 `development.web.root`（未声明时回退到顶层 `web.root`）；开发服务模式由主机启动并通过工作台同源代理访问。只有 `hmr: true` 时，代理才允许 HMR WebSocket，不会暴露额外网络端口。`development.services` 可为现有 `services` 中已声明的 loopback 服务附加受管命令与 `never` / `on-failure` 重启策略。
+
+源码会话具有 `registered`、`starting`、`running`、`building`、`stopping`、`stopped`、`failed` 状态。同一插件同一时间只允许一个启动、停止、重启或构建操作；停止必须确认受管进程组退出后才会恢复正式 Release。
+
+源码开发会话只能在本机桌面工作台中启动，且永远不能使用 sudo、Polkit、UAC 或高权限 runner；这类操作仍必须使用通过 Release 指纹验证的正式插件。
+
+## 宿主内置能力
+
+系统插件不能自行执行系统命令、读取任意本地路径或猜测工作台状态。需要与主应用协作时，在 `alx.json` 声明有限的 `hostCapabilities`，并调用对应的宿主 API：
+
+```json
+{
+  "hostCapabilities": ["finder", "robot-context", "network-context"],
+  "systemPickers": [
+    { "id": "runtime-directory", "kind": "directory", "title": "选择运行目录" }
+  ]
+}
+```
+
+| 能力 | API | 返回范围 |
+| --- | --- | --- |
+| `finder` | `POST /api/v1/system/capabilities/finder` | 仅由清单中 `pickerId` 定义的工作台 Finder 文件或目录选择结果；可在 Web 工作台中使用。 |
+| `robot-context` | `GET /api/v1/system/capabilities/context?pluginId=<id>&keys=robot` | 当前工作台已验证的机器人根目录和名称；没有选择时为 `null`。 |
+| `network-context` | `GET /api/v1/system/capabilities/context?pluginId=<id>&keys=network` | 脱敏后的工作台网络路由配置；绝不返回代理凭据。 |
+
+Finder 请求只传 `{ "pluginId": "...", "pickerId": "..." }`。宿主从清单取得窗口标题、类型和多选策略，并在父工作台中打开统一的 Web Finder；插件不能提交路径、命令、端口或原生脚本。旧 `/api/v1/system/picker` 暂时兼容已发布插件，新插件应使用 capability API。
+
+`network-context` 仅供界面展示脱敏状态，不能用来拼装代理或读取密码。需要下载官方资源的受信任正式插件，应通过宿主的受限下载 Broker 请求资源；源码开发会话和普通清单插件不会获得代理凭据。
 
 ## 静态 Web 界面（必选）
 

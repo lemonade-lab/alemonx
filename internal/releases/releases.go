@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"golang.org/x/mod/semver"
+
+	"alemonx/internal/systemnetwork"
 )
 
 type Item struct {
@@ -137,7 +139,7 @@ func latestRelease(id string) (Item, error) {
 	if !ok {
 		return Item{}, fmt.Errorf("不支持该下载项目")
 	}
-	response, err := (&http.Client{Timeout: 8 * time.Second}).Get(fmt.Sprintf(latestIndexURL, repository))
+	response, err := systemnetwork.DefaultClient(8 * time.Second).Get(fmt.Sprintf(latestIndexURL, repository))
 	if err != nil {
 		return Item{}, err
 	}
@@ -229,7 +231,7 @@ func checksumForAsset(assets []Asset, name string) (string, error) {
 		if upper != "SHA256SUMS" && upper != "SHA256SUMS.TXT" && upper != "CHECKSUMS.TXT" {
 			continue
 		}
-		response, err := (&http.Client{Timeout: 8 * time.Second}).Get(asset.URL)
+		response, err := systemnetwork.DefaultClient(8 * time.Second).Get(asset.URL)
 		if err != nil {
 			// Keep the underlying error (timeout, DNS, TLS, …) in the console
 			// log for diagnosis; the caller must not surface it to the user,
@@ -295,7 +297,7 @@ func list(id string, fresh bool) ([]Item, error) {
 			return items, nil
 		}
 	}
-	client := &http.Client{Timeout: 8 * time.Second}
+	client := systemnetwork.DefaultClient(8 * time.Second)
 	request, err := http.NewRequest(http.MethodGet, fmt.Sprintf(githubReleasesURL, repository), nil)
 	if err != nil {
 		return nil, fmt.Errorf("无法创建版本列表请求：%w", err)

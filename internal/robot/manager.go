@@ -19,6 +19,7 @@ import (
 	"golang.org/x/mod/semver"
 
 	"alemonx/internal/catalog"
+	"alemonx/internal/system"
 )
 
 type Manager struct{}
@@ -1648,6 +1649,8 @@ func runNamedPackageManager(root, manager string, args ...string) (string, error
 func packageManagerEnvironment(root string) map[string]string {
 	values := map[string]string{}
 	if bin := preferredNVMNodeBin(root); bin != "" {
+		values["PATH"] = bin + string(os.PathListSeparator) + os.Getenv("PATH")
+	} else if bin := system.ManagedNodeBin(); bin != "" {
 		values["PATH"] = bin + string(os.PathListSeparator) + os.Getenv("PATH")
 	}
 	return values
