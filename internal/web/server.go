@@ -856,6 +856,7 @@ func NewServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	mux.HandleFunc("/api/v1/events", s.eventsHandler)
 	mux.HandleFunc("/api/v1/events/diagnostics", s.eventsHandler)
 	mux.HandleFunc("/api/v1/system/ssh", s.sshHandler)
+	mux.HandleFunc("/api/v1/system/service", s.systemServiceHandler)
 	mux.HandleFunc("/api/v1/system/mcp", s.systemMCPHandler)
 	mux.HandleFunc("/api/v1/system/events", s.systemEventsHandler)
 	mux.HandleFunc("/api/v1/system/privileged/status", s.privilegedStatusHandler)
@@ -1584,6 +1585,21 @@ func (s *server) setupPluginActionHandler(w http.ResponseWriter, r *http.Request
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"id": installed.ID, "installed": true})
+		return
+	}
+	if parts[1] == "uninstall" {
+		var input struct {
+			Confirm bool `json:"confirm"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&input); err != nil || !input.Confirm {
+			writeError(w, http.StatusBadRequest, "请确认卸载系统插件。")
+			return
+		}
+		if err := s.plugins.Uninstall(parts[0]); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"id": parts[0], "uninstalled": true})
 		return
 	}
 	if parts[1] == "switch" {
@@ -2666,7 +2682,14 @@ func (s *server) releasesHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
 		return
 	}
-	items, err := releases.List(r.URL.Query().Get("app"))
+	app := r.URL.Query().Get("app")
+	var items []releases.Item
+	var err error
+	if r.URL.Query().Get("refresh") == "1" {
+		items, err = releases.ListFresh(app)
+	} else {
+		items, err = releases.List(app)
+	}
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
@@ -2711,6 +2734,97 @@ func (s *server) updateStatusHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, transaction)
+}
+
+func (s *server) systemServiceHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		status, err := system.ServiceStatus()
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"status": status, "runtime": system.UpdateRuntime(), "installed": system.ServiceInstalled()})
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
+		return
+	}
+	var input struct {
+		Action  string `json:"action"`
+		Confirm bool   `json:"confirm"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil || !input.Confirm {
+		writeError(w, http.StatusBadRequest, "请确认服务操作。")
+		return
+	}
+	switch input.Action {
+	case "install":
+		if system.ServiceInstalled() {
+			writeError(w, http.StatusConflict, "后台服务已安装；请使用启动或重启服务。")
+			return
+		}
+		if system.UpdateRuntime() != "direct" {
+			writeError(w, http.StatusConflict, "当前不是可迁移的前台运行模式。")
+			return
+		}
+		output, err := system.PrepareService(updateRequestPort(r))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "注册后台服务失败："+err.Error())
+			return
+		}
+		if err := system.ScheduleServiceStart(); err != nil {
+			writeError(w, http.StatusInternalServerError, "无法安排后台服务启动："+err.Error())
+			return
+		}
+		writeJSON(w, http.StatusAccepted, map[string]string{"output": output + " 工作台即将切换到后台服务。"})
+		s.requestGracefulUpdateShutdown()
+	case "start":
+		output, err := system.StartService()
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"output": output})
+	case "stop", "restart":
+		// A foreground process is not represented by a LaunchAgent/systemd unit
+		// or scheduled task. Handle it directly instead of asking the platform
+		// supervisor to stop a service that does not exist.
+		foreground := system.UpdateRuntime() == "direct"
+		if foreground && input.Action == "restart" {
+			if err := system.RestartForeground(updateRequestPort(r)); err != nil {
+				writeError(w, http.StatusInternalServerError, "无法安排前台服务重启："+err.Error())
+				return
+			}
+		}
+		output := map[string]string{"stop": "正在停止 AlemonX 服务。", "restart": "正在重启 AlemonX 服务。"}[input.Action]
+		if foreground {
+			output = map[string]string{"stop": "正在关闭当前前台运行的 AlemonX 服务。", "restart": "正在关闭并重新启动当前前台运行的 AlemonX 服务。"}[input.Action]
+		}
+		writeJSON(w, http.StatusAccepted, map[string]string{"output": output})
+		go func(action string, isForeground bool) {
+			time.Sleep(150 * time.Millisecond)
+			if isForeground {
+				if s.requestUpdateShutdown == nil {
+					log.Printf("AlemonX 前台服务%s失败：未配置优雅关闭回调", map[string]string{"stop": "停止", "restart": "重启"}[action])
+					return
+				}
+				s.requestUpdateShutdown()
+				return
+			}
+			var err error
+			if action == "stop" {
+				_, err = system.StopService()
+			} else {
+				_, err = system.RestartService()
+			}
+			if err != nil {
+				log.Printf("AlemonX 服务%s失败：%v", map[string]string{"stop": "停止", "restart": "重启"}[action], err)
+			}
+		}(input.Action, foreground)
+	default:
+		writeError(w, http.StatusBadRequest, "未知服务操作。")
+	}
 }
 
 func (s *server) confirmUpdateStartup() {

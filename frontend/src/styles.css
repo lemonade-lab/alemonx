@@ -1529,6 +1529,93 @@ button {
   cursor: grabbing;
 }
 
+/* Application settings deliberately use the same desktop window chrome as
+ * every other tool, while the inside mirrors the calm two-column structure of
+ * macOS System Settings. */
+.app-settings-shell {
+  background: var(--theme-surface-raised, #fff);
+  display: grid;
+  grid-template-columns: 176px minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+}
+
+.app-settings-sidebar {
+  background: color-mix(in srgb, var(--theme-surface-muted, #f8fafc) 88%, transparent);
+  border-right: 1px solid var(--theme-border-default, #e2e8f0);
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  padding: 18px 12px;
+}
+
+.app-settings-nav {
+  display: grid;
+  gap: 3px;
+}
+
+.app-settings-nav button {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  color: var(--theme-text-secondary, #475569);
+  cursor: pointer;
+  display: flex;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  gap: 9px;
+  min-height: 34px;
+  padding: 0 9px;
+  text-align: left;
+}
+
+.app-settings-nav button:hover {
+  background: color-mix(in srgb, var(--theme-surface-hover, #e2e8f0) 70%, transparent);
+}
+
+.app-settings-nav button.active {
+  background: var(--theme-accent-soft, #eff6ff);
+  color: var(--theme-accent-text, #2563eb);
+}
+
+.app-settings-content {
+  min-height: 0;
+}
+
+.app-settings-body {
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
+  padding: 20px 24px 28px;
+}
+
+.settings-panel-content {
+  color: var(--theme-text-primary, #0f172a);
+  margin: 0 auto;
+  max-width: 620px;
+}
+
+.app-settings-body .account-management {
+  margin: 0 auto;
+  max-width: 760px;
+}
+
+.settings-update-panel .settings-panel-content > header,
+.settings-auth-panel .settings-panel-content > header,
+.app-settings-body .account-management .bot-page-header {
+  display: none;
+}
+
+@container desktop-window (max-width: 759px) {
+  .app-settings-shell { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+  .app-settings-sidebar { border-bottom: 1px solid var(--theme-border-default, #e2e8f0); border-right: 0; gap: 10px; padding: 12px; }
+  .app-settings-nav { display: flex; overflow-x: auto; }
+  .app-settings-nav button { flex: 0 0 auto; }
+  .app-settings-body { padding: 16px; }
+}
+
 /* A custom header still lives in the shared window chrome. Terminal tabs are
  * flush with that chrome instead of looking like a second, nested toolbar. */
 .floating-window-header-custom {

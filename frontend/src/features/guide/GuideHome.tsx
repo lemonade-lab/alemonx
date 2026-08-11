@@ -21,6 +21,7 @@ type Props = {
   creation: Creation | null
   onSelect: (id: string | null) => void
   onClose: () => void
+  onOpenSettings: () => void
   onClearError: () => void
   onCheck: (variant?: string) => void
   onCreate: (config: ProjectConfig) => void
@@ -37,6 +38,7 @@ export function GuideHome({
   error,
   onSelect,
   onClose,
+  onOpenSettings,
   onClearError,
   onFix,
   renderFlow,
@@ -71,6 +73,7 @@ export function GuideHome({
         <GuideHeader
           onBack={() => (group ? navigate('/guide') : backAction.current())}
           onClose={onClose}
+          onOpenSettings={onOpenSettings}
           showBack={Boolean(goal || group)}
         />
         {error && <ErrorNotice message={error} onClose={onClearError} />}

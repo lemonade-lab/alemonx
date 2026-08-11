@@ -5,7 +5,9 @@ import {
   ExternalLink,
   FileArchive,
   Home,
+  Power,
   RefreshCw,
+  RotateCcw,
   Upload,
   X
 } from 'lucide-react'
@@ -61,9 +63,9 @@ const updatePhaseLabels: Record<string, string> = {
   failed: '更新未完成。'
 }
 
-export function SetupUpdateButton() {
+export function SetupUpdateButton({ embedded = false }: { embedded?: boolean }) {
   const [check, { data, isFetching, error }] = useLazySetupUpdateQuery()
-  const [open, setOpen] = useStoreState(false)
+  const [open, setOpen] = useStoreState(embedded)
   const [mode, setMode] = useStoreState<'now' | 'manual'>('now')
   const [releaseURL, setReleaseURL] = useStoreState('')
   const [file, setFile] = useStoreState<File | null>(null)
@@ -73,6 +75,9 @@ export function SetupUpdateButton() {
   const [busy, setBusy] = useStoreState(false)
   const [message, setMessage] = useStoreState('')
   const [confirmRestart, setConfirmRestart] = useStoreState(false)
+  const [serviceAction, setServiceAction] = useState<'install' | 'stop' | 'restart' | null>(null)
+  const [serviceStatus, setServiceStatus] = useState('')
+  const [serviceInstalled, setServiceInstalled] = useState<boolean | null>(null)
   const [transaction, setTransaction] = useState<UpdateTransaction | null>(null)
   const updateAvailable = Boolean(data?.available)
   const checkUpdate = useCallback(
@@ -105,20 +110,35 @@ export function SetupUpdateButton() {
       return null
     }
   }, [])
+  const loadServiceStatus = useCallback(async () => {
+    try {
+      const response = await fetch('/api/v1/system/service', { cache: 'no-store' })
+      const result = (await response.json()) as { status?: string; installed?: boolean }
+      if (!response.ok) throw new Error()
+      setServiceStatus(result.status || '')
+      setServiceInstalled(result.installed ?? null)
+    } catch {
+      setServiceStatus('无法读取 AlemonX 服务状态。')
+    }
+  }, [])
   useEffect(() => {
+    if (embedded) return
     const closeWhenAnotherToolOpens = (event: Event) => {
       if ((event as CustomEvent<string>).detail !== 'update') setOpen(false)
     }
     window.addEventListener('alx:top-tool-open', closeWhenAnotherToolOpens)
     return () =>
       window.removeEventListener('alx:top-tool-open', closeWhenAnotherToolOpens)
-  }, [setOpen])
+  }, [embedded, setOpen])
   const uploadInputID = useId()
   const {
     data: releaseData = [],
     error: releasesError,
     isFetching: releasesLoading
-  } = useReleasesQuery('alemonx', { skip: !open || mode !== 'manual' })
+  } = useReleasesQuery(
+    { app: 'alemonx', refresh: true },
+    { skip: !open || mode !== 'manual' }
+  )
   const releases = releaseData as Release[]
   const selected = releases.find(item => item.url === releaseURL) ?? releases[0]
 
@@ -137,8 +157,11 @@ export function SetupUpdateButton() {
       window.removeEventListener('alx:unified-event', onUpdateChanged)
   }, [checkUpdate])
   useEffect(() => {
-    if (open) void loadUpdateStatus()
-  }, [loadUpdateStatus, open])
+    if (open) {
+      void loadUpdateStatus()
+      void loadServiceStatus()
+    }
+  }, [loadServiceStatus, loadUpdateStatus, open])
 
   const api = async (path: string, options: RequestInit) => {
     const response = await fetch(path, options)
@@ -297,11 +320,54 @@ export function SetupUpdateButton() {
     setConfirmRestart(false)
     void checkUpdate(true)
     void loadUpdateStatus()
+    void loadServiceStatus()
+  }
+
+  const reconnectAfterServiceInstall = () => {
+    const deadline = Date.now() + 20_000
+    const retry = () => {
+      void fetch('/healthz', { cache: 'no-store' })
+        .then(response => {
+          if (response.ok) {
+            window.location.reload()
+            return
+          }
+          throw new Error()
+        })
+        .catch(() => {
+          if (Date.now() < deadline) window.setTimeout(retry, 500)
+          else {
+            setBusy(false)
+            setMessage('后台服务启动超时，请刷新状态查看具体原因。')
+          }
+        })
+    }
+    window.setTimeout(retry, 900)
+  }
+
+  const manageService = async (action: 'install' | 'stop' | 'restart') => {
+    setBusy(true)
+    setMessage('')
+    try {
+      const result = await api('/api/v1/system/service', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, confirm: true })
+      })
+      setMessage(result.output || '服务操作已提交。')
+      if (action === 'install') reconnectAfterServiceInstall()
+      else if (action === 'restart') window.setTimeout(() => void loadServiceStatus(), 1200)
+    } catch (reason) {
+      setMessage(reason instanceof Error ? reason.message : '服务操作失败。')
+    } finally {
+      setBusy(false)
+    }
   }
 
   return (
-    <div className="relative">
-      <button
+    <div className={embedded ? 'settings-update-panel' : 'relative'}>
+      {!embedded && (
+        <button
         className={`inline-flex size-8 items-center justify-center rounded-md border transition disabled:cursor-wait disabled:opacity-70 ${
           updateAvailable
             ? 'border-brand-100 bg-brand-50 text-brand-600 hover:bg-brand-100'
@@ -323,13 +389,58 @@ export function SetupUpdateButton() {
         ) : (
           <Home className="size-4" />
         )}
-      </button>
+        </button>
+      )}
       {open && (
         <section
-          className="topbar-popover absolute left-0 top-[calc(100%+8px)] z-50 grid w-80 gap-2.5 rounded-xl border border-slate-200 bg-white p-3 shadow-[0_18px_42px_rgb(28_26_23/0.13)]"
-          role="dialog"
+          className={
+            embedded
+              ? 'settings-panel-content grid gap-4'
+              : 'topbar-popover absolute left-0 top-[calc(100%+8px)] z-50 grid w-80 gap-2.5 rounded-xl border border-slate-200 bg-white p-3 shadow-[0_18px_42px_rgb(28_26_23/0.13)]'
+          }
+          role={embedded ? undefined : 'dialog'}
           aria-label="应用更新"
         >
+          <section className="grid gap-2 rounded-lg border border-slate-200 bg-slate-50 p-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <strong className="text-xs text-slate-700">AlemonX 服务</strong>
+              <button
+                className="text-[11px] text-slate-500 hover:text-brand-600"
+                onClick={() => void loadServiceStatus()}
+                disabled={busy}
+              >
+                刷新状态
+              </button>
+            </div>
+            <small className="whitespace-pre-line text-[11px] leading-4 text-slate-500">
+              {serviceStatus || '正在读取服务状态…'}
+            </small>
+            <div className="flex justify-end gap-2">
+              {serviceInstalled === false && (
+                <Button
+                  className="inline-flex min-h-8 items-center gap-1 px-2 text-[11px]"
+                  disabled={busy}
+                  onClick={() => setServiceAction('install')}
+                >
+                  <Download className="size-3" /> 安装并启动后台服务
+                </Button>
+              )}
+              <Button
+                className="inline-flex min-h-8 items-center gap-1 px-2 text-[11px]"
+                disabled={busy}
+                onClick={() => setServiceAction('restart')}
+              >
+                <RotateCcw className="size-3" /> 重启服务
+              </Button>
+              <Button
+                className="inline-flex min-h-8 items-center gap-1 px-2 text-[11px]"
+                disabled={busy}
+                onClick={() => setServiceAction('stop')}
+              >
+                <Power className="size-3" /> 停止服务
+              </Button>
+            </div>
+          </section>
           <header className="flex items-start justify-between gap-3">
             <div className="flex items-center gap-2.5">
               <i className="inline-flex size-8 items-center justify-center rounded-lg bg-brand-50 text-brand-600">
@@ -342,19 +453,22 @@ export function SetupUpdateButton() {
                 </small>
               </span>
             </div>
-            <button
-              className="topbar-popover-close"
-              onClick={() => setOpen(false)}
-              aria-label="关闭更新提示"
-            >
-              <X className="size-4" />
-            </button>
+            {!embedded && (
+              <button
+                className="topbar-popover-close"
+                onClick={() => setOpen(false)}
+                aria-label="关闭更新提示"
+              >
+                <X className="size-4" />
+              </button>
+            )}
           </header>
           <Tabs
             ariaLabel="更新方式"
             value={mode}
             onChange={nextMode => {
               setMode(nextMode)
+              if (nextMode === 'manual') setReleaseURL('')
               if (nextMode === 'now') {
                 setFile(null)
                 setUploadProgress(null)
@@ -600,6 +714,43 @@ export function SetupUpdateButton() {
         onConfirm={() => {
           setConfirmRestart(false)
           void applyAndRestart()
+        }}
+      />
+      <ConfirmDialog
+        open={serviceAction !== null}
+        title={
+          serviceAction === 'install'
+            ? '安装 AlemonX 后台服务'
+            : serviceAction === 'stop'
+              ? '停止 AlemonX 服务'
+              : '重启 AlemonX 服务'
+        }
+        subtitle={
+          serviceAction === 'install'
+            ? '后台服务会在登录后自动运行，不会影响机器人项目。'
+            : '仅影响工作台后台服务，不会停止机器人项目。'
+        }
+        message={
+          serviceAction === 'install'
+            ? '当前前台工作台会关闭，并切换为系统后台服务；页面恢复连接后会自动刷新。'
+            : serviceAction === 'stop'
+            ? '服务停止后，工作台页面将无法继续连接，直到你从系统服务或命令行重新启动它。'
+            : '工作台会短暂断开，服务恢复后可重新打开页面。'
+        }
+        confirmLabel={
+          serviceAction === 'install'
+            ? '安装并启动'
+            : serviceAction === 'stop'
+              ? '确认停止'
+              : '确认重启'
+        }
+        busy={busy}
+        onCancel={() => setServiceAction(null)}
+        onConfirm={() => {
+          if (!serviceAction) return
+          const action = serviceAction
+          setServiceAction(null)
+          void manageService(action)
         }}
       />
     </div>

@@ -242,6 +242,32 @@ func List(id string) ([]Item, error) {
 	return list(id, false)
 }
 
+// ListFresh is used by the manual installer. It bypasses the cached history,
+// puts the stable latest index first, and retains older releases when the
+// GitHub history endpoint is reachable.
+func ListFresh(id string) ([]Item, error) {
+	latest, latestErr := latestRelease(id)
+	items, err := list(id, true)
+	if latestErr != nil {
+		return items, err
+	}
+	if err != nil {
+		return []Item{latest}, nil
+	}
+	return withLatestFirst(latest, items), nil
+}
+
+func withLatestFirst(latest Item, items []Item) []Item {
+	result := make([]Item, 0, len(items)+1)
+	result = append(result, latest)
+	for _, item := range items {
+		if item.Tag != latest.Tag {
+			result = append(result, item)
+		}
+	}
+	return result
+}
+
 func list(id string, fresh bool) ([]Item, error) {
 	repository, ok := allowed[id]
 	if !ok {

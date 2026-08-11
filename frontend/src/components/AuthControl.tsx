@@ -150,9 +150,9 @@ export function AuthGate({ children }: { children: ReactNode }) {
   )
 }
 
-export function AuthControl() {
+export function AuthControl({ embedded = false }: { embedded?: boolean }) {
   const [status, setStatus] = useStoreState<AuthStatus | null>(null)
-  const [open, setOpen] = useStoreState(false)
+  const [open, setOpen] = useStoreState(embedded)
   const [account, setAccount] = useStoreState('')
   const [password, setPassword] = useStoreState('')
   const [confirmation, setConfirmation] = useStoreState('')
@@ -169,13 +169,14 @@ export function AuthControl() {
     return () => window.removeEventListener('alx:auth-changed', refresh)
   }, [refresh])
   useEffect(() => {
+    if (embedded) return
     const closeWhenAnotherToolOpens = (event: Event) => {
       if ((event as CustomEvent<string>).detail !== 'auth') setOpen(false)
     }
     window.addEventListener('alx:top-tool-open', closeWhenAnotherToolOpens)
     return () =>
       window.removeEventListener('alx:top-tool-open', closeWhenAnotherToolOpens)
-  }, [setOpen])
+  }, [embedded, setOpen])
   const enable = async () => {
     setBusy(true)
     setError('')
@@ -186,7 +187,7 @@ export function AuthControl() {
       })
       setPassword('')
       setConfirmation('')
-      setOpen(false)
+      if (!embedded) setOpen(false)
       notifyAuthChanged()
       refresh()
     } catch (reason) {
@@ -201,8 +202,9 @@ export function AuthControl() {
     refresh()
   }
   return (
-    <div className="relative">
-      <Button
+    <div className={embedded ? 'settings-auth-panel' : 'relative'}>
+      {!embedded && (
+        <Button
         variant="icon"
         className={
           status?.enabled ? 'border-brand-100 bg-brand-50 text-brand-600' : ''
@@ -222,11 +224,16 @@ export function AuthControl() {
         title="身份认证"
       >
         <LockKeyhole className="size-4" />
-      </Button>
+        </Button>
+      )}
       {open && (
         <section
-          className="topbar-popover absolute right-0 top-[calc(100%+8px)] z-50 grid w-[min(22.5rem,calc(100vw-2rem))] max-h-[calc(100vh-5rem)] gap-2.5 overflow-y-auto rounded-xl border border-slate-200 bg-white p-3 shadow-[0_18px_42px_rgb(28_26_23/0.13)]"
-          role="dialog"
+          className={
+            embedded
+              ? 'settings-panel-content grid gap-4'
+              : 'topbar-popover absolute right-0 top-[calc(100%+8px)] z-50 grid w-[min(22.5rem,calc(100vw-2rem))] max-h-[calc(100vh-5rem)] gap-2.5 overflow-y-auto rounded-xl border border-slate-200 bg-white p-3 shadow-[0_18px_42px_rgb(28_26_23/0.13)]'
+          }
+          role={embedded ? undefined : 'dialog'}
           aria-label="身份认证"
           onKeyDown={event => {
             if (event.key === 'Escape') setOpen(false)
@@ -236,14 +243,16 @@ export function AuthControl() {
             <strong className="text-xs text-slate-800">
               {status?.enabled ? '身份认证已开启' : '开启身份认证'}
             </strong>
-            <Button
-              variant="icon"
-              className="topbar-popover-close size-6"
-              onClick={() => setOpen(false)}
-              aria-label="关闭身份认证"
-            >
-              <X className="size-4" />
-            </Button>
+            {!embedded && (
+              <Button
+                variant="icon"
+                className="topbar-popover-close size-6"
+                onClick={() => setOpen(false)}
+                aria-label="关闭身份认证"
+              >
+                <X className="size-4" />
+              </Button>
+            )}
           </header>
           {status?.enabled ? (
             <>

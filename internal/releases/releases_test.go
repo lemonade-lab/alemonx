@@ -68,6 +68,14 @@ func TestUpdateForReleaseUsesIndexChecksum(t *testing.T) {
 	}
 }
 
+func TestWithLatestFirstReplacesStaleCopy(t *testing.T) {
+	latest := Item{Tag: "v2.0.0", URL: "new"}
+	items := withLatestFirst(latest, []Item{{Tag: "v2.0.0", URL: "old"}, {Tag: "v1.0.0", URL: "older"}})
+	if len(items) != 2 || items[0].URL != "new" || items[1].Tag != "v1.0.0" {
+		t.Fatalf("latest-first items = %#v", items)
+	}
+}
+
 func TestChecksumForAssetReadsReleaseManifest(t *testing.T) {
 	checksum := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

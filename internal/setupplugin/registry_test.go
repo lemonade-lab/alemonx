@@ -471,6 +471,15 @@ func TestRegistryInstallsOnlinePluginLocally(t *testing.T) {
 	if _, err := registry.Install("alemonx-network", "v1.0.0", assetName); err != nil {
 		t.Fatalf("reinstalling a cached version should not fail: %v", err)
 	}
+	if err := registry.Uninstall("alemonx-network"); err != nil {
+		t.Fatalf("uninstalling an owned release should not fail: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "alemonx-network")); !os.IsNotExist(err) {
+		t.Fatalf("owned release directory should be removed, stat err=%v", err)
+	}
+	if cached, err := registry.listCached("alemonx-network"); err != nil || len(cached) != 1 {
+		t.Fatalf("uninstall should retain release cache: %#v, %v", cached, err)
+	}
 }
 
 func TestRegistryInstallRejectsUnknownPlugin(t *testing.T) {

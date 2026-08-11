@@ -83,7 +83,6 @@ import {
   ShieldCheck,
   Terminal,
   Trash2,
-  UsersRound,
   Waypoints,
   Wifi,
   X,
@@ -100,12 +99,10 @@ import { OpsCenter } from './OpsCenter'
 import { OpsOverview } from './OpsOverview'
 import { NpmPublishPanel } from './NpmPublishPanel'
 import { PackageManifestPanel } from './PackageManifestPanel'
-import { SetupUpdateButton } from './SetupUpdateButton'
 import { AgentChatPage } from './AgentChat'
 import { ErrorNotice } from './ErrorNotice'
 import { ConfirmDialog } from './ConfirmDialog'
 import { GLOBAL_MODAL_Z_INDEX, Modal } from './Modal'
-import { AuthControl } from './AuthControl'
 import { AccountManagementPage } from './AccountManagement'
 import { RobotGitControl } from './RobotGitControl'
 import { useIsMobileViewport } from '../hooks/useIsMobileViewport'
@@ -150,6 +147,7 @@ import {
   useSaveRobotLoginMutation,
   useSetSetupPluginEnabledMutation,
   useInstallSetupPluginMutation,
+  useUninstallSetupPluginMutation,
   useLazySetupPluginReleasesQuery,
   useLazySetupPluginVersionsQuery,
   useSetupPluginCacheQuery,
@@ -221,6 +219,7 @@ type Props = {
   error: string
   defaultPage: string
   onOpenGuide: () => void
+  onOpenSettings: () => void
   onClearError: () => void
   onCheck: () => void
   onFix: (check: Check) => void
@@ -248,8 +247,7 @@ const coreFeatureCatalog: Array<{
   status?: string
 }> = [
   { id: 'plugins', label: '插件', icon: <Plug /> },
-  { id: 'ops-overview', label: '运维', icon: <ShieldCheck /> },
-  { id: 'accounts', label: '账户', icon: <UsersRound /> }
+  { id: 'ops-overview', label: '运维', icon: <ShieldCheck /> }
 ]
 
 function systemFeatureLabel(feature: SystemFeature, plugins: SetupPlugin[]) {
@@ -919,6 +917,7 @@ export function Dashboard({
   error,
   defaultPage,
   onOpenGuide,
+  onOpenSettings,
   onClearError,
   onCheck,
   onFix,
@@ -2897,7 +2896,14 @@ export function Dashboard({
         >
           <header className="topbar flex min-h-11 min-w-0 items-center justify-between gap-2 border-b border-slate-200 bg-white/90 px-3 dark:border-slate-700">
             <div className="flex min-w-0 flex-1 items-center gap-1.5">
-              <SetupUpdateButton />
+              <Button
+                variant="icon"
+                onClick={onOpenSettings}
+                aria-label="打开设置"
+                title="设置"
+              >
+                <Settings className="size-4" />
+              </Button>
               <a
                 className="truncate px-1 text-[0.82rem] font-semibold tracking-[-0.01em] text-slate-800 no-underline transition-colors hover:text-brand-600 dark:text-slate-200"
                 href="https://alemonjs.com/"
@@ -2942,7 +2948,6 @@ export function Dashboard({
                 <Code2 className="size-4" />
               </Button>
               <SSHControl />
-              <AuthControl />
               <Button
                 variant="icon"
                 onClick={() => setRobotNavigationHidden(value => !value)}
@@ -5261,6 +5266,8 @@ function SystemPluginCenter({
   const [setEnabled, { isLoading }] = useSetSetupPluginEnabledMutation()
   const [installPlugin, { isLoading: installing }] =
     useInstallSetupPluginMutation()
+  const [uninstallPlugin, { isLoading: uninstalling }] =
+    useUninstallSetupPluginMutation()
   const [loadReleases] = useLazySetupPluginReleasesQuery()
   const [loadVersions] = useLazySetupPluginVersionsQuery()
   const [switchVersion, { isLoading: switching }] =
@@ -5290,11 +5297,23 @@ function SystemPluginCenter({
         pluginID: plugin.id,
         enabled: !plugin.enabled
       }).unwrap()
-      setMessage(
-        plugin.enabled ? `已卸载“${plugin.name}”。` : `已启用“${plugin.name}”。`
-      )
+      setMessage(plugin.enabled ? `已停用“${plugin.name}”。` : `已启用“${plugin.name}”。`)
     } catch (reason) {
       setMessage(operationErrorMessage(reason, '插件状态未更新。'))
+    }
+  }
+  const uninstall = async (plugin: SetupPlugin) => {
+    if (
+      !window.confirm(
+        `卸载“${plugin.name}”会删除其本地插件文件。已下载的 Release 缓存会保留，以便以后重新安装，是否继续？`
+      )
+    )
+      return
+    try {
+      await uninstallPlugin({ pluginID: plugin.id }).unwrap()
+      setMessage(`已卸载“${plugin.name}”。你可以随时重新安装。`)
+    } catch (reason) {
+      setMessage(operationErrorMessage(reason, '插件卸载未完成。'))
     }
   }
   const install = async (plugin: SetupPlugin) => {
@@ -5403,6 +5422,7 @@ function SystemPluginCenter({
           {plugins.map(plugin => {
             const isOnline = Boolean(plugin.online)
             const isEnabled = Boolean(plugin.enabled)
+            const isManagedRelease = Boolean(plugin.source && plugin.installedTag)
             const hasWeb = Boolean(plugin.web)
             const canOpen = isEnabled && hasWeb
             return (
@@ -5461,6 +5481,11 @@ function SystemPluginCenter({
                         <Globe className="size-3" />
                         在线目录
                       </span>
+                    ) : isManagedRelease && !isEnabled ? (
+                      <span className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400">
+                        <Circle className="size-3" />
+                        等待重新安装
+                      </span>
                     ) : isEnabled ? (
                       <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
                         <CheckCircle2 className="size-3" />
@@ -5496,7 +5521,7 @@ function SystemPluginCenter({
                 </button>
 
                 {/* 操作 */}
-                {isOnline ? (
+                {isOnline || (isManagedRelease && !isEnabled) ? (
                   <Button
                     variant="primary"
                     size="sm"
@@ -5513,7 +5538,7 @@ function SystemPluginCenter({
                       '安装'
                     )}
                   </Button>
-                ) : (
+                ) : isManagedRelease ? (
                   <div className="system-feature-actions flex shrink-0 gap-1.5">
                     <Button
                       variant="secondary"
@@ -5524,20 +5549,28 @@ function SystemPluginCenter({
                       版本管理
                     </Button>
                     <Button
-                      variant={isEnabled ? 'secondary' : 'primary'}
+                      variant="secondary"
                       size="sm"
-                      disabled={isLoading}
-                      onClick={() => void toggle(plugin)}
+                      disabled={uninstalling}
+                      onClick={() => void uninstall(plugin)}
                       className={cn(
                         'h-7 rounded-md px-2.5 text-xs font-medium',
-                        isEnabled
-                          ? 'border-slate-200 text-slate-600 hover:border-red-200 hover:bg-red-50 hover:text-red-600 dark:border-slate-700 dark:text-slate-400 dark:hover:border-red-800 dark:hover:bg-red-900/20 dark:hover:text-red-400'
-                          : ''
+                        'border-slate-200 text-slate-600 hover:border-red-200 hover:bg-red-50 hover:text-red-600 dark:border-slate-700 dark:text-slate-400 dark:hover:border-red-800 dark:hover:bg-red-900/20 dark:hover:text-red-400'
                       )}
                     >
-                      {isEnabled ? '卸载' : '启用'}
+                      {uninstalling ? '卸载中…' : '卸载'}
                     </Button>
                   </div>
+                ) : (
+                  <Button
+                    variant={isEnabled ? 'secondary' : 'primary'}
+                    size="sm"
+                    disabled={isLoading}
+                    onClick={() => void toggle(plugin)}
+                    className="system-feature-actions h-7 shrink-0 rounded-md px-2.5 text-xs font-medium"
+                  >
+                    {isEnabled ? '停用' : '启用'}
+                  </Button>
                 )}
               </article>
             )
@@ -5649,9 +5682,9 @@ function SystemPluginCenter({
           onClose={() => setVersionTarget(null)}
           ariaLabel={`${versionTarget.name}版本管理`}
         >
-          <div className="grid w-full max-w-lg gap-3 rounded-xl bg-white p-5 shadow-xl dark:bg-slate-900">
-            <div>
-              <strong className="text-base text-slate-900 dark:text-slate-100">
+          <div className="grid max-h-[min(80vh,48rem)] w-full max-w-lg min-w-0 gap-3 overflow-y-auto rounded-xl bg-white p-5 shadow-xl dark:bg-slate-900">
+            <div className="min-w-0">
+              <strong className="block break-words text-base text-slate-900 dark:text-slate-100">
                 {versionTarget.name} · 版本管理
               </strong>
               <p className="m-0 mt-1 text-xs text-slate-500">
@@ -5671,25 +5704,25 @@ function SystemPluginCenter({
                 versionItems.map(item => (
                   <div
                     key={`${item.tag}:${item.asset}`}
-                    className="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 dark:border-slate-700"
+                    className="flex min-w-0 flex-col gap-2 rounded-lg border border-slate-200 px-3 py-2 sm:flex-row sm:items-center dark:border-slate-700"
                   >
                     <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2 text-sm text-slate-800 dark:text-slate-100">
-                        <span className="font-mono">{item.tag}</span>
+                      <div className="flex min-w-0 flex-wrap items-center gap-2 text-sm text-slate-800 dark:text-slate-100">
+                        <span className="break-all font-mono">{item.tag}</span>
                         {item.active && (
                           <span className="text-xs text-emerald-600">
                             当前活动
                           </span>
                         )}
                       </div>
-                      <div className="truncate text-xs text-slate-400">
+                      <div className="break-all text-xs leading-4 text-slate-400">
                         {item.cached
                           ? `${item.asset} · ${(item.size / 1024 / 1024).toFixed(1)} MB`
                           : '当前版本未进入缓存'}
                       </div>
                       {item.cached && (
                         <div
-                          className="truncate text-[11px] leading-4 text-slate-400"
+                          className="break-all text-[11px] leading-4 text-slate-400"
                           title={`SHA-256: ${item.archiveSha256 ?? ''}\n指纹: ${item.fingerprint ?? ''}`}
                         >
                           SHA-256 {item.archiveSha256 ?? '未知'} · 指纹{' '}
@@ -5701,7 +5734,7 @@ function SystemPluginCenter({
                       )}
                     </div>
                     {!item.active && item.cached && (
-                      <>
+                      <div className="flex shrink-0 gap-1.5 self-end sm:self-auto">
                         <Button
                           variant="secondary"
                           size="sm"
@@ -5717,7 +5750,7 @@ function SystemPluginCenter({
                         >
                           删除
                         </Button>
-                      </>
+                      </div>
                     )}
                   </div>
                 ))

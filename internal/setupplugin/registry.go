@@ -433,7 +433,7 @@ func (r *Registry) disabled() map[string]bool {
 	return items
 }
 
-// SetEnabled is a reversible uninstall: the plugin's files are left intact,
+// SetEnabled is a reversible disable: the plugin's files are left intact,
 // but it disappears from the active function rail and its web UI is no longer
 // served. The cache is refreshed immediately.
 func (r *Registry) SetEnabled(id string, enabled bool) error {
@@ -477,6 +477,71 @@ func (r *Registry) SetEnabled(id string, enabled bool) error {
 	}
 	if err := os.Rename(temporary, r.statePath); err != nil {
 		return err
+	}
+	r.Rescan()
+	return nil
+}
+
+// Uninstall removes only a release installation owned by the Setup-plugin
+// installer. Development, bundled, and manually copied directories do not
+// carry a valid .alx-install.json and therefore cannot be deleted through the
+// workbench. Cached archives are intentionally retained so a later reinstall
+// can reuse a verified download without fetching it again.
+func (r *Registry) Uninstall(id string) error {
+	if !validID.MatchString(id) {
+		return errors.New("无效的 Setup 插件标识")
+	}
+	plugin, err := r.Find(id)
+	if err != nil || plugin.Online {
+		return errors.New("在线系统插件尚未安装")
+	}
+	metadata, err := r.readActiveMetadata(id)
+	if err != nil || metadata.ID != id || metadata.Fingerprint == "" || metadata.Fingerprint != installFingerprint(metadata.ID, metadata.Tag, metadata.Asset, metadata.ArchiveSHA256) {
+		return errors.New("该插件不是工作台安装的 Release，不能从这里删除")
+	}
+	source := filepath.Clean(plugin.Source)
+	if source == "." || filepath.Base(source) == "." || filepath.Base(source) == ".." {
+		return errors.New("插件安装目录无效")
+	}
+	if info, statErr := os.Lstat(source); statErr != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return errors.New("插件安装目录无效或不是普通目录")
+	}
+	ownedRoot := false
+	for _, root := range r.roots {
+		if filepath.Clean(filepath.Dir(source)) == filepath.Clean(root) {
+			ownedRoot = true
+			break
+		}
+	}
+	if !ownedRoot {
+		return errors.New("插件安装目录不受工作台管理，已拒绝删除")
+	}
+	if err := os.RemoveAll(source); err != nil {
+		return errors.New("删除插件文件失败：" + err.Error())
+	}
+	// A previous reversible disable must not hide the online entry after the
+	// local release directory is gone.
+	if r.statePath != "" {
+		disabled := r.disabled()
+		if disabled[id] {
+			delete(disabled, id)
+			ids := make([]string, 0, len(disabled))
+			for item := range disabled {
+				ids = append(ids, item)
+			}
+			sort.Strings(ids)
+			data, marshalErr := json.Marshal(disabledState{Disabled: ids})
+			if marshalErr != nil {
+				return marshalErr
+			}
+			temporary := r.statePath + ".new"
+			if writeErr := os.WriteFile(temporary, data, 0o600); writeErr != nil {
+				return writeErr
+			}
+			if renameErr := os.Rename(temporary, r.statePath); renameErr != nil {
+				return renameErr
+			}
+		}
 	}
 	r.Rescan()
 	return nil

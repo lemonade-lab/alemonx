@@ -48,6 +48,26 @@ func ServiceStatus() (string, error) {
 	}
 }
 
+// ServiceInstalled reports whether a user-level background-service definition
+// exists, regardless of whether it is currently running.
+func ServiceInstalled() bool {
+	switch runtime.GOOS {
+	case "darwin":
+		return userLaunchAgentInstalled()
+	case "linux":
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return false
+		}
+		_, err = os.Stat(filepath.Join(home, ".config", "systemd", "user", "alx.service"))
+		return err == nil
+	case "windows":
+		return windowsScheduledTaskInstalled()
+	default:
+		return false
+	}
+}
+
 func StartService() (string, error) {
 	switch runtime.GOOS {
 	case "darwin":
@@ -84,6 +104,12 @@ func StopService() (string, error) {
 	case "darwin":
 		uid := strconv.Itoa(os.Getuid())
 		if output, err := exec.Command("launchctl", "bootout", "gui/"+uid+"/"+serviceName).CombinedOutput(); err != nil {
+			// launchctl returns this when the LaunchAgent is installed but not
+			// currently loaded. Stopping an already stopped managed service is
+			// intentionally idempotent.
+			if strings.Contains(string(output), "No such process") {
+				return "后台服务当前未运行。", nil
+			}
 			return "", fmt.Errorf("停止后台服务失败：%s", strings.TrimSpace(string(output)))
 		}
 		return "后台服务已停止；登录启动配置仍然保留。", nil
@@ -100,6 +126,78 @@ func StopService() (string, error) {
 	default:
 		return "", fmt.Errorf("暂不支持在 %s 上管理后台服务", runtime.GOOS)
 	}
+}
+
+// RestartForeground schedules the currently foreground-run instance to start
+// again after it has released its listening port. It deliberately preserves
+// the original command line so explicit bind, port, and development options
+// survive the restart.
+func RestartForeground(port string) error {
+	executable, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("无法定位当前 alx：%w", err)
+	}
+	if resolved, err := filepath.EvalSymlinks(executable); err == nil {
+		executable = resolved
+	}
+	args := append([]string(nil), os.Args[1:]...)
+	if !hasPortArgument(args) {
+		args = append(args, "--port", port)
+	}
+	if runtime.GOOS == "windows" {
+		quotedArgs := make([]string, len(args))
+		for index, argument := range args {
+			quotedArgs[index] = powershellQuote(argument)
+		}
+		script := strings.Join([]string{
+			"Start-Sleep -Milliseconds 500",
+			"Start-Process -FilePath " + powershellQuote(executable) + " -ArgumentList @(" + strings.Join(quotedArgs, ",") + ")",
+		}, "; ")
+		return exec.Command("powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-Command", script).Start()
+	}
+	command := append([]string{"-c", "sleep 0.5; exec \"$@\"", "alx-foreground-restart", executable}, args...)
+	return exec.Command("/bin/sh", command...).Start()
+}
+
+// PrepareService registers a background-service definition without starting
+// it. It is used when the current foreground instance owns the listening port:
+// the caller can close that instance first and then schedule StartService.
+func PrepareService(port string) (string, error) {
+	return installService(port, false)
+}
+
+// ScheduleServiceStart starts a previously registered service after a short
+// delay, allowing the foreground process to release its HTTP port first.
+func ScheduleServiceStart() error {
+	switch runtime.GOOS {
+	case "darwin":
+		path, err := launchAgentPath()
+		if err != nil {
+			return err
+		}
+		uid := strconv.Itoa(os.Getuid())
+		script := "sleep 0.6; launchctl bootstrap gui/" + uid + " " + shellQuote(path) + " >/dev/null 2>&1 || true; launchctl kickstart -k gui/" + uid + "/" + serviceName
+		return exec.Command("/bin/sh", "-c", script).Start()
+	case "linux":
+		return exec.Command("/bin/sh", "-c", "sleep 0.6; systemctl --user start alx.service").Start()
+	case "windows":
+		script := "Start-Sleep -Milliseconds 600; schtasks.exe /Run /TN 'ALemonX'"
+		return exec.Command("powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-Command", script).Start()
+	default:
+		return fmt.Errorf("暂不支持在 %s 上注册后台服务", runtime.GOOS)
+	}
+}
+
+func hasPortArgument(arguments []string) bool {
+	for index, argument := range arguments {
+		if argument == "--port" && index+1 < len(arguments) {
+			return true
+		}
+		if strings.HasPrefix(argument, "--port=") {
+			return true
+		}
+	}
+	return false
 }
 
 func RestartService() (string, error) {
@@ -141,6 +239,10 @@ func UninstallService() (string, error) {
 
 // InstallService registers the current binary as a user-level background service.
 func InstallService(port string) (string, error) {
+	return installService(port, true)
+}
+
+func installService(port string, start bool) (string, error) {
 	value, err := strconv.ParseUint(port, 10, 16)
 	if err != nil || value == 0 {
 		return "", errors.New("端口应为 1 到 65535 的数字")
@@ -160,11 +262,11 @@ func InstallService(port string) (string, error) {
 	var result string
 	switch runtime.GOOS {
 	case "darwin":
-		result, err = installLaunchAgent(executable, port)
+		result, err = installLaunchAgent(executable, port, start)
 	case "linux":
-		result, err = installSystemdUserService(executable, port)
+		result, err = installSystemdUserService(executable, port, start)
 	case "windows":
-		result, err = installScheduledTask(executable, port)
+		result, err = installScheduledTask(executable, port, start)
 	default:
 		return "", fmt.Errorf("暂不支持在 %s 上注册后台服务", runtime.GOOS)
 	}
@@ -243,7 +345,7 @@ func OpenBrowser(port string) error {
 	return nil
 }
 
-func installLaunchAgent(executable, port string) (string, error) {
+func installLaunchAgent(executable, port string, start bool) (string, error) {
 	path, err := launchAgentPath()
 	if err != nil {
 		return "", err
@@ -264,6 +366,9 @@ func installLaunchAgent(executable, port string) (string, error) {
 	if err := os.WriteFile(path, []byte(plist), 0644); err != nil {
 		return "", err
 	}
+	if !start {
+		return "已注册后台服务；当前前台实例关闭后会自动启动。", nil
+	}
 	uid := strconv.Itoa(os.Getuid())
 	_ = exec.Command("launchctl", "bootout", "gui/"+uid+"/"+serviceName).Run()
 	if output, err := exec.Command("launchctl", "bootstrap", "gui/"+uid, path).CombinedOutput(); err != nil {
@@ -283,7 +388,7 @@ func launchAgentPath() (string, error) {
 	return filepath.Join(home, "Library", "LaunchAgents", serviceName+".plist"), nil
 }
 
-func installSystemdUserService(executable, port string) (string, error) {
+func installSystemdUserService(executable, port string, start bool) (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
@@ -300,16 +405,26 @@ func installSystemdUserService(executable, port string) (string, error) {
 	if output, err := exec.Command("systemctl", "--user", "daemon-reload").CombinedOutput(); err != nil {
 		return "", fmt.Errorf("刷新 systemd 配置失败：%s", strings.TrimSpace(string(output)))
 	}
-	if output, err := exec.Command("systemctl", "--user", "enable", "--now", "alx.service").CombinedOutput(); err != nil {
+	arguments := []string{"--user", "enable", "alx.service"}
+	if start {
+		arguments = append(arguments[:2], append([]string{"--now"}, arguments[2:]...)...)
+	}
+	if output, err := exec.Command("systemctl", arguments...).CombinedOutput(); err != nil {
 		return "", fmt.Errorf("启动后台服务失败：%s", strings.TrimSpace(string(output)))
+	}
+	if !start {
+		return "已注册 systemd 用户服务；当前前台实例关闭后会自动启动。", nil
 	}
 	return "已注册 systemd 用户服务，访问地址：http://127.0.0.1:" + port, nil
 }
 
-func installScheduledTask(executable, port string) (string, error) {
+func installScheduledTask(executable, port string, start bool) (string, error) {
 	command := `"` + executable + `" serve --port ` + port
 	if output, err := exec.Command("schtasks", "/Create", "/TN", "ALemonX", "/SC", "ONLOGON", "/TR", command, "/F").CombinedOutput(); err != nil {
 		return "", fmt.Errorf("注册计划任务失败：%s", strings.TrimSpace(string(output)))
+	}
+	if !start {
+		return "已注册登录启动任务；当前前台实例关闭后会自动启动。", nil
 	}
 	if output, err := exec.Command("schtasks", "/Run", "/TN", "ALemonX").CombinedOutput(); err != nil {
 		return "", fmt.Errorf("启动后台服务失败：%s", strings.TrimSpace(string(output)))

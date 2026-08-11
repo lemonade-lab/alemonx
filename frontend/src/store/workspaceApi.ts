@@ -252,8 +252,14 @@ export const workspaceApi = createApi({
         { type: 'EnvironmentReport', id: `${arg.goalId}:${arg.variant}` }
       ]
     }),
-    releases: build.query<unknown[], string>({
-      query: app => `releases?app=${encodeURIComponent(app)}`
+    releases: build.query<unknown[], string | { app: string; refresh?: boolean }>({
+      query: input => {
+        const { app, refresh } =
+          typeof input === 'string' ? { app: input } : input
+        const query = new URLSearchParams({ app })
+        if (refresh) query.set('refresh', '1')
+        return `releases?${query}`
+      }
     }),
     setupUpdate: build.query<
       {
@@ -306,6 +312,17 @@ export const workspaceApi = createApi({
         url: `setup/plugins/${encodeURIComponent(pluginID)}/install`,
         method: 'POST',
         body
+      }),
+      invalidatesTags: ['SetupPlugins']
+    }),
+    uninstallSetupPlugin: build.mutation<
+      { id: string; uninstalled: boolean },
+      { pluginID: string }
+    >({
+      query: ({ pluginID }) => ({
+        url: `setup/plugins/${encodeURIComponent(pluginID)}/uninstall`,
+        method: 'POST',
+        body: { confirm: true }
       }),
       invalidatesTags: ['SetupPlugins']
     }),
@@ -680,6 +697,7 @@ export const {
   useSetupPluginCacheQuery,
   useSetSetupPluginEnabledMutation,
   useInstallSetupPluginMutation,
+  useUninstallSetupPluginMutation,
   useSwitchSetupPluginVersionMutation,
   useDeleteSetupPluginVersionMutation,
   useCleanupSetupPluginCacheMutation,

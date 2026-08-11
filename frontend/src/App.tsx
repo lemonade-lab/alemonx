@@ -9,6 +9,8 @@ import {
   type RootState
 } from './store/guideStore'
 import { Dashboard } from './components/Dashboard'
+import { AppSettingsPanel } from './components/AppSettingsPanel'
+import { DesktopWindow } from './components/DesktopWindow'
 import { isWindowHeaderInteractiveTarget } from './components/desktopWindowInteraction'
 import { registerDesktopWindowShortcut } from './components/desktopWindowShortcuts'
 import { EnvironmentFixDialog } from './components/EnvironmentFixDialog'
@@ -150,6 +152,9 @@ export default function App() {
   const isPadView = useIsPadViewport()
   const padRestoreRef = useRef<WorkbenchRect | null>(null)
   const [workbenchLayer, setWorkbenchLayer] = useState(100)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [settingsMinimized, setSettingsMinimized] = useState(false)
+  const [settingsLayer, setSettingsLayer] = useState(108)
   const [dockWindows, setDockWindows] = useState<DockWindows>(emptyDockWindows)
   const [mainWindowHidden, setMainWindowHidden] = useState(false)
   const nextWindowLayer = useRef(106)
@@ -189,6 +194,16 @@ export default function App() {
   function activateWorkbench() {
     const layer = ++nextWindowLayer.current
     setWorkbenchLayer(layer)
+    window.dispatchEvent(
+      new CustomEvent('alx:desktop-window-layer', { detail: layer })
+    )
+  }
+
+  function openSettings() {
+    const layer = ++nextWindowLayer.current
+    setSettingsLayer(layer)
+    setSettingsOpen(true)
+    setSettingsMinimized(false)
     window.dispatchEvent(
       new CustomEvent('alx:desktop-window-layer', { detail: layer })
     )
@@ -508,6 +523,7 @@ export default function App() {
     )
   const hasOpenDesktopWindow =
     [
+      { open: settingsOpen, minimized: settingsMinimized },
       dockWindows.terminal,
       dockWindows.git,
       dockWindows.app,
@@ -592,6 +608,7 @@ export default function App() {
             setError('')
           }}
           onClose={() => navigate('/dashboard')}
+          onOpenSettings={openSettings}
           onClearError={() => setError('')}
           onCheck={checkEnvironment}
           onCreate={createProject}
@@ -641,6 +658,7 @@ export default function App() {
                 setError('')
               }}
               onOpenGuide={openGuide}
+              onOpenSettings={openSettings}
               onCheck={checkEnvironment}
               onFix={setRepairCheck}
               onWindowStateChange={handleWindowStateChange}
@@ -650,6 +668,25 @@ export default function App() {
         )}
         </div>
       </div>
+      <DesktopWindow
+        id="app-settings"
+        open={settingsOpen}
+        minimized={settingsMinimized}
+        title="设置"
+        icon={<Settings className="size-4 text-brand-600 dark:text-brand-200" />}
+        onClose={() => {
+          setSettingsOpen(false)
+          setSettingsMinimized(false)
+        }}
+        onMinimize={() => setSettingsMinimized(true)}
+        zIndex={settingsLayer}
+        onActivate={openSettings}
+        initialPosition={{ left: 180, top: 120 }}
+        width={820}
+        height={640}
+      >
+        <AppSettingsPanel />
+      </DesktopWindow>
       {repairCheck && (
         <EnvironmentFixDialog
           check={repairCheck}
