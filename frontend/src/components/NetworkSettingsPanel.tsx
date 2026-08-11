@@ -26,7 +26,7 @@ const defaultRoutes: Record<SystemNetworkRoute, SystemNetworkRouteSettings> = {
   github: { mode: 'mirror', mirrorUrl: 'https://ghfast.top/{url}' },
   gitee: { mode: 'direct' },
   npm: { mode: 'mirror', mirrorUrl: 'https://registry.npmmirror.com{path}' },
-  node: { mode: 'mirror', mirrorUrl: 'https://npmmirror.com/mirrors/node{path}' },
+  node: { mode: 'mirror', mirrorUrl: 'https://npmmirror.com/mirrors/node{nodepath}' },
   cdn: { mode: 'direct' },
   official: { mode: 'direct' }
 }

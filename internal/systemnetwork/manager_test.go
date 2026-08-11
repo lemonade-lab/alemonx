@@ -152,6 +152,14 @@ func TestMirrorURLRewritesOnlyTheSelectedRoute(t *testing.T) {
 	if err != nil || rewritten.String() != "https://registry.npmmirror.com/alemonjs?active=true" {
 		t.Fatalf("rewritten NPM URL = %v, %v", rewritten, err)
 	}
+	node, err := url.Parse("https://nodejs.org/dist/v24.19.0/SHASUMS256.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rewritten, err = rewriteMirrorURL(defaultNodeMirror, node)
+	if err != nil || rewritten.String() != "https://npmmirror.com/mirrors/node/v24.19.0/SHASUMS256.txt" {
+		t.Fatalf("node mirror rewrite = %v, %v", rewritten, err)
+	}
 }
 
 func TestMirrorTransportRewritesRequestsAndRetriesKnownPresets(t *testing.T) {

@@ -50,7 +50,7 @@ var allRoutes = []Route{RouteGitHub, RouteGitee, RouteNPM, RouteNode, RouteCDN, 
 const (
 	defaultGitHubMirror = "https://ghfast.top/{url}"
 	defaultNPMMirror    = "https://registry.npmmirror.com{path}"
-	defaultNodeMirror   = "https://npmmirror.com/mirrors/node{path}"
+	defaultNodeMirror   = "https://npmmirror.com/mirrors/node{nodepath}"
 )
 
 // MirrorPreset is a host-maintained template available for a system route.
@@ -494,16 +494,18 @@ func shouldFallbackToOfficialAPI(request *http.Request, response *http.Response,
 }
 
 func validateMirrorURL(value string) error {
-	urlCount, pathCount := strings.Count(value, "{url}"), strings.Count(value, "{path}")
-	if (urlCount == 1 && pathCount == 0) || (urlCount == 0 && pathCount == 1) {
+	urlCount, pathCount, nodePathCount := strings.Count(value, "{url}"), strings.Count(value, "{path}"), strings.Count(value, "{nodepath}")
+	if (urlCount == 1 && pathCount == 0 && nodePathCount == 0) || (urlCount == 0 && pathCount == 1 && nodePathCount == 0) || (urlCount == 0 && pathCount == 0 && nodePathCount == 1) {
 		// A mirror can either proxy the complete URL (GitHub accelerators) or
 		// replace only the host while preserving a path (NPM registries).
 	} else {
-		return errors.New("请使用包含 {url} 或 {path} 的完整镜像模板")
+		return errors.New("请使用包含 {url}、{path} 或 {nodepath} 的完整镜像模板")
 	}
 	marker := "{url}"
 	if pathCount == 1 {
 		marker = "{path}"
+	} else if nodePathCount == 1 {
+		marker = "{nodepath}"
 	}
 	prefix := strings.Split(value, marker)[0]
 	parsed, err := url.Parse(prefix)
@@ -520,7 +522,14 @@ func rewriteMirrorURL(template string, source *url.URL) (*url.URL, error) {
 	if strings.Contains(template, "{url}") {
 		return url.Parse(strings.Replace(template, "{url}", source.String(), 1))
 	}
-	target, err := url.Parse(strings.Replace(template, "{path}", source.EscapedPath(), 1))
+	path := source.EscapedPath()
+	if strings.Contains(template, "{nodepath}") {
+		path = strings.TrimPrefix(path, "/dist")
+		template = strings.Replace(template, "{nodepath}", path, 1)
+	} else {
+		template = strings.Replace(template, "{path}", path, 1)
+	}
+	target, err := url.Parse(template)
 	if err != nil {
 		return nil, err
 	}
@@ -571,6 +580,9 @@ func normalizedRoutes(input map[Route]storedRouteSettings, legacyMode Mode, lega
 				}
 				if item.ProxyURL == "" && item.Mode == ModeManual {
 					item.ProxyURL = legacyProxyURL
+				}
+				if route == RouteNode && item.MirrorURL == "https://npmmirror.com/mirrors/node{path}" {
+					item.MirrorURL = defaultNodeMirror
 				}
 				routes[route] = item
 				break
