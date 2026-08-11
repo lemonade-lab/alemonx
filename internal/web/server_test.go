@@ -213,6 +213,24 @@ func waitForSetupOperation(t *testing.T, s *server) operationTask {
 	return operationTask{}
 }
 
+func TestAppendOperationStepKeepsBoundedDistinctTimeline(t *testing.T) {
+	task := operationTask{}
+	appendOperationStep(&task, 20, "下载官方运行时")
+	appendOperationStep(&task, 20, "下载官方运行时")
+	if len(task.Steps) != 1 {
+		t.Fatalf("duplicate step count = %d, want 1", len(task.Steps))
+	}
+	for index := 0; index < operationStepLimit+3; index++ {
+		appendOperationStep(&task, index, fmt.Sprintf("阶段 %d", index))
+	}
+	if len(task.Steps) != operationStepLimit {
+		t.Fatalf("step count = %d, want %d", len(task.Steps), operationStepLimit)
+	}
+	if task.Steps[len(task.Steps)-1].Message != fmt.Sprintf("阶段 %d", operationStepLimit+2) {
+		t.Fatalf("last step = %#v", task.Steps[len(task.Steps)-1])
+	}
+}
+
 func TestNapcatSudoActionRequiresLocalSuperAdminAndConfirmation(t *testing.T) {
 	s, token := newSudoActionTestServer(t, func(context.Context, []byte) (string, error) {
 		t.Fatal("sudo executor must not run when the request is rejected")

@@ -68,8 +68,18 @@ type operationTask struct {
 	Error      string          `json:"error,omitempty"`
 	Data       json.RawMessage `json:"data,omitempty"`
 	Progress   int             `json:"progress"`
+	Steps      []operationStep `json:"steps,omitempty"`
 	CreatedAt  time.Time       `json:"createdAt"`
 	FinishedAt *time.Time      `json:"finishedAt,omitempty"`
+}
+
+// operationStep is a bounded, durable timeline for long-running operations.
+// Keeping it on the task means a page refresh or SSE reconnect still shows
+// which download, verification, or rollback phase was reached.
+type operationStep struct {
+	At       time.Time `json:"at"`
+	Progress int       `json:"progress"`
+	Message  string    `json:"message"`
 }
 
 // robotEvent is pushed to subscribed SSE clients whenever a supervised task
@@ -5823,6 +5833,7 @@ func (s *server) updateOperationData(id string, progress int, output, failure st
 		s.operations[index].Progress = progress
 		if output != "" {
 			s.operations[index].Output = output
+			appendOperationStep(&s.operations[index], progress, output)
 		}
 		if data != nil {
 			s.operations[index].Data = data
@@ -5842,6 +5853,31 @@ func (s *server) updateOperationData(id string, progress int, output, failure st
 	s.mu.Unlock()
 	if snapshot.ID != "" {
 		s.publishRobotEvent(robotEvent{Type: "task", TaskID: snapshot.ID, Task: &snapshot})
+	}
+}
+
+const (
+	operationStepLimit       = 64
+	operationStepMessageSize = 1024
+)
+
+func appendOperationStep(task *operationTask, progress int, message string) {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return
+	}
+	if len(message) > operationStepMessageSize {
+		message = message[:operationStepMessageSize] + "…"
+	}
+	if count := len(task.Steps); count > 0 {
+		previous := task.Steps[count-1]
+		if previous.Progress == progress && previous.Message == message {
+			return
+		}
+	}
+	task.Steps = append(task.Steps, operationStep{At: time.Now(), Progress: progress, Message: message})
+	if len(task.Steps) > operationStepLimit {
+		task.Steps = append([]operationStep(nil), task.Steps[len(task.Steps)-operationStepLimit:]...)
 	}
 }
 
