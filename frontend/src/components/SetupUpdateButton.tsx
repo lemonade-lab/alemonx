@@ -90,13 +90,10 @@ export function SetupUpdateButton({ embedded = false }: { embedded?: boolean }) 
   const checkUpdate = useCallback(
     async (force = false) => {
       try {
-        if (force) {
-          const response = await fetch('/api/v1/update?refresh=1', {
-            cache: 'no-store'
-          })
-          if (!response.ok) throw new Error('更新检查暂不可用。')
-        }
-        await check().unwrap()
+        // The response that performs a force refresh must be the one rendered
+        // by this panel. A separate fetch followed by the cache-keyed query
+        // could display the previous RTK Query result instead.
+        await check(force ? { refresh: true } : undefined).unwrap()
       } catch {
         // The server retains the last known status; a temporary failure should
         // not turn into a client polling loop.

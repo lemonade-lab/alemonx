@@ -274,8 +274,11 @@ export const workspaceApi = createApi({
         integrityReady: boolean
         downloadReady: boolean
       },
-      void
-    >({ query: () => 'update', providesTags: ['SetupUpdate'] }),
+      { refresh?: boolean } | void
+    >({
+      query: input => (input?.refresh ? 'update?refresh=1' : 'update'),
+      providesTags: ['SetupUpdate']
+    }),
     setupPlugins: build.query<SetupPlugin[], void>({
       query: () => 'setup/plugins',
       providesTags: ['SetupPlugins']

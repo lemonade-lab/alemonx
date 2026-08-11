@@ -80,7 +80,21 @@ func SetupUpdate(current string) (Update, error) {
 // SetupUpdateFresh bypasses a still-valid local release cache. An explicit
 // user recheck should contact the release source when it is available.
 func SetupUpdateFresh(current string) (Update, error) {
-	return setupUpdate(current, true)
+	result := Update{Current: current}
+	// An explicit user recheck must prefer GitHub's release history over the
+	// static latest index. CDN caching of the latter can briefly lag a newly
+	// published release, while the release API is also what manual install uses.
+	items, err := list("alemonx", true)
+	if err == nil && len(items) > 0 {
+		return updateForRelease(result, items[0])
+	}
+	if latest, indexErr := latestRelease("alemonx"); indexErr == nil {
+		return updateForRelease(result, latest)
+	}
+	if err != nil {
+		return result, err
+	}
+	return result, fmt.Errorf("暂未找到可用的正式版本")
 }
 
 func setupUpdate(current string, fresh bool) (Update, error) {
@@ -242,19 +256,18 @@ func List(id string) ([]Item, error) {
 	return list(id, false)
 }
 
-// ListFresh is used by the manual installer. It bypasses the cached history,
-// puts the stable latest index first, and retains older releases when the
-// GitHub history endpoint is reachable.
+// ListFresh is used by the manual installer. It bypasses cached history and
+// uses the GitHub release list as the source of truth; the static latest index
+// remains a fallback when that list cannot be reached.
 func ListFresh(id string) ([]Item, error) {
-	latest, latestErr := latestRelease(id)
 	items, err := list(id, true)
-	if latestErr != nil {
-		return items, err
+	if err == nil && len(items) > 0 {
+		return items, nil
 	}
-	if err != nil {
+	if latest, latestErr := latestRelease(id); latestErr == nil {
 		return []Item{latest}, nil
 	}
-	return withLatestFirst(latest, items), nil
+	return items, err
 }
 
 func withLatestFirst(latest Item, items []Item) []Item {
