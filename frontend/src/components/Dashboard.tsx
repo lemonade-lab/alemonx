@@ -1170,6 +1170,43 @@ export function Dashboard({
     pendingHistoryNavigation.current = true
   }, [])
 
+  // Project selection is navigation as well. Writing the destination root
+  // first prevents the URL restoration effect from immediately selecting the
+  // previous project again.
+  const openProject = useCallback(
+    (id: string) => {
+      const project = projects.find(item => item.id === id)
+      if (!project) return
+      const search = writeDashboardNavigation(location.search, {
+        root: project.path,
+        page: 'robot',
+        section: 'runtime',
+        buildMode,
+        configEditor,
+        agentOpen: false,
+        sessionID: ''
+      })
+      if (search === location.search) {
+        dispatch(selectProject(id))
+        return
+      }
+      navigate(
+        { pathname: location.pathname, search, hash: location.hash },
+        { replace: false }
+      )
+    },
+    [
+      buildMode,
+      configEditor,
+      dispatch,
+      location.hash,
+      location.pathname,
+      location.search,
+      navigate,
+      projects
+    ]
+  )
+
   // URL is the durable source for navigation only. Effects triggered by a
   // browser back/forward action update state first; the following state-to-URL
   // effect then deliberately skips one turn to avoid replacing that history
@@ -2725,11 +2762,8 @@ export function Dashboard({
       <OpsOverview
         projects={projects}
         onOpenProject={id => {
-          markUserNavigation()
-          dispatch(selectProject(id))
+          openProject(id)
           closeSystemWindow(feature)
-          setPage('robot')
-          setSection('runtime')
         }}
       />
     ) : feature === 'plugins' ? (
@@ -2761,11 +2795,8 @@ export function Dashboard({
       <OpsOverview
         projects={projects}
         onOpenProject={id => {
-          markUserNavigation()
-          dispatch(selectProject(id))
+          openProject(id)
           setSystemFeature(null)
-          setPage('robot')
-          setSection('runtime')
         }}
       />
     ) : systemFeature === 'plugins' ? (
@@ -3179,13 +3210,8 @@ export function Dashboard({
               onAdd={chooseDirectories}
               onClone={() => setGitCloneOpen(true)}
               onSelect={id => {
-                markUserNavigation()
-                dispatch(selectProject(id))
-                // Selecting a robot directory always returns to its runtime.
-                setAIOpen(false)
+                openProject(id)
                 setSystemFeature(null)
-                setPage('robot')
-                setSection('runtime')
                 setOutput('')
               }}
               onRemove={removeProject}
