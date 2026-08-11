@@ -516,7 +516,20 @@ func (r *Registry) Uninstall(id string) error {
 	if !ownedRoot {
 		return errors.New("插件安装目录不受工作台管理，已拒绝删除")
 	}
+	// Stop serving and executing the plugin before its files are removed. This
+	// unloads the workbench plugin immediately; plugins do not share a common
+	// external-process lifecycle, so their separately managed processes are not
+	// guessed or terminated here.
+	wasEnabled := plugin.Enabled
+	if r.statePath != "" && wasEnabled {
+		if err := r.SetEnabled(id, false); err != nil {
+			return errors.New("停止插件失败：" + err.Error())
+		}
+	}
 	if err := os.RemoveAll(source); err != nil {
+		if r.statePath != "" && wasEnabled {
+			_ = r.SetEnabled(id, true)
+		}
 		return errors.New("删除插件文件失败：" + err.Error())
 	}
 	// A previous reversible disable must not hide the online entry after the

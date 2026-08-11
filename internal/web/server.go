@@ -1584,7 +1584,14 @@ func (s *server) setupPluginActionHandler(w http.ResponseWriter, r *http.Request
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"id": installed.ID, "installed": true})
+		// Downloading a system plugin only places the verified release on disk.
+		// The user explicitly starts it from the plugin centre, which makes the
+		// transition from downloaded to loaded visible and reversible.
+		if err := s.plugins.SetEnabled(installed.ID, false); err != nil {
+			writeError(w, http.StatusBadRequest, "插件已下载，但无法进入待启动状态："+err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"id": installed.ID, "downloaded": true, "enabled": false})
 		return
 	}
 	if parts[1] == "uninstall" {

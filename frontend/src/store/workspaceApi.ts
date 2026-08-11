@@ -305,7 +305,7 @@ export const workspaceApi = createApi({
       invalidatesTags: ['SetupPlugins']
     }),
     installSetupPlugin: build.mutation<
-      { id: string; installed: boolean },
+      { id: string; downloaded: boolean; enabled: boolean },
       { pluginID: string; version: string; assetName: string }
     >({
       query: ({ pluginID, ...body }) => ({

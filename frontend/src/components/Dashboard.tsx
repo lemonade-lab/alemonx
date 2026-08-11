@@ -5297,7 +5297,7 @@ function SystemPluginCenter({
         pluginID: plugin.id,
         enabled: !plugin.enabled
       }).unwrap()
-      setMessage(plugin.enabled ? `已停用“${plugin.name}”。` : `已启用“${plugin.name}”。`)
+      setMessage(plugin.enabled ? `已停用“${plugin.name}”。` : `已启动“${plugin.name}”。`)
     } catch (reason) {
       setMessage(operationErrorMessage(reason, '插件状态未更新。'))
     }
@@ -5342,7 +5342,7 @@ function SystemPluginCenter({
         assetName: selectedAsset
       }).unwrap()
       setInstallTarget(null)
-      setMessage(`已安装“${installTarget.name}”。`)
+      setMessage(`已下载“${installTarget.name}”。现在可以点击「启动」加载它。`)
     } catch (reason) {
       setMessage(operationErrorMessage(reason, '插件安装未完成。'))
     }
@@ -5484,7 +5484,7 @@ function SystemPluginCenter({
                     ) : isManagedRelease && !isEnabled ? (
                       <span className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400">
                         <Circle className="size-3" />
-                        等待重新安装
+                        已下载，等待启动
                       </span>
                     ) : isEnabled ? (
                       <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
@@ -5521,7 +5521,7 @@ function SystemPluginCenter({
                 </button>
 
                 {/* 操作 */}
-                {isOnline || (isManagedRelease && !isEnabled) ? (
+                {isOnline ? (
                   <Button
                     variant="primary"
                     size="sm"
@@ -5535,19 +5535,31 @@ function SystemPluginCenter({
                         安装中
                       </>
                     ) : (
-                      '安装'
+                      '下载'
                     )}
                   </Button>
                 ) : isManagedRelease ? (
                   <div className="system-feature-actions flex shrink-0 gap-1.5">
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      onClick={() => void manageVersions(plugin)}
-                      className="h-7 rounded-md px-2.5 text-xs font-medium"
-                    >
-                      版本管理
-                    </Button>
+                    {!isEnabled ? (
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        disabled={isLoading}
+                        onClick={() => void toggle(plugin)}
+                        className="h-7 rounded-md px-2.5 text-xs font-medium"
+                      >
+                        启动
+                      </Button>
+                    ) : (
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => void manageVersions(plugin)}
+                        className="h-7 rounded-md px-2.5 text-xs font-medium"
+                      >
+                        版本管理
+                      </Button>
+                    )}
                     <Button
                       variant="secondary"
                       size="sm"
@@ -5602,11 +5614,11 @@ function SystemPluginCenter({
         <Modal
           open
           onClose={() => setInstallTarget(null)}
-          ariaLabel={`安装${installTarget.name}`}
+          ariaLabel={`下载${installTarget.name}`}
         >
           <div className="grid w-full max-w-md gap-3 rounded-xl bg-white p-5 shadow-xl dark:bg-slate-900">
             <strong className="text-base text-slate-900 dark:text-slate-100">
-              安装“{installTarget.name}”
+              下载“{installTarget.name}”
             </strong>
             <label className="grid gap-1 text-xs font-semibold text-slate-500">
               版本
@@ -5670,7 +5682,7 @@ function SystemPluginCenter({
                 disabled={installing || !selectedAsset}
                 onClick={() => void confirmInstall()}
               >
-                {installing ? '安装中…' : '下载并安装'}
+                {installing ? '下载中…' : '下载'}
               </Button>
             </div>
           </div>
