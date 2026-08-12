@@ -40,7 +40,14 @@ const manifestName = "alx.json"
 const installMetadataName = ".alx-install.json"
 const maxManifestSize = 64 * 1024
 const onlineIndexURL = "https://raw.githubusercontent.com/lemonade-lab/alemonjs.dev/main/docs/apps-x.md"
-const installTimeout = 3 * time.Minute
+
+// Release archives use a dedicated long-running transfer path. Metadata
+// requests keep their short client timeout, while a valid archive may take
+// considerably longer to arrive on a slow connection.
+const installTimeout = 60 * time.Minute
+const downloadAttemptTimeout = 15 * time.Minute
+const downloadAttempts = 3
+const maxPluginArchiveSize int64 = 300 << 20
 
 var validID = regexp.MustCompile(`^[a-z][a-z0-9-]{1,63}$`)
 var onlineRepository = regexp.MustCompile(`(?m)^\s*\[[^\]]+\]:\s*(https://github\.com/lemonade-lab/([A-Za-z0-9_.-]+))\s*$`)
@@ -1644,43 +1651,118 @@ func (r *Registry) activateCached(root, name string, cached cacheVersion) error 
 }
 
 func (r *Registry) downloadAsset(ctx context.Context, asset ReleaseAsset) (string, string, error) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, asset.URL, nil)
-	if err != nil {
+	if _, err := http.NewRequestWithContext(ctx, http.MethodGet, asset.URL, nil); err != nil {
 		return "", "", errors.New("插件安装包地址无效")
 	}
-	response, err := r.httpClient.Do(request)
+	var lastErr error
+	for attempt := 1; attempt <= downloadAttempts; attempt++ {
+		path, checksum, retry, err := r.downloadAssetAttempt(ctx, asset)
+		if err == nil {
+			return path, checksum, nil
+		}
+		lastErr = err
+		if !retry || ctx.Err() != nil || attempt == downloadAttempts {
+			break
+		}
+		if err := waitDownloadRetry(ctx, time.Duration(attempt)*time.Second); err != nil {
+			lastErr = err
+			break
+		}
+	}
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return "", "", fmt.Errorf("下载插件安装包超过 %s；请检查网络或镜像设置后重试", installTimeout.Round(time.Minute))
+	}
+	if lastErr == nil {
+		lastErr = errors.New("未知下载错误")
+	}
+	return "", "", fmt.Errorf("下载插件安装包失败（已尝试 %d 次）：%w", downloadAttempts, lastErr)
+}
+
+// downloadAssetAttempt removes the ordinary metadata client's five-second
+// timeout for an archive body. Each attempt remains cancellable and bounded.
+func (r *Registry) downloadAssetAttempt(parent context.Context, asset ReleaseAsset) (string, string, bool, error) {
+	ctx, cancel := context.WithTimeout(parent, downloadAttemptTimeout)
+	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, asset.URL, nil)
 	if err != nil {
-		return "", "", errors.New("下载插件安装包失败：" + err.Error())
+		return "", "", false, errors.New("插件安装包地址无效")
+	}
+	client := r.httpClient
+	if client == nil {
+		client = systemnetwork.DefaultClient(0)
+	} else {
+		copy := *client
+		copy.Timeout = 0
+		client = &copy
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return "", "", true, errors.New("连接或下载在 15 分钟内未完成")
+		}
+		return "", "", true, err
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return "", "", errors.New("下载插件安装包失败")
+		retry := response.StatusCode == http.StatusRequestTimeout || response.StatusCode == http.StatusTooManyRequests || response.StatusCode >= http.StatusInternalServerError
+		return "", "", retry, fmt.Errorf("官方服务器返回 %s", response.Status)
+	}
+	if declaredArchiveSize(response) > maxPluginArchiveSize {
+		return "", "", false, fmt.Errorf("插件安装包超过 %d MB 限制", maxPluginArchiveSize>>20)
 	}
 	file, err := os.CreateTemp("", "alx-plugin-*."+filepath.Ext(asset.Name))
 	if err != nil {
-		return "", "", err
+		return "", "", false, err
 	}
 	path := file.Name()
-	defer func() { _ = file.Close() }()
+	keep := false
+	defer func() {
+		_ = file.Close()
+		if !keep {
+			_ = os.Remove(path)
+		}
+	}()
 	hash := sha256.New()
-	limit := io.LimitReader(io.TeeReader(response.Body, hash), 300<<20)
-	count, copyErr := io.Copy(file, limit)
-	if copyErr != nil || count > 300<<20 {
-		_ = os.Remove(path)
-		return "", "", errors.New("插件安装包过大或下载失败")
+	count, copyErr := io.Copy(io.MultiWriter(file, hash), io.LimitReader(response.Body, maxPluginArchiveSize+1))
+	if copyErr != nil {
+		return "", "", true, copyErr
+	}
+	if count > maxPluginArchiveSize {
+		return "", "", false, fmt.Errorf("插件安装包超过 %d MB 限制", maxPluginArchiveSize>>20)
 	}
 	if err := file.Close(); err != nil {
-		_ = os.Remove(path)
-		return "", "", err
+		return "", "", true, err
 	}
-	if asset.SHA256 != "" {
-		got := hex.EncodeToString(hash.Sum(nil))
-		if !strings.EqualFold(got, asset.SHA256) {
-			_ = os.Remove(path)
-			return "", "", errors.New("插件安装包校验失败")
+	checksum := hex.EncodeToString(hash.Sum(nil))
+	if asset.SHA256 != "" && !strings.EqualFold(checksum, asset.SHA256) {
+		return "", "", false, errors.New("插件安装包校验失败")
+	}
+	keep = true
+	return path, checksum, false, nil
+}
+
+func waitDownloadRetry(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func declaredArchiveSize(response *http.Response) int64 {
+	if response == nil {
+		return -1
+	}
+	if raw := strings.TrimSpace(response.Header.Get("Content-Length")); raw != "" {
+		value, err := strconv.ParseInt(raw, 10, 64)
+		if err == nil && value >= 0 {
+			return value
 		}
 	}
-	return path, hex.EncodeToString(hash.Sum(nil)), nil
+	return response.ContentLength
 }
 
 func installFingerprint(id, tag, asset, archiveSHA256 string) string {

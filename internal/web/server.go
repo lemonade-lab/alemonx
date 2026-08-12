@@ -1762,8 +1762,8 @@ func (s *server) setupPluginActionHandler(w http.ResponseWriter, r *http.Request
 }
 
 func (s *server) handleNetworkPrivilegedAction(w http.ResponseWriter, r *http.Request, input setupPluginActionRequest) {
-	if !input.Confirm || !s.localPrivilegeRequest(r) {
-		writeError(w, http.StatusForbidden, "网络系统变更仅允许已确认的本机桌面权限操作。")
+	if !input.Confirm || !s.privilegedRequestAllowed(r) {
+		writeError(w, http.StatusForbidden, "网络系统变更当前未获允许；请检查工作台的系统权限模式。")
 		return
 	}
 	status, err := s.auth.Status(s.authToken(r))
@@ -2181,9 +2181,9 @@ func (s *server) buildPrivilegePreflight(r *http.Request, input privilegePreflig
 		account = "local"
 	}
 	source := privilegeRequestSource(r)
-	if !s.localPrivilegeRequest(r) {
-		response.Description = "系统权限只能在本机桌面工作台中请求。"
-		response.Reason = "当前访问不是受信任的本机回环连接，或工作台已禁用系统权限。请在运行 AlemonX 的设备上打开工作台后重试。"
+	if !s.privilegedRequestAllowed(r) {
+		response.Description = "系统权限已由工作台策略关闭。"
+		response.Reason = "当前工作台未允许系统权限操作。请联系管理员将 ALX_PRIVILEGED_MODE 设为 enabled，或在 local 模式下从本机工作台操作。"
 		return response, account, source
 	}
 	if status.Enabled && (!status.Authenticated || !s.auth.Authorize(s.authToken(r), "system.manage")) {
@@ -2320,8 +2320,8 @@ func (s *server) handleApprovedSudoAction(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, "系统依赖安装不接受额外参数。")
 		return
 	}
-	if !s.localPrivilegeRequest(r) {
-		writeError(w, http.StatusForbidden, "系统管理员密码只能在本机桌面工作台中使用，反代和线上部署已禁用此操作。")
+	if !s.privilegedRequestAllowed(r) {
+		writeError(w, http.StatusForbidden, "当前工作台策略未允许系统管理员密码操作。请联系管理员检查 ALX_PRIVILEGED_MODE。")
 		return
 	}
 	status, err := s.auth.Status(s.authToken(r))
@@ -2386,9 +2386,18 @@ func (s *server) handleApprovedSudoAction(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusAccepted, created)
 }
 
-func (s *server) localPrivilegeRequest(r *http.Request) bool {
+// privilegedRequestAllowed applies the operator-selected scope. In the
+// default enabled mode authenticated administrators may manage a remote host;
+// local mode retains the old loopback-only behavior for hardened desktops.
+func (s *server) privilegedRequestAllowed(r *http.Request) bool {
 	status := system.CurrentPrivilegeStatus()
-	if !status.Enabled || !requestIsLoopback(r) {
+	if !status.Enabled {
+		return false
+	}
+	if status.Mode != string(system.PrivilegedModeLocal) {
+		return true
+	}
+	if !requestIsLoopback(r) {
 		return false
 	}
 	for _, header := range []string{"Forwarded", "X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto"} {

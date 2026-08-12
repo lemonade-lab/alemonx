@@ -321,6 +321,14 @@ func TestNapcatSudoActionRequiresLocalSuperAdminAndConfirmation(t *testing.T) {
 		t.Fatal("sudo executor must not run when the request is rejected")
 		return "", nil
 	})
+	t.Setenv("ALX_PRIVILEGED_MODE", "local")
+	if err := system.ConfigurePrivilegedMode("127.0.0.1", false); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		t.Setenv("ALX_PRIVILEGED_MODE", "disabled")
+		_ = system.ConfigurePrivilegedMode("127.0.0.1", false)
+	})
 	if _, err := s.auth.CreateAccount("operator", "operator-password", "operator-password", nil); err != nil {
 		t.Fatal(err)
 	}
@@ -394,12 +402,20 @@ func TestNapcatSudoActionRequiresAuthorizationIntent(t *testing.T) {
 
 func TestPrivilegePreflightExplainsRemoteRestriction(t *testing.T) {
 	s, token := newSudoActionTestServer(t, func(context.Context, []byte) (string, error) { return "", nil })
+	t.Setenv("ALX_PRIVILEGED_MODE", "local")
+	if err := system.ConfigurePrivilegedMode("127.0.0.1", false); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		t.Setenv("ALX_PRIVILEGED_MODE", "disabled")
+		_ = system.ConfigurePrivilegedMode("127.0.0.1", false)
+	})
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/system/privileged/preflight", strings.NewReader(`{"pluginId":"alemonx-qq","action":"napcat-install-dependencies"}`))
 	request.RemoteAddr = "203.0.113.10:4242"
 	request.AddCookie(&http.Cookie{Name: authCookieName, Value: token})
 	recorder := httptest.NewRecorder()
 	s.privilegedPreflightHandler(recorder, request)
-	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"available":false`) || !strings.Contains(recorder.Body.String(), "本机") {
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"available":false`) || !strings.Contains(recorder.Body.String(), "ALX_PRIVILEGED_MODE") {
 		t.Fatalf("remote preflight = %d %s", recorder.Code, recorder.Body.String())
 	}
 }
@@ -415,18 +431,36 @@ func TestNormalPluginActionRejectsSudoPassword(t *testing.T) {
 }
 
 func TestLocalPrivilegeRequestRejectsProxyHeaders(t *testing.T) {
+	t.Setenv("ALX_PRIVILEGED_MODE", "local")
 	if err := system.ConfigurePrivilegedMode("127.0.0.1", false); err != nil {
 		t.Fatal(err)
 	}
 	s := newStatefulTestServer()
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/system/privileged/napcat-dependencies", nil)
 	request.RemoteAddr = "127.0.0.1:1234"
-	if !s.localPrivilegeRequest(request) {
+	if !s.privilegedRequestAllowed(request) {
 		t.Fatal("direct loopback request must be local")
 	}
 	request.Header.Set("X-Forwarded-For", "203.0.113.8")
-	if s.localPrivilegeRequest(request) {
+	if s.privilegedRequestAllowed(request) {
 		t.Fatal("proxied request must not be treated as a local privilege request")
+	}
+}
+
+func TestEnabledPrivilegeModeAllowsRemoteAdministratorRequest(t *testing.T) {
+	s, _ := newSudoActionTestServer(t, func(context.Context, []byte) (string, error) { return "", nil })
+	t.Setenv("ALX_PRIVILEGED_MODE", "enabled")
+	if err := system.ConfigurePrivilegedMode("0.0.0.0", true); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		t.Setenv("ALX_PRIVILEGED_MODE", "disabled")
+		_ = system.ConfigurePrivilegedMode("127.0.0.1", false)
+	})
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/system/privileged/napcat-dependencies", nil)
+	request.RemoteAddr = "203.0.113.10:4242"
+	if !s.privilegedRequestAllowed(request) {
+		t.Fatal("enabled mode must allow a remote administrator request")
 	}
 }
 

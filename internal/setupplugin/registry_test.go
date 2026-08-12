@@ -3,6 +3,7 @@ package setupplugin
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -536,6 +538,56 @@ func TestRegistryInstallRejectsUnknownPlugin(t *testing.T) {
 	registry := Registry{roots: []string{t.TempDir()}}
 	if _, err := registry.Install("nope", "v1.0.0", "x.zip"); err == nil {
 		t.Fatal("unknown plugin id must be rejected")
+	}
+}
+
+func TestDownloadAssetRejectsDeclaredOversizeArchive(t *testing.T) {
+	registry := Registry{httpClient: newTestHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Length", strconv.FormatInt(maxPluginArchiveSize+1, 10))
+		w.WriteHeader(http.StatusOK)
+	})).Client()}
+	_, _, err := registry.downloadAsset(context.Background(), ReleaseAsset{Name: "plugin.zip", URL: "https://github.com/lemonade-lab/plugin/releases/download/v1/plugin.zip"})
+	if err == nil || !strings.Contains(err.Error(), "超过 300 MB 限制") {
+		t.Fatalf("oversized archive error = %v", err)
+	}
+}
+
+func TestDownloadAssetRejectsUndeclaredOversizeArchive(t *testing.T) {
+	registry := Registry{httpClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(io.LimitReader(zeroReader{}, maxPluginArchiveSize+1)), ContentLength: -1, Request: request}, nil
+	})}}
+	_, _, err := registry.downloadAsset(context.Background(), ReleaseAsset{Name: "plugin.zip", URL: "https://github.com/lemonade-lab/plugin/releases/download/v1/plugin.zip"})
+	if err == nil || !strings.Contains(err.Error(), "超过 300 MB 限制") {
+		t.Fatalf("undeclared oversized archive error = %v", err)
+	}
+}
+
+type zeroReader struct{}
+
+func (zeroReader) Read(data []byte) (int, error) {
+	for index := range data {
+		data[index] = 0
+	}
+	return len(data), nil
+}
+
+func TestDownloadAssetRetriesTransientFailure(t *testing.T) {
+	attempts := 0
+	registry := Registry{httpClient: newTestHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attempts++
+		if attempts == 1 {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		_, _ = w.Write([]byte("archive"))
+	})).Client()}
+	path, _, err := registry.downloadAsset(context.Background(), ReleaseAsset{Name: "plugin.zip", URL: "https://github.com/lemonade-lab/plugin/releases/download/v1/plugin.zip"})
+	if err != nil {
+		t.Fatalf("transient download must retry: %v", err)
+	}
+	defer os.Remove(path)
+	if attempts != 2 {
+		t.Fatalf("attempts = %d, want 2", attempts)
 	}
 }
 

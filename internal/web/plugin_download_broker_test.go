@@ -22,11 +22,11 @@ func TestPluginDownloadBrokerIssuesCredentialFreeLoopbackGrant(t *testing.T) {
 	if !strings.Contains(environment, "ALX_PLUGIN_DOWNLOAD_BROKER=http://127.0.0.1:17100"+pluginDownloadBrokerPath) || !strings.Contains(environment, "ALX_PLUGIN_DOWNLOAD_TOKEN=") || strings.Contains(environment, "proxy") || strings.Contains(environment, "secret") {
 		t.Fatalf("broker environment = %q", environment)
 	}
-	development := strings.Join(broker.environment(setupplugin.Plugin{ID: "alemonx-qq", Enabled: true, DevelopmentSource: true}, "napcat-macos-installer-download"), "\n")
+	development := strings.Join(broker.environment(setupplugin.Plugin{ID: "alemonx-qq", Enabled: true, DevelopmentSource: true}, "napcat-windows-installer-download"), "\n")
 	if !strings.Contains(development, "ALX_PLUGIN_DOWNLOAD_BROKER=http://127.0.0.1:17100"+pluginDownloadBrokerPath) || !strings.Contains(development, "ALX_PLUGIN_DOWNLOAD_TOKEN=") {
 		t.Fatalf("source session did not receive bounded download broker: %q", development)
 	}
-	localBuild := strings.Join(broker.environment(setupplugin.Plugin{ID: "alemonx-qq", Enabled: true}, "napcat-macos-installer-download"), "\n")
+	localBuild := strings.Join(broker.environment(setupplugin.Plugin{ID: "alemonx-qq", Enabled: true}, "napcat-windows-installer-download"), "\n")
 	if !strings.Contains(localBuild, "ALX_PLUGIN_DOWNLOAD_BROKER=http://127.0.0.1:17100"+pluginDownloadBrokerPath) || !strings.Contains(localBuild, "ALX_PLUGIN_DOWNLOAD_TOKEN=") {
 		t.Fatalf("local QQ build did not receive bounded download broker: %q", localBuild)
 	}
@@ -95,6 +95,15 @@ func TestAllowedQQDownloadURLIsBoundToAction(t *testing.T) {
 		target, _ := http.NewRequest(http.MethodGet, value, nil)
 		if !allowedQQDownloadURL("napcat-macos-installer-download", target.URL) {
 			t.Fatalf("NapCat macOS installer URL %q rejected", value)
+		}
+	}
+	for _, value := range []string{
+		"https://api.github.com/repos/NapNeko/NapCatQQ/releases/latest",
+		"https://github.com/NapNeko/NapCatQQ/releases/download/v4/NapCat.Shell.Windows.OneKey.zip",
+	} {
+		target, _ := http.NewRequest(http.MethodGet, value, nil)
+		if !allowedQQDownloadURL("napcat-windows-installer-download", target.URL) {
+			t.Fatalf("NapCat Windows installer URL %q rejected", value)
 		}
 	}
 	for _, value := range []string{

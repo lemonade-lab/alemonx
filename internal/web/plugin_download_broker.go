@@ -169,7 +169,7 @@ func (b *pluginDownloadBroker) serveHTTP(w http.ResponseWriter, r *http.Request)
 
 func qqDownloadAction(action string) bool {
 	switch action {
-	case "install", "update", "update-check", "napcat-macos-installer-download", "luckylillia-install", "luckylillia-reinstall", "luckylillia-update", "luckylillia-update-check":
+	case "install", "update", "update-check", "napcat-macos-installer-download", "napcat-windows-installer-download", "luckylillia-install", "luckylillia-reinstall", "luckylillia-update", "luckylillia-update-check":
 		return true
 	default:
 		return false
@@ -196,6 +196,11 @@ func allowedQQDownloadURL(action string, target *url.URL) bool {
 			return true
 		}
 		return host == "github.com" && strings.HasPrefix(path, "/NapNeko/NapCat-Mac-Installer/releases/download/")
+	case "napcat-windows-installer-download":
+		if host == "api.github.com" && path == "/repos/NapNeko/NapCatQQ/releases/latest" {
+			return true
+		}
+		return host == "github.com" && strings.HasPrefix(path, "/NapNeko/NapCatQQ/releases/download/")
 	case "luckylillia-install", "luckylillia-reinstall", "luckylillia-update", "luckylillia-update-check":
 		if host == "api.github.com" && path == "/repos/LLOneBot/LuckyLilliaBot/releases/latest" {
 			return true

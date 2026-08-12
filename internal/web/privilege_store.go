@@ -47,8 +47,9 @@ type privilegeAuditStatus struct {
 }
 
 // privilegeIntent is an ephemeral, host-issued authorization ticket. It binds
-// a browser's confirmed operation to the authenticated account and loopback
-// source without ever storing a password.
+// a browser's confirmed operation to the authenticated account and request
+// source without ever storing a password. The host's privilege mode decides
+// whether that source must be loopback.
 type privilegeIntent struct {
 	ID            string
 	PluginID      string

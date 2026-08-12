@@ -22,6 +22,11 @@ var embeddedPrivilegePolicy []byte
 type PrivilegedMode string
 
 const (
+	// PrivilegedModeEnabled permits an authenticated super administrator to
+	// approve the small host-owned privilege policy from any deployment
+	// address. It is the default because a managed Linux server is commonly
+	// administered through the workbench remotely.
+	PrivilegedModeEnabled  PrivilegedMode = "enabled"
 	PrivilegedModeLocal    PrivilegedMode = "local"
 	PrivilegedModeDisabled PrivilegedMode = "disabled"
 )
@@ -108,20 +113,18 @@ func validatePrivilegePolicy(policy privilegePolicyFile) error {
 }
 
 // ConfigurePrivilegedMode must be called by the process entrypoint before it
-// exposes HTTP. Production defaults to disabled; local desktop mode requires
-// a literal loopback listener and is never inferred from reverse-proxy headers.
+// exposes HTTP. The default is enabled so a managed server does not lose its
+// normal click-to-authorize workflow merely because it is administered
+// remotely. Operators may choose local for desktop-only access or disabled to
+// remove all system mutation endpoints.
 func ConfigurePrivilegedMode(bind string, production bool) error {
 	requested := strings.ToLower(strings.TrimSpace(os.Getenv("ALX_PRIVILEGED_MODE")))
 	if requested == "" {
-		if production {
-			requested = string(PrivilegedModeDisabled)
-		} else {
-			requested = string(PrivilegedModeLocal)
-		}
+		requested = string(PrivilegedModeEnabled)
 	}
 	mode := PrivilegedMode(requested)
-	if mode != PrivilegedModeLocal && mode != PrivilegedModeDisabled {
-		return errors.New("ALX_PRIVILEGED_MODE 仅支持 local 或 disabled")
+	if mode != PrivilegedModeEnabled && mode != PrivilegedModeLocal && mode != PrivilegedModeDisabled {
+		return errors.New("ALX_PRIVILEGED_MODE 仅支持 enabled、local 或 disabled")
 	}
 	reason := ""
 	if mode == PrivilegedModeLocal && !literalLoopback(bind) {
@@ -141,7 +144,7 @@ func literalLoopback(bind string) bool { return bind == "127.0.0.1" || bind == "
 func CurrentPrivilegeStatus() PrivilegeStatus {
 	privilegeRuntime.RLock()
 	defer privilegeRuntime.RUnlock()
-	return PrivilegeStatus{Enabled: privilegeRuntime.mode == PrivilegedModeLocal, Mode: string(privilegeRuntime.mode), Reason: privilegeRuntime.reason, Version: privilegeRuntime.policy.Version}
+	return PrivilegeStatus{Enabled: privilegeRuntime.mode != PrivilegedModeDisabled, Mode: string(privilegeRuntime.mode), Reason: privilegeRuntime.reason, Version: privilegeRuntime.policy.Version}
 }
 
 // AuthorizePluginPrivilege binds a request to both the immutable host policy

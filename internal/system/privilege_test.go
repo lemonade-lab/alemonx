@@ -14,6 +14,18 @@ func TestConfigurePrivilegedModeRejectsNonLoopbackLocal(t *testing.T) {
 	}
 }
 
+func TestConfigurePrivilegedModeDefaultsToRemoteEnabled(t *testing.T) {
+	t.Setenv("ALX_PRIVILEGED_MODE", "")
+	if err := ConfigurePrivilegedMode("0.0.0.0", true); err != nil {
+		t.Fatal(err)
+	}
+	status := CurrentPrivilegeStatus()
+	if !status.Enabled || status.Mode != string(PrivilegedModeEnabled) {
+		t.Fatalf("default privilege status = %#v", status)
+	}
+	t.Cleanup(func() { t.Setenv("ALX_PRIVILEGED_MODE", "disabled"); _ = ConfigurePrivilegedMode("127.0.0.1", false) })
+}
+
 func TestPluginPrivilegeBindsExactInstalledRunner(t *testing.T) {
 	t.Setenv("ALX_PRIVILEGED_MODE", "local")
 	if err := ConfigurePrivilegedMode("127.0.0.1", false); err != nil {
