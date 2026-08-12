@@ -86,7 +86,7 @@ func SetupUpdateFresh(current string) (Update, error) {
 	// An explicit user recheck must prefer GitHub's release history over the
 	// static latest index. CDN caching of the latter can briefly lag a newly
 	// published release, while the release API is also what manual install uses.
-	items, err := list("alemonx", true)
+	items, err := freshReleaseList("alemonx")
 	if err == nil && len(items) > 0 {
 		return updateForRelease(result, items[0])
 	}
@@ -284,6 +284,17 @@ func withLatestFirst(latest Item, items []Item) []Item {
 }
 
 func list(id string, fresh bool) ([]Item, error) {
+	return listWithFallback(id, fresh, true)
+}
+
+// freshReleaseList deliberately does not return a stale local release list.
+// An explicit automatic-update check must either reach the actual Release API
+// or fall back to the release index in SetupUpdateFresh.
+func freshReleaseList(id string) ([]Item, error) {
+	return listWithFallback(id, true, false)
+}
+
+func listWithFallback(id string, fresh, allowStaleFallback bool) ([]Item, error) {
 	repository, ok := allowed[id]
 	if !ok {
 		return nil, fmt.Errorf("不支持该下载项目")
@@ -304,23 +315,31 @@ func list(id string, fresh bool) ([]Item, error) {
 	}
 	request.Header.Set("Accept", "application/vnd.github+json")
 	request.Header.Set("User-Agent", "AlemonX-Update-Checker")
+	if fresh {
+		request.Header.Set("Cache-Control", "no-cache")
+		request.Header.Set("Pragma", "no-cache")
+	}
 	response, err := client.Do(request)
 	if err != nil {
-		if items, ok := staleCachedReleaseItems(id); ok {
-			return items, nil
-		}
-		if item, indexErr := latestRelease(id); indexErr == nil {
-			return []Item{item}, nil
+		if allowStaleFallback {
+			if items, ok := staleCachedReleaseItems(id); ok {
+				return items, nil
+			}
+			if item, indexErr := latestRelease(id); indexErr == nil {
+				return []Item{item}, nil
+			}
 		}
 		return nil, fmt.Errorf("无法获取版本列表，请检查网络后重试")
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		if items, ok := staleCachedReleaseItems(id); ok {
-			return items, nil
-		}
-		if item, indexErr := latestRelease(id); indexErr == nil {
-			return []Item{item}, nil
+		if allowStaleFallback {
+			if items, ok := staleCachedReleaseItems(id); ok {
+				return items, nil
+			}
+			if item, indexErr := latestRelease(id); indexErr == nil {
+				return []Item{item}, nil
+			}
 		}
 		if response.StatusCode == http.StatusForbidden && response.Header.Get("X-RateLimit-Remaining") == "0" {
 			return nil, fmt.Errorf("GitHub API 请求次数已用尽，请稍后重试或直接选择本地安装包")

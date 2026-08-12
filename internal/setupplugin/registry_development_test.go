@@ -4,12 +4,20 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"testing"
 )
 
 func TestDevelopmentRunnerIsUsedWhenReleaseRunnerIsMissing(t *testing.T) {
+	source := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(source, "runner"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "runner", "main.go"), []byte("package main"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	plugin := Plugin{
-		Source:  t.TempDir(),
+		Source:  source,
 		Runtime: "binary",
 		Entry:   map[string]string{"missing-platform": "dist/runner"},
 		Development: &RuntimeSpec{
@@ -21,8 +29,21 @@ func TestDevelopmentRunnerIsUsedWhenReleaseRunnerIsMissing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if entry.name != "go" || len(entry.args) != 2 || entry.args[0] != "run" {
+	if entry.name != "go" || !slices.Equal(entry.args, []string{"run", filepath.Join(plugin.Source, "runner")}) {
 		t.Fatalf("unexpected development entry: %#v", entry)
+	}
+}
+
+func TestDevelopmentGoRunnerUsesDeclaredPackageDirectory(t *testing.T) {
+	source := t.TempDir()
+	runner := filepath.Join(source, "runner")
+	if err := os.MkdirAll(runner, 0755); err != nil {
+		t.Fatal(err)
+	}
+	plugin := Plugin{Source: source, DevelopmentSource: true, Development: &RuntimeSpec{Runtime: "go", Entry: map[string]string{"go": "runner"}}}
+	entry, err := plugin.entryPath()
+	if err != nil || entry.name != "go" || !slices.Equal(entry.args, []string{"run", runner}) {
+		t.Fatalf("development package entry = %#v, err=%v", entry, err)
 	}
 }
 

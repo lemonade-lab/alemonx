@@ -1026,9 +1026,24 @@ func (p Plugin) runtimeEntry(runtimeName string, entries map[string]string) (exe
 	if runtimeName == "go" {
 		relative := entries["go"]
 		if relative == "" || filepath.IsAbs(relative) || strings.HasPrefix(filepath.Clean(relative), ".."+string(filepath.Separator)) {
-			return executable{}, errors.New("Go 插件缺少位于插件目录内的入口文件")
+			return executable{}, errors.New("Go 插件缺少位于插件目录内的入口包")
 		}
-		return executable{name: "go", args: []string{"run", filepath.Join(p.Source, relative)}}, nil
+		path := filepath.Join(p.Source, relative)
+		info, err := os.Stat(path)
+		if err != nil {
+			return executable{}, errors.New("Go 插件入口不可用")
+		}
+		if info.IsDir() {
+			return executable{name: "go", args: []string{"run", path}}, nil
+		}
+		if !info.Mode().IsRegular() || filepath.Ext(path) != ".go" {
+			return executable{}, errors.New("Go 插件入口必须是包含 main 包的目录或 .go 文件")
+		}
+		// A Go source file is a compatibility spelling for its package directory.
+		// `go run runner/main.go` compiles only that file and loses the other
+		// files of package main (platform implementations, state and actions).
+		// Running the directory always builds the complete package.
+		return executable{name: "go", args: []string{"run", filepath.Dir(path)}}, nil
 	}
 	if runtimeName == "python" {
 		relative := entries["python"]

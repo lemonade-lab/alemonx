@@ -146,8 +146,8 @@ export function SetupUpdateButton({ embedded = false }: { embedded?: boolean }) 
   const releases = releaseData as Release[]
   const selected = releases.find(item => item.url === releaseURL) ?? releases[0]
 
-  // The server owns automatic version discovery. This initial request only
-  // reads its cached status; later changes arrive through the unified gateway.
+  // Read the server's cached status initially so the top-bar indicator can
+  // render promptly. Opening either update panel then performs a forced check.
   useEffect(() => {
     void checkUpdate()
   }, [checkUpdate])
@@ -162,10 +162,13 @@ export function SetupUpdateButton({ embedded = false }: { embedded?: boolean }) 
   }, [checkUpdate])
   useEffect(() => {
     if (open) {
+      // Both the popover and the embedded settings panel must perform the
+      // same explicit latest-version lookup when opened.
+      void checkUpdate(true)
       void loadUpdateStatus()
       void loadServiceStatus()
     }
-  }, [loadServiceStatus, loadUpdateStatus, open])
+  }, [checkUpdate, loadServiceStatus, loadUpdateStatus, open])
 
   const api = async (path: string, options: RequestInit) => {
     const response = await fetch(path, options)
@@ -349,6 +352,31 @@ export function SetupUpdateButton({ embedded = false }: { embedded?: boolean }) 
     window.setTimeout(retry, 900)
   }
 
+  const reconnectAfterServiceRestart = () => {
+    const deadline = Date.now() + 20_000
+    const retry = () => {
+      void fetch('/healthz', { cache: 'no-store' })
+        .then(response => {
+          if (response.ok) {
+            window.location.reload()
+            return
+          }
+          throw new Error()
+        })
+        .catch(() => {
+          if (Date.now() < deadline) window.setTimeout(retry, 500)
+          else {
+            setBusy(false)
+            setMessage('服务重启超时，请刷新状态查看具体原因。')
+          }
+        })
+    }
+    // The API response is sent before the old service is stopped. Starting
+    // the first probe after that shutdown window avoids treating the old
+    // process as a successful restart.
+    window.setTimeout(retry, 900)
+  }
+
   const manageService = async (action: 'install' | 'stop' | 'restart') => {
     setBusy(true)
     setMessage('')
@@ -360,7 +388,7 @@ export function SetupUpdateButton({ embedded = false }: { embedded?: boolean }) 
       })
       setMessage(result.output || '服务操作已提交。')
       if (action === 'install') reconnectAfterServiceInstall()
-      else if (action === 'restart') window.setTimeout(() => void loadServiceStatus(), 1200)
+      else if (action === 'restart') reconnectAfterServiceRestart()
     } catch (reason) {
       setMessage(reason instanceof Error ? reason.message : '服务操作失败。')
     } finally {

@@ -6778,24 +6778,6 @@ function PackageConfigPanel({
           values={values}
           onChange={updateValue}
         />
-        {data.commands?.length ? (
-          <div className="grid gap-1.5 border-t border-slate-100 pt-3">
-            <strong className="text-xs font-semibold text-slate-600">
-              桌面命令
-            </strong>
-            {data.commands.map(command => (
-              <code
-                key={command.command}
-                className="rounded-md bg-slate-100 px-2 py-1 text-[11px] text-slate-600"
-              >
-                {command.name} · {command.command}
-              </code>
-            ))}
-            <small className="text-[11px] text-slate-400">
-              命令由包桌面端处理，工作台仅展示声明。
-            </small>
-          </div>
-        ) : null}
       </section>
       <ConfigReadmeCard
         docURL={docURL}

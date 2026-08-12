@@ -22,8 +22,13 @@ func TestPluginDownloadBrokerIssuesCredentialFreeLoopbackGrant(t *testing.T) {
 	if !strings.Contains(environment, "ALX_PLUGIN_DOWNLOAD_BROKER=http://127.0.0.1:17100"+pluginDownloadBrokerPath) || !strings.Contains(environment, "ALX_PLUGIN_DOWNLOAD_TOKEN=") || strings.Contains(environment, "proxy") || strings.Contains(environment, "secret") {
 		t.Fatalf("broker environment = %q", environment)
 	}
-	if got := broker.environment(setupplugin.Plugin{ID: "alemonx-qq", Enabled: true, DevelopmentSource: true, InstalledTag: "v1.2.3", InstalledAsset: "asset", ArchiveSHA256: strings.Repeat("a", 64), Fingerprint: "fingerprint"}, "install"); len(got) != 0 {
-		t.Fatalf("source session received broker variables: %#v", got)
+	development := strings.Join(broker.environment(setupplugin.Plugin{ID: "alemonx-qq", Enabled: true, DevelopmentSource: true}, "napcat-macos-installer-download"), "\n")
+	if !strings.Contains(development, "ALX_PLUGIN_DOWNLOAD_BROKER=http://127.0.0.1:17100"+pluginDownloadBrokerPath) || !strings.Contains(development, "ALX_PLUGIN_DOWNLOAD_TOKEN=") {
+		t.Fatalf("source session did not receive bounded download broker: %q", development)
+	}
+	localBuild := strings.Join(broker.environment(setupplugin.Plugin{ID: "alemonx-qq", Enabled: true}, "napcat-macos-installer-download"), "\n")
+	if !strings.Contains(localBuild, "ALX_PLUGIN_DOWNLOAD_BROKER=http://127.0.0.1:17100"+pluginDownloadBrokerPath) || !strings.Contains(localBuild, "ALX_PLUGIN_DOWNLOAD_TOKEN=") {
+		t.Fatalf("local QQ build did not receive bounded download broker: %q", localBuild)
 	}
 	if got := broker.environment(setupplugin.Plugin{ID: "alemonx-qq", Enabled: true, InstalledTag: "v1.2.3", InstalledAsset: "asset", ArchiveSHA256: strings.Repeat("a", 64), Fingerprint: "fingerprint"}, "napcat-status"); len(got) != 0 {
 		t.Fatalf("status action received broker variables: %#v", got)

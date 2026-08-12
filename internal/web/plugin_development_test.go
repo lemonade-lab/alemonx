@@ -203,6 +203,18 @@ const api = "/api/v1/setup/plugins";`)),
 	}
 }
 
+func TestDevelopmentWebProxyDisablesCaching(t *testing.T) {
+	registry := setupplugin.NewRegistry(t.TempDir())
+	manager := newPluginDevelopmentManager(registry, "")
+	server := &server{pluginDevelopment: manager}
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/setup/plugins/development/missing/web/", nil)
+	recorder := httptest.NewRecorder()
+	server.pluginDevelopmentWebProxy(recorder, request, "missing", "/")
+	if cacheControl := recorder.Header().Get("Cache-Control"); cacheControl != "no-store, max-age=0" {
+		t.Fatalf("development proxy Cache-Control = %q", cacheControl)
+	}
+}
+
 func TestDevelopmentRetryTransportRetriesViteOptimizeTimeout(t *testing.T) {
 	attempts := 0
 	transport := developmentRetryTransport{base: roundTripFunc(func(*http.Request) (*http.Response, error) {

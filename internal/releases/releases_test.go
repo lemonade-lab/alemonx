@@ -68,6 +68,43 @@ func TestUpdateForReleaseUsesIndexChecksum(t *testing.T) {
 	}
 }
 
+func TestSetupUpdateFreshUsesLatestReleaseAPI(t *testing.T) {
+	checksum := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	assetName := "alx-" + runtime.GOOS + "-" + runtime.GOARCH + ".zip"
+	var sawNoCache bool
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/SHA256SUMS" {
+			_, _ = fmt.Fprintf(w, "%s  %s\n", checksum, assetName)
+			return
+		}
+		if r.Header.Get("Cache-Control") == "no-cache" {
+			sawNoCache = true
+		}
+		_ = json.NewEncoder(w).Encode([]map[string]any{{
+			"tag_name": "v9.9.9",
+			"name":     "Latest",
+			"html_url": "https://example.invalid/v9.9.9",
+			"assets": []map[string]any{
+				{"name": assetName, "browser_download_url": "https://example.invalid/" + assetName},
+				{"name": "SHA256SUMS", "browser_download_url": server.URL + "/SHA256SUMS"},
+			},
+		}})
+	}))
+	defer server.Close()
+	previous := githubReleasesURL
+	githubReleasesURL = server.URL + "/repos/%s/releases?per_page=30"
+	t.Cleanup(func() { githubReleasesURL = previous })
+
+	update, err := SetupUpdateFresh("v1.0.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sawNoCache || update.Latest != "v9.9.9" || !update.Available || !update.IntegrityReady {
+		t.Fatalf("fresh update = %#v, no-cache=%t", update, sawNoCache)
+	}
+}
+
 func TestWithLatestFirstReplacesStaleCopy(t *testing.T) {
 	latest := Item{Tag: "v2.0.0", URL: "new"}
 	items := withLatestFirst(latest, []Item{{Tag: "v2.0.0", URL: "old"}, {Tag: "v1.0.0", URL: "older"}})

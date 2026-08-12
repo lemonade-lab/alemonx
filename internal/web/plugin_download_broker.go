@@ -46,9 +46,12 @@ func (b *pluginDownloadBroker) setEndpoint(endpoint string) {
 
 func (b *pluginDownloadBroker) environment(plugin setupplugin.Plugin, action string) []string {
 	// This is a host policy, not a manifest capability. The token has no proxy
-	// credentials and is granted only to a formal QQ Release identity; source
-	// development sessions never receive it.
-	if b == nil || !qqDownloadAction(action) || plugin.ID != "alemonx-qq" || plugin.DevelopmentSource || plugin.Online || !plugin.Enabled || plugin.InstalledTag == "" || plugin.InstalledAsset == "" || plugin.ArchiveSHA256 == "" || plugin.Fingerprint == "" {
+	// credentials. The gateway is read-only and binds every request to one QQ
+	// action plus a fixed official URL allowlist, so a local build can safely use
+	// it too. Requiring a Release fingerprint here made local package testing
+	// silently bypass the workbench's GitHub mirror/proxy setting and fall back
+	// to direct GitHub. This is networking only: it never grants privilege.
+	if b == nil || !qqDownloadAction(action) || plugin.ID != "alemonx-qq" || plugin.Online || !plugin.Enabled {
 		return nil
 	}
 	secret := make([]byte, 32)

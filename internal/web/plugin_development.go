@@ -798,6 +798,12 @@ func (s *server) requirePluginDevelopment(w http.ResponseWriter, r *http.Request
 }
 
 func (s *server) pluginDevelopmentWebProxy(w http.ResponseWriter, r *http.Request, id, requestPath string) {
+	// A source session is intentionally live: neither the WebView nor an
+	// intermediary may reuse a previous Vite HTML/module response after a
+	// developer has stopped and started the session again. In particular this
+	// prevents a stale entry module from presenting an older plugin UI while its
+	// current runner has already changed.
+	w.Header().Set("Cache-Control", "no-store, max-age=0")
 	if requestPath == "/finder-bridge.js" {
 		w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
 		_, _ = io.WriteString(w, setupPluginFinderBridge())
@@ -837,6 +843,7 @@ func (s *server) pluginDevelopmentWebProxy(w http.ResponseWriter, r *http.Reques
 		},
 		Transport: developmentWebTransport(), FlushInterval: 100 * time.Millisecond,
 		ModifyResponse: func(response *http.Response) error {
+			response.Header.Set("Cache-Control", "no-store, max-age=0")
 			if location := response.Header.Get("Location"); location != "" && !localServiceLocationAllowed(location, target) {
 				return errors.New("源码前端重定向到了不受信任的地址")
 			}
