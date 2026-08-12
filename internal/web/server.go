@@ -5996,11 +5996,29 @@ func appendOperationStep(task *operationTask, progress int, message string) {
 		if previous.Progress == progress && previous.Message == message {
 			return
 		}
+		// Progress within one stage (especially a large download) is an update,
+		// not a new log line. Keep a compact stage timeline while task.Output
+		// and SSE continue to expose the newest exact message.
+		if operationStage(previous.Message) == operationStage(message) {
+			task.Steps[count-1] = operationStep{At: time.Now(), Progress: progress, Message: message}
+			return
+		}
 	}
 	task.Steps = append(task.Steps, operationStep{At: time.Now(), Progress: progress, Message: message})
 	if len(task.Steps) > operationStepLimit {
 		task.Steps = append([]operationStep(nil), task.Steps[len(task.Steps)-operationStepLimit:]...)
 	}
+}
+
+func operationStage(message string) string {
+	message = strings.TrimSpace(message)
+	if before, _, found := strings.Cut(message, "（"); found {
+		message = before
+	}
+	if before, _, found := strings.Cut(message, "("); found {
+		message = before
+	}
+	return strings.TrimSpace(message)
 }
 
 func (s *server) robotGitCloneCheckHandler(w http.ResponseWriter, r *http.Request) {

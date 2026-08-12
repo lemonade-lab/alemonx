@@ -316,6 +316,15 @@ func TestAppendOperationStepKeepsBoundedDistinctTimeline(t *testing.T) {
 	}
 }
 
+func TestAppendOperationStepUpdatesActiveDownloadLine(t *testing.T) {
+	task := operationTask{}
+	appendOperationStep(&task, 20, "下载官方运行时（1 MB / 10 MB）")
+	appendOperationStep(&task, 25, "下载官方运行时（2 MB / 10 MB）")
+	if len(task.Steps) != 1 || task.Steps[0].Progress != 25 || task.Steps[0].Message != "下载官方运行时（2 MB / 10 MB）" {
+		t.Fatalf("download updates must replace one line: %#v", task.Steps)
+	}
+}
+
 func TestNapcatSudoActionRequiresLocalSuperAdminAndConfirmation(t *testing.T) {
 	s, token := newSudoActionTestServer(t, func(context.Context, []byte) (string, error) {
 		t.Fatal("sudo executor must not run when the request is rejected")
