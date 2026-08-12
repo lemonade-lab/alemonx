@@ -19,7 +19,7 @@ func TestPluginDownloadBrokerIssuesCredentialFreeLoopbackGrant(t *testing.T) {
 	broker := newPluginDownloadBroker(network)
 	broker.setEndpoint("http://127.0.0.1:17100")
 	environment := strings.Join(broker.environment(setupplugin.Plugin{ID: "alemonx-qq", Enabled: true, InstalledTag: "v1.2.3", InstalledAsset: "alemonx-qq-linux-amd64.zip", ArchiveSHA256: strings.Repeat("a", 64), Fingerprint: "fingerprint"}, "install"), "\n")
-	if !strings.Contains(environment, "ALX_PLUGIN_DOWNLOAD_BROKER=http://127.0.0.1:17100"+pluginDownloadBrokerPath) || !strings.Contains(environment, "ALX_PLUGIN_DOWNLOAD_TOKEN=") || strings.Contains(environment, "proxy") || strings.Contains(environment, "secret") {
+	if !strings.Contains(environment, "ALX_PLUGIN_DOWNLOAD_BROKER=http://127.0.0.1:17100"+pluginDownloadBrokerPath) || !strings.Contains(environment, "ALX_PLUGIN_DOWNLOAD_TOKEN=") || !strings.Contains(environment, "ALX_PLUGIN_INSTALLED_TAG=v1.2.3") || strings.Contains(environment, "proxy") || strings.Contains(environment, "secret") {
 		t.Fatalf("broker environment = %q", environment)
 	}
 	development := strings.Join(broker.environment(setupplugin.Plugin{ID: "alemonx-qq", Enabled: true, DevelopmentSource: true}, "napcat-windows-installer-download"), "\n")
@@ -82,6 +82,8 @@ func TestAllowedQQDownloadURLIsBoundToAction(t *testing.T) {
 		"https://api.github.com/repos/NapNeko/NapCatQQ/releases/latest",
 		"https://github.com/NapNeko/NapCatQQ/releases/download/v1/package.zip",
 		"https://qqdl.gtimg.cn/qqfile/QQNT/9.9.32/release/file.deb",
+		"https://api.github.com/repos/lemonade-lab/alemonx-qq/releases/tags/v0.0.14",
+		"https://github.com/lemonade-lab/alemonx-qq/releases/download/v0.0.14/alemonx-qq-runtime-linux-amd64-glibc.tar.zst",
 	} {
 		target, _ := http.NewRequest(http.MethodGet, value, nil)
 		if !allowedQQDownloadURL("install", target.URL) {
@@ -117,6 +119,7 @@ func TestAllowedQQDownloadURLIsBoundToAction(t *testing.T) {
 	}
 	for _, value := range []string{
 		"https://github.com/other/repository/releases/download/v1/package.zip",
+		"https://github.com/lemonade-lab/alemonx-qq/releases/download/runtime-v1/anything.zip",
 		"https://objects.githubusercontent.com/unrelated",
 		"https://qqdl.gtimg.cn/other/file.deb",
 	} {

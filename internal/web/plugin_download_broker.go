@@ -70,11 +70,16 @@ func (b *pluginDownloadBroker) environment(plugin setupplugin.Plugin, action str
 			delete(b.grants, value)
 		}
 	}
-	// A Linux NapCat install performs one metadata request and two archive
-	// downloads. Eight requests leave room for retries without turning a runner
+	// A Linux NapCat install can fetch the exact plugin release metadata, its
+	// compatibility runtime, NapCat and QQ archives. Twelve requests leave room
+	// for retries without turning a runner
 	// token into a long-lived generic download capability.
-	b.grants[token] = pluginDownloadGrant{pluginID: plugin.ID, action: action, remaining: 8, expiresAt: now.Add(70 * time.Minute)}
-	return []string{"ALX_PLUGIN_DOWNLOAD_BROKER=" + b.endpoint + pluginDownloadBrokerPath, "ALX_PLUGIN_DOWNLOAD_TOKEN=" + token}
+	b.grants[token] = pluginDownloadGrant{pluginID: plugin.ID, action: action, remaining: 12, expiresAt: now.Add(70 * time.Minute)}
+	environment := []string{"ALX_PLUGIN_DOWNLOAD_BROKER=" + b.endpoint + pluginDownloadBrokerPath, "ALX_PLUGIN_DOWNLOAD_TOKEN=" + token}
+	if tag := strings.TrimSpace(plugin.InstalledTag); tag != "" {
+		environment = append(environment, "ALX_PLUGIN_INSTALLED_TAG="+tag)
+	}
+	return environment
 }
 
 func (b *pluginDownloadBroker) grant(r *http.Request) (string, pluginDownloadGrant, bool) {
@@ -187,7 +192,16 @@ func allowedQQDownloadURL(action string, target *url.URL) bool {
 		if host == "api.github.com" && path == "/repos/NapNeko/NapCatQQ/releases/latest" {
 			return true
 		}
+		// ALX's Linux compatibility runtime is attached to the current official
+		// QQ plugin release. The policy remains repository/path-bound, so an
+		// install grant cannot be repurposed as a generic GitHub proxy.
+		if host == "api.github.com" && strings.HasPrefix(path, "/repos/lemonade-lab/alemonx-qq/releases/tags/v") {
+			return true
+		}
 		if host == "github.com" && strings.HasPrefix(path, "/NapNeko/NapCatQQ/releases/download/") {
+			return true
+		}
+		if host == "github.com" && strings.HasPrefix(path, "/lemonade-lab/alemonx-qq/releases/download/v") {
 			return true
 		}
 		return host == "qqdl.gtimg.cn" && strings.HasPrefix(path, "/qqfile/QQNT/")

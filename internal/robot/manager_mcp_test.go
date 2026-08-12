@@ -75,6 +75,31 @@ func TestReadMissingEditableConfigurationAsEmptyDocument(t *testing.T) {
 	}
 }
 
+func TestApplicationCommandPrefersDevAndFallsBackToApp(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "package.json"), []byte(`{"scripts":{"app":"node index.js"}}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	manager := Manager{}
+	_, mode, err := manager.ApplicationCommand(root)
+	if err != nil || mode != "app" {
+		t.Fatalf("app fallback = mode %q, err %v", mode, err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "package.json"), []byte(`{"scripts":{"dev":"node app.js","app":"node index.js"}}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	_, mode, err = manager.ApplicationCommand(root)
+	if err != nil || mode != "dev" {
+		t.Fatalf("dev preference = mode %q, err %v", mode, err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "package.json"), []byte(`{"scripts":{}}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := manager.ApplicationCommand(root); err == nil || !strings.Contains(err.Error(), "未找到 dev 或 app") {
+		t.Fatalf("missing scripts error = %v", err)
+	}
+}
+
 func TestRepairPM2CreatesRunnableProductionEntryAndConfig(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "package.json"), []byte(`{"name":"example"}`), 0644); err != nil {

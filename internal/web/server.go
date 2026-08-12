@@ -4098,10 +4098,6 @@ func (s *server) robotTasksHandler(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusConflict, "请先为当前机器人配置测试端口（port）。")
 			return
 		}
-		if !s.robots.HasScript(input.Root, "dev") {
-			writeError(w, http.StatusBadRequest, "测试需要 package.json 中可用的 dev 启动脚本；前台 app 脚本不能保证启动 testone 服务。")
-			return
-		}
 	}
 	if input.Action == "dev" || input.Action == "app" || input.Action == "app-open" || input.Action == "pm2" || input.Action == "pm2-reload" || input.Action == "pm2-restart" {
 		if blockers := s.robotStartPortBlockers(input.Root, readyKind); len(blockers) > 0 {
@@ -4177,7 +4173,9 @@ func (s *server) robotTasksHandler(w http.ResponseWriter, r *http.Request) {
 		if input.Action == "app" {
 			command, err = s.robots.ForegroundCommand(input.Root)
 		}
-		if input.Action == "app-open" {
+		// "应用"与"测试"只有就绪端口不同：两者都优先 dev，缺失时
+		// 自动回退 app。只有两个启动脚本都不存在时才要求用户修复。
+		if input.Action == "app-open" || readyKind == "test" {
 			var mode string
 			command, mode, err = s.robots.ApplicationCommand(input.Root)
 			created.Action = mode

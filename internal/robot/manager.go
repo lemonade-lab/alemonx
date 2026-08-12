@@ -1151,10 +1151,10 @@ func (Manager) DevelopmentCommand(root string) (*exec.Cmd, error) {
 }
 
 // ApplicationCommand prefers the project's development script for the embedded
-// application. Projects without one can still expose their declared foreground
-// app script; the returned mode is persisted by the caller for accurate UI
-// state. Testone deliberately does not use this fallback because it requires a
-// development command that starts the sandbox endpoint.
+// application or test workspace. Projects without one can still expose their
+// declared foreground app script; the returned mode is persisted by the caller
+// for accurate UI state. The selected port determines whether the caller opens
+// the application or test workspace; it must not change script selection.
 func (Manager) ApplicationCommand(root string) (*exec.Cmd, string, error) {
 	if (Manager{}).HasScript(root, "dev") {
 		command, err := (Manager{}).DevelopmentCommand(root)
