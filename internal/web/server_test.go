@@ -377,6 +377,39 @@ func TestManifestSudoActionRequiresLocalSuperAdminAndConfirmation(t *testing.T) 
 	}
 }
 
+func TestManifestSudoActionAllowsLocalOperationWhenAuthenticationIsUnset(t *testing.T) {
+	s, _ := newSudoActionTestServer(t, func(context.Context, []byte, string, []string) (string, error) {
+		return "", nil
+	})
+	// Replace the configured test account with an untouched manager: this is
+	// the first-run state, where no ALX account system has been configured.
+	unauthenticated, err := access.NewAt(filepath.Join(t.TempDir(), "auth.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.auth = unauthenticated
+	t.Setenv("ALX_PRIVILEGED_MODE", "local")
+	if err := system.ConfigurePrivilegedMode("127.0.0.1", false); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		t.Setenv("ALX_PRIVILEGED_MODE", "disabled")
+		_ = system.ConfigurePrivilegedMode("127.0.0.1", false)
+	})
+
+	intent, err := s.privilegeStore.createIntent("fixture-system", "prepare-runtime", "", "local", "127.0.0.1", "password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/setup/plugins/fixture-system/actions", strings.NewReader(fmt.Sprintf(`{"action":"prepare-runtime","confirm":true,"sudoPassword":"password","authorizationId":%q}`, intent.ID)))
+	request.RemoteAddr = "127.0.0.1:4242"
+	recorder := httptest.NewRecorder()
+	s.setupPluginActionHandler(recorder, request)
+	if recorder.Code != http.StatusAccepted {
+		t.Fatalf("unset authentication must allow local system operation, status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
 func TestManifestSudoActionUsesTransientPasswordAndLocksAfterThreeFailures(t *testing.T) {
 	var received []byte
 	s, token := newSudoActionTestServer(t, func(_ context.Context, password []byte, program string, args []string) (string, error) {

@@ -2354,7 +2354,12 @@ func (s *server) buildPrivilegePreflight(r *http.Request, input privilegePreflig
 				response.Reason = "当前平台不支持该插件声明的系统授权方式。"
 				return response, account, source
 			}
-			if !status.Enabled || !status.Authenticated || !status.SuperAdmin {
+			// Authentication is optional. On a fresh local workbench with no
+			// account system configured, the local privileged-mode policy is the
+			// authority; requiring a non-existent super-admin would permanently
+			// block declared system operations. Once authentication is enabled,
+			// retain the stricter logged-in super-admin requirement.
+			if status.Enabled && (!status.Authenticated || !status.SuperAdmin) {
 				response.Reason = "只有已登录的超级管理员可以执行系统操作。"
 				return response, account, source
 			}
@@ -2465,9 +2470,15 @@ func (s *server) handleManifestSudoAction(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if !status.Enabled || !status.Authenticated || !status.SuperAdmin {
+	if status.Enabled && (!status.Authenticated || !status.SuperAdmin) {
 		writeError(w, http.StatusForbidden, "只有已登录的超级管理员可以安装系统依赖。")
 		return
+	}
+	account := status.Account
+	if account == "" {
+		// Keep this identity aligned with buildPrivilegePreflight so a local
+		// first-run request can consume the intent it just created.
+		account = "local"
 	}
 	plugin, err := s.plugins.Find(pluginID)
 	if err != nil || plugin.Online || !plugin.Enabled {
@@ -2484,12 +2495,12 @@ func (s *server) handleManifestSudoAction(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	intent, err := s.privilegeStore.validateIntent(input.AuthorizationID, pluginID, input.Action, "", status.Account, privilegeRequestSource(r), "password")
+	intent, err := s.privilegeStore.validateIntent(input.AuthorizationID, pluginID, input.Action, "", account, privilegeRequestSource(r), "password")
 	if err != nil {
 		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
-	key := sudoAttemptKey(status.Account, r, pluginID, input.Action)
+	key := sudoAttemptKey(account, r, pluginID, input.Action)
 	if err := s.checkSudoAttempt(key); err != nil {
 		writeError(w, http.StatusTooManyRequests, err.Error())
 		return
