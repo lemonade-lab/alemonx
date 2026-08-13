@@ -889,10 +889,10 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 		// Kill any previously supervised robot process that survived a restart so a
 		// stray node cannot keep the app port occupied.
 		cleanupStaleProcesses()
-		// A dev/app process is supervised only in memory. After a workbench restart
-		// there is no longer a live supervisor, so persisted "running" local tasks
-		// must not keep the UI in a false running/stopping state.
-		s.reconcileRecoveredLocalOperations()
+		// Every supervised process is owned by this server instance. A restart
+		// therefore cannot resume an in-flight local or setup-plugin operation;
+		// settle those persisted snapshots so they never block a new action.
+		s.reconcileRecoveredOperations()
 		// Poll plugin roots so adding/removing a plugin directory or editing a
 		// manifest is reflected without a restart or manual refresh.
 		// Filesystem notifications avoid a recurring one-second directory scan. A
@@ -4997,11 +4997,39 @@ func (s *server) completePendingStopTasks(root string, finished time.Time) {
 	}
 }
 
-// reconcileRecoveredLocalOperations clears only app/dev lifecycle tasks that
-// were persisted as running before the workbench restarted. These processes
-// are not resumable: startup already terminates any recorded process group.
-func (s *server) reconcileRecoveredLocalOperations() {
+// reconcileRecoveredOperations finalizes operations that were persisted as
+// running before this workbench instance started. Their owning goroutine has
+// gone away, so keeping them running would permanently reuse a dead task for
+// later identical setup-plugin requests.
+func (s *server) reconcileRecoveredOperations() {
 	s.settleUnmanagedLocalOperations("", "工作台重启后，本机运行已结束。")
+	s.settleRecoveredSetupPluginOperations()
+}
+
+// settleRecoveredSetupPluginOperations marks interrupted setup-plugin runs as
+// failed. Plugin runners are short-lived child processes and do not support
+// cross-restart resumption, unlike a persisted task snapshot.
+func (s *server) settleRecoveredSetupPluginOperations() {
+	const message = "工作台重启，未完成的插件操作已中止；请重新执行。"
+	finished := time.Now()
+	s.mu.Lock()
+	updated := make([]operationTask, 0, 2)
+	for index := range s.operations {
+		item := &s.operations[index]
+		if item.Status != "running" || !strings.HasPrefix(item.Action, "setup:") {
+			continue
+		}
+		item.Status = "failed"
+		item.Error = message
+		item.FinishedAt = &finished
+		item.Output = strings.TrimSpace(item.Output+"\n"+message) + "\n"
+		updated = append(updated, *item)
+	}
+	s.mu.Unlock()
+	for index := range updated {
+		snapshot := updated[index]
+		s.publishRobotEvent(robotEvent{Type: "task", TaskID: snapshot.ID, Task: &snapshot})
+	}
 }
 
 // settleUnmanagedLocalOperations finalizes stale local lifecycle tasks. An
