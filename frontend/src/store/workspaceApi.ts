@@ -235,6 +235,9 @@ export type SetupPluginDevelopment = {
   buildAvailable: boolean
   webUrl?: string
   webPort?: number
+	 sourceType: string
+	 privileges?: string[]
+	 services?: { id: string; port?: number; running: boolean; restart?: string }[]
   lastError?: string
   updatedAt: string
 }

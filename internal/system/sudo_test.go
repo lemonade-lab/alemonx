@@ -4,26 +4,8 @@ import (
 	"context"
 	"errors"
 	"io"
-	"reflect"
-	"runtime"
 	"testing"
 )
-
-func TestNapcatAPTCommandIsFixed(t *testing.T) {
-	command := napcatAPTCommand(context.Background(), []byte("not-used"))
-	want := []string{"sudo", "-S", "-k", "-p", "", "--", "apt-get", "install", "-y", "xvfb", "libnss3", "libgbm1", "libglib2.0-0", "libatk1.0-0", "libatspi2.0-0", "libgtk-3-0", "libasound2"}
-	if !reflect.DeepEqual(command.Args, want) {
-		t.Fatalf("sudo command = %#v, want %#v", command.Args, want)
-	}
-}
-
-func TestNapcatDNFCommandIsFixed(t *testing.T) {
-	command := napcatDNFCommand(context.Background(), []byte("not-used"))
-	want := []string{"sudo", "-S", "-k", "-p", "", "--", "dnf", "install", "--allowerasing", "-y", "xorg-x11-server-Xvfb", "nss", "mesa-libgbm", "glib2", "atk", "at-spi2-atk", "gtk3", "alsa-lib"}
-	if !reflect.DeepEqual(command.Args, want) {
-		t.Fatalf("sudo command = %#v, want %#v", command.Args, want)
-	}
-}
 
 func TestSudoPasswordReaderClearsTemporaryBuffer(t *testing.T) {
 	reader := newSudoPasswordReader([]byte("correct"))
@@ -38,22 +20,22 @@ func TestSudoPasswordReaderClearsTemporaryBuffer(t *testing.T) {
 	}
 }
 
-func TestInstallNapCatAPTDependenciesClearsPasswordAndUsesFixedOperation(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("APT operation is Linux-only")
-	}
+func TestRunSudoCommandClearsPasswordAndUsesDeclaredOperation(t *testing.T) {
 	previous := sudoCommand
 	t.Cleanup(func() { sudoCommand = previous })
 	called := false
-	sudoCommand = func(_ context.Context, password []byte) ([]byte, error) {
+	sudoCommand = func(_ context.Context, password []byte, program string, args []string) ([]byte, error) {
 		called = true
 		if string(password) != "correct" {
 			t.Fatalf("password = %q", password)
 		}
+		if program != "go" || len(args) != 1 || args[0] != "version" {
+			t.Fatalf("declared command = %s %#v", program, args)
+		}
 		return []byte("installed"), nil
 	}
 	password := []byte("correct")
-	if _, err := InstallNapCatAPTDependencies(context.Background(), password); err != nil {
+	if _, err := RunSudoCommand(context.Background(), password, "go", []string{"version"}); err != nil {
 		t.Fatal(err)
 	}
 	if !called {
@@ -66,16 +48,13 @@ func TestInstallNapCatAPTDependenciesClearsPasswordAndUsesFixedOperation(t *test
 	}
 }
 
-func TestInstallNapCatAPTDependenciesClassifiesBadPassword(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("APT operation is Linux-only")
-	}
+func TestRunSudoCommandClassifiesBadPassword(t *testing.T) {
 	previous := sudoCommand
 	t.Cleanup(func() { sudoCommand = previous })
-	sudoCommand = func(context.Context, []byte) ([]byte, error) {
+	sudoCommand = func(context.Context, []byte, string, []string) ([]byte, error) {
 		return []byte("Sorry, try again."), errors.New("exit status 1")
 	}
-	_, err := InstallNapCatAPTDependencies(context.Background(), []byte("wrong"))
+	_, err := RunSudoCommand(context.Background(), []byte("wrong"), "go", []string{"version"})
 	if err == nil || err.Error() != "sudo 密码无效，请确认后重试" {
 		t.Fatalf("bad password error = %v", err)
 	}

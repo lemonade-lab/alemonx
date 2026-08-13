@@ -1,7 +1,11 @@
 package web
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -11,20 +15,20 @@ func TestPrivilegeStoreSignsPlansAndDetectsAuditTampering(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.close()
-	data, _ := json.Marshal(networkPlan{Operation: "open-port", Params: map[string]string{"port": "17117", "protocol": "tcp"}, Fingerprint: "snapshot", Risk: "high", Impact: "network", Verification: []string{"check"}, CreatedAt: "2026-01-01T00:00:00Z", ExpiresAt: "2099-01-01T00:00:00Z"})
-	stored, err := store.saveNetworkPlan(data, "root")
+	data, _ := json.Marshal(privilegedPlan{Operation: "open-port", Params: map[string]string{"port": "17117", "protocol": "tcp"}, Fingerprint: "snapshot", Risk: "high", Impact: "network", Verification: []string{"check"}, CreatedAt: "2026-01-01T00:00:00Z", ExpiresAt: "2099-01-01T00:00:00Z"})
+	stored, err := store.savePlan("demo", "apply", data, "root")
 	if err != nil {
 		t.Fatal(err)
 	}
-	var plan networkPlan
+	var plan privilegedPlan
 	if err := json.Unmarshal(stored, &plan); err != nil || plan.ID == "" {
 		t.Fatalf("stored plan = %s, %v", stored, err)
 	}
-	consumed, err := store.consumeNetworkPlan(plan.ID, "root")
+	consumed, err := store.consumePlan(plan.ID, "demo", "apply", "root")
 	if err != nil || consumed.Operation != "open-port" {
 		t.Fatalf("consumed = %#v, %v", consumed, err)
 	}
-	if err := store.appendAudit("open-port", consumed.Params, "done", "root"); err != nil {
+	if err := store.appendAudit("demo", "apply", "open-port", consumed.Params, "done", "root"); err != nil {
 		t.Fatal(err)
 	}
 	if status := store.auditStatus("test"); !status.Valid {
@@ -38,22 +42,48 @@ func TestPrivilegeStoreSignsPlansAndDetectsAuditTampering(t *testing.T) {
 	}
 }
 
+func TestPrivilegeStoreKeepsV1AuditAndExcludesItFromRestore(t *testing.T) {
+	store, err := newPrivilegeStoreAt(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.close()
+	params := []byte(`{"port":"17117"}`)
+	created := "2025-01-01T00:00:00Z"
+	mac := hmac.New(sha256.New, store.key)
+	_, _ = mac.Write([]byte(strings.Join([]string{"", "open-port", string(params), "done", "root", created}, "\x00")))
+	chain := hex.EncodeToString(mac.Sum(nil))
+	if _, err := store.db.Exec(`INSERT INTO privilege_audit(plugin_id,action,signature_version,operation,params,output,account,created_at,previous_hash,chain_hash) VALUES('alemonx-network', 'legacy', 1, 'open-port', ?, 'done', 'root', ?, '', ?)`, params, created, chain); err != nil {
+		t.Fatal(err)
+	}
+	if status := store.auditStatus("test"); !status.Valid {
+		t.Fatalf("v1 audit invalid: %#v", status)
+	}
+	if _, err := store.latestAudit("alemonx-network"); err == nil {
+		t.Fatal("legacy audit must not be restored")
+	}
+	items, err := store.auditItems("alemonx-network")
+	if err != nil || len(items) != 1 || items[0]["legacy"] != true {
+		t.Fatalf("legacy items = %#v, %v", items, err)
+	}
+}
+
 func TestPrivilegeStoreBindsPlanToCreator(t *testing.T) {
 	store, err := newPrivilegeStoreAt(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer store.close()
-	data, _ := json.Marshal(networkPlan{Operation: "open-port", Params: map[string]string{"port": "17117"}, Fingerprint: "snapshot", Risk: "high", Impact: "network", CreatedAt: "2026-01-01T00:00:00Z", ExpiresAt: "2099-01-01T00:00:00Z"})
-	stored, err := store.saveNetworkPlan(data, "alice")
+	data, _ := json.Marshal(privilegedPlan{Operation: "open-port", Params: map[string]string{"port": "17117"}, Fingerprint: "snapshot", Risk: "high", Impact: "network", CreatedAt: "2026-01-01T00:00:00Z", ExpiresAt: "2099-01-01T00:00:00Z"})
+	stored, err := store.savePlan("demo", "apply", data, "alice")
 	if err != nil {
 		t.Fatal(err)
 	}
-	var plan networkPlan
+	var plan privilegedPlan
 	if err := json.Unmarshal(stored, &plan); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.consumeNetworkPlan(plan.ID, "bob"); err == nil {
+	if _, err := store.consumePlan(plan.ID, "demo", "apply", "bob"); err == nil {
 		t.Fatal("another account must not consume the plan")
 	}
 }

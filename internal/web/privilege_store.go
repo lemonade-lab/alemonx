@@ -27,8 +27,13 @@ type privilegeStore struct {
 	key []byte
 }
 
-type networkPlan struct {
+// privilegedPlan is plugin-owned preview data persisted by the host only to
+// bind an approval to one account and one short-lived operation. The host does
+// not interpret its operation, risk, or parameters.
+type privilegedPlan struct {
 	ID           string            `json:"id"`
+	PluginID     string            `json:"pluginId,omitempty"`
+	Action       string            `json:"action,omitempty"`
 	Operation    string            `json:"operation"`
 	Params       map[string]string `json:"params"`
 	Fingerprint  string            `json:"fingerprint"`
@@ -40,11 +45,15 @@ type networkPlan struct {
 }
 
 type privilegeAuditStatus struct {
-	Valid          bool   `json:"valid"`
-	PolicyVersion  string `json:"policyVersion"`
-	LegacyImported bool   `json:"legacyImported"`
-	Reason         string `json:"reason,omitempty"`
+	Valid         bool   `json:"valid"`
+	PolicyVersion string `json:"policyVersion"`
+	Reason        string `json:"reason,omitempty"`
 }
+
+const (
+	privilegeAuditSignatureV1 = 1
+	privilegeAuditSignatureV2 = 2
+)
 
 // privilegeIntent is an ephemeral, host-issued authorization ticket. It binds
 // a browser's confirmed operation to the authenticated account and request
@@ -84,17 +93,89 @@ func newPrivilegeStoreAt(directory string) (*privilegeStore, error) {
 		return nil, err
 	}
 	if _, err = db.Exec(`PRAGMA journal_mode=WAL;
-CREATE TABLE IF NOT EXISTS privilege_plans(id TEXT PRIMARY KEY, operation TEXT NOT NULL, params BLOB NOT NULL, fingerprint TEXT NOT NULL, risk TEXT NOT NULL, impact TEXT NOT NULL, verification BLOB NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL, account TEXT NOT NULL, used_at TEXT);
-CREATE TABLE IF NOT EXISTS privilege_audit(sequence INTEGER PRIMARY KEY AUTOINCREMENT, operation TEXT NOT NULL, params BLOB NOT NULL, output TEXT NOT NULL, account TEXT NOT NULL, created_at TEXT NOT NULL, previous_hash TEXT NOT NULL, chain_hash TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS privilege_plans(id TEXT PRIMARY KEY, plugin_id TEXT NOT NULL DEFAULT '', action TEXT NOT NULL DEFAULT '', operation TEXT NOT NULL, params BLOB NOT NULL, fingerprint TEXT NOT NULL, risk TEXT NOT NULL, impact TEXT NOT NULL, verification BLOB NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL, account TEXT NOT NULL, used_at TEXT);
+CREATE TABLE IF NOT EXISTS privilege_audit(sequence INTEGER PRIMARY KEY AUTOINCREMENT, plugin_id TEXT NOT NULL DEFAULT '', action TEXT NOT NULL DEFAULT '', signature_version INTEGER NOT NULL DEFAULT 1, operation TEXT NOT NULL, params BLOB NOT NULL, output TEXT NOT NULL, account TEXT NOT NULL, created_at TEXT NOT NULL, previous_hash TEXT NOT NULL, chain_hash TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS sudo_attempts(key TEXT PRIMARY KEY, failures INTEGER NOT NULL, locked_until TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS privilege_intents(id TEXT PRIMARY KEY, plugin_id TEXT NOT NULL, action TEXT NOT NULL, plan_id TEXT NOT NULL, account TEXT NOT NULL, source TEXT NOT NULL, authorization TEXT NOT NULL, expires_at TEXT NOT NULL, used_at TEXT);
-CREATE TABLE IF NOT EXISTS privilege_meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);`); err != nil {
+CREATE TABLE IF NOT EXISTS privilege_meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS privilege_intents(id TEXT PRIMARY KEY, plugin_id TEXT NOT NULL, action TEXT NOT NULL, plan_id TEXT NOT NULL, account TEXT NOT NULL, source TEXT NOT NULL, authorization TEXT NOT NULL, expires_at TEXT NOT NULL, used_at TEXT);`); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
 	store := &privilegeStore{db: db, key: key}
+	_, _ = db.Exec(`ALTER TABLE privilege_plans ADD COLUMN plugin_id TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE privilege_plans ADD COLUMN action TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE privilege_audit ADD COLUMN plugin_id TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE privilege_audit ADD COLUMN action TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE privilege_audit ADD COLUMN signature_version INTEGER NOT NULL DEFAULT 1`)
+	// Earlier audit rows predate generic plugin ownership. Keep their original
+	// v1 signatures intact, add display-only legacy metadata, and never offer
+	// them as an automatic restore candidate.
+	_, _ = db.Exec(`UPDATE privilege_audit SET signature_version=? WHERE COALESCE(plugin_id,'')<>'' AND signature_version=?`, privilegeAuditSignatureV2, privilegeAuditSignatureV1)
+	_, _ = db.Exec(`UPDATE privilege_audit SET plugin_id='alemonx-network', action='legacy', signature_version=? WHERE COALESCE(plugin_id,'')=''`, privilegeAuditSignatureV1)
 	store.migrateLegacyNetworkAudit()
 	return store, nil
+}
+
+// migrateLegacyNetworkAudit is a one-time compatibility importer. It treats
+// historic JSON as v1 display-only records, never rewrites an existing audit
+// signature and never makes those records eligible for restore.
+func (s *privilegeStore) migrateLegacyNetworkAudit() {
+	if s == nil || s.db == nil {
+		return
+	}
+	var complete string
+	_ = s.db.QueryRow(`SELECT value FROM privilege_meta WHERE key='legacy_network_audit'`).Scan(&complete)
+	if complete != "" {
+		return
+	}
+	config, err := os.UserConfigDir()
+	if err != nil {
+		return
+	}
+	data, err := os.ReadFile(filepath.Join(config, "alx-network", "audit.json"))
+	if errors.Is(err, os.ErrNotExist) {
+		_, _ = s.db.Exec(`INSERT INTO privilege_meta(key,value) VALUES('legacy_network_audit','none')`)
+		return
+	}
+	if err != nil {
+		_, _ = s.db.Exec(`INSERT INTO privilege_meta(key,value) VALUES('legacy_network_audit','unreadable')`)
+		return
+	}
+	var entries []struct {
+		Operation string            `json:"operation"`
+		Params    map[string]string `json:"params"`
+		Output    string            `json:"output"`
+		CreatedAt string            `json:"createdAt"`
+	}
+	if json.Unmarshal(data, &entries) != nil {
+		_, _ = s.db.Exec(`INSERT INTO privilege_meta(key,value) VALUES('legacy_network_audit','invalid')`)
+		return
+	}
+	for _, entry := range entries {
+		if strings.TrimSpace(entry.Operation) == "" {
+			continue
+		}
+		_ = s.appendLegacyAudit("alemonx-network", entry.Operation, entry.Params, entry.Output, entry.CreatedAt)
+	}
+	_, _ = s.db.Exec(`INSERT INTO privilege_meta(key,value) VALUES('legacy_network_audit','imported')`)
+}
+
+func (s *privilegeStore) appendLegacyAudit(pluginID, operation string, params map[string]string, output, created string) error {
+	if created == "" {
+		created = time.Now().UTC().Format(time.RFC3339Nano)
+	}
+	encoded, err := json.Marshal(params)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	previous := ""
+	_ = s.db.QueryRow(`SELECT chain_hash FROM privilege_audit ORDER BY sequence DESC LIMIT 1`).Scan(&previous)
+	mac := hmac.New(sha256.New, s.key)
+	_, _ = mac.Write([]byte(strings.Join([]string{previous, operation, string(encoded), output, "legacy-import", created}, "\x00")))
+	_, err = s.db.Exec(`INSERT INTO privilege_audit(plugin_id,action,signature_version,operation,params,output,account,created_at,previous_hash,chain_hash) VALUES(?,?,?,?,?,?,?,?,?,?)`, pluginID, "legacy", privilegeAuditSignatureV1, operation, encoded, output, "legacy-import", created, previous, hex.EncodeToString(mac.Sum(nil)))
+	return err
 }
 
 func (s *privilegeStore) createIntent(pluginID, action, planID, account, source, authorization string) (privilegeIntent, error) {
@@ -149,46 +230,6 @@ func (s *privilegeStore) consumeIntent(intent privilegeIntent) error {
 	return nil
 }
 
-func (s *privilegeStore) migrateLegacyNetworkAudit() {
-	if s == nil || s.db == nil {
-		return
-	}
-	var complete string
-	_ = s.db.QueryRow(`SELECT value FROM privilege_meta WHERE key='legacy_network_audit'`).Scan(&complete)
-	if complete != "" {
-		return
-	}
-	config, err := os.UserConfigDir()
-	if err != nil {
-		return
-	}
-	data, err := os.ReadFile(filepath.Join(config, "alx-network", "audit.json"))
-	if errors.Is(err, os.ErrNotExist) {
-		_, _ = s.db.Exec(`INSERT INTO privilege_meta(key,value) VALUES('legacy_network_audit','none')`)
-		return
-	}
-	if err != nil {
-		_, _ = s.db.Exec(`INSERT INTO privilege_meta(key,value) VALUES('legacy_network_audit','unreadable')`)
-		return
-	}
-	var entries []struct {
-		Operation string            `json:"operation"`
-		Params    map[string]string `json:"params"`
-		Output    string            `json:"output"`
-		CreatedAt string            `json:"createdAt"`
-	}
-	if json.Unmarshal(data, &entries) != nil {
-		_, _ = s.db.Exec(`INSERT INTO privilege_meta(key,value) VALUES('legacy_network_audit','invalid')`)
-		return
-	}
-	for _, entry := range entries {
-		if allowedNetworkOperation(entry.Operation) {
-			_ = s.appendAudit(entry.Operation, entry.Params, "[legacy] "+entry.Output, "legacy-import")
-		}
-	}
-	_, _ = s.db.Exec(`INSERT INTO privilege_meta(key,value) VALUES('legacy_network_audit','imported')`)
-}
-
 func (s *privilegeStore) checkSudoAttempt(key string) error {
 	if s == nil || s.db == nil {
 		return nil
@@ -240,22 +281,13 @@ func (s *privilegeStore) close() {
 	}
 }
 
-func allowedNetworkOperation(operation string) bool {
-	switch operation {
-	case "set-npm-registry", "reset-npm-registry", "open-port", "close-port", "iface-up", "iface-down", "ip-add", "ip-remove", "dns-set", "mtu-set", "route-add", "route-remove", "forward-add", "forward-remove", "bond-create", "bond-delete", "bridge-create", "bridge-delete", "vlan-create", "vlan-delete", "firewalld-service-add", "firewalld-service-remove", "firewalld-zone-set-default":
-		return true
-	default:
-		return false
-	}
-}
-
-func (s *privilegeStore) saveNetworkPlan(data json.RawMessage, account string) (json.RawMessage, error) {
+func (s *privilegeStore) savePlan(pluginID, action string, data json.RawMessage, account string) (json.RawMessage, error) {
 	if s == nil || s.db == nil {
 		return nil, errors.New("权限审计存储不可用")
 	}
-	var plan networkPlan
-	if err := json.Unmarshal(data, &plan); err != nil || !allowedNetworkOperation(plan.Operation) || plan.Fingerprint == "" {
-		return nil, errors.New("网络插件返回的变更计划无效")
+	var plan privilegedPlan
+	if err := json.Unmarshal(data, &plan); err != nil || strings.TrimSpace(plan.Operation) == "" || plan.Fingerprint == "" {
+		return nil, errors.New("插件返回的变更计划无效")
 	}
 	if _, err := time.Parse(time.RFC3339, plan.ExpiresAt); err != nil {
 		return nil, errors.New("网络变更计划缺少有效过期时间")
@@ -264,19 +296,19 @@ func (s *privilegeStore) saveNetworkPlan(data json.RawMessage, account string) (
 	if _, err := rand.Read(id); err != nil {
 		return nil, err
 	}
-	plan.ID = hex.EncodeToString(id)
+	plan.ID, plan.PluginID, plan.Action = hex.EncodeToString(id), pluginID, action
 	params, _ := json.Marshal(plan.Params)
 	verification, _ := json.Marshal(plan.Verification)
-	if _, err := s.db.Exec(`INSERT INTO privilege_plans(id,operation,params,fingerprint,risk,impact,verification,created_at,expires_at,account) VALUES(?,?,?,?,?,?,?,?,?,?)`, plan.ID, plan.Operation, params, plan.Fingerprint, plan.Risk, plan.Impact, verification, plan.CreatedAt, plan.ExpiresAt, account); err != nil {
+	if _, err := s.db.Exec(`INSERT INTO privilege_plans(id,plugin_id,action,operation,params,fingerprint,risk,impact,verification,created_at,expires_at,account) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, plan.ID, pluginID, action, plan.Operation, params, plan.Fingerprint, plan.Risk, plan.Impact, verification, plan.CreatedAt, plan.ExpiresAt, account); err != nil {
 		return nil, err
 	}
 	return json.Marshal(plan)
 }
 
-func (s *privilegeStore) consumeNetworkPlan(id, account string) (networkPlan, error) {
-	var plan networkPlan
+func (s *privilegeStore) consumePlan(id, pluginID, action, account string) (privilegedPlan, error) {
+	var plan privilegedPlan
 	if s == nil || s.db == nil || strings.TrimSpace(id) == "" {
-		return plan, errors.New("未找到宿主签发的网络变更计划")
+		return plan, errors.New("未找到宿主签发的插件变更计划")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -284,22 +316,22 @@ func (s *privilegeStore) consumeNetworkPlan(id, account string) (networkPlan, er
 	var expiresAt string
 	var usedAt sql.NullString
 	var owner string
-	err := s.db.QueryRow(`SELECT operation,params,fingerprint,risk,impact,verification,created_at,expires_at,account,used_at FROM privilege_plans WHERE id=?`, id).Scan(&plan.Operation, &params, &plan.Fingerprint, &plan.Risk, &plan.Impact, &verification, &plan.CreatedAt, &expiresAt, &owner, &usedAt)
+	err := s.db.QueryRow(`SELECT plugin_id,action,operation,params,fingerprint,risk,impact,verification,created_at,expires_at,account,used_at FROM privilege_plans WHERE id=?`, id).Scan(&plan.PluginID, &plan.Action, &plan.Operation, &params, &plan.Fingerprint, &plan.Risk, &plan.Impact, &verification, &plan.CreatedAt, &expiresAt, &owner, &usedAt)
 	if err != nil {
-		return plan, errors.New("未找到宿主签发的网络变更计划")
+		return plan, errors.New("未找到宿主签发的插件变更计划")
 	}
 	if usedAt.Valid && usedAt.String != "" {
 		return plan, errors.New("网络变更计划已使用，请重新预演")
 	}
-	if owner != account {
-		return plan, errors.New("网络变更计划只能由创建它的账户执行")
+	if owner != account || plan.PluginID != pluginID || plan.Action != action {
+		return plan, errors.New("插件变更计划与当前操作不匹配")
 	}
 	expires, err := time.Parse(time.RFC3339, expiresAt)
 	if err != nil || time.Now().After(expires) {
-		return plan, errors.New("网络变更计划已过期，请重新预演")
+		return plan, errors.New("插件变更计划已过期，请重新预演")
 	}
-	if json.Unmarshal(params, &plan.Params) != nil || json.Unmarshal(verification, &plan.Verification) != nil || !allowedNetworkOperation(plan.Operation) {
-		return plan, errors.New("网络变更计划损坏")
+	if json.Unmarshal(params, &plan.Params) != nil || json.Unmarshal(verification, &plan.Verification) != nil {
+		return plan, errors.New("插件变更计划损坏")
 	}
 	plan.ID, plan.ExpiresAt = id, expiresAt
 	if _, err := s.db.Exec(`UPDATE privilege_plans SET used_at=? WHERE id=? AND used_at IS NULL`, time.Now().UTC().Format(time.RFC3339), id); err != nil {
@@ -308,63 +340,53 @@ func (s *privilegeStore) consumeNetworkPlan(id, account string) (networkPlan, er
 	return plan, nil
 }
 
-// peekNetworkPlan validates a plan for a preflight without consuming it. The
-// actual network mutation still consumes the plan only after authorization.
-func (s *privilegeStore) peekNetworkPlan(id, account string) (networkPlan, error) {
-	var plan networkPlan
+// peekPlan validates a plugin plan for preflight without consuming it.
+func (s *privilegeStore) peekPlan(id, pluginID, action, account string) (privilegedPlan, error) {
+	var plan privilegedPlan
 	if s == nil || s.db == nil || strings.TrimSpace(id) == "" {
-		return plan, errors.New("未找到宿主签发的网络变更计划")
+		return plan, errors.New("未找到宿主签发的插件变更计划")
 	}
 	var params, verification []byte
 	var expiresAt, owner string
 	var usedAt sql.NullString
-	err := s.db.QueryRow(`SELECT operation,params,fingerprint,risk,impact,verification,created_at,expires_at,account,used_at FROM privilege_plans WHERE id=?`, id).Scan(&plan.Operation, &params, &plan.Fingerprint, &plan.Risk, &plan.Impact, &verification, &plan.CreatedAt, &expiresAt, &owner, &usedAt)
-	if err != nil || owner != account || (usedAt.Valid && usedAt.String != "") {
-		return plan, errors.New("未找到可用的宿主签发网络变更计划")
+	err := s.db.QueryRow(`SELECT plugin_id,action,operation,params,fingerprint,risk,impact,verification,created_at,expires_at,account,used_at FROM privilege_plans WHERE id=?`, id).Scan(&plan.PluginID, &plan.Action, &plan.Operation, &params, &plan.Fingerprint, &plan.Risk, &plan.Impact, &verification, &plan.CreatedAt, &expiresAt, &owner, &usedAt)
+	if err != nil || owner != account || plan.PluginID != pluginID || plan.Action != action || (usedAt.Valid && usedAt.String != "") {
+		return plan, errors.New("未找到可用的宿主签发插件变更计划")
 	}
 	expires, parseErr := time.Parse(time.RFC3339, expiresAt)
-	if parseErr != nil || time.Now().After(expires) || json.Unmarshal(params, &plan.Params) != nil || json.Unmarshal(verification, &plan.Verification) != nil || !allowedNetworkOperation(plan.Operation) {
-		return plan, errors.New("网络变更计划已过期或损坏，请重新预演")
+	if parseErr != nil || time.Now().After(expires) || json.Unmarshal(params, &plan.Params) != nil || json.Unmarshal(verification, &plan.Verification) != nil {
+		return plan, errors.New("插件变更计划已过期或损坏，请重新预演")
 	}
 	plan.ID, plan.ExpiresAt = id, expiresAt
 	return plan, nil
 }
 
-// releaseNetworkPlan is used only when sudo rejects a password before the
-// reviewed runner starts. Other execution failures may have changed the
-// system and therefore intentionally keep the plan consumed.
-func (s *privilegeStore) releaseNetworkPlan(id, account string) {
+// releasePlan is available for password-based operations that fail before
+// their plugin runner starts. Native authorization attempts stay consumed:
+// they may already have changed the system before reporting failure.
+func (s *privilegeStore) releasePlan(id, pluginID, action, account string) {
 	if s == nil || s.db == nil || id == "" {
 		return
 	}
-	_, _ = s.db.Exec(`UPDATE privilege_plans SET used_at=NULL WHERE id=? AND account=?`, id, account)
+	_, _ = s.db.Exec(`UPDATE privilege_plans SET used_at=NULL WHERE id=? AND plugin_id=? AND action=? AND account=?`, id, pluginID, action, account)
 }
 
-func inverseNetworkOperation(operation string) string {
-	return map[string]string{"open-port": "close-port", "close-port": "open-port", "iface-up": "iface-down", "iface-down": "iface-up", "ip-add": "ip-remove", "ip-remove": "ip-add", "route-add": "route-remove", "route-remove": "route-add", "forward-add": "forward-remove", "forward-remove": "forward-add", "bond-create": "bond-delete", "bridge-create": "bridge-delete", "vlan-create": "vlan-delete", "firewalld-service-add": "firewalld-service-remove", "firewalld-service-remove": "firewalld-service-add"}[operation]
-}
-
-func (s *privilegeStore) latestUndoPlan() (networkPlan, error) {
-	var operation string
+func (s *privilegeStore) latestAudit(pluginID string) (privilegedPlan, error) {
+	var plan privilegedPlan
 	var params []byte
 	if s == nil || s.db == nil {
-		return networkPlan{}, errors.New("权限审计存储不可用")
+		return plan, errors.New("权限审计存储不可用")
 	}
-	if err := s.db.QueryRow(`SELECT operation,params FROM privilege_audit ORDER BY sequence DESC LIMIT 1`).Scan(&operation, &params); err != nil {
-		return networkPlan{}, errors.New("没有可撤销的网络变更")
+	if err := s.db.QueryRow(`SELECT action,operation,params FROM privilege_audit WHERE plugin_id=? AND signature_version=? ORDER BY sequence DESC LIMIT 1`, pluginID, privilegeAuditSignatureV2).Scan(&plan.Action, &plan.Operation, &params); err != nil {
+		return plan, errors.New("该插件没有可用于恢复的最近操作")
 	}
-	inverse := inverseNetworkOperation(operation)
-	if inverse == "" {
-		return networkPlan{}, errors.New("最近网络变更不支持自动撤销")
-	}
-	plan := networkPlan{Operation: inverse, Params: map[string]string{}}
 	if err := json.Unmarshal(params, &plan.Params); err != nil {
-		return networkPlan{}, errors.New("网络审计记录损坏")
+		return plan, errors.New("插件审计记录损坏")
 	}
 	return plan, nil
 }
 
-func (s *privilegeStore) appendAudit(operation string, params map[string]string, output, account string) error {
+func (s *privilegeStore) appendAudit(pluginID, action, operation string, params map[string]string, output, account string) error {
 	if s == nil || s.db == nil {
 		return errors.New("权限审计存储不可用")
 	}
@@ -378,9 +400,9 @@ func (s *privilegeStore) appendAudit(operation string, params map[string]string,
 	_ = s.db.QueryRow(`SELECT chain_hash FROM privilege_audit ORDER BY sequence DESC LIMIT 1`).Scan(&previous)
 	created := time.Now().UTC().Format(time.RFC3339Nano)
 	mac := hmac.New(sha256.New, s.key)
-	_, _ = mac.Write([]byte(strings.Join([]string{previous, operation, string(encoded), output, account, created}, "\x00")))
+	_, _ = mac.Write([]byte(strings.Join([]string{previous, pluginID, action, operation, string(encoded), output, account, created}, "\x00")))
 	chain := hex.EncodeToString(mac.Sum(nil))
-	_, err = s.db.Exec(`INSERT INTO privilege_audit(operation,params,output,account,created_at,previous_hash,chain_hash) VALUES(?,?,?,?,?,?,?)`, operation, encoded, output, account, created, previous, chain)
+	_, err = s.db.Exec(`INSERT INTO privilege_audit(plugin_id,action,signature_version,operation,params,output,account,created_at,previous_hash,chain_hash) VALUES(?,?,?,?,?,?,?,?,?,?)`, pluginID, action, privilegeAuditSignatureV2, operation, encoded, output, account, created, previous, chain)
 	return err
 }
 
@@ -390,13 +412,7 @@ func (s *privilegeStore) auditStatus(policyVersion string) privilegeAuditStatus 
 		result.Valid, result.Reason = false, "权限审计存储不可用"
 		return result
 	}
-	var legacy string
-	_ = s.db.QueryRow(`SELECT value FROM privilege_meta WHERE key='legacy_network_audit'`).Scan(&legacy)
-	result.LegacyImported = legacy == "imported"
-	if legacy == "unreadable" {
-		result.Reason = "旧网络审计文件无法读取，未自动修改其权限"
-	}
-	rows, err := s.db.Query(`SELECT operation,params,output,account,created_at,previous_hash,chain_hash FROM privilege_audit ORDER BY sequence ASC`)
+	rows, err := s.db.Query(`SELECT plugin_id,action,signature_version,operation,params,output,account,created_at,previous_hash,chain_hash FROM privilege_audit ORDER BY sequence ASC`)
 	if err != nil {
 		result.Valid, result.Reason = false, err.Error()
 		return result
@@ -404,14 +420,22 @@ func (s *privilegeStore) auditStatus(policyVersion string) privilegeAuditStatus 
 	defer rows.Close()
 	previous := ""
 	for rows.Next() {
-		var operation, output, account, created, previousHash, chain string
+		var pluginID, action, operation, output, account, created, previousHash, chain string
+		var signatureVersion int
 		var params []byte
-		if err := rows.Scan(&operation, &params, &output, &account, &created, &previousHash, &chain); err != nil || previousHash != previous {
+		if err := rows.Scan(&pluginID, &action, &signatureVersion, &operation, &params, &output, &account, &created, &previousHash, &chain); err != nil || previousHash != previous {
 			result.Valid, result.Reason = false, "权限审计链不连续"
 			return result
 		}
 		mac := hmac.New(sha256.New, s.key)
-		_, _ = mac.Write([]byte(strings.Join([]string{previous, operation, string(params), output, account, created}, "\x00")))
+		values := []string{previous, operation, string(params), output, account, created}
+		if signatureVersion == privilegeAuditSignatureV2 {
+			values = []string{previous, pluginID, action, operation, string(params), output, account, created}
+		} else if signatureVersion != privilegeAuditSignatureV1 {
+			result.Valid, result.Reason = false, "权限审计签名版本无效"
+			return result
+		}
+		_, _ = mac.Write([]byte(strings.Join(values, "\x00")))
 		if !hmac.Equal([]byte(chain), []byte(hex.EncodeToString(mac.Sum(nil)))) {
 			result.Valid, result.Reason = false, "权限审计链校验失败"
 			return result
@@ -421,11 +445,11 @@ func (s *privilegeStore) auditStatus(policyVersion string) privilegeAuditStatus 
 	return result
 }
 
-func (s *privilegeStore) auditItems() ([]map[string]any, error) {
+func (s *privilegeStore) auditItems(pluginID string) ([]map[string]any, error) {
 	if s == nil || s.db == nil {
 		return nil, errors.New("权限审计存储不可用")
 	}
-	rows, err := s.db.Query(`SELECT sequence,operation,params,output,created_at FROM privilege_audit ORDER BY sequence DESC LIMIT 100`)
+	rows, err := s.db.Query(`SELECT sequence,action,signature_version,operation,params,output,created_at FROM privilege_audit WHERE plugin_id=? ORDER BY sequence DESC LIMIT 100`, pluginID)
 	if err != nil {
 		return nil, err
 	}
@@ -433,12 +457,13 @@ func (s *privilegeStore) auditItems() ([]map[string]any, error) {
 	items := []map[string]any{}
 	for rows.Next() {
 		var sequence int
-		var operation, output, created string
+		var action, operation, output, created string
+		var signatureVersion int
 		var params json.RawMessage
-		if err := rows.Scan(&sequence, &operation, &params, &output, &created); err != nil {
+		if err := rows.Scan(&sequence, &action, &signatureVersion, &operation, &params, &output, &created); err != nil {
 			return nil, err
 		}
-		items = append(items, map[string]any{"id": fmt.Sprintf("%d", sequence), "operation": operation, "params": params, "output": output, "createdAt": created, "undoOperation": inverseNetworkOperation(operation)})
+		items = append(items, map[string]any{"id": fmt.Sprintf("%d", sequence), "action": action, "operation": operation, "params": params, "output": output, "createdAt": created, "legacy": signatureVersion == privilegeAuditSignatureV1})
 	}
 	return items, rows.Err()
 }

@@ -36,6 +36,9 @@ var templateFiles embed.FS
 var Version = "dev"
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "__alx-privileged-run" {
+		os.Exit(system.RunPrivilegedHelper(os.Args[2:]))
+	}
 	logging.ConfigureStandardLogger(os.Stderr)
 	defer robot.CleanupGitBuildSessions()
 	arguments := normalizeArgs(os.Args[1:])

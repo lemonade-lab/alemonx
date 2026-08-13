@@ -68,20 +68,20 @@ func TestDecodeManifestAcceptsValidWebRoot(t *testing.T) {
 	}
 }
 
-func TestDecodeManifestKeepsElevatedActionAllowlist(t *testing.T) {
-	plugin, err := decodeManifest([]byte(`{"id":"demo","name":"Demo","version":"1.0.0","web":{"root":"web"},"permissions":{"elevatedActions":["apply-plan"]}}`), "/plugins/demo")
+func TestDecodeManifestKeepsPrivilegedOperation(t *testing.T) {
+	plugin, err := decodeManifest([]byte(`{"id":"demo","name":"Demo","version":"1.0.0","web":{"root":"web"},"privilegedOperations":[{"action":"apply-plan","runnerAction":"apply","title":"应用变更","authorization":"native","platforms":["linux"]}]}`), "/plugins/demo")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !plugin.RequiresElevation("apply-plan") || plugin.RequiresElevation("snapshot") {
-		t.Fatalf("unexpected elevation allowlist: %#v", plugin.Permissions)
+	if operation, ok := plugin.PrivilegedOperation("apply-plan"); !ok || operation.RunnerAction != "apply" {
+		t.Fatalf("unexpected privileged operation: %#v", operation)
 	}
 }
 
-func TestDecodeManifestRejectsDuplicateElevatedAction(t *testing.T) {
-	_, err := decodeManifest([]byte(`{"id":"demo","name":"Demo","version":"1.0.0","web":{"root":"web"},"permissions":{"elevatedActions":["apply-plan","apply-plan"]}}`), "/plugins/demo")
+func TestDecodeManifestRejectsInvalidPrivilegedOperation(t *testing.T) {
+	_, err := decodeManifest([]byte(`{"id":"demo","name":"Demo","version":"1.0.0","web":{"root":"web"},"privilegedOperations":[{"action":"apply-plan","title":"应用变更","authorization":"native","platforms":["linux"]}]}`), "/plugins/demo")
 	if err == nil {
-		t.Fatal("duplicate elevated action must be rejected")
+		t.Fatal("missing runner action must be rejected")
 	}
 }
 
@@ -99,14 +99,32 @@ func TestDecodeManifestAcceptsOnlyTypedSystemPickers(t *testing.T) {
 	}
 }
 
-func TestRegistryRejectsUnconfirmedElevatedAction(t *testing.T) {
+func TestDecodeManifestAcceptsFixedPrivilegedOperation(t *testing.T) {
+	plugin, err := decodeManifest([]byte(`{"id":"demo","name":"Demo","version":"1.0.0","web":{"root":"web"},"privilegedOperations":[{"action":"prepare-runtime","runnerAction":"prepare-runtime","title":"准备运行环境","authorization":"password","platforms":["linux"],"commands":[{"program":"apt-get","args":["install","-y","xvfb"]}]}]}`), "/plugins/demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	operation, ok := plugin.PrivilegedOperation("prepare-runtime")
+	if !ok || operation.Commands[0].Program != "apt-get" {
+		t.Fatalf("privileged operation = %#v, ok=%v", operation, ok)
+	}
+}
+
+func TestDecodeManifestRejectsUnsafePrivilegedOperation(t *testing.T) {
+	_, err := decodeManifest([]byte(`{"id":"demo","name":"Demo","version":"1.0.0","web":{"root":"web"},"privilegedOperations":[{"action":"prepare-runtime","runnerAction":"prepare-runtime","title":"准备运行环境","authorization":"password","platforms":["linux"],"commands":[{"program":"/bin/sh","args":["-c","echo unsafe"]}]}]}`), "/plugins/demo")
+	if err == nil {
+		t.Fatal("shell privileged operation must be rejected")
+	}
+}
+
+func TestRegistryRejectsDirectPrivilegedAction(t *testing.T) {
 	root := t.TempDir()
 	directory := filepath.Join(root, "fixture")
 	if err := os.MkdirAll(filepath.Join(directory, "web"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	key := runtime.GOOS + "-" + runtime.GOARCH
-	manifest := `{"id":"fixture","name":"Fixture","version":"1.0.0","entry":{"` + key + `":"runner"},"web":{"root":"web"},"permissions":{"elevatedActions":["apply-plan"]}}`
+	manifest := `{"id":"fixture","name":"Fixture","version":"1.0.0","entry":{"` + key + `":"runner"},"web":{"root":"web"},"privilegedOperations":[{"action":"apply-plan","runnerAction":"apply","title":"应用变更","authorization":"native","platforms":["` + runtime.GOOS + `"]}]}`
 	if err := os.WriteFile(filepath.Join(directory, manifestName), []byte(manifest), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -114,8 +132,8 @@ func TestRegistryRejectsUnconfirmedElevatedAction(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err := NewRegistry(root).RunResultWithProgress("fixture", "apply-plan", nil, false, nil)
-	if err == nil || !strings.Contains(err.Error(), "确认") {
-		t.Fatalf("unconfirmed elevated action = %v", err)
+	if err == nil || !strings.Contains(err.Error(), "权限代理") {
+		t.Fatalf("direct privileged action = %v", err)
 	}
 }
 

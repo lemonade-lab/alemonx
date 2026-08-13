@@ -18,27 +18,28 @@ func TestPluginDownloadBrokerIssuesCredentialFreeLoopbackGrant(t *testing.T) {
 	}
 	broker := newPluginDownloadBroker(network)
 	broker.setEndpoint("http://127.0.0.1:17100")
-	environment := strings.Join(broker.environment(setupplugin.Plugin{ID: "alemonx-qq", Enabled: true, InstalledTag: "v1.2.3", InstalledAsset: "alemonx-qq-linux-amd64.zip", ArchiveSHA256: strings.Repeat("a", 64), Fingerprint: "fingerprint"}, "install"), "\n")
+	plugin := downloadFixturePlugin()
+	environment := strings.Join(broker.environment(plugin, "install"), "\n")
 	if !strings.Contains(environment, "ALX_PLUGIN_DOWNLOAD_BROKER=http://127.0.0.1:17100"+pluginDownloadBrokerPath) || !strings.Contains(environment, "ALX_PLUGIN_DOWNLOAD_TOKEN=") || !strings.Contains(environment, "ALX_PLUGIN_INSTALLED_TAG=v1.2.3") || strings.Contains(environment, "proxy") || strings.Contains(environment, "secret") {
 		t.Fatalf("broker environment = %q", environment)
 	}
-	development := strings.Join(broker.environment(setupplugin.Plugin{ID: "alemonx-qq", Enabled: true, DevelopmentSource: true}, "napcat-windows-installer-download"), "\n")
+	development := strings.Join(broker.environment(plugin, "install"), "\n")
 	if !strings.Contains(development, "ALX_PLUGIN_DOWNLOAD_BROKER=http://127.0.0.1:17100"+pluginDownloadBrokerPath) || !strings.Contains(development, "ALX_PLUGIN_DOWNLOAD_TOKEN=") {
 		t.Fatalf("source session did not receive bounded download broker: %q", development)
 	}
-	localBuild := strings.Join(broker.environment(setupplugin.Plugin{ID: "alemonx-qq", Enabled: true}, "napcat-windows-installer-download"), "\n")
+	localBuild := strings.Join(broker.environment(plugin, "install"), "\n")
 	if !strings.Contains(localBuild, "ALX_PLUGIN_DOWNLOAD_BROKER=http://127.0.0.1:17100"+pluginDownloadBrokerPath) || !strings.Contains(localBuild, "ALX_PLUGIN_DOWNLOAD_TOKEN=") {
-		t.Fatalf("local QQ build did not receive bounded download broker: %q", localBuild)
+		t.Fatalf("local system plugin did not receive bounded download broker: %q", localBuild)
 	}
-	if got := broker.environment(setupplugin.Plugin{ID: "alemonx-qq", Enabled: true, InstalledTag: "v1.2.3", InstalledAsset: "asset", ArchiveSHA256: strings.Repeat("a", 64), Fingerprint: "fingerprint"}, "napcat-status"); len(got) != 0 {
-		t.Fatalf("status action received broker variables: %#v", got)
+	if got := broker.environment(plugin, "status"); len(got) == 0 {
+		t.Fatal("any runner action may use the generic download transport")
 	}
 }
 
-func TestPluginDownloadBrokerRejectsRemoteAndUnapprovedURLs(t *testing.T) {
+func TestPluginDownloadBrokerRejectsRemoteAndInvalidURLs(t *testing.T) {
 	broker := newPluginDownloadBroker(nil)
 	broker.setEndpoint("http://127.0.0.1:17100")
-	environment := broker.environment(setupplugin.Plugin{ID: "alemonx-qq", Enabled: true, InstalledTag: "v1.2.3", InstalledAsset: "asset", ArchiveSHA256: strings.Repeat("a", 64), Fingerprint: "fingerprint"}, "install")
+	environment := broker.environment(downloadFixturePlugin(), "install")
 	var token string
 	for _, value := range environment {
 		if strings.HasPrefix(value, "ALX_PLUGIN_DOWNLOAD_TOKEN=") {
@@ -48,26 +49,26 @@ func TestPluginDownloadBrokerRejectsRemoteAndUnapprovedURLs(t *testing.T) {
 	if token == "" {
 		t.Fatal("missing grant token")
 	}
-	remote := httptest.NewRequest(http.MethodGet, pluginDownloadBrokerPath+"?url=https://api.github.com/repos/NapNeko/NapCatQQ/releases/latest", nil)
+	remote := httptest.NewRequest(http.MethodGet, pluginDownloadBrokerPath+"?url=https://downloads.example.test/releases/latest", nil)
 	remote.RemoteAddr = "203.0.113.4:1234"
 	remote.Header.Set("Authorization", "Bearer "+token)
 	if _, _, ok := broker.grant(remote); ok {
 		t.Fatal("remote request must not use a broker token")
 	}
-	unapproved := httptest.NewRequest(http.MethodGet, pluginDownloadBrokerPath+"?url=https://example.com/archive.zip", nil)
-	unapproved.RemoteAddr = "127.0.0.1:1234"
-	unapproved.Header.Set("Authorization", "Bearer "+token)
+	invalid := httptest.NewRequest(http.MethodGet, pluginDownloadBrokerPath+"?url=file:///tmp/archive.zip", nil)
+	invalid.RemoteAddr = "127.0.0.1:1234"
+	invalid.Header.Set("Authorization", "Bearer "+token)
 	response := httptest.NewRecorder()
-	broker.serveHTTP(response, unapproved)
+	broker.serveHTTP(response, invalid)
 	if response.Code != http.StatusBadRequest {
-		t.Fatalf("unapproved URL = %d %s", response.Code, response.Body.String())
+		t.Fatalf("invalid URL = %d %s", response.Code, response.Body.String())
 	}
 }
 
 func TestPluginDownloadBrokerGrantHasBoundedUses(t *testing.T) {
 	broker := newPluginDownloadBroker(nil)
 	broker.mu.Lock()
-	broker.grants["token"] = pluginDownloadGrant{pluginID: "alemonx-qq", action: "install", remaining: 1, expiresAt: time.Now().Add(time.Minute)}
+	broker.grants["token"] = pluginDownloadGrant{pluginID: "fixture", remaining: 1, expiresAt: time.Now().Add(time.Minute)}
 	broker.mu.Unlock()
 	if !broker.consume("token") {
 		t.Fatal("first authorized download must consume the grant")
@@ -77,55 +78,8 @@ func TestPluginDownloadBrokerGrantHasBoundedUses(t *testing.T) {
 	}
 }
 
-func TestAllowedQQDownloadURLIsBoundToAction(t *testing.T) {
-	for _, value := range []string{
-		"https://api.github.com/repos/NapNeko/NapCatQQ/releases/latest",
-		"https://github.com/NapNeko/NapCatQQ/releases/download/v1/package.zip",
-		"https://qqdl.gtimg.cn/qqfile/QQNT/9.9.32/release/file.deb",
-		"https://api.github.com/repos/lemonade-lab/alemonx-qq/releases/tags/v0.0.14",
-		"https://github.com/lemonade-lab/alemonx-qq/releases/download/v0.0.14/alemonx-qq-runtime-linux-amd64-glibc.tar.zst",
-	} {
-		target, _ := http.NewRequest(http.MethodGet, value, nil)
-		if !allowedQQDownloadURL("install", target.URL) {
-			t.Fatalf("NapCat official URL %q rejected", value)
-		}
-	}
-	for _, value := range []string{
-		"https://api.github.com/repos/NapNeko/NapCat-Mac-Installer/releases/latest",
-		"https://github.com/NapNeko/NapCat-Mac-Installer/releases/download/v1.5/NapCatInstaller.zip",
-	} {
-		target, _ := http.NewRequest(http.MethodGet, value, nil)
-		if !allowedQQDownloadURL("napcat-macos-installer-download", target.URL) {
-			t.Fatalf("NapCat macOS installer URL %q rejected", value)
-		}
-	}
-	for _, value := range []string{
-		"https://api.github.com/repos/NapNeko/NapCatQQ/releases/latest",
-		"https://github.com/NapNeko/NapCatQQ/releases/download/v4/NapCat.Shell.Windows.OneKey.zip",
-	} {
-		target, _ := http.NewRequest(http.MethodGet, value, nil)
-		if !allowedQQDownloadURL("napcat-windows-installer-download", target.URL) {
-			t.Fatalf("NapCat Windows installer URL %q rejected", value)
-		}
-	}
-	for _, value := range []string{
-		"https://api.github.com/repos/LLOneBot/LuckyLilliaBot/releases/latest",
-		"https://github.com/LLOneBot/LuckyLilliaBot/releases/download/v1/package.zip",
-	} {
-		target, _ := http.NewRequest(http.MethodGet, value, nil)
-		if !allowedQQDownloadURL("luckylillia-install", target.URL) {
-			t.Fatalf("Lucky official URL %q rejected", value)
-		}
-	}
-	for _, value := range []string{
-		"https://github.com/other/repository/releases/download/v1/package.zip",
-		"https://github.com/lemonade-lab/alemonx-qq/releases/download/runtime-v1/anything.zip",
-		"https://objects.githubusercontent.com/unrelated",
-		"https://qqdl.gtimg.cn/other/file.deb",
-	} {
-		target, _ := http.NewRequest(http.MethodGet, value, nil)
-		if allowedQQDownloadURL("install", target.URL) {
-			t.Fatalf("unapproved URL %q allowed", value)
-		}
+func downloadFixturePlugin() setupplugin.Plugin {
+	return setupplugin.Plugin{
+		ID: "fixture", Enabled: true, InstalledTag: "v1.2.3", InstalledAsset: "fixture.zip", ArchiveSHA256: strings.Repeat("a", 64), Fingerprint: "fingerprint",
 	}
 }

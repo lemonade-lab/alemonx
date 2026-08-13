@@ -1,24 +1,31 @@
 package system
 
 import (
-	"strings"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
-func TestPrivilegedScriptQuotesEachInput(t *testing.T) {
-	script := privilegedScript("/tmp/a folder", map[string]string{"TOKEN": "a'; rm -rf /"}, "npm", []string{"publish", "--tag", "next"})
-	for _, want := range []string{"cd -- '/tmp/a folder'", "'TOKEN=a\"'\"'; rm -rf /'", "'npm'", "'publish'"} {
-		if !strings.Contains(script, want) {
-			t.Fatalf("privileged script must quote %q: %s", want, script)
-		}
+func TestPrivilegedHelperRunsDirectProgram(t *testing.T) {
+	if testing.Short() || os.PathSeparator == '\\' {
+		t.Skip("uses a small Unix shell fixture")
 	}
-}
-
-func TestWindowsScriptUsesLiteralPathsAndOutputFile(t *testing.T) {
-	script := windowsScript(`C:\Robot's`, map[string]string{"NPM_CONFIG_USERCONFIG": `C:\Temp\a's.npmrc`}, "npm.cmd", []string{"publish", "--tag", "next"}, `C:\Temp\result.txt`)
-	for _, want := range []string{"Set-Location -LiteralPath 'C:\\Robot''s'", "$env:NPM_CONFIG_USERCONFIG = 'C:\\Temp\\a''s.npmrc'", "WriteAllText('C:\\Temp\\result.txt'"} {
-		if !strings.Contains(script, want) {
-			t.Fatalf("windows script missing %q: %s", want, script)
-		}
+	directory := t.TempDir()
+	program := filepath.Join(directory, "runner")
+	if err := os.WriteFile(program, []byte("#!/bin/sh\ncat\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	input := filepath.Join(directory, "input.json")
+	output := filepath.Join(directory, "output.json")
+	errorPath := filepath.Join(directory, "error.txt")
+	if err := os.WriteFile(input, []byte(`{"action":"apply"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code := RunPrivilegedHelper([]string{"--directory", directory, "--input", input, "--output", output, "--error", errorPath, "--program", program}); code != 0 {
+		t.Fatalf("helper exit = %d", code)
+	}
+	value, err := os.ReadFile(output)
+	if err != nil || string(value) != `{"action":"apply"}` {
+		t.Fatalf("helper output = %q, %v", value, err)
 	}
 }

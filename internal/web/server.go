@@ -334,34 +334,34 @@ type server struct {
 	// pm2Status lets tests substitute a fake PM2 state. The default read runs a
 	// real `npx pm2 jlist` behind a short timeout so a missing pm2 never blocks
 	// a local start request for the full package-manager timeout.
-	pm2Status                func(string) (robot.PM2Status, error)
-	requestID                atomic.Uint64
-	nodeID                   string
-	directoryRoots           []string
-	events                   *robotEventHub
-	eventGateway             *eventGateway
-	operationEvents          *OperationEventStore
-	opsEvents                *opsEventHub
-	mcpEvents                *mcpEventHub
-	mcpMonitorStop           chan struct{}
-	pluginEventsStop         chan struct{}
-	updateMonitorStop        chan struct{}
-	updateMu                 sync.Mutex
-	updateStateMu            sync.RWMutex
-	updateState              updateStatusState
-	requestUpdateShutdown    func()
-	robotProjectsMu          sync.Mutex
-	robotProjectsCache       robotProjectsSnapshot
-	pluginStatusMu           sync.Mutex
-	pluginStatusCache        map[string]*pluginStatusSnapshot
-	hostContextMu            sync.RWMutex
-	hostContexts             map[string]pluginHostContext
-	privilegeStore           *privilegeStore
-	pluginDownloadBroker     *pluginDownloadBroker
-	sudoAttemptMu            sync.Mutex
-	sudoAttempts             map[string]sudoAttempt
-	runNapcatAPTDependencies func(context.Context, []byte) (string, error)
-	installEnvironment       func(context.Context, string) (string, error)
+	pm2Status             func(string) (robot.PM2Status, error)
+	requestID             atomic.Uint64
+	nodeID                string
+	directoryRoots        []string
+	events                *robotEventHub
+	eventGateway          *eventGateway
+	operationEvents       *OperationEventStore
+	opsEvents             *opsEventHub
+	mcpEvents             *mcpEventHub
+	mcpMonitorStop        chan struct{}
+	pluginEventsStop      chan struct{}
+	updateMonitorStop     chan struct{}
+	updateMu              sync.Mutex
+	updateStateMu         sync.RWMutex
+	updateState           updateStatusState
+	requestUpdateShutdown func()
+	robotProjectsMu       sync.Mutex
+	robotProjectsCache    robotProjectsSnapshot
+	pluginStatusMu        sync.Mutex
+	pluginStatusCache     map[string]*pluginStatusSnapshot
+	hostContextMu         sync.RWMutex
+	hostContexts          map[string]pluginHostContext
+	privilegeStore        *privilegeStore
+	pluginDownloadBroker  *pluginDownloadBroker
+	sudoAttemptMu         sync.Mutex
+	sudoAttempts          map[string]sudoAttempt
+	runPrivilegedCommand  func(context.Context, []byte, string, []string) (string, error)
+	installEnvironment    func(context.Context, string) (string, error)
 }
 
 type pluginStatusSnapshot struct {
@@ -405,6 +405,8 @@ type privilegePreflightResponse struct {
 	Reason        string `json:"reason,omitempty"`
 	IntentID      string `json:"intentId,omitempty"`
 	ExpiresAt     string `json:"expiresAt,omitempty"`
+	SourceType    string `json:"sourceType,omitempty"`
+	SourcePath    string `json:"sourcePath,omitempty"`
 }
 
 type updateStatusState struct {
@@ -678,8 +680,9 @@ func NewServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	}
 	plugins := setupplugin.NewRegistry()
 	downloadBroker := newPluginDownloadBroker(networkManager)
+	downloadBroker.setRegistry(plugins)
 	plugins.SetRunnerEnvironmentProvider(downloadBroker.environment)
-	s := &server{version: version, assets: assets, static: http.FileServer(http.FS(assets)), checker: system.NewChecker(), network: networkManager, plugins: plugins, auth: identity, ai: aiManager, agentSessions: sessionStore, agentTaskStore: taskStore, agentTasks: tasks, taskService: &agent.TaskService{Manager: tasks}, goalStore: goalStore, opsStore: opsStore, opsPaused: opsStartupErr != nil, goalSchedulerStop: make(chan struct{}), goalRunning: map[string]bool{}, agentConfirms: newAgentConfirmManager(), development: map[string]developmentProcess{}, webviewRuntimes: map[string]*webViewRuntime{}, stopping: map[string]bool{}, consoleCache: map[string]consoleSnapshot{}, outputBuffers: map[string]*operationOutputBuffer{}, directoryRoots: managedDirectoryRoots(), events: newRobotEventHub(), eventGateway: newEventGateway(), operationEvents: operationEvents, operations: operationEvents.snapshot(), opsEvents: newOpsEventHub(), mcpEvents: newMCPEventHub(), mcpMonitorStop: make(chan struct{}), pluginEventsStop: make(chan struct{}), updateMonitorStop: make(chan struct{}), updateState: updateStatusState{Update: releases.Update{Current: version}}, nodeID: fmt.Sprintf("%s-%d", hostname(), os.Getpid()), pluginStatusCache: map[string]*pluginStatusSnapshot{}, hostContexts: map[string]pluginHostContext{}, privilegeStore: privileges, pluginDownloadBroker: downloadBroker, sudoAttempts: map[string]sudoAttempt{}, runNapcatAPTDependencies: system.InstallNapCatAPTDependencies, installEnvironment: system.InstallEnvironment}
+	s := &server{version: version, assets: assets, static: http.FileServer(http.FS(assets)), checker: system.NewChecker(), network: networkManager, plugins: plugins, auth: identity, ai: aiManager, agentSessions: sessionStore, agentTaskStore: taskStore, agentTasks: tasks, taskService: &agent.TaskService{Manager: tasks}, goalStore: goalStore, opsStore: opsStore, opsPaused: opsStartupErr != nil, goalSchedulerStop: make(chan struct{}), goalRunning: map[string]bool{}, agentConfirms: newAgentConfirmManager(), development: map[string]developmentProcess{}, webviewRuntimes: map[string]*webViewRuntime{}, stopping: map[string]bool{}, consoleCache: map[string]consoleSnapshot{}, outputBuffers: map[string]*operationOutputBuffer{}, directoryRoots: managedDirectoryRoots(), events: newRobotEventHub(), eventGateway: newEventGateway(), operationEvents: operationEvents, operations: operationEvents.snapshot(), opsEvents: newOpsEventHub(), mcpEvents: newMCPEventHub(), mcpMonitorStop: make(chan struct{}), pluginEventsStop: make(chan struct{}), updateMonitorStop: make(chan struct{}), updateState: updateStatusState{Update: releases.Update{Current: version}}, nodeID: fmt.Sprintf("%s-%d", hostname(), os.Getpid()), pluginStatusCache: map[string]*pluginStatusSnapshot{}, hostContexts: map[string]pluginHostContext{}, privilegeStore: privileges, pluginDownloadBroker: downloadBroker, sudoAttempts: map[string]sudoAttempt{}, runPrivilegedCommand: system.RunSudoCommand, installEnvironment: system.InstallEnvironment}
 	s.pluginDevelopment = newPluginDevelopmentManager(plugins, filepath.Join(filepath.Dir(taskStore.TasksDir()), "setup-plugins", "development.json"))
 	if opsStartupErr != nil {
 		log.Printf("AI 运维 SQLite 初始化失败，已回退 JSON 并暂停自动维护: %v", opsStartupErr)
@@ -927,13 +930,18 @@ func NewServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	mux.HandleFunc("/api/v1/system/mcp", s.systemMCPHandler)
 	mux.HandleFunc("/api/v1/system/events", s.systemEventsHandler)
 	mux.HandleFunc("/api/v1/system/picker", s.systemPickerHandler)
+	mux.HandleFunc("/api/v1/system/capabilities", s.systemCapabilitiesHandler)
 	mux.HandleFunc("/api/v1/system/capabilities/finder", s.systemCapabilityFinderHandler)
 	mux.HandleFunc("/api/v1/system/capabilities/context", s.systemCapabilityContextHandler)
+	mux.HandleFunc("/api/v1/system/capabilities/desktop/open", s.systemCapabilityDesktopOpenHandler)
+	mux.HandleFunc("/api/v1/system/capabilities/clipboard", s.systemCapabilityClipboardHandler)
+	mux.HandleFunc("/api/v1/system/capabilities/notification", s.systemCapabilityNotificationHandler)
+	mux.HandleFunc("/api/v1/system/capabilities/info", s.systemCapabilityInfoHandler)
+	mux.HandleFunc("/api/v1/system/capabilities/network/fetch", s.systemCapabilityNetworkFetchHandler)
 	mux.HandleFunc("/api/v1/system/context/robot", s.systemCurrentRobotHandler)
 	mux.HandleFunc("/api/v1/system/privileged/status", s.privilegedStatusHandler)
 	mux.HandleFunc("/api/v1/system/privileged/preflight", s.privilegedPreflightHandler)
 	mux.HandleFunc("/api/v1/system/privileged/audit", s.privilegedAuditHandler)
-	mux.HandleFunc("/api/v1/system/privileged/napcat-dependencies", s.napcatDependenciesHandler)
 	mux.HandleFunc("/api/v1/directories", s.directoryHandler)
 	mux.HandleFunc("/api/v1/catalog", s.catalogHandler)
 	mux.HandleFunc("/api/v1/catalog/versions", s.catalogVersionsHandler)
@@ -1552,7 +1560,8 @@ func (s *server) setupPluginActionHandler(w http.ResponseWriter, r *http.Request
 	}
 	if len(parts) == 2 && parts[1] == "status" && r.Method == http.MethodGet {
 		action := strings.TrimSpace(r.URL.Query().Get("action"))
-		if !setupPluginStatusAction(action) || len(r.URL.Query()) != 1 {
+		plugin, findErr := s.plugins.Find(parts[0])
+		if findErr != nil || !plugin.AllowsStatusAction(action) || len(r.URL.Query()) != 1 {
 			writeError(w, http.StatusBadRequest, "仅支持无参数的插件状态动作。")
 			return
 		}
@@ -1570,34 +1579,36 @@ func (s *server) setupPluginActionHandler(w http.ResponseWriter, r *http.Request
 		_, _ = w.Write([]byte(output))
 		return
 	}
-	// A system plugin may expose a small, typed visual payload through its
-	// runner. This endpoint deliberately has no path parameter: the runner is
-	// responsible for reading only its own known runtime files, while the
-	// workbench keeps those file paths out of browser-visible JSON.
-	if len(parts) == 2 && parts[1] == "qrcode" && r.Method == http.MethodGet {
-		if parts[0] != "alemonx-qq" {
-			writeError(w, http.StatusNotFound, "未找到插件二维码。")
+	// A media resource is declared by the plugin manifest. The runner returns
+	// typed bytes as base64 while the host supplies authenticated same-origin
+	// transport and response validation. No product-specific media route is
+	// needed for QR codes, screenshots, previews, or future plugin UI assets.
+	if len(parts) == 3 && parts[1] == "media" && r.Method == http.MethodGet {
+		plugin, findErr := s.plugins.Find(parts[0])
+		media, declared := plugin.MediaResource(parts[2])
+		if findErr != nil || !declared {
+			writeError(w, http.StatusNotFound, "未找到插件媒体资源。")
 			return
 		}
-		output, err := s.plugins.Run(parts[0], "napcat-qrcode", nil, false)
+		output, err := s.plugins.Run(parts[0], media.Action, nil, false)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		var payload struct {
 			Available bool   `json:"available"`
-			PNG       string `json:"png"`
+			Data      string `json:"data"`
 		}
-		if err := json.Unmarshal([]byte(output), &payload); err != nil || !payload.Available || payload.PNG == "" {
+		if err := json.Unmarshal([]byte(output), &payload); err != nil || !payload.Available || payload.Data == "" {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
-		image, err := base64.StdEncoding.DecodeString(payload.PNG)
-		if err != nil || len(image) < 8 || len(image) > 2<<20 || !bytes.Equal(image[:8], []byte{'\x89', 'P', 'N', 'G', '\r', '\n', '\x1a', '\n'}) {
-			writeError(w, http.StatusBadGateway, "插件返回的二维码图片无效。")
+		image, err := base64.StdEncoding.DecodeString(payload.Data)
+		if err != nil || len(image) < 8 || len(image) > 2<<20 || (media.ContentType == "image/png" && !bytes.Equal(image[:8], []byte{'\x89', 'P', 'N', 'G', '\r', '\n', '\x1a', '\n'})) {
+			writeError(w, http.StatusBadGateway, "插件返回的媒体资源无效。")
 			return
 		}
-		w.Header().Set("Content-Type", "image/png")
+		w.Header().Set("Content-Type", media.ContentType)
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		_, _ = w.Write(image)
@@ -1713,23 +1724,34 @@ func (s *server) setupPluginActionHandler(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, "请选择要执行的插件操作。")
 		return
 	}
-	if isApprovedSudoAction(parts[0], input.Action) {
-		// Compatibility route. The browser uses the dedicated host endpoint,
-		// but this alias retains existing local clients without returning the
-		// password to the plugin runner.
-		s.handleApprovedSudoAction(w, r, parts[0], input)
+	if s.isManifestPasswordOperation(parts[0], input.Action) {
+		s.handleManifestSudoAction(w, r, parts[0], input)
 		return
 	}
-	if parts[0] == "alemonx-network" && (input.Action == "apply-plan" || input.Action == "undo-last") {
-		s.handleNetworkPrivilegedAction(w, r, input)
+	if s.isManifestNativeOperation(parts[0], input.Action) {
+		s.handleManifestNativeAction(w, r, parts[0], input)
 		return
 	}
 	if input.SudoPassword != nil {
 		writeError(w, http.StatusBadRequest, "此操作不接受系统管理员密码。")
 		return
 	}
-	created := operationTask{ID: "setup-" + time.Now().Format("20060102150405.000000000"), Root: "", Action: "setup:" + parts[0] + ":" + input.Action, Status: "running", CreatedAt: time.Now()}
+	// A plugin runner is a separate process for every action. Starting the same
+	// lifecycle action twice would therefore race over its installation and
+	// process-state files. Reuse the existing task for an identical request;
+	// reject a conflicting action until that task reaches a terminal state.
+	operationName := "setup:" + parts[0] + ":" + input.Action
 	s.mu.Lock()
+	if active := activeSetupPluginOperation(s.operations, parts[0]); active != nil {
+		s.mu.Unlock()
+		if active.Action == operationName {
+			writeJSON(w, http.StatusAccepted, active)
+			return
+		}
+		writeError(w, http.StatusConflict, "该插件正在执行“"+strings.TrimPrefix(active.Action, "setup:"+parts[0]+":")+"”，请等待当前操作完成。")
+		return
+	}
+	created := operationTask{ID: "setup-" + time.Now().Format("20060102150405.000000000"), Root: "", Action: "setup:" + parts[0] + ":" + input.Action, Status: "running", CreatedAt: time.Now()}
 	s.operations = append([]operationTask{created}, s.operations...)
 	if len(s.operations) > 40 {
 		s.operations = s.operations[:40]
@@ -1739,18 +1761,30 @@ func (s *server) setupPluginActionHandler(w http.ResponseWriter, r *http.Request
 		result, err := s.plugins.RunResultWithProgress(parts[0], input.Action, input.Params, input.Confirm, func(event setupplugin.Progress) {
 			s.updateOperation(created.ID, event.Percent, event.Message, "", false)
 		})
-		if err == nil && parts[0] == "alemonx-network" && input.Action == "plan" {
-			if s.privilegeStore == nil {
-				s.updateOperationData(created.ID, 100, result.Output, "权限审计存储不可用", nil, true)
-				return
+		if err == nil {
+			plugin, findErr := s.plugins.Find(parts[0])
+			operation, planned := setupplugin.PrivilegedOperationSpec{}, false
+			if findErr == nil {
+				for _, candidate := range plugin.PrivilegedOperations {
+					if candidate.PlanAction == input.Action {
+						operation, planned = candidate, true
+						break
+					}
+				}
 			}
-			status, _ := s.auth.Status(s.authToken(r))
-			stored, storeErr := s.privilegeStore.saveNetworkPlan(result.Data, status.Account)
-			if storeErr != nil {
-				s.updateOperationData(created.ID, 100, result.Output, storeErr.Error(), nil, true)
-				return
+			if planned {
+				if s.privilegeStore == nil {
+					s.updateOperationData(created.ID, 100, result.Output, "权限审计存储不可用", nil, true)
+					return
+				}
+				status, _ := s.auth.Status(s.authToken(r))
+				stored, storeErr := s.privilegeStore.savePlan(parts[0], operation.Action, result.Data, status.Account)
+				if storeErr != nil {
+					s.updateOperationData(created.ID, 100, result.Output, storeErr.Error(), nil, true)
+					return
+				}
+				result.Data = stored
 			}
-			result.Data = stored
 		}
 		if err != nil {
 			s.updateOperationData(created.ID, 100, result.Output, err.Error(), result.Data, true)
@@ -1761,9 +1795,36 @@ func (s *server) setupPluginActionHandler(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusAccepted, created)
 }
 
-func (s *server) handleNetworkPrivilegedAction(w http.ResponseWriter, r *http.Request, input setupPluginActionRequest) {
+// activeSetupPluginOperation returns the one in-flight task for a plugin.
+// Keeping this at the host boundary covers every browser tab and every plugin
+// WebView, rather than relying only on a disabled UI button.
+func activeSetupPluginOperation(operations []operationTask, pluginID string) *operationTask {
+	prefix := "setup:" + pluginID + ":"
+	for index := range operations {
+		item := &operations[index]
+		if item.Status == "running" && strings.HasPrefix(item.Action, prefix) {
+			copy := *item
+			return &copy
+		}
+	}
+	return nil
+}
+
+func (s *server) isManifestNativeOperation(pluginID, action string) bool {
+	if s.plugins == nil {
+		return false
+	}
+	plugin, err := s.plugins.Find(pluginID)
+	if err != nil || plugin.Online || !plugin.Enabled {
+		return false
+	}
+	operation, ok := plugin.PrivilegedOperation(action)
+	return ok && operation.Authorization == "native" && operationSupportsPlatform(operation, runtime.GOOS)
+}
+
+func (s *server) handleManifestNativeAction(w http.ResponseWriter, r *http.Request, pluginID string, input setupPluginActionRequest) {
 	if !input.Confirm || !s.privilegedRequestAllowed(r) {
-		writeError(w, http.StatusForbidden, "网络系统变更当前未获允许；请检查工作台的系统权限模式。")
+		writeError(w, http.StatusForbidden, "该系统操作当前未获授权；请检查工作台的系统权限模式。")
 		return
 	}
 	status, err := s.auth.Status(s.authToken(r))
@@ -1775,13 +1836,26 @@ func (s *server) handleNetworkPrivilegedAction(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusForbidden, "当前账户没有系统变更权限。")
 		return
 	}
-	var plan networkPlan
-	policyAction := input.Action
+	plugin, findErr := s.plugins.Find(pluginID)
+	if findErr != nil || plugin.Online || !plugin.Enabled {
+		writeError(w, http.StatusBadRequest, "系统插件未安装或已停用。")
+		return
+	}
+	operation, ok := plugin.PrivilegedOperation(input.Action)
+	if !ok || operation.Authorization != "native" || !operationSupportsPlatform(operation, runtime.GOOS) {
+		writeError(w, http.StatusBadRequest, "该系统插件操作当前不可执行。")
+		return
+	}
+	if input.SudoPassword != nil {
+		writeError(w, http.StatusBadRequest, "当前操作使用系统原生授权窗口，不接受工作台密码。")
+		return
+	}
+	var plan privilegedPlan
 	planID := ""
-	authorization := ""
+	authorization := "native-uac"
 	switch runtime.GOOS {
 	case "darwin":
-		authorization = "password"
+		authorization = "native"
 	case "windows":
 		authorization = "native-uac"
 	case "linux":
@@ -1790,65 +1864,51 @@ func (s *server) handleNetworkPrivilegedAction(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusBadRequest, "当前平台没有可用的系统授权方式。")
 		return
 	}
-	if input.Action == "apply-plan" {
+	if operation.PlanAction != "" {
 		if len(input.Params) != 1 {
-			writeError(w, http.StatusBadRequest, "网络应用仅接受宿主签发的计划 ID。")
+			writeError(w, http.StatusBadRequest, "该系统操作仅接受宿主签发的计划 ID。")
 			return
 		}
 		planID = input.Params["planID"]
-	} else {
+	} else if !operation.UseLatestAudit {
 		if len(input.Params) != 0 {
-			writeError(w, http.StatusBadRequest, "撤销操作不接受额外参数。")
+			writeError(w, http.StatusBadRequest, "该系统操作不接受额外参数。")
 			return
 		}
 	}
-	intent, err := s.privilegeStore.validateIntent(input.AuthorizationID, "alemonx-network", policyAction, planID, status.Account, privilegeRequestSource(r), authorization)
+	if operation.UseLatestAudit && len(input.Params) != 0 {
+		writeError(w, http.StatusBadRequest, "该系统操作不接受额外参数。")
+		return
+	}
+	intent, err := s.privilegeStore.validateIntent(input.AuthorizationID, pluginID, input.Action, planID, status.Account, privilegeRequestSource(r), authorization)
 	if err != nil {
 		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
-	if err := s.plugins.PrivilegeAvailability("alemonx-network", policyAction); err != nil {
-		writeError(w, http.StatusForbidden, err.Error())
+	if err := s.privilegeStore.consumeIntent(intent); err != nil {
+		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
-	var password []byte
-	if authorization == "password" {
-		if input.SudoPassword == nil || strings.TrimSpace(*input.SudoPassword) == "" {
-			writeError(w, http.StatusBadRequest, "请输入当前系统账户的管理员密码。")
-			return
-		}
-		password = []byte(*input.SudoPassword)
-		*input.SudoPassword = ""
-		input.SudoPassword = nil
-	} else if input.SudoPassword != nil {
-		writeError(w, http.StatusBadRequest, "当前平台请在系统原生授权窗口中确认，不接受工作台密码。")
-		return
-	}
-	if authorization != "password" {
-		if err := s.privilegeStore.consumeIntent(intent); err != nil {
-			clearSudoPassword(password)
-			writeError(w, http.StatusConflict, err.Error())
-			return
-		}
-	}
-	if input.Action == "apply-plan" {
-		plan, err = s.privilegeStore.consumeNetworkPlan(planID, status.Account)
-	} else {
-		plan, err = s.privilegeStore.latestUndoPlan()
+	if operation.PlanAction != "" {
+		plan, err = s.privilegeStore.consumePlan(planID, pluginID, input.Action, status.Account)
+	} else if operation.UseLatestAudit {
+		plan, err = s.privilegeStore.latestAudit(pluginID)
 	}
 	if err != nil {
-		clearSudoPassword(password)
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	params := map[string]string{"operation": plan.Operation}
-	for key, value := range plan.Params {
-		params[key] = value
+	params := map[string]string{}
+	if operation.PlanAction != "" || operation.UseLatestAudit {
+		params["operation"] = plan.Operation
+		for key, value := range plan.Params {
+			params[key] = value
+		}
+		if plan.Fingerprint != "" {
+			params["__alxFingerprint"] = plan.Fingerprint
+		}
 	}
-	if plan.Fingerprint != "" {
-		params["__alxFingerprint"] = plan.Fingerprint
-	}
-	created := operationTask{ID: "setup-" + time.Now().Format("20060102150405.000000000"), Action: "setup:alemonx-network:" + policyAction, Status: "running", Output: "正在请求系统管理员授权…", CreatedAt: time.Now()}
+	created := operationTask{ID: "setup-" + time.Now().Format("20060102150405.000000000"), Action: "setup:" + pluginID + ":" + input.Action, Status: "running", Output: "正在请求系统管理员授权…", CreatedAt: time.Now()}
 	s.mu.Lock()
 	s.operations = append([]operationTask{created}, s.operations...)
 	if len(s.operations) > 40 {
@@ -1858,42 +1918,24 @@ func (s *server) handleNetworkPrivilegedAction(w http.ResponseWriter, r *http.Re
 	go func() {
 		var result setupplugin.ActionResult
 		var runErr error
-		if authorization == "password" {
-			result, runErr = s.plugins.RunPrivilegedApprovedWithPassword("alemonx-network", policyAction, "apply-approved-plan", params, password)
-		} else {
-			result, runErr = s.plugins.RunPrivilegedApproved("alemonx-network", policyAction, "apply-approved-plan", params, func(event setupplugin.Progress) {
-				s.updateOperation(created.ID, event.Percent, event.Message, "", false)
-			})
-		}
+		result, runErr = s.plugins.RunWithNativePrivileges(pluginID, input.Action, params, func(event setupplugin.Progress) {
+			s.updateOperation(created.ID, event.Percent, event.Message, "", false)
+		})
 		if runErr != nil {
-			if authorization == "password" && errors.Is(runErr, system.ErrSudoPasswordInvalid) {
-				s.privilegeStore.releaseNetworkPlan(planID, status.Account)
-			}
 			s.updateOperationData(created.ID, 100, result.Output, runErr.Error(), result.Data, true)
 			return
 		}
-		if authorization == "password" {
-			if consumeErr := s.privilegeStore.consumeIntent(intent); consumeErr != nil {
-				s.updateOperationData(created.ID, 100, result.Output, consumeErr.Error(), result.Data, true)
-				return
-			}
+		auditOperation, auditParams := plan.Operation, plan.Params
+		if auditOperation == "" {
+			auditOperation, auditParams = input.Action, map[string]string{}
 		}
-		if auditErr := s.privilegeStore.appendAudit(plan.Operation, plan.Params, result.Output, status.Account); auditErr != nil {
+		if auditErr := s.privilegeStore.appendAudit(pluginID, input.Action, auditOperation, auditParams, result.Output, status.Account); auditErr != nil {
 			s.updateOperationData(created.ID, 100, result.Output, auditErr.Error(), result.Data, true)
 			return
 		}
 		s.updateOperationData(created.ID, 100, result.Output, "", result.Data, true)
 	}()
 	writeJSON(w, http.StatusAccepted, created)
-}
-
-func setupPluginStatusAction(action string) bool {
-	switch action {
-	case "status", "napcat-status", "luckylillia-status":
-		return true
-	default:
-		return false
-	}
 }
 
 // pluginStatus coalesces concurrent reads and keeps a one-second in-memory
@@ -1977,9 +2019,9 @@ func (s *server) setupPluginWebHandler(w http.ResponseWriter, r *http.Request) {
 	if requestPath == "" {
 		requestPath = "index.html"
 	}
-	if requestPath == "finder-bridge.js" {
+	if requestPath == "finder-bridge.js" || requestPath == "host-bridge.js" {
 		w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
-		_, _ = io.WriteString(w, setupPluginFinderBridge())
+		_, _ = io.WriteString(w, setupPluginHostBridge())
 		return
 	}
 	clean := filepath.Clean(requestPath)
@@ -2027,11 +2069,10 @@ func (s *server) setupPluginWebHandler(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, resolved)
 }
 
-// rewriteSetupPluginWebHTML injects the deliberately narrow Finder bridge.
-// It preserves the plugin's existing fetch contract while keeping directory
-// selection in the host workbench's Web UI.
+// rewriteSetupPluginWebHTML injects the host capability bridge. It preserves
+// the existing fetch contract while keeping desktop requests in the workbench.
 func rewriteSetupPluginWebHTML(content string) string {
-	const bridge = `<script src="finder-bridge.js"></script>`
+	const bridge = `<script src="host-bridge.js"></script>`
 	if strings.Contains(content, "</head>") {
 		return strings.Replace(content, "</head>", bridge+"</head>", 1)
 	}
@@ -2060,7 +2101,14 @@ func injectSetupPluginFinderBridge(response *http.Response) {
 }
 
 func setupPluginFinderBridge() string {
-	return `(function(){var nativeFetch=window.fetch;var serial=0;var pending={};function finderRequest(input,init){var url;try{url=new URL(input instanceof Request?input.url:input,location.href)}catch(_){return null}if(url.origin!==location.origin||(url.pathname!=='/api/v1/system/capabilities/finder'&&url.pathname!=='/api/v1/system/picker'))return null;var body=init&&init.body;if(typeof body!=='string')return null;var payload;try{payload=JSON.parse(body)}catch(_){return null}if(!payload||typeof payload.pluginId!=='string'||typeof payload.pickerId!=='string')return null;return payload}function response(status,body){return new Response(JSON.stringify(body),{status:status,headers:{'Content-Type':'application/json'}})}window.fetch=function(input,init){var payload=finderRequest(input,init);if(!payload)return nativeFetch.apply(this,arguments);var requestId='finder-'+Date.now().toString(36)+'-'+(++serial).toString(36);return new Promise(function(resolve){pending[requestId]=resolve;parent.postMessage({source:'alx-setup-plugin',type:'finder-request',requestId:requestId,pluginId:payload.pluginId,pickerId:payload.pickerId},location.origin);window.setTimeout(function(){if(!pending[requestId])return;delete pending[requestId];resolve(response(408,{error:'等待工作台 Finder 选择超时。'}))},10*60*1000)})};window.addEventListener('message',function(event){if(event.origin!==location.origin)return;var data=event.data;if(!data||data.source!=='alx-parent'||data.type!=='finder-result'||typeof data.requestId!=='string')return;var resolve=pending[data.requestId];if(!resolve)return;delete pending[data.requestId];resolve(response(data.error?400:200,data.error?{error:data.error}:{paths:Array.isArray(data.paths)?data.paths:[]}))})})();`
+	return setupPluginHostBridge()
+}
+
+// setupPluginHostBridge is intentionally dependency-free, so every static or
+// Vite-served system plugin receives the same small browser SDK. The server
+// still performs plugin identity, authentication and availability checks.
+func setupPluginHostBridge() string {
+	return `(function(){var nativeFetch=window.fetch;var serial=0;var pending={};function finderRequest(input,init){var url;try{url=new URL(input instanceof Request?input.url:input,location.href)}catch(_){return null}if(url.origin!==location.origin||(url.pathname!=='/api/v1/system/capabilities/finder'&&url.pathname!=='/api/v1/system/picker'))return null;var body=init&&init.body;if(typeof body!=='string')return null;var payload;try{payload=JSON.parse(body)}catch(_){return null}if(!payload||typeof payload.pluginId!=='string'||typeof payload.pickerId!=='string')return null;return payload}function response(status,body){return new Response(JSON.stringify(body),{status:status,headers:{'Content-Type':'application/json'}})}function json(url,init){return nativeFetch(url,init).then(function(res){return res.json().then(function(data){if(!res.ok)throw new Error(data&&data.error||'宿主能力请求失败');return data})})}window.fetch=function(input,init){var payload=finderRequest(input,init);if(!payload)return nativeFetch.apply(this,arguments);var requestId='finder-'+Date.now().toString(36)+'-'+(++serial).toString(36);return new Promise(function(resolve){pending[requestId]=resolve;parent.postMessage({source:'alx-setup-plugin',type:'finder-request',requestId:requestId,pluginId:payload.pluginId,pickerId:payload.pickerId},location.origin);window.setTimeout(function(){if(!pending[requestId])return;delete pending[requestId];resolve(response(408,{error:'等待工作台 Finder 选择超时。'}))},10*60*1000)})};window.addEventListener('message',function(event){if(event.origin!==location.origin)return;var data=event.data;if(!data||data.source!=='alx-parent'||data.type!=='finder-result'||typeof data.requestId!=='string')return;var resolve=pending[data.requestId];if(!resolve)return;delete pending[data.requestId];resolve(response(data.error?400:200,data.error?{error:data.error}:{paths:Array.isArray(data.paths)?data.paths:[]}))})};window.ALXHost={capabilities:function(){return json('/api/v1/system/capabilities')},finder:{pick:function(pluginId,pickerId){return window.fetch('/api/v1/system/capabilities/finder',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pluginId:pluginId,pickerId:pickerId})}).then(function(res){return res.json().then(function(data){if(!res.ok)throw new Error(data&&data.error||'选择目录失败');return data.paths||[]})})}},context:function(pluginId,keys){return json('/api/v1/system/capabilities/context?pluginId='+encodeURIComponent(pluginId)+'&keys='+encodeURIComponent((keys||[]).join(',')))},desktop:{open:function(pluginId,target){return json('/api/v1/system/capabilities/desktop/open',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pluginId:pluginId,target:target})})}},clipboard:{read:function(pluginId){return json('/api/v1/system/capabilities/clipboard?pluginId='+encodeURIComponent(pluginId))},write:function(pluginId,text){return json('/api/v1/system/capabilities/clipboard',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pluginId:pluginId,text:text})})}},notification:{send:function(pluginId,title,message){return json('/api/v1/system/capabilities/notification',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pluginId:pluginId,title:title,message:message})})}},info:function(pluginId){return json('/api/v1/system/capabilities/info?pluginId='+encodeURIComponent(pluginId))},network:{fetch:function(pluginId,url,method){return json('/api/v1/system/capabilities/network/fetch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pluginId:pluginId,url:url,method:method||'GET'})})}}};})();`
 }
 
 func (s *server) sshHandler(w http.ResponseWriter, r *http.Request) {
@@ -2137,11 +2185,37 @@ func (s *server) startMCPStatusMonitor() {
 	}()
 }
 
-// isApprovedSudoAction is a host-owned allowlist. A plugin manifest never
-// grants a downloaded executor arbitrary root access merely by naming an
-// action; each new operation must be reviewed in this process.
-func isApprovedSudoAction(pluginID, action string) bool {
-	return pluginID == "alemonx-qq" && action == system.NapCatAPTDependencyAction
+// isManifestPasswordOperation identifies an installed system plugin's fixed
+// native operation. The manifest carries semantics; the host still owns the
+// password prompt, intent, timeout, process execution and audit lifecycle.
+func (s *server) isManifestPasswordOperation(pluginID, action string) bool {
+	if s.plugins == nil {
+		return false
+	}
+	plugin, err := s.plugins.Find(pluginID)
+	if err != nil || plugin.Online || !plugin.Enabled {
+		return false
+	}
+	operation, ok := plugin.PrivilegedOperation(action)
+	return ok && operation.Authorization == "password" && operationSupportsPlatform(operation, runtime.GOOS)
+}
+
+func operationSupportsPlatform(operation setupplugin.PrivilegedOperationSpec, platform string) bool {
+	for _, candidate := range operation.Platforms {
+		if candidate == platform {
+			return true
+		}
+	}
+	return false
+}
+
+func selectPrivilegedCommand(operation setupplugin.PrivilegedOperationSpec) (setupplugin.PrivilegedCommandSpec, error) {
+	for _, command := range operation.Commands {
+		if _, err := exec.LookPath(command.Program); err == nil {
+			return command, nil
+		}
+	}
+	return setupplugin.PrivilegedCommandSpec{}, errors.New("当前系统没有可用于此操作的受支持命令")
 }
 
 func (s *server) privilegedPreflightHandler(w http.ResponseWriter, r *http.Request) {
@@ -2190,58 +2264,68 @@ func (s *server) buildPrivilegePreflight(r *http.Request, input privilegePreflig
 		response.Reason = "当前账户没有系统变更权限。"
 		return response, account, source
 	}
-	switch {
-	case input.PluginID == "alemonx-qq" && input.Action == system.NapCatAPTDependencyAction:
-		response.Title = "授权安装 NapCat Linux 系统依赖"
-		response.Description = "将以当前系统账户通过 APT 或 DNF 安装固定的 NapCat 图形、解压与运行依赖。密码仅用于本次授权，成功后会自动继续安装。"
-		if !status.Enabled || !status.Authenticated || !status.SuperAdmin {
-			response.Reason = "只有已登录的超级管理员可以安装系统依赖。"
-			return response, account, source
-		}
-		if runtime.GOOS != "linux" {
-			response.Reason = "NapCat 工作台密码授权仅适用于受支持的 Linux 系统；当前平台请使用对应的系统安装方式。"
-			return response, account, source
-		}
-		plugin, findErr := s.plugins.Find(input.PluginID)
-		if findErr != nil || plugin.Online || !plugin.Enabled {
-			response.Reason = "NapCat QQ 系统插件未安装或已停用。"
-			return response, account, source
-		}
-		response.Available, response.Authorization = true, "password"
-	case input.PluginID == "alemonx-network" && (input.Action == "apply-plan" || input.Action == "undo-last"):
-		response.Title = "授权网络系统变更"
-		response.Description = "工作台将按已确认的网络变更计划请求系统授权。"
-		if input.Action == "apply-plan" {
-			if input.PlanID == "" {
-				response.Reason = "请选择工作台签发的网络变更计划。"
+	if plugin, findErr := s.plugins.Find(input.PluginID); findErr == nil {
+		if operation, ok := plugin.PrivilegedOperation(input.Action); ok {
+			if plugin.DevelopmentSource {
+				response.SourceType, response.SourcePath = "development", plugin.Source
+			} else {
+				response.SourceType = "release"
+			}
+			response.Title = operation.Title
+			response.Description = operation.Description
+			if response.Description == "" {
+				response.Description = "该系统插件将执行已声明的系统操作。"
+			}
+			if plugin.Online || !plugin.Enabled {
+				response.Reason = "该系统插件尚未安装或已停用。"
 				return response, account, source
 			}
-			if _, planErr := s.privilegeStore.peekNetworkPlan(input.PlanID, account); planErr != nil {
-				response.Reason = planErr.Error()
+			if !operationSupportsPlatform(operation, runtime.GOOS) {
+				response.Reason = "当前平台不支持该插件声明的系统授权方式。"
 				return response, account, source
 			}
-		}
-		if availabilityErr := s.plugins.PrivilegeAvailability(input.PluginID, input.Action); availabilityErr != nil {
-			response.Reason = availabilityErr.Error()
+			if !status.Enabled || !status.Authenticated || !status.SuperAdmin {
+				response.Reason = "只有已登录的超级管理员可以执行系统操作。"
+				return response, account, source
+			}
+			if operation.PlanAction != "" {
+				if input.PlanID == "" {
+					response.Reason = "请选择该插件预演后生成的变更计划。"
+					return response, account, source
+				}
+				if _, planErr := s.privilegeStore.peekPlan(input.PlanID, input.PluginID, input.Action, account); planErr != nil {
+					response.Reason = planErr.Error()
+					return response, account, source
+				}
+			}
+			if operation.UseLatestAudit {
+				if _, auditErr := s.privilegeStore.latestAudit(input.PluginID); auditErr != nil {
+					response.Reason = auditErr.Error()
+					return response, account, source
+				}
+			}
+			if operation.Authorization == "password" {
+				if _, commandErr := selectPrivilegedCommand(operation); commandErr != nil {
+					response.Reason = commandErr.Error()
+					return response, account, source
+				}
+				response.Available, response.Authorization = true, "password"
+				return response, account, source
+			}
+			switch runtime.GOOS {
+			case "darwin":
+				response.Available, response.Authorization = true, "native"
+			case "windows":
+				response.Available, response.Authorization = true, "native-uac"
+			case "linux":
+				response.Available, response.Authorization = true, "polkit"
+			default:
+				response.Reason = "当前平台没有可用的系统授权方式。"
+			}
 			return response, account, source
 		}
-		response.Available = true
-		switch runtime.GOOS {
-		case "darwin":
-			response.Authorization = "password"
-			response.Description += " 将在工作台中要求输入一次 macOS 管理员密码。"
-		case "windows":
-			response.Authorization = "native-uac"
-			response.Description += " 确认后 Windows 将显示原生 UAC 授权窗口。"
-		case "linux":
-			response.Authorization = "polkit"
-			response.Description += " 确认后 Linux 将显示原生 Polkit 授权窗口。"
-		default:
-			response.Available, response.Authorization, response.Reason = false, "unavailable", "当前平台没有可用的系统授权方式。"
-		}
-	default:
-		response.Reason = "该操作没有宿主审核的系统权限策略。"
 	}
+	response.Reason = "该系统插件没有声明此权限操作。"
 	return response, account, source
 }
 
@@ -2260,13 +2344,7 @@ func (s *server) privilegedStatusHandler(w http.ResponseWriter, r *http.Request)
 	}
 	status := system.CurrentPrivilegeStatus()
 	audit := s.privilegeStore.auditStatus(status.Version)
-	networkReason := s.plugins.PrivilegeAvailability("alemonx-network", "apply-plan")
-	networkEnabled := status.Enabled && networkReason == nil && audit.Valid
-	response := map[string]any{"privilege": status, "audit": audit, "network": map[string]any{"enabled": networkEnabled}}
-	if networkReason != nil {
-		response["network"] = map[string]any{"enabled": false, "reason": networkReason.Error()}
-	}
-	writeJSON(w, http.StatusOK, response)
+	writeJSON(w, http.StatusOK, map[string]any{"privilege": status, "audit": audit})
 }
 
 func (s *server) localSystemDialogRequest(r *http.Request) bool {
@@ -2282,11 +2360,12 @@ func (s *server) localSystemDialogRequest(r *http.Request) bool {
 }
 
 func (s *server) privilegedAuditHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet || r.URL.Query().Get("plugin") != "alemonx-network" {
-		writeError(w, http.StatusBadRequest, "仅支持读取网络插件的权限审计。")
+	pluginID := strings.TrimSpace(r.URL.Query().Get("plugin"))
+	if r.Method != http.MethodGet || pluginID == "" {
+		writeError(w, http.StatusBadRequest, "请指定要读取审计记录的系统插件。")
 		return
 	}
-	items, err := s.privilegeStore.auditItems()
+	items, err := s.privilegeStore.auditItems(pluginID)
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, err.Error())
 		return
@@ -2294,30 +2373,17 @@ func (s *server) privilegedAuditHandler(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]any{"items": items, "audit": s.privilegeStore.auditStatus(system.CurrentPrivilegeStatus().Version)})
 }
 
-func (s *server) napcatDependenciesHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
-		return
-	}
-	var input setupPluginActionRequest
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&input); err != nil || input.Action != system.NapCatAPTDependencyAction {
-		writeError(w, http.StatusBadRequest, "仅支持安装固定的 NapCat Linux 系统依赖。")
-		return
-	}
-	s.handleApprovedSudoAction(w, r, "alemonx-qq", input)
-}
-
-func (s *server) handleApprovedSudoAction(w http.ResponseWriter, r *http.Request, pluginID string, input setupPluginActionRequest) {
+func (s *server) handleManifestSudoAction(w http.ResponseWriter, r *http.Request, pluginID string, input setupPluginActionRequest) {
 	if input.SudoPassword == nil || strings.TrimSpace(*input.SudoPassword) == "" {
 		writeError(w, http.StatusBadRequest, "请输入当前系统账户的 sudo 密码。")
 		return
 	}
 	if !input.Confirm {
-		writeError(w, http.StatusBadRequest, "请先确认安装固定的 NapCat 系统依赖。")
+		writeError(w, http.StatusBadRequest, "请先确认执行此系统操作。")
 		return
 	}
 	if len(input.Params) != 0 {
-		writeError(w, http.StatusBadRequest, "系统依赖安装不接受额外参数。")
+		writeError(w, http.StatusBadRequest, "系统操作不接受浏览器传入的额外参数。")
 		return
 	}
 	if !s.privilegedRequestAllowed(r) {
@@ -2335,7 +2401,17 @@ func (s *server) handleApprovedSudoAction(w http.ResponseWriter, r *http.Request
 	}
 	plugin, err := s.plugins.Find(pluginID)
 	if err != nil || plugin.Online || !plugin.Enabled {
-		writeError(w, http.StatusBadRequest, "NapCat QQ 系统插件未安装或已停用。")
+		writeError(w, http.StatusBadRequest, "系统插件未安装或已停用。")
+		return
+	}
+	operation, ok := plugin.PrivilegedOperation(input.Action)
+	if !ok || operation.Authorization != "password" || !operationSupportsPlatform(operation, runtime.GOOS) {
+		writeError(w, http.StatusBadRequest, "该系统插件操作当前不可执行。")
+		return
+	}
+	command, err := selectPrivilegedCommand(operation)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	intent, err := s.privilegeStore.validateIntent(input.AuthorizationID, pluginID, input.Action, "", status.Account, privilegeRequestSource(r), "password")
@@ -2361,13 +2437,14 @@ func (s *server) handleApprovedSudoAction(w http.ResponseWriter, r *http.Request
 	go func() {
 		defer clearSudoPassword(password)
 		s.updateOperation(created.ID, 5, "正在验证管理员授权…", "", false)
-		ctx, cancel := context.WithTimeout(context.Background(), system.NapCatAPTTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), system.PrivilegedCommandTimeout)
 		defer cancel()
-		runDependencies := s.runNapcatAPTDependencies
-		if runDependencies == nil {
-			runDependencies = system.InstallNapCatAPTDependencies
+		runCommand := s.runPrivilegedCommand
+		if runCommand == nil {
+			runCommand = system.RunSudoCommand
 		}
-		output, runErr := runDependencies(ctx, password)
+		s.updateOperation(created.ID, 35, "正在执行系统操作…", "", false)
+		output, runErr := runCommand(ctx, password, command.Program, command.Args)
 		if errors.Is(runErr, system.ErrSudoPasswordInvalid) {
 			s.recordSudoPasswordFailure(key)
 		} else if runErr == nil {

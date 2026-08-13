@@ -1,12 +1,19 @@
 package web
 
 import (
+	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -15,27 +22,48 @@ import (
 	"alemonx/internal/systemnetwork"
 )
 
-const pluginDownloadBrokerPath = "/api/v1/system/plugin-download"
+const (
+	pluginDownloadBrokerPath = "/api/v1/system/plugin-download"
+	pluginDownloadCacheLimit = int64(1 << 30)
+)
 
 type pluginDownloadGrant struct {
 	pluginID  string
-	action    string
 	remaining int
 	expiresAt time.Time
 }
 
-// pluginDownloadBroker keeps credential-bearing networking inside the host.
-// A runner gets only a short-lived loopback token and may fetch only the
-// official domains declared in this small host policy.
+type pluginDownloadCacheMeta struct {
+	URL          string `json:"url"`
+	ETag         string `json:"etag,omitempty"`
+	LastModified string `json:"lastModified,omitempty"`
+	ContentType  string `json:"contentType,omitempty"`
+	Disposition  string `json:"disposition,omitempty"`
+	Size         int64  `json:"size"`
+	LastAccess   string `json:"lastAccess"`
+}
+
+// pluginDownloadBroker is a generic HTTP(S) transport for installed system
+// plugins. It deliberately knows neither release providers nor plugin asset
+// names: a capability token establishes the calling plugin, while the host
+// contributes proxy settings, retry, cancellation and a bounded local cache.
 type pluginDownloadBroker struct {
 	mu       sync.Mutex
 	endpoint string
 	grants   map[string]pluginDownloadGrant
 	network  *systemnetwork.Manager
+	plugins  *setupplugin.Registry
+	cacheDir string
 }
 
 func newPluginDownloadBroker(network *systemnetwork.Manager) *pluginDownloadBroker {
-	return &pluginDownloadBroker{grants: map[string]pluginDownloadGrant{}, network: network}
+	directory, err := os.UserCacheDir()
+	if err != nil || strings.TrimSpace(directory) == "" {
+		directory = os.TempDir()
+	}
+	directory = filepath.Join(directory, "alx", "plugin-downloads")
+	_ = os.MkdirAll(directory, 0o700)
+	return &pluginDownloadBroker{grants: map[string]pluginDownloadGrant{}, network: network, cacheDir: directory}
 }
 
 func (b *pluginDownloadBroker) setEndpoint(endpoint string) {
@@ -44,14 +72,14 @@ func (b *pluginDownloadBroker) setEndpoint(endpoint string) {
 	b.mu.Unlock()
 }
 
-func (b *pluginDownloadBroker) environment(plugin setupplugin.Plugin, action string) []string {
-	// This is a host policy, not a manifest capability. The token has no proxy
-	// credentials. The gateway is read-only and binds every request to one QQ
-	// action plus a fixed official URL allowlist, so a local build can safely use
-	// it too. Requiring a Release fingerprint here made local package testing
-	// silently bypass the workbench's GitHub mirror/proxy setting and fall back
-	// to direct GitHub. This is networking only: it never grants privilege.
-	if b == nil || !qqDownloadAction(action) || plugin.ID != "alemonx-qq" || plugin.Online || !plugin.Enabled {
+func (b *pluginDownloadBroker) setRegistry(registry *setupplugin.Registry) {
+	b.mu.Lock()
+	b.plugins = registry
+	b.mu.Unlock()
+}
+
+func (b *pluginDownloadBroker) environment(plugin setupplugin.Plugin, _ string) []string {
+	if b == nil || plugin.Online || !plugin.Enabled {
 		return nil
 	}
 	secret := make([]byte, 32)
@@ -70,11 +98,7 @@ func (b *pluginDownloadBroker) environment(plugin setupplugin.Plugin, action str
 			delete(b.grants, value)
 		}
 	}
-	// A Linux NapCat install can fetch the exact plugin release metadata, its
-	// compatibility runtime, NapCat and QQ archives. Twelve requests leave room
-	// for retries without turning a runner
-	// token into a long-lived generic download capability.
-	b.grants[token] = pluginDownloadGrant{pluginID: plugin.ID, action: action, remaining: 12, expiresAt: now.Add(70 * time.Minute)}
+	b.grants[token] = pluginDownloadGrant{pluginID: plugin.ID, remaining: 24, expiresAt: now.Add(90 * time.Minute)}
 	environment := []string{"ALX_PLUGIN_DOWNLOAD_BROKER=" + b.endpoint + pluginDownloadBrokerPath, "ALX_PLUGIN_DOWNLOAD_TOKEN=" + token, "ALX_PLUGIN_PROGRESS_MODE=structured"}
 	if tag := strings.TrimSpace(plugin.InstalledTag); tag != "" {
 		environment = append(environment, "ALX_PLUGIN_INSTALLED_TAG="+tag)
@@ -97,7 +121,7 @@ func (b *pluginDownloadBroker) grant(r *http.Request) (string, pluginDownloadGra
 		ok = false
 	}
 	b.mu.Unlock()
-	return token, grant, ok && grant.pluginID == "alemonx-qq" && grant.remaining > 0
+	return token, grant, ok && grant.remaining > 0
 }
 
 func (b *pluginDownloadBroker) consume(token string) bool {
@@ -113,125 +137,249 @@ func (b *pluginDownloadBroker) consume(token string) bool {
 	grant.remaining--
 	if grant.remaining <= 0 {
 		delete(b.grants, token)
-		return true
+	} else {
+		b.grants[token] = grant
 	}
-	b.grants[token] = grant
 	return true
 }
 
 func (b *pluginDownloadBroker) serveHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "下载代理仅支持读取官方资源。")
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		writeError(w, http.StatusMethodNotAllowed, "下载代理仅支持 HTTP(S) 读取。")
 		return
 	}
 	token, grant, ok := b.grant(r)
-	if !ok {
+	if !ok || !b.consume(token) {
 		writeError(w, http.StatusForbidden, "插件下载授权无效或已过期。")
 		return
 	}
 	target, err := url.Parse(strings.TrimSpace(r.URL.Query().Get("url")))
-	if err != nil || target == nil || !allowedQQDownloadURL(grant.action, target) {
-		writeError(w, http.StatusBadRequest, "仅允许下载 QQ 官方发布资源。")
+	if err != nil || target == nil || (target.Scheme != "http" && target.Scheme != "https") || target.Host == "" {
+		writeError(w, http.StatusBadRequest, "下载地址必须是有效的 HTTP 或 HTTPS 地址。")
+		return
+	}
+	plugin, err := b.plugin(grant.pluginID)
+	if err != nil || plugin.Online || !plugin.Enabled {
+		writeError(w, http.StatusForbidden, "系统插件未安装或已停用。")
 		return
 	}
 	if b.network == nil {
 		writeError(w, http.StatusServiceUnavailable, "主应用网络配置不可用。")
 		return
 	}
-	if !b.consume(token) {
-		writeError(w, http.StatusForbidden, "插件下载授权无效、已过期或请求次数已用完。")
-		return
-	}
-	request, err := http.NewRequestWithContext(r.Context(), http.MethodGet, target.String(), nil)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "官方资源地址无效。")
-		return
-	}
-	client := b.network.Client(0)
-	client.CheckRedirect = func(next *http.Request, _ []*http.Request) error {
-		if next.URL.Scheme != "https" || !allowedQQDownloadRedirect(next.URL) {
-			return errors.New("官方资源重定向到了未允许的地址")
+	b.fetch(w, r, target)
+}
+
+func (b *pluginDownloadBroker) fetch(w http.ResponseWriter, incoming *http.Request, target *url.URL) {
+	cachePath, metaPath := b.cachePaths(target.String())
+	meta, cached := readPluginDownloadMeta(metaPath)
+	requestHeaders := make(http.Header)
+	if cached && incoming.Method == http.MethodGet {
+		if meta.ETag != "" {
+			requestHeaders.Set("If-None-Match", meta.ETag)
 		}
-		return nil
+		if meta.LastModified != "" {
+			requestHeaders.Set("If-Modified-Since", meta.LastModified)
+		}
 	}
-	response, err := client.Do(request)
+	response, err := b.downloadRequest(incoming.Context(), incoming.Method, target.String(), requestHeaders)
 	if err != nil {
-		// Transport errors can include implementation-specific proxy details.
-		// The runner only needs a recovery hint, never the configured endpoint.
-		writeError(w, http.StatusBadGateway, "主应用下载官方资源失败，请检查网络配置后重试。")
+		if cached && incoming.Method == http.MethodGet {
+			if body, openErr := os.Open(cachePath); openErr == nil {
+				defer body.Close()
+				meta.LastAccess = time.Now().UTC().Format(time.RFC3339Nano)
+				_ = writePluginDownloadMeta(metaPath, meta)
+				serveCachedPluginDownload(w, meta, body)
+				return
+			}
+		}
+		writeError(w, http.StatusBadGateway, "主应用下载资源失败，请检查网络配置后重试。")
 		return
 	}
 	defer response.Body.Close()
-	for _, key := range []string{"Content-Length", "Content-Type", "Content-Disposition", "ETag", "Last-Modified"} {
-		if value := response.Header.Get(key); value != "" {
-			w.Header().Set(key, value)
+	if response.StatusCode == http.StatusNotModified && cached && incoming.Method == http.MethodGet {
+		body, err := os.Open(cachePath)
+		if err == nil {
+			defer body.Close()
+			meta.LastAccess = time.Now().UTC().Format(time.RFC3339Nano)
+			_ = writePluginDownloadMeta(metaPath, meta)
+			serveCachedPluginDownload(w, meta, body)
+			return
 		}
 	}
-	w.Header().Set("Cache-Control", "no-store")
+	copyPluginDownloadHeaders(w.Header(), response.Header)
 	w.WriteHeader(response.StatusCode)
-	_, _ = io.Copy(w, response.Body)
+	if incoming.Method == http.MethodHead || response.StatusCode < 200 || response.StatusCode >= 300 {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(cachePath), 0o700); err != nil {
+		_, _ = io.Copy(w, response.Body)
+		return
+	}
+	temporary, err := os.CreateTemp(filepath.Dir(cachePath), "body-*.tmp")
+	if err != nil {
+		_, _ = io.Copy(w, response.Body)
+		return
+	}
+	temporaryPath := temporary.Name()
+	written, copyErr := io.Copy(io.MultiWriter(w, temporary), response.Body)
+	closeErr := temporary.Close()
+	if copyErr != nil || closeErr != nil {
+		_ = os.Remove(temporaryPath)
+		return
+	}
+	if err := os.Rename(temporaryPath, cachePath); err != nil {
+		_ = os.Remove(temporaryPath)
+		return
+	}
+	meta = pluginDownloadCacheMeta{URL: target.String(), ETag: response.Header.Get("ETag"), LastModified: response.Header.Get("Last-Modified"), ContentType: response.Header.Get("Content-Type"), Disposition: response.Header.Get("Content-Disposition"), Size: written, LastAccess: time.Now().UTC().Format(time.RFC3339Nano)}
+	_ = writePluginDownloadMeta(metaPath, meta)
+	b.cleanupCache()
 }
 
-func qqDownloadAction(action string) bool {
-	switch action {
-	case "install", "update", "update-check", "napcat-macos-installer-download", "napcat-windows-installer-download", "luckylillia-install", "luckylillia-reinstall", "luckylillia-update", "luckylillia-update-check":
-		return true
-	default:
-		return false
+func (b *pluginDownloadBroker) downloadRequest(ctx context.Context, method, rawURL string, headers http.Header) (*http.Response, error) {
+	// Every retry creates a pristine request, so no workbench cookie or
+	// Authorization header can ever reach the target.
+	for attempt := 0; attempt < 2; attempt++ {
+		request, err := http.NewRequestWithContext(ctx, method, rawURL, nil)
+		if err != nil {
+			return nil, err
+		}
+		request.Header = headers.Clone()
+		client := b.network.Client(0)
+		client.CheckRedirect = func(next *http.Request, _ []*http.Request) error {
+			if next.URL.Scheme != "http" && next.URL.Scheme != "https" {
+				return errors.New("下载重定向协议无效")
+			}
+			return nil
+		}
+		response, err := client.Do(request)
+		if err == nil && response.StatusCode < 500 {
+			return response, nil
+		}
+		if response != nil {
+			response.Body.Close()
+		}
+		if err == nil {
+			err = fmt.Errorf("HTTP %d", response.StatusCode)
+		}
+		if attempt == 1 {
+			return nil, err
+		}
+	}
+	return nil, errors.New("下载失败")
+}
+
+func (b *pluginDownloadBroker) cachePaths(rawURL string) (string, string) {
+	digest := sha256.Sum256([]byte(rawURL))
+	directory := filepath.Join(b.cacheDir, hex.EncodeToString(digest[:]))
+	return filepath.Join(directory, "body"), filepath.Join(directory, "meta.json")
+}
+
+func readPluginDownloadMeta(path string) (pluginDownloadCacheMeta, bool) {
+	var meta pluginDownloadCacheMeta
+	data, err := os.ReadFile(path)
+	if err != nil || json.Unmarshal(data, &meta) != nil || meta.URL == "" {
+		return pluginDownloadCacheMeta{}, false
+	}
+	return meta, true
+}
+
+func writePluginDownloadMeta(path string, meta pluginDownloadCacheMeta) error {
+	data, err := json.Marshal(meta)
+	if err != nil {
+		return err
+	}
+	temporary := path + ".tmp"
+	if err := os.WriteFile(temporary, data, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(temporary, path)
+}
+
+func copyPluginDownloadHeaders(target, source http.Header) {
+	for _, key := range []string{"Content-Length", "Content-Type", "Content-Disposition", "ETag", "Last-Modified"} {
+		if value := source.Get(key); value != "" {
+			target.Set(key, value)
+		}
+	}
+	target.Set("Cache-Control", "no-store")
+}
+
+func serveCachedPluginDownload(w http.ResponseWriter, meta pluginDownloadCacheMeta, body io.Reader) {
+	if meta.ContentType != "" {
+		w.Header().Set("Content-Type", meta.ContentType)
+	}
+	if meta.Disposition != "" {
+		w.Header().Set("Content-Disposition", meta.Disposition)
+	}
+	if meta.ETag != "" {
+		w.Header().Set("ETag", meta.ETag)
+	}
+	if meta.LastModified != "" {
+		w.Header().Set("Last-Modified", meta.LastModified)
+	}
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", meta.Size))
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.Copy(w, body)
+}
+
+func (b *pluginDownloadBroker) cleanupCache() {
+	entries := []struct {
+		body   string
+		meta   string
+		size   int64
+		access time.Time
+	}{}
+	var total int64
+	_ = filepath.WalkDir(b.cacheDir, func(path string, entry os.DirEntry, err error) error {
+		if err != nil || entry.IsDir() || entry.Name() != "meta.json" {
+			return nil
+		}
+		meta, ok := readPluginDownloadMeta(path)
+		if !ok {
+			return nil
+		}
+		body := filepath.Join(filepath.Dir(path), "body")
+		info, err := os.Stat(body)
+		if err != nil {
+			return nil
+		}
+		access, _ := time.Parse(time.RFC3339Nano, meta.LastAccess)
+		entries = append(entries, struct {
+			body   string
+			meta   string
+			size   int64
+			access time.Time
+		}{body, path, info.Size(), access})
+		total += info.Size()
+		return nil
+	})
+	if total <= pluginDownloadCacheLimit {
+		return
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].access.Before(entries[j].access) })
+	for _, entry := range entries {
+		if total <= pluginDownloadCacheLimit {
+			break
+		}
+		_ = os.Remove(entry.body)
+		_ = os.Remove(entry.meta)
+		_ = os.Remove(filepath.Dir(entry.body))
+		total -= entry.size
 	}
 }
 
-func allowedQQDownloadURL(action string, target *url.URL) bool {
-	if target == nil || target.Scheme != "https" {
-		return false
+func (b *pluginDownloadBroker) plugin(id string) (setupplugin.Plugin, error) {
+	if b == nil {
+		return setupplugin.Plugin{}, errors.New("系统插件注册表不可用")
 	}
-	host := strings.TrimSuffix(strings.ToLower(target.Hostname()), ".")
-	path := target.EscapedPath()
-	switch action {
-	case "install", "update", "update-check":
-		if host == "api.github.com" && path == "/repos/NapNeko/NapCatQQ/releases/latest" {
-			return true
-		}
-		// ALX's Linux compatibility runtime is attached to the current official
-		// QQ plugin release. The policy remains repository/path-bound, so an
-		// install grant cannot be repurposed as a generic GitHub proxy.
-		if host == "api.github.com" && strings.HasPrefix(path, "/repos/lemonade-lab/alemonx-qq/releases/tags/v") {
-			return true
-		}
-		if host == "api.github.com" && path == "/repos/lemonade-lab/alemonx-qq/releases/latest" {
-			return true
-		}
-		if host == "github.com" && strings.HasPrefix(path, "/NapNeko/NapCatQQ/releases/download/") {
-			return true
-		}
-		if host == "github.com" && strings.HasPrefix(path, "/lemonade-lab/alemonx-qq/releases/download/v") {
-			return true
-		}
-		return host == "qqdl.gtimg.cn" && strings.HasPrefix(path, "/qqfile/QQNT/")
-	case "napcat-macos-installer-download":
-		if host == "api.github.com" && path == "/repos/NapNeko/NapCat-Mac-Installer/releases/latest" {
-			return true
-		}
-		return host == "github.com" && strings.HasPrefix(path, "/NapNeko/NapCat-Mac-Installer/releases/download/")
-	case "napcat-windows-installer-download":
-		if host == "api.github.com" && path == "/repos/NapNeko/NapCatQQ/releases/latest" {
-			return true
-		}
-		return host == "github.com" && strings.HasPrefix(path, "/NapNeko/NapCatQQ/releases/download/")
-	case "luckylillia-install", "luckylillia-reinstall", "luckylillia-update", "luckylillia-update-check":
-		if host == "api.github.com" && path == "/repos/LLOneBot/LuckyLilliaBot/releases/latest" {
-			return true
-		}
-		return host == "github.com" && strings.HasPrefix(path, "/LLOneBot/LuckyLilliaBot/releases/download/")
-	default:
-		return false
+	b.mu.Lock()
+	registry := b.plugins
+	b.mu.Unlock()
+	if registry == nil {
+		return setupplugin.Plugin{}, errors.New("系统插件注册表不可用")
 	}
-}
-
-func allowedQQDownloadRedirect(target *url.URL) bool {
-	if target == nil {
-		return false
-	}
-	host := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(target.Hostname())), ".")
-	return host == "githubusercontent.com" || strings.HasSuffix(host, ".githubusercontent.com") || host == "qqdl.gtimg.cn"
+	return registry.Find(id)
 }

@@ -76,18 +76,26 @@ type Plugin struct {
 	Web           *WebSpec           `json:"web,omitempty"`
 	Services      []ServiceSpec      `json:"services,omitempty"`
 	SystemPickers []SystemPickerSpec `json:"systemPickers,omitempty"`
-	// HostCapabilities is an allowlist for host-owned features. A plugin never
-	// receives arbitrary OS or workbench access merely by being installed.
-	HostCapabilities []string    `json:"hostCapabilities,omitempty"`
-	Permissions      Permissions `json:"permissions,omitempty"`
-	Runnable         bool        `json:"runnable"`
-	Enabled          bool        `json:"enabled"`
-	Online           bool        `json:"online,omitempty"`
-	Source           string      `json:"source,omitempty"`
-	InstalledTag     string      `json:"installedTag,omitempty"`
-	InstalledAsset   string      `json:"installedAsset,omitempty"`
-	ArchiveSHA256    string      `json:"archiveSha256,omitempty"`
-	Fingerprint      string      `json:"fingerprint,omitempty"`
+	// StatusActions are runner actions that are explicitly read-only. The host
+	// coalesces them without allocating a task, which makes rapid UI polling a
+	// normal system-plugin capability rather than a per-plugin special case.
+	StatusActions []string `json:"statusActions,omitempty"`
+	// Media declares typed bytes produced by a runner action. It lets any
+	// plugin return a QR code, screenshot, archive preview, or other UI media
+	// through the authenticated host origin without the host knowing its domain.
+	Media []MediaSpec `json:"media,omitempty"`
+	// PrivilegedOperations describe a plugin-owned system operation. The host
+	// supplies only authorization, process launching, progress and auditing;
+	// a system plugin owns the action and its platform-specific semantics.
+	PrivilegedOperations []PrivilegedOperationSpec `json:"privilegedOperations,omitempty"`
+	Runnable             bool                      `json:"runnable"`
+	Enabled              bool                      `json:"enabled"`
+	Online               bool                      `json:"online,omitempty"`
+	Source               string                    `json:"source,omitempty"`
+	InstalledTag         string                    `json:"installedTag,omitempty"`
+	InstalledAsset       string                    `json:"installedAsset,omitempty"`
+	ArchiveSHA256        string                    `json:"archiveSha256,omitempty"`
+	Fingerprint          string                    `json:"fingerprint,omitempty"`
 	// DevelopmentSource is set only by the host for an explicitly started
 	// source-development session. It is never trusted from alx.json.
 	DevelopmentSource bool `json:"developmentSource,omitempty"`
@@ -95,21 +103,6 @@ type Plugin struct {
 	// backed by a development server. Static source web roots continue through
 	// the ordinary plugin web handler.
 	DevelopmentWebProxy bool `json:"developmentWebProxy,omitempty"`
-}
-
-// Permissions explicitly opts a plugin into individually elevated actions.
-// The browser never controls elevation: Registry consults this allowlist.
-type Permissions struct {
-	ElevatedActions []string `json:"elevatedActions,omitempty"`
-}
-
-func (p Plugin) RequiresElevation(action string) bool {
-	for _, candidate := range p.Permissions.ElevatedActions {
-		if candidate == action {
-			return true
-		}
-	}
-	return false
 }
 
 type installMetadata struct {
@@ -167,6 +160,29 @@ type WebSpec struct {
 	Root string `json:"root"`
 }
 
+type MediaSpec struct {
+	ID          string `json:"id"`
+	Action      string `json:"action"`
+	ContentType string `json:"contentType"`
+}
+
+type PrivilegedOperationSpec struct {
+	Action         string                  `json:"action"`
+	RunnerAction   string                  `json:"runnerAction,omitempty"`
+	PlanAction     string                  `json:"planAction,omitempty"`
+	UseLatestAudit bool                    `json:"useLatestAudit,omitempty"`
+	Title          string                  `json:"title"`
+	Description    string                  `json:"description,omitempty"`
+	Authorization  string                  `json:"authorization"`
+	Platforms      []string                `json:"platforms,omitempty"`
+	Commands       []PrivilegedCommandSpec `json:"commands"`
+}
+
+type PrivilegedCommandSpec struct {
+	Program string   `json:"program"`
+	Args    []string `json:"args,omitempty"`
+}
+
 // ServiceSpec is an allowlisted loopback HTTP service contributed by a setup
 // plugin. The browser never supplies its host or port; alx proxies only these
 // manifest-declared destinations through the authenticated management origin.
@@ -202,25 +218,31 @@ func (p Plugin) SystemPicker(id string) (SystemPickerSpec, bool) {
 	return SystemPickerSpec{}, false
 }
 
-const (
-	HostCapabilityFinder         = "finder"
-	HostCapabilityRobotContext   = "robot-context"
-	HostCapabilityNetworkContext = "network-context"
-)
-
-func (p Plugin) AllowsHostCapability(capability string) bool {
-	// Existing picker declarations remain compatible while manifests migrate to
-	// the explicit capability list. New data capabilities always require a
-	// declaration.
-	if capability == HostCapabilityFinder && len(p.SystemPickers) > 0 {
-		return true
-	}
-	for _, item := range p.HostCapabilities {
-		if item == capability {
+func (p Plugin) AllowsStatusAction(action string) bool {
+	for _, candidate := range p.StatusActions {
+		if candidate == action {
 			return true
 		}
 	}
 	return false
+}
+
+func (p Plugin) MediaResource(id string) (MediaSpec, bool) {
+	for _, media := range p.Media {
+		if media.ID == id {
+			return media, true
+		}
+	}
+	return MediaSpec{}, false
+}
+
+func (p Plugin) PrivilegedOperation(action string) (PrivilegedOperationSpec, bool) {
+	for _, operation := range p.PrivilegedOperations {
+		if operation.Action == action {
+			return operation, true
+		}
+	}
+	return PrivilegedOperationSpec{}, false
 }
 
 // Progress is an optional, structured stderr event emitted while a plugin
@@ -528,10 +550,23 @@ func pluginsEqual(a, b Plugin) bool {
 		a.Description == b.Description && a.Runnable == b.Runnable &&
 		a.Enabled == b.Enabled && a.Online == b.Online && a.InstalledTag == b.InstalledTag && a.InstalledAsset == b.InstalledAsset && a.ArchiveSHA256 == b.ArchiveSHA256 && a.Fingerprint == b.Fingerprint &&
 		strings.Join(a.Platforms, ",") == strings.Join(b.Platforms, ",") &&
-		strings.Join(a.HostCapabilities, ",") == strings.Join(b.HostCapabilities, ",") &&
+		strings.Join(a.StatusActions, ",") == strings.Join(b.StatusActions, ",") &&
+		pluginDeclaredCapabilitiesEqual(a, b) &&
 		a.Navigation.Label == b.Navigation.Label && a.Navigation.Icon == b.Navigation.Icon &&
 		a.Navigation.Order == b.Navigation.Order && webRootEqual(a.Web, b.Web) &&
 		entryEqual(a.Entry, b.Entry) && developmentEqual(a.Development, b.Development)
+}
+
+func pluginDeclaredCapabilitiesEqual(a, b Plugin) bool {
+	left, leftErr := json.Marshal(struct {
+		Media                []MediaSpec               `json:"media"`
+		PrivilegedOperations []PrivilegedOperationSpec `json:"privilegedOperations"`
+	}{a.Media, a.PrivilegedOperations})
+	right, rightErr := json.Marshal(struct {
+		Media                []MediaSpec               `json:"media"`
+		PrivilegedOperations []PrivilegedOperationSpec `json:"privilegedOperations"`
+	}{b.Media, b.PrivilegedOperations})
+	return leftErr == nil && rightErr == nil && bytes.Equal(left, right)
 }
 
 func (p Plugin) DevelopmentEntry() map[string]string {
@@ -820,10 +855,7 @@ func (r *Registry) RunResultWithProgress(id, actionID string, params map[string]
 	if err != nil {
 		return ActionResult{}, err
 	}
-	if plugin.RequiresElevation(actionID) && !confirmed {
-		return ActionResult{}, errors.New("此操作需要在界面确认后才会请求系统管理员权限")
-	}
-	if plugin.RequiresElevation(actionID) {
+	if _, privileged := plugin.PrivilegedOperation(actionID); privileged {
 		return ActionResult{}, errors.New("系统权限操作必须经宿主权限代理执行")
 	}
 	requestPayload := request{Protocol: "alx/v1", Method: "run", Action: actionID, Params: params, Confirm: confirmed}
@@ -885,10 +917,10 @@ func (r *Registry) RunResultWithProgress(id, actionID string, params map[string]
 	return parseActionResult(output, nil)
 }
 
-// RunPrivilegedApproved is intentionally separate from RunResultWithProgress:
-// only the host broker may choose the policy action and the runner action. A
-// downloaded manifest can describe a button but can never elevate itself.
-func (r *Registry) RunPrivilegedApproved(id, policyAction, runnerAction string, params map[string]string, progress func(Progress)) (ActionResult, error) {
+// RunWithNativePrivileges runs a plugin-owned action after the host has
+// completed its generic authorization flow. The runner action is declared in
+// the installed manifest; the browser cannot select an executable or command.
+func (r *Registry) RunWithNativePrivileges(id, action string, params map[string]string, progress func(Progress)) (ActionResult, error) {
 	plugin, err := r.Find(id)
 	if err != nil {
 		return ActionResult{}, err
@@ -896,75 +928,20 @@ func (r *Registry) RunPrivilegedApproved(id, policyAction, runnerAction string, 
 	if plugin.Online || !plugin.Enabled || !plugin.Runnable {
 		return ActionResult{}, errors.New("系统插件未安装、已停用或没有可用执行器")
 	}
-	if plugin.DevelopmentSource {
-		return ActionResult{}, errors.New("源码开发插件不允许执行系统权限操作")
-	}
-	if !plugin.RequiresElevation(policyAction) {
-		return ActionResult{}, errors.New("该操作未被插件声明为系统变更")
+	operation, ok := plugin.PrivilegedOperation(action)
+	if !ok || operation.RunnerAction == "" {
+		return ActionResult{}, errors.New("该插件没有可用的受权执行器操作")
 	}
 	entry, err := plugin.entryPath()
 	if err != nil {
 		return ActionResult{}, err
 	}
-	if err := system.AuthorizePluginPrivilege(system.PluginPrivilegeIdentity{PluginID: plugin.ID, Action: policyAction, Tag: plugin.InstalledTag, Asset: plugin.InstalledAsset, ArchiveSHA256: plugin.ArchiveSHA256, RunnerPath: entry.name, RunnerArgs: entry.args, DeclaredActions: plugin.Permissions.ElevatedActions}); err != nil {
-		return ActionResult{}, err
-	}
-	payload, err := json.Marshal(request{Protocol: "alx/v1", Method: "run", Action: runnerAction, Params: params, Confirm: true})
+	payload, err := json.Marshal(request{Protocol: "alx/v1", Method: "run", Action: operation.RunnerAction, Params: params, Confirm: true})
 	if err != nil {
 		return ActionResult{}, err
 	}
 	output, runErr := system.RunWithPrivilegesInput(plugin.Source, entry.name, entry.args, payload)
 	return parseActionResult(output, runErr)
-}
-
-// RunPrivilegedApprovedWithPassword is the macOS variant of the host broker.
-// It intentionally remains separate so only a preflight-selected, policy-bound
-// operation can receive a one-time password.
-func (r *Registry) RunPrivilegedApprovedWithPassword(id, policyAction, runnerAction string, params map[string]string, password []byte) (ActionResult, error) {
-	plugin, err := r.Find(id)
-	if err != nil {
-		return ActionResult{}, err
-	}
-	if plugin.Online || !plugin.Enabled || !plugin.Runnable || !plugin.RequiresElevation(policyAction) {
-		return ActionResult{}, errors.New("当前插件没有可用的受控系统权限操作")
-	}
-	if plugin.DevelopmentSource {
-		return ActionResult{}, errors.New("源码开发插件不允许执行系统权限操作")
-	}
-	entry, err := plugin.entryPath()
-	if err != nil {
-		return ActionResult{}, err
-	}
-	identity := system.PluginPrivilegeIdentity{PluginID: plugin.ID, Action: policyAction, Tag: plugin.InstalledTag, Asset: plugin.InstalledAsset, ArchiveSHA256: plugin.ArchiveSHA256, RunnerPath: entry.name, RunnerArgs: entry.args, DeclaredActions: plugin.Permissions.ElevatedActions}
-	if err := system.AuthorizePluginPrivilege(identity); err != nil {
-		return ActionResult{}, err
-	}
-	payload, err := json.Marshal(request{Protocol: "alx/v1", Method: "run", Action: runnerAction, Params: params, Confirm: true})
-	if err != nil {
-		return ActionResult{}, err
-	}
-	output, runErr := system.RunWithSudoInput(plugin.Source, entry.name, entry.args, payload, password)
-	return parseActionResult(output, runErr)
-}
-
-// PrivilegeAvailability exposes only a safe readiness result for the host UI.
-// It lets a plugin show preview-only mode before a user reaches an OS prompt.
-func (r *Registry) PrivilegeAvailability(id, action string) error {
-	plugin, err := r.Find(id)
-	if err != nil {
-		return err
-	}
-	if plugin.Online || !plugin.Enabled || !plugin.Runnable || !plugin.RequiresElevation(action) {
-		return errors.New("当前插件没有可用的受控系统权限操作")
-	}
-	if plugin.DevelopmentSource {
-		return errors.New("源码开发插件不允许请求系统权限")
-	}
-	entry, err := plugin.entryPath()
-	if err != nil {
-		return err
-	}
-	return system.CheckPluginPrivilege(system.PluginPrivilegeIdentity{PluginID: plugin.ID, Action: action, Tag: plugin.InstalledTag, Asset: plugin.InstalledAsset, ArchiveSHA256: plugin.ArchiveSHA256, RunnerPath: entry.name, RunnerArgs: entry.args, DeclaredActions: plugin.Permissions.ElevatedActions})
 }
 
 func parseActionResult(output []byte, runErr error) (ActionResult, error) {
@@ -1186,15 +1163,6 @@ func decodeManifest(data []byte, source string) (Plugin, error) {
 		return Plugin{}, errors.New("setup plugin web root must be a directory inside the plugin")
 	}
 	plugin.Web.Root = root
-	seenElevated := map[string]bool{}
-	for index, action := range plugin.Permissions.ElevatedActions {
-		action = strings.TrimSpace(action)
-		if action == "" || len(action) > 96 || seenElevated[action] {
-			return Plugin{}, errors.New("setup plugin elevatedActions must contain unique action names")
-		}
-		plugin.Permissions.ElevatedActions[index] = action
-		seenElevated[action] = true
-	}
 	seenServices := map[string]bool{}
 	for index := range plugin.Services {
 		service := &plugin.Services[index]
@@ -1236,19 +1204,69 @@ func decodeManifest(data []byte, source string) (Plugin, error) {
 		}
 		seenPickers[picker.ID] = true
 	}
-	allowedCapabilities := map[string]bool{
-		HostCapabilityFinder:         true,
-		HostCapabilityRobotContext:   true,
-		HostCapabilityNetworkContext: true,
-	}
-	seenCapabilities := map[string]bool{}
-	for index, capability := range plugin.HostCapabilities {
-		capability = strings.TrimSpace(capability)
-		if !allowedCapabilities[capability] || seenCapabilities[capability] {
-			return Plugin{}, errors.New("setup plugin hostCapabilities must contain unique supported capabilities")
+	seenStatusActions := map[string]bool{}
+	for index, action := range plugin.StatusActions {
+		action = strings.TrimSpace(action)
+		if action == "" || len(action) > 96 || seenStatusActions[action] {
+			return Plugin{}, errors.New("setup plugin statusActions must contain unique action names")
 		}
-		plugin.HostCapabilities[index] = capability
-		seenCapabilities[capability] = true
+		plugin.StatusActions[index] = action
+		seenStatusActions[action] = true
+	}
+	seenMedia := map[string]bool{}
+	for index := range plugin.Media {
+		media := &plugin.Media[index]
+		media.ID = strings.TrimSpace(media.ID)
+		media.Action = strings.TrimSpace(media.Action)
+		media.ContentType = strings.TrimSpace(strings.ToLower(media.ContentType))
+		if !validID.MatchString(media.ID) || media.Action == "" || len(media.Action) > 96 || seenMedia[media.ID] || media.ContentType != "image/png" {
+			return Plugin{}, errors.New("setup plugin media requires a unique id, action and supported content type")
+		}
+		seenMedia[media.ID] = true
+	}
+	seenPrivileged := map[string]bool{}
+	for index := range plugin.PrivilegedOperations {
+		operation := &plugin.PrivilegedOperations[index]
+		operation.Action = strings.TrimSpace(operation.Action)
+		operation.RunnerAction = strings.TrimSpace(operation.RunnerAction)
+		operation.PlanAction = strings.TrimSpace(operation.PlanAction)
+		operation.Title = strings.TrimSpace(operation.Title)
+		operation.Description = strings.TrimSpace(operation.Description)
+		operation.Authorization = strings.TrimSpace(operation.Authorization)
+		if operation.Action == "" || len(operation.Action) > 96 || operation.RunnerAction == "" || len(operation.RunnerAction) > 96 || (operation.PlanAction != "" && len(operation.PlanAction) > 96) || operation.Title == "" || len(operation.Title) > 120 || seenPrivileged[operation.Action] {
+			return Plugin{}, errors.New("setup plugin privileged operation is invalid")
+		}
+		if operation.Authorization != "password" && operation.Authorization != "native" {
+			return Plugin{}, errors.New("setup plugin privileged operation authorization is invalid")
+		}
+		if len(operation.Platforms) == 0 {
+			return Plugin{}, errors.New("setup plugin privileged operation requires platforms")
+		}
+		seenPlatforms := map[string]bool{}
+		for platformIndex, platform := range operation.Platforms {
+			platform = strings.TrimSpace(platform)
+			if (platform != "linux" && platform != "darwin" && platform != "windows") || seenPlatforms[platform] {
+				return Plugin{}, errors.New("setup plugin privileged operation platforms are invalid")
+			}
+			operation.Platforms[platformIndex] = platform
+			seenPlatforms[platform] = true
+		}
+		if operation.PlanAction != "" && operation.UseLatestAudit {
+			return Plugin{}, errors.New("setup plugin privileged operation cannot combine a plan with latest audit")
+		}
+		if operation.Authorization == "password" && len(operation.Commands) == 0 {
+			return Plugin{}, errors.New("setup plugin password operation requires commands")
+		}
+		if operation.Authorization == "native" && len(operation.Commands) != 0 {
+			return Plugin{}, errors.New("setup plugin native operation must use its runner action")
+		}
+		for commandIndex := range operation.Commands {
+			command := &operation.Commands[commandIndex]
+			if err := validateCommandSpec(&CommandSpec{Program: command.Program, Args: command.Args}); err != nil {
+				return Plugin{}, errors.New("setup plugin privileged operation command is invalid")
+			}
+		}
+		seenPrivileged[operation.Action] = true
 	}
 	if !validRuntime(plugin.Runtime) {
 		return Plugin{}, errors.New("setup plugin runtime is invalid")

@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strconv"
 	"strings"
@@ -228,18 +229,18 @@ func TestCaptureWriterBuffersFailedResponseBody(t *testing.T) {
 	}
 }
 
-func newSudoActionTestServer(t *testing.T, run func(context.Context, []byte) (string, error)) (*server, string) {
+func newSudoActionTestServer(t *testing.T, run func(context.Context, []byte, string, []string) (string, error)) (*server, string) {
 	t.Helper()
 	if err := system.ConfigurePrivilegedMode("127.0.0.1", false); err != nil {
 		t.Fatal(err)
 	}
 	root := t.TempDir()
-	pluginRoot := filepath.Join(root, "alemonx-qq")
+	pluginRoot := filepath.Join(root, "fixture-system")
 	if err := os.MkdirAll(filepath.Join(pluginRoot, "web"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	key := runtime.GOOS + "-" + runtime.GOARCH
-	manifest := `{"id":"alemonx-qq","name":"QQ","version":"1.0.0","entry":{"` + key + `":"runner"},"web":{"root":"web"}}`
+	manifest := `{"id":"fixture-system","name":"Fixture","version":"1.0.0","entry":{"` + key + `":"runner"},"web":{"root":"web"},"privilegedOperations":[{"action":"prepare-runtime","title":"准备系统运行环境","description":"安装插件需要的系统运行环境。","authorization":"password","platforms":["` + runtime.GOOS + `"],"commands":[{"program":"go","args":["version"]}]}]}`
 	if err := os.WriteFile(filepath.Join(pluginRoot, "alx.json"), []byte(manifest), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -257,25 +258,25 @@ func newSudoActionTestServer(t *testing.T, run func(context.Context, []byte) (st
 	}
 	t.Cleanup(store.close)
 	return &server{
-		plugins:                  setupplugin.NewRegistry(root),
-		auth:                     identity,
-		operations:               []operationTask{},
-		events:                   newRobotEventHub(),
-		sudoAttempts:             map[string]sudoAttempt{},
-		privilegeStore:           store,
-		runNapcatAPTDependencies: run,
+		plugins:              setupplugin.NewRegistry(root),
+		auth:                 identity,
+		operations:           []operationTask{},
+		events:               newRobotEventHub(),
+		sudoAttempts:         map[string]sudoAttempt{},
+		privilegeStore:       store,
+		runPrivilegedCommand: run,
 	}, token
 }
 
 func sudoActionRequest(t *testing.T, s *server, token, remote, password string, confirm bool) *http.Request {
 	t.Helper()
 	host, _, _ := net.SplitHostPort(remote)
-	intent, err := s.privilegeStore.createIntent("alemonx-qq", system.NapCatAPTDependencyAction, "", "root", host, "password")
+	intent, err := s.privilegeStore.createIntent("fixture-system", "prepare-runtime", "", "root", host, "password")
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := fmt.Sprintf(`{"action":"napcat-install-dependencies","confirm":%t,"sudoPassword":%q,"authorizationId":%q}`, confirm, password, intent.ID)
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/setup/plugins/alemonx-qq/actions", strings.NewReader(body))
+	body := fmt.Sprintf(`{"action":"prepare-runtime","confirm":%t,"sudoPassword":%q,"authorizationId":%q}`, confirm, password, intent.ID)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/setup/plugins/fixture-system/actions", strings.NewReader(body))
 	request.RemoteAddr = remote
 	request.AddCookie(&http.Cookie{Name: authCookieName, Value: token})
 	return request
@@ -325,8 +326,23 @@ func TestAppendOperationStepUpdatesActiveDownloadLine(t *testing.T) {
 	}
 }
 
-func TestNapcatSudoActionRequiresLocalSuperAdminAndConfirmation(t *testing.T) {
-	s, token := newSudoActionTestServer(t, func(context.Context, []byte) (string, error) {
+func TestActiveSetupPluginOperationUsesPluginScope(t *testing.T) {
+	operations := []operationTask{
+		{ID: "finished", Action: "setup:alemonx-qq:luckylillia-install", Status: "completed"},
+		{ID: "other", Action: "setup:alemonx-network:plan", Status: "running"},
+		{ID: "active", Action: "setup:alemonx-qq:luckylillia-install", Status: "running"},
+	}
+	active := activeSetupPluginOperation(operations, "alemonx-qq")
+	if active == nil || active.ID != "active" {
+		t.Fatalf("active QQ operation = %#v", active)
+	}
+	if active := activeSetupPluginOperation(operations, "missing"); active != nil {
+		t.Fatalf("missing plugin operation = %#v", active)
+	}
+}
+
+func TestManifestSudoActionRequiresLocalSuperAdminAndConfirmation(t *testing.T) {
+	s, token := newSudoActionTestServer(t, func(context.Context, []byte, string, []string) (string, error) {
 		t.Fatal("sudo executor must not run when the request is rejected")
 		return "", nil
 	})
@@ -361,9 +377,12 @@ func TestNapcatSudoActionRequiresLocalSuperAdminAndConfirmation(t *testing.T) {
 	}
 }
 
-func TestNapcatSudoActionUsesTransientPasswordAndLocksAfterThreeFailures(t *testing.T) {
+func TestManifestSudoActionUsesTransientPasswordAndLocksAfterThreeFailures(t *testing.T) {
 	var received []byte
-	s, token := newSudoActionTestServer(t, func(_ context.Context, password []byte) (string, error) {
+	s, token := newSudoActionTestServer(t, func(_ context.Context, password []byte, program string, args []string) (string, error) {
+		if program != "go" || !reflect.DeepEqual(args, []string{"version"}) {
+			t.Fatalf("command = %s %#v", program, args)
+		}
 		received = password
 		return "", system.ErrSudoPasswordInvalid
 	})
@@ -393,13 +412,13 @@ func TestNapcatSudoActionUsesTransientPasswordAndLocksAfterThreeFailures(t *test
 	}
 }
 
-func TestNapcatSudoActionRequiresAuthorizationIntent(t *testing.T) {
-	s, token := newSudoActionTestServer(t, func(context.Context, []byte) (string, error) {
+func TestManifestSudoActionRequiresAuthorizationIntent(t *testing.T) {
+	s, token := newSudoActionTestServer(t, func(context.Context, []byte, string, []string) (string, error) {
 		t.Fatal("sudo executor must not run without a preflight intent")
 		return "", nil
 	})
-	body := `{"action":"napcat-install-dependencies","confirm":true,"sudoPassword":"not-forwarded"}`
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/setup/plugins/alemonx-qq/actions", strings.NewReader(body))
+	body := `{"action":"prepare-runtime","confirm":true,"sudoPassword":"not-forwarded"}`
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/setup/plugins/fixture-system/actions", strings.NewReader(body))
 	request.RemoteAddr = "127.0.0.1:4242"
 	request.AddCookie(&http.Cookie{Name: authCookieName, Value: token})
 	recorder := httptest.NewRecorder()
@@ -410,7 +429,7 @@ func TestNapcatSudoActionRequiresAuthorizationIntent(t *testing.T) {
 }
 
 func TestPrivilegePreflightExplainsRemoteRestriction(t *testing.T) {
-	s, token := newSudoActionTestServer(t, func(context.Context, []byte) (string, error) { return "", nil })
+	s, token := newSudoActionTestServer(t, func(context.Context, []byte, string, []string) (string, error) { return "", nil })
 	t.Setenv("ALX_PRIVILEGED_MODE", "local")
 	if err := system.ConfigurePrivilegedMode("127.0.0.1", false); err != nil {
 		t.Fatal(err)
@@ -419,7 +438,7 @@ func TestPrivilegePreflightExplainsRemoteRestriction(t *testing.T) {
 		t.Setenv("ALX_PRIVILEGED_MODE", "disabled")
 		_ = system.ConfigurePrivilegedMode("127.0.0.1", false)
 	})
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/system/privileged/preflight", strings.NewReader(`{"pluginId":"alemonx-qq","action":"napcat-install-dependencies"}`))
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/system/privileged/preflight", strings.NewReader(`{"pluginId":"fixture-system","action":"prepare-runtime"}`))
 	request.RemoteAddr = "203.0.113.10:4242"
 	request.AddCookie(&http.Cookie{Name: authCookieName, Value: token})
 	recorder := httptest.NewRecorder()
@@ -445,7 +464,7 @@ func TestLocalPrivilegeRequestRejectsProxyHeaders(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := newStatefulTestServer()
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/system/privileged/napcat-dependencies", nil)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/system/privileged/preflight", nil)
 	request.RemoteAddr = "127.0.0.1:1234"
 	if !s.privilegedRequestAllowed(request) {
 		t.Fatal("direct loopback request must be local")
@@ -457,7 +476,7 @@ func TestLocalPrivilegeRequestRejectsProxyHeaders(t *testing.T) {
 }
 
 func TestEnabledPrivilegeModeAllowsRemoteAdministratorRequest(t *testing.T) {
-	s, _ := newSudoActionTestServer(t, func(context.Context, []byte) (string, error) { return "", nil })
+	s, _ := newSudoActionTestServer(t, func(context.Context, []byte, string, []string) (string, error) { return "", nil })
 	t.Setenv("ALX_PRIVILEGED_MODE", "enabled")
 	if err := system.ConfigurePrivilegedMode("0.0.0.0", true); err != nil {
 		t.Fatal(err)
@@ -466,7 +485,7 @@ func TestEnabledPrivilegeModeAllowsRemoteAdministratorRequest(t *testing.T) {
 		t.Setenv("ALX_PRIVILEGED_MODE", "disabled")
 		_ = system.ConfigurePrivilegedMode("127.0.0.1", false)
 	})
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/system/privileged/napcat-dependencies", nil)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/system/privileged/preflight", nil)
 	request.RemoteAddr = "203.0.113.10:4242"
 	if !s.privilegedRequestAllowed(request) {
 		t.Fatal("enabled mode must allow a remote administrator request")
@@ -583,13 +602,13 @@ func TestEnvironmentInstallRequiresConfirmationAndUsesFixedCheckID(t *testing.T)
 	}
 }
 
-func TestPluginContextCapabilityIsDeclaredAndSanitized(t *testing.T) {
+func TestPluginContextCapabilityIsBuiltInAndSanitized(t *testing.T) {
 	root := t.TempDir()
 	pluginRoot := filepath.Join(root, "context-plugin")
 	if err := os.MkdirAll(pluginRoot, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	manifest := `{"id":"context-plugin","name":"Context","version":"1.0.0","web":{"root":"web"},"hostCapabilities":["robot-context","network-context"]}`
+	manifest := `{"id":"context-plugin","name":"Context","version":"1.0.0","web":{"root":"web"}}`
 	if err := os.WriteFile(filepath.Join(pluginRoot, "alx.json"), []byte(manifest), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -612,6 +631,33 @@ func TestPluginContextCapabilityIsDeclaredAndSanitized(t *testing.T) {
 	s.systemCapabilityContextHandler(denied, httptest.NewRequest(http.MethodGet, "/api/v1/system/capabilities/context?pluginId=context-plugin&keys=finder", nil))
 	if denied.Code != http.StatusBadRequest {
 		t.Fatalf("unsupported context = %d %s", denied.Code, denied.Body.String())
+	}
+}
+
+func TestSystemCapabilityCatalogAndPluginIdentity(t *testing.T) {
+	root := t.TempDir()
+	pluginRoot := filepath.Join(root, "capability-plugin")
+	if err := os.MkdirAll(pluginRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pluginRoot, "alx.json"), []byte(`{"id":"capability-plugin","name":"Capability","version":"1.0.0","web":{"root":"web"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := &server{plugins: setupplugin.NewRegistry(root)}
+	response := httptest.NewRecorder()
+	s.systemCapabilitiesHandler(response, httptest.NewRequest(http.MethodGet, "/api/v1/system/capabilities", nil))
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "network.fetch") || !strings.Contains(response.Body.String(), "finder.pick") {
+		t.Fatalf("catalog = %d %s", response.Code, response.Body.String())
+	}
+	response = httptest.NewRecorder()
+	s.systemCapabilityInfoHandler(response, httptest.NewRequest(http.MethodGet, "/api/v1/system/capabilities/info?pluginId=missing", nil))
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("unknown plugin capability = %d %s", response.Code, response.Body.String())
+	}
+	response = httptest.NewRecorder()
+	s.systemCapabilityInfoHandler(response, httptest.NewRequest(http.MethodGet, "/api/v1/system/capabilities/info?pluginId=capability-plugin", nil))
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "architecture") {
+		t.Fatalf("system info = %d %s", response.Code, response.Body.String())
 	}
 }
 
@@ -1614,7 +1660,7 @@ func TestSetupPluginStatusIsReadOnlyAndCoalesced(t *testing.T) {
 		t.Fatal(err)
 	}
 	key := runtime.GOOS + "-" + runtime.GOARCH
-	manifest := `{"id":"fixture","name":"Fixture","version":"1.0.0","entry":{"` + key + `":"runner"},"web":{"root":"web"}}`
+	manifest := `{"id":"fixture","name":"Fixture","version":"1.0.0","entry":{"` + key + `":"runner"},"web":{"root":"web"},"statusActions":["status"]}`
 	if err := os.WriteFile(filepath.Join(pluginRoot, "alx.json"), []byte(manifest), 0o600); err != nil {
 		t.Fatal(err)
 	}

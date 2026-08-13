@@ -27,6 +27,8 @@ type localServiceView struct {
 	Reachable bool   `json:"reachable"`
 	ProxyURL  string `json:"proxyUrl"`
 	Embed     bool   `json:"embed"`
+	WebSocket bool   `json:"websocket"`
+	Error     string `json:"error,omitempty"`
 }
 
 // localWebSocketFrame keeps the original WebSocket frame type. The standard
@@ -68,7 +70,12 @@ func (s *server) localServicesHandler(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		for _, service := range plugin.Services {
-			items = append(items, localServiceView{PluginID: plugin.ID, ID: service.ID, Name: service.Name, Reachable: localServiceReachable(r.Context(), service), ProxyURL: localServiceURL(plugin.ID, service.ID), Embed: service.Embed})
+			reachable := localServiceReachable(r.Context(), service)
+			item := localServiceView{PluginID: plugin.ID, ID: service.ID, Name: service.Name, Reachable: reachable, ProxyURL: localServiceURL(plugin.ID, service.ID), Embed: service.Embed, WebSocket: service.WebSocket}
+			if !reachable {
+				item.Error = "服务未启动或无法连接"
+			}
+			items = append(items, item)
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})

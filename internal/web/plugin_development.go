@@ -72,20 +72,30 @@ type pluginDevelopmentSession struct {
 }
 
 type pluginDevelopmentView struct {
-	ID             string    `json:"id"`
-	Name           string    `json:"name"`
-	Source         string    `json:"source"`
-	Registered     bool      `json:"registered"`
-	Running        bool      `json:"running"`
-	State          string    `json:"state"`
-	Busy           bool      `json:"busy"`
-	Runner         string    `json:"runner,omitempty"`
-	WebMode        string    `json:"webMode,omitempty"`
-	BuildAvailable bool      `json:"buildAvailable"`
-	WebURL         string    `json:"webUrl,omitempty"`
-	WebPort        int       `json:"webPort,omitempty"`
-	LastError      string    `json:"lastError,omitempty"`
-	UpdatedAt      time.Time `json:"updatedAt"`
+	ID             string                         `json:"id"`
+	Name           string                         `json:"name"`
+	Source         string                         `json:"source"`
+	Registered     bool                           `json:"registered"`
+	Running        bool                           `json:"running"`
+	State          string                         `json:"state"`
+	Busy           bool                           `json:"busy"`
+	Runner         string                         `json:"runner,omitempty"`
+	WebMode        string                         `json:"webMode,omitempty"`
+	BuildAvailable bool                           `json:"buildAvailable"`
+	WebURL         string                         `json:"webUrl,omitempty"`
+	WebPort        int                            `json:"webPort,omitempty"`
+	SourceType     string                         `json:"sourceType"`
+	Privileges     []string                       `json:"privileges,omitempty"`
+	Services       []pluginDevelopmentServiceView `json:"services,omitempty"`
+	LastError      string                         `json:"lastError,omitempty"`
+	UpdatedAt      time.Time                      `json:"updatedAt"`
+}
+
+type pluginDevelopmentServiceView struct {
+	ID      string `json:"id"`
+	Port    int    `json:"port,omitempty"`
+	Running bool   `json:"running"`
+	Restart string `json:"restart,omitempty"`
 }
 
 type pluginDevelopmentManager struct {
@@ -154,7 +164,10 @@ func (m *pluginDevelopmentManager) viewLocked(session *pluginDevelopmentSession)
 	if state == "" {
 		state = "registered"
 	}
-	view := pluginDevelopmentView{ID: session.plugin.ID, Name: session.plugin.Name, Source: session.source, Registered: true, Running: session.running, State: state, Busy: session.operation != "", LastError: session.lastError, UpdatedAt: session.updatedAt}
+	view := pluginDevelopmentView{ID: session.plugin.ID, Name: session.plugin.Name, Source: session.source, SourceType: "source", Registered: true, Running: session.running, State: state, Busy: session.operation != "", LastError: session.lastError, UpdatedAt: session.updatedAt}
+	for _, operation := range session.plugin.PrivilegedOperations {
+		view.Privileges = append(view.Privileges, operation.Action)
+	}
 	if session.plugin.Development != nil {
 		view.Runner = session.plugin.Development.Runtime
 		if web := session.plugin.Development.Web; web != nil {
@@ -165,6 +178,17 @@ func (m *pluginDevelopmentManager) viewLocked(session *pluginDevelopmentSession)
 	if session.web != nil {
 		view.WebPort = session.web.port
 		view.WebURL = developmentWebURL(session.plugin.ID)
+	}
+	for _, declaration := range session.plugin.Development.Services {
+		service := pluginDevelopmentServiceView{ID: declaration.ID, Restart: declaration.Restart}
+		for _, known := range session.plugin.Services {
+			if known.ID == declaration.ID {
+				service.Port = known.Port
+				break
+			}
+		}
+		service.Running = session.services[declaration.ID] != nil
+		view.Services = append(view.Services, service)
 	}
 	return view
 }
