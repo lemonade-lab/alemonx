@@ -47,6 +47,22 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	host, arguments, err := option(arguments, "--host", env("alx_BIND", "0.0.0.0"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	redisPort, arguments, err := option(arguments, "--redis-port", env("alx_REDIS_PORT", ""))
+	if err != nil {
+		log.Fatal(err)
+	}
+	redisOff, arguments := flagPresent(arguments, "--redis-off")
+	if strings.TrimSpace(redisPort) != "" {
+		value, parseErr := strconv.Atoi(strings.TrimSpace(redisPort))
+		if parseErr != nil || value < 1 || value > 65535 {
+			log.Fatal("--redis-port 需要在 1-65535 之间")
+		}
+		redisPort = strconv.Itoa(value)
+	}
 	mcpPort, arguments, err := option(arguments, "--mcp-port", env("MCP_PORT", "17391"))
 	if err != nil {
 		log.Fatal(err)
@@ -114,7 +130,7 @@ func main() {
 				usage()
 				return
 			}
-			result, err := system.InstallService(port)
+			result, err := system.InstallService(port, host)
 			if err != nil {
 				log.Fatal(err)
 			}
@@ -266,11 +282,10 @@ func main() {
 			log.Fatal("ALX_DEPLOYMENT=production 要求先启用本地身份认证（alx auth enable）")
 		}
 	}
-	bind := env("alx_BIND", "127.0.0.1")
-	if err := system.ConfigurePrivilegedMode(bind, strings.EqualFold(strings.TrimSpace(os.Getenv("ALX_DEPLOYMENT")), "production")); err != nil {
+	if err := system.ConfigurePrivilegedMode(host, strings.EqualFold(strings.TrimSpace(os.Getenv("ALX_DEPLOYMENT")), "production")); err != nil {
 		log.Fatal(err)
 	}
-	serve(bind, port)
+	serve(host, port, redisPort, redisOff)
 }
 
 func authCommand(arguments []string, confirmed bool, account, password, confirmation string) {
@@ -311,8 +326,14 @@ func authCommand(arguments []string, confirmed bool, account, password, confirma
 	usage()
 }
 
-func serve(host, port string) {
-	runtime := web.NewServerRuntime(Version, staticFiles, templateFiles)
+func serve(host, port, redisPort string, redisOff bool) {
+	options := web.ServerOptions{RedisDisabled: redisOff}
+	if strings.TrimSpace(redisPort) != "" {
+		if value, err := strconv.Atoi(strings.TrimSpace(redisPort)); err == nil {
+			options.RedisPort = value
+		}
+	}
+	runtime := web.NewServerRuntimeWithOptions(Version, staticFiles, options, templateFiles)
 	listener, err := net.Listen("tcp", host+":"+port)
 	if err != nil {
 		log.Fatal(err)
@@ -348,8 +369,21 @@ func serve(host, port string) {
 	}()
 
 	fmt.Print(startupMessage(Version, host, port))
+	if !isLoopbackHost(host) {
+		fmt.Printf("\n  注意：已监听 %s，局域网或公网可直接访问。\n  强烈建议先执行 alx auth enable 开启身份认证，并配合防火墙限制访问来源。\n", host)
+	}
 	if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
+	}
+}
+
+// isLoopbackHost reports whether the bind host only accepts local connections.
+func isLoopbackHost(host string) bool {
+	switch strings.ToLower(strings.TrimSpace(host)) {
+	case "", "127.0.0.1", "::1", "localhost":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -548,11 +582,15 @@ func flagPresent(arguments []string, name string) (bool, []string) {
 
 func usage() {
 	fmt.Println(`用法:
-  alx [serve] --port 17390           启动浏览器引导
+  alx [serve] --port 17390           启动浏览器引导（默认监听 0.0.0.0，请先 alx auth enable）
+      --host 127.0.0.1               仅本机可访问
+      --host 0.0.0.0                 监听所有网卡（默认，局域网/公网可直接访问）
+      --redis-port <端口>             调整临时 Redis 端口（默认 6379，会持久化到配置）
+      --redis-off                     禁止启动临时 Redis
 
   alx mcp                            启动本机 stdio MCP 服务
   MCP_TOKEN=... alx mcp-http         启动受保护的本机 HTTP MCP 服务
-  alx install --port 17390           注册为后台常驻服务
+  alx install --port 17390 [--host 0.0.0.0]   注册为后台常驻服务（默认 0.0.0.0）
   alx open [--port 17390]            打开浏览器
   alx update                         检查并更新 alx
   alx status                         查看后台服务状态

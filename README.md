@@ -39,6 +39,28 @@ chmod +x alx
 
 Windows、macOS 与 Linux 支持在工作台中一键注册后台服务。FreeBSD 提供前台运行与自动更新；请使用系统自身的 rc.d、daemon 或服务管理方案进行常驻托管。FreeBSD 的 Node.js 请使用系统包管理器安装，工作台不会自动下载 Node 运行时。
 
+## 临时 Redis
+
+工作台内置一个纯 Go 的内存版 Redis（`miniredis`），供没有独立 Redis 条件的机器人应用在本地调试时使用。在「设置 → Redis」中可以查看状态、启动/停止服务、修改端口，并配置工作台启动时自动开启。数据只保存在内存中，工作台退出后清空，不建议存放重要数据。
+
+启动时若配置的端口已被占用：如果端口上已经是可用的 Redis，工作台会跳过启动并直接复用该服务；如果是其他程序占用，则会提示错误而不会误用。
+
+命令行也可以控制临时 Redis：
+
+```bash
+alx --redis-port 6380     # 调整临时 Redis 端口（会保存到配置）
+alx --redis-off           # 禁止启动临时 Redis（设置页可重新启用）
+```
+
+工作台默认监听 `0.0.0.0`，`http://服务器IP:17390` 可直接公网访问（历史版本默认只监听 `127.0.0.1`，所以才需要 nginx 反向代理）。请先开启身份认证：
+
+```bash
+alx auth enable --account admin --password '你的密码' --confirm-password '你的密码'
+alx --port 17390
+```
+
+只想本机访问时用 `alx --host 127.0.0.1`；`alx install` 同样支持 `--host`，详见 [命令行文档](docs/cli.md)。
+
 ## 操作可控
 
 完整能力范围与权限边界见 [MCP 控制面文档](docs/mcp.md)。

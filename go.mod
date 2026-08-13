@@ -3,12 +3,14 @@ module alemonx
 go 1.23.0
 
 require (
+	github.com/alicebob/miniredis/v2 v2.38.0
 	github.com/fsnotify/fsnotify v1.8.0
 	github.com/gin-gonic/gin v1.11.0
 )
 
 require (
 	github.com/ncruces/go-strftime v0.1.9 // indirect
+	github.com/yuin/gopher-lua v1.1.1 // indirect
 	golang.org/x/exp v0.0.0-20230315142452-642cacee5cc0 // indirect
 )
 

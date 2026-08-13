@@ -35,8 +35,10 @@ import (
 	"alemonx/internal/agent"
 	"alemonx/internal/ai"
 	"alemonx/internal/catalog"
+	"alemonx/internal/githubauth"
 	"alemonx/internal/logging"
 	"alemonx/internal/project"
+	"alemonx/internal/redis"
 	"alemonx/internal/releases"
 	"alemonx/internal/robot"
 	"alemonx/internal/setupplugin"
@@ -234,6 +236,9 @@ type developmentProcess struct {
 	// PGID is the process-group id created for the command (unix: its own pid).
 	// Persisted so an orphaned node can be killed even after alx restarts.
 	PGID int
+	// Cleanup releases process-owned resources (such as a temporary sandbox
+	// config) after the process exits.
+	Cleanup func()
 }
 
 // persistedProcess is the on-disk marker for a supervised robot process. It
@@ -364,6 +369,7 @@ type server struct {
 	sudoAttempts          map[string]sudoAttempt
 	runPrivilegedCommand  func(context.Context, []byte, string, []string) (string, error)
 	installEnvironment    func(context.Context, string) (string, error)
+	redisManager          *redis.Manager
 }
 
 type pluginStatusSnapshot struct {
@@ -544,6 +550,9 @@ func (r *ServerRuntime) Shutdown(ctx context.Context) error {
 			}
 		}
 		s.privilegeStore.close()
+		if s.redisManager != nil {
+			s.redisManager.Close()
+		}
 		select {
 		case <-ctx.Done():
 			if shutdownErr == nil {
@@ -610,28 +619,46 @@ func NewServer(version string, staticFiles fs.FS, templateFiles ...fs.FS) http.H
 	// A bare handler has no lifecycle hook for stopping background workers.
 	// Keep it suitable for embedding and tests; executable entrypoints must use
 	// NewServerRuntime and call Shutdown during process termination.
-	return newServerRuntimeWithAuth(version, staticFiles, identity, false, templateFiles...).Handler
+	return newServerRuntimeWithAuth(version, staticFiles, identity, false, ServerOptions{}, templateFiles...).Handler
+}
+
+// ServerOptions carries process-level overrides that are applied once at
+// startup, such as command-line Redis settings.
+type ServerOptions struct {
+	// RedisPort overrides the temporary Redis port when non-zero.
+	RedisPort int
+	// RedisDisabled forbids starting the temporary Redis.
+	RedisDisabled bool
 }
 
 func NewServerRuntime(version string, staticFiles fs.FS, templateFiles ...fs.FS) *ServerRuntime {
+	if _, err := access.New(); err != nil {
+		panic(err)
+	}
+	return NewServerRuntimeWithOptions(version, staticFiles, ServerOptions{}, templateFiles...)
+}
+
+// NewServerRuntimeWithOptions starts a runtime with process-level overrides,
+// keeping the variadic template files last for callers.
+func NewServerRuntimeWithOptions(version string, staticFiles fs.FS, options ServerOptions, templateFiles ...fs.FS) *ServerRuntime {
 	identity, err := access.New()
 	if err != nil {
 		panic(err)
 	}
-	return newServerRuntimeWithAuth(version, staticFiles, identity, true, templateFiles...)
+	return newServerRuntimeWithAuth(version, staticFiles, identity, true, options, templateFiles...)
 }
 
 // NewServerWithAuth permits tests and embedders to provide an isolated auth
 // store instead of reading the current user's alx configuration.
 func NewServerWithAuth(version string, staticFiles fs.FS, identity *access.Manager, templateFiles ...fs.FS) http.Handler {
-	return newServerRuntimeWithAuth(version, staticFiles, identity, false, templateFiles...).Handler
+	return newServerRuntimeWithAuth(version, staticFiles, identity, false, ServerOptions{}, templateFiles...).Handler
 }
 
 func NewServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *access.Manager, templateFiles ...fs.FS) *ServerRuntime {
-	return newServerRuntimeWithAuth(version, staticFiles, identity, true, templateFiles...)
+	return newServerRuntimeWithAuth(version, staticFiles, identity, true, ServerOptions{}, templateFiles...)
 }
 
-func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *access.Manager, startBackground bool, templateFiles ...fs.FS) *ServerRuntime {
+func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *access.Manager, startBackground bool, options ServerOptions, templateFiles ...fs.FS) *ServerRuntime {
 	// Rehydrate command paths on every service start so a managed Node remains
 	// usable after restart without writing to the machine-wide PATH.
 	system.RefreshCommandEnvironment("node", "npm", "npx", "git", "docker")
@@ -694,6 +721,17 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	downloadBroker.setRegistry(plugins)
 	plugins.SetRunnerEnvironmentProvider(downloadBroker.environment)
 	s := &server{version: version, assets: assets, static: http.FileServer(http.FS(assets)), checker: system.NewChecker(), network: networkManager, plugins: plugins, auth: identity, ai: aiManager, agentSessions: sessionStore, agentTaskStore: taskStore, agentTasks: tasks, taskService: &agent.TaskService{Manager: tasks}, goalStore: goalStore, opsStore: opsStore, opsProjects: opsProjects, opsBackground: startBackground, opsPaused: opsStartupErr != nil, goalSchedulerStop: make(chan struct{}), goalRunning: map[string]bool{}, agentConfirms: newAgentConfirmManager(), development: map[string]developmentProcess{}, webviewRuntimes: map[string]*webViewRuntime{}, stopping: map[string]bool{}, consoleCache: map[string]consoleSnapshot{}, outputBuffers: map[string]*operationOutputBuffer{}, directoryRoots: managedDirectoryRoots(), events: newRobotEventHub(), eventGateway: newEventGateway(), operationEvents: operationEvents, operations: operationEvents.snapshot(), opsEvents: newOpsEventHub(), mcpEvents: newMCPEventHub(), mcpMonitorStop: make(chan struct{}), pluginEventsStop: make(chan struct{}), updateMonitorStop: make(chan struct{}), updateState: updateStatusState{Update: releases.Update{Current: version}}, nodeID: fmt.Sprintf("%s-%d", hostname(), os.Getpid()), pluginStatusCache: map[string]*pluginStatusSnapshot{}, hostContexts: map[string]pluginHostContext{}, privilegeStore: privileges, pluginDownloadBroker: downloadBroker, sudoAttempts: map[string]sudoAttempt{}, runPrivilegedCommand: system.RunSudoCommand, installEnvironment: system.InstallEnvironment}
+	s.redisManager = redis.NewManager(filepath.Join(filepath.Dir(taskStore.TasksDir()), "alx-redis.json"))
+	if options.RedisPort > 0 || options.RedisDisabled {
+		status := s.redisManager.Status()
+		port := status.Port
+		if options.RedisPort > 0 {
+			port = options.RedisPort
+		}
+		if err := s.redisManager.Configure(port, status.AutoStart, options.RedisDisabled); err != nil {
+			log.Printf("应用 Redis 启动参数失败：%v", err)
+		}
+	}
 	s.pluginDevelopment = newPluginDevelopmentManager(plugins, filepath.Join(filepath.Dir(taskStore.TasksDir()), "setup-plugins", "development.json"))
 	if opsStartupErr != nil {
 		log.Printf("AI 运维 SQLite 初始化失败，已回退 JSON 并暂停自动维护: %v", opsStartupErr)
@@ -905,6 +943,13 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 		s.startPluginEventBridge()
 		s.startMCPStatusMonitor()
 		s.startUpdateStatusMonitor()
+		if redisStatus := s.redisManager.Status(); redisStatus.AutoStart && !redisStatus.Disabled {
+			go func() {
+				if err := s.redisManager.Start(); err != nil {
+					log.Printf("临时 Redis 自动启动失败：%v", err)
+				}
+			}()
+		}
 	}
 	if len(templateFiles) > 0 {
 		templates, err := fs.Sub(templateFiles[0], "templates")
@@ -954,6 +999,7 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	mux.HandleFunc("/api/v1/system/service", s.systemServiceHandler)
 	mux.HandleFunc("/api/v1/system/environment/install", s.environmentInstallHandler)
 	mux.HandleFunc("/api/v1/system/network", s.systemNetworkHandler)
+	mux.HandleFunc("/api/v1/system/redis", s.systemRedisHandler)
 	mux.HandleFunc(pluginDownloadBrokerPath, s.pluginDownloadBrokerHandler)
 	mux.HandleFunc("/api/v1/system/plugin-download-cache", s.pluginDownloadCacheHandler)
 	mux.HandleFunc("/api/v1/system/mcp", s.systemMCPHandler)
@@ -1015,6 +1061,12 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	mux.HandleFunc("/api/v1/robot/package-config", s.robotPackageConfigHandler)
 	mux.HandleFunc("/api/v1/robot/login", s.robotLoginHandler)
 	mux.HandleFunc("/api/v1/robot/onebot-sync", s.robotOneBotSyncHandler)
+	mux.HandleFunc("/api/v1/github/auth/status", s.githubAuthStatusHandler)
+	mux.HandleFunc("/api/v1/github/auth/device", s.githubAuthDeviceHandler)
+	mux.HandleFunc("/api/v1/github/auth/poll", s.githubAuthPollHandler)
+	mux.HandleFunc("/api/v1/github/auth/client-id", s.githubAuthClientIDHandler)
+	mux.HandleFunc("/api/v1/github/auth/token", s.githubAuthTokenHandler)
+	mux.HandleFunc("/api/v1/github/auth/logout", s.githubAuthLogoutHandler)
 	mux.HandleFunc("/api/v1/robot/manifest", s.robotManifestHandler)
 	mux.HandleFunc("/api/v1/robot/git-init", s.robotGitInitHandler)
 	mux.HandleFunc("/api/v1/robot/git", s.robotGitHandler)
@@ -2392,7 +2444,7 @@ func (s *server) privilegedAuditHandler(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *server) handleManifestSudoAction(w http.ResponseWriter, r *http.Request, pluginID string, input setupPluginActionRequest) {
-	if input.SudoPassword == nil || strings.TrimSpace(*input.SudoPassword) == "" {
+	if os.Geteuid() != 0 && (input.SudoPassword == nil || strings.TrimSpace(*input.SudoPassword) == "") {
 		writeError(w, http.StatusBadRequest, "请输入当前系统账户的 sudo 密码。")
 		return
 	}
@@ -2442,9 +2494,12 @@ func (s *server) handleManifestSudoAction(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusTooManyRequests, err.Error())
 		return
 	}
-	password := []byte(*input.SudoPassword)
-	*input.SudoPassword = ""
-	input.SudoPassword = nil
+	var password []byte
+	if input.SudoPassword != nil {
+		password = []byte(*input.SudoPassword)
+		*input.SudoPassword = ""
+		input.SudoPassword = nil
+	}
 	created := operationTask{ID: "setup-" + time.Now().Format("20060102150405.000000000"), Root: "", Action: "setup:" + pluginID + ":" + input.Action, Status: "running", Output: "等待管理员授权…", CreatedAt: time.Now()}
 	s.mu.Lock()
 	s.operations = append([]operationTask{created}, s.operations...)
@@ -4303,6 +4358,26 @@ func (s *server) robotTasksHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		configureManagedProcess(command)
+		sandboxCleanup := func() {}
+		// testone 一律以无 login 模式启动：临时复制一份配置并注释掉
+		// login/platform/serverPort，通过项目内相对路径的 CFG_PATH 覆盖
+		// （alemonjs 用 path.join(cwd, CFG_PATH) 解析），用户配置
+		// alemon.config.yaml 始终不被修改；进程退出时清理临时文件。
+		if readyKind == "test" {
+			sandboxPath, cleanup, sandboxErr := s.robots.SandboxConfig(input.Root)
+			if sandboxErr != nil {
+				writeError(w, http.StatusBadRequest, "准备无 login 测试配置失败："+sandboxErr.Error())
+				return
+			}
+			sandboxCleanup = cleanup
+			if sandboxPath != "" {
+				if command.Env == nil {
+					command.Env = os.Environ()
+				}
+				command.Env = append(command.Env, "CFG_PATH="+sandboxPath)
+				log.Printf("[ROBOT %s] testone 使用无 login 沙盒配置 %s", created.ID, sandboxPath)
+			}
+		}
 		// Route stdout/stderr through a writer instead of StdoutPipe. exec copies
 		// process output into the writer on its own goroutine, so when the
 		// process exits the copy ends with a clean EOF rather than the pipe
@@ -4314,7 +4389,7 @@ func (s *server) robotTasksHandler(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "运行启动失败："+err.Error())
 			return
 		}
-		if !s.registerDevelopment(input.Root, created.ID, created.Action, command, processGroupID(command)) {
+		if !s.registerDevelopment(input.Root, created.ID, created.Action, command, processGroupID(command), sandboxCleanup) {
 			_ = command.Process.Kill()
 			writeError(w, http.StatusConflict, "当前目录已有前台或开发进程正在运行；请先停止后再启动。")
 			return
@@ -4390,6 +4465,10 @@ func (s *server) addOperation(created operationTask) {
 	s.publishRobotEvent(robotEvent{Type: "task", TaskID: created.ID, Task: &created})
 }
 
+// startTestSandbox launches the isolated testone sandbox: it probes a free
+// loopback port, builds a temporary no-login config (via CFG_PATH) that also
+// carries that port, and tracks the process separately from the robot's
+// original dev/app process. Closing the test window stops it.
 // watchPortReadiness keeps the browser from polling a port while a dev/app
 // process boots. It emits one terminal readiness event for the task; the
 // process lifecycle itself remains represented by ordinary task events. kind
@@ -4746,13 +4825,13 @@ func (s *server) developmentRunning(root string) bool {
 	return running
 }
 
-func (s *server) registerDevelopment(root, taskID, action string, command *exec.Cmd, pgid int) bool {
+func (s *server) registerDevelopment(root, taskID, action string, command *exec.Cmd, pgid int, cleanup func()) bool {
 	s.mu.Lock()
 	if _, running := s.development[root]; running {
 		s.mu.Unlock()
 		return false
 	}
-	s.development[root] = developmentProcess{TaskID: taskID, Command: command, PGID: pgid}
+	s.development[root] = developmentProcess{TaskID: taskID, Command: command, PGID: pgid, Cleanup: cleanup}
 	s.mu.Unlock()
 	s.recordProcess(root, taskID, pgid, action)
 	return true
@@ -4930,17 +5009,34 @@ func (w *operationWriter) Write(data []byte) (int, error) {
 }
 
 func (s *server) watchDevelopmentTask(id, root, action string, command *exec.Cmd) {
-	err := command.Wait()
+	waitResult := make(chan error, 1)
+	go func() { waitResult <- command.Wait() }()
+	err, waitTimedOut := s.waitForManagedProcessExit(root, waitResult)
 	s.flushOperationOutput(id)
+	if waitTimedOut {
+		// The direct child may have exited while a descendant kept the output
+		// pipe open, so command.Wait() never returned. Try one more tree kill
+		// and then finalize the stop task; leaving the UI on "正在停止" forever
+		// is worse than reporting the stop as done with a note.
+		s.mu.RLock()
+		current, active := s.development[root]
+		s.mu.RUnlock()
+		if active && current.TaskID == id {
+			_ = forceStopManagedProcess(current.Command)
+		}
+		s.appendOperationOutput(id, "等待进程退出超时，已结束停止状态。\n")
+	}
 
 	finished := time.Now()
 	s.mu.Lock()
 	stopped := s.stopping[root]
 	wasManaged := false
+	var processCleanup func()
 	if current, active := s.development[root]; active && current.TaskID == id {
 		delete(s.development, root)
 		delete(s.stopping, root)
 		wasManaged = true
+		processCleanup = current.Cleanup
 	}
 	// A pending stop task only becomes "completed" once the process has really
 	// exited, which is exactly the moment we reach here.
@@ -4972,11 +5068,48 @@ func (s *server) watchDevelopmentTask(id, root, action string, command *exec.Cmd
 		break
 	}
 	s.mu.Unlock()
+	if processCleanup != nil {
+		processCleanup()
+	}
 	if wasManaged {
 		s.forgetProcess(root, id)
 	}
 	if snapshot.ID != "" {
 		s.publishRobotEvent(robotEvent{Type: "task", TaskID: snapshot.ID, Task: &snapshot})
+	}
+}
+
+// managedProcessStopTimeout bounds how long a stop task may wait for the
+// supervised process to exit. A graceful signal plus the force-stop fallback
+// normally finish in seconds; the bound exists so a Windows descendant that
+// inherited the output pipe can never leave the UI stuck on "正在停止" forever.
+// managedProcessStopTimeout is a variable so tests can shorten the bound.
+var managedProcessStopTimeout = 10 * time.Second
+
+// waitForManagedProcessExit waits for the supervised process to exit, but
+// starts a deadline as soon as a stop was requested. When the deadline passes
+// the caller finalizes the task instead of blocking on command.Wait() forever.
+func (s *server) waitForManagedProcessExit(root string, waitResult <-chan error) (error, bool) {
+	ticker := time.NewTicker(300 * time.Millisecond)
+	defer ticker.Stop()
+	var stopDeadline time.Time
+	for {
+		select {
+		case err := <-waitResult:
+			return err, false
+		case <-ticker.C:
+			s.mu.RLock()
+			stopping := s.stopping[root]
+			s.mu.RUnlock()
+			if !stopping {
+				continue
+			}
+			if stopDeadline.IsZero() {
+				stopDeadline = time.Now().Add(managedProcessStopTimeout)
+			} else if time.Now().After(stopDeadline) {
+				return errors.New("等待进程退出超时"), true
+			}
+		}
 	}
 }
 
@@ -5362,10 +5495,14 @@ func (s *server) robotTestHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "请先为当前机器人配置测试端口（port）。")
 		return
 	}
+	s.proxyRobotTest(w, r, root, info.Port)
+}
+
+func (s *server) proxyRobotTest(w http.ResponseWriter, r *http.Request, root string, port int) {
 	// The transport dials an HTTP request and completes the WebSocket upgrade
 	// through the Upgrade headers, so the target scheme is http (same as the
 	// app proxy). A "ws://" scheme here makes http.Transport fail the dial.
-	target, err := url.Parse("http://127.0.0.1:" + strconv.Itoa(info.Port))
+	target, err := url.Parse("http://127.0.0.1:" + strconv.Itoa(port))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "测试服务地址无效。")
 		return
@@ -5918,6 +6055,148 @@ func (s *server) robotLoginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+// requireWorkbenchAuth rejects unauthenticated requests when the workbench
+// identity system is enabled, matching the other management endpoints.
+func (s *server) requireWorkbenchAuth(w http.ResponseWriter, r *http.Request) bool {
+	status, err := s.auth.Status(s.authToken(r))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return false
+	}
+	if status.Enabled && !status.Authenticated {
+		writeError(w, http.StatusUnauthorized, "请先登录身份认证账户。")
+		return false
+	}
+	return true
+}
+
+func (s *server) githubAuthStatusHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
+		return
+	}
+	if !s.requireWorkbenchAuth(w, r) {
+		return
+	}
+	status, err := githubauth.Status()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, status)
+}
+
+func (s *server) githubAuthDeviceHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
+		return
+	}
+	if !s.requireWorkbenchAuth(w, r) {
+		return
+	}
+	flow, err := githubauth.StartDeviceFlow()
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, flow)
+}
+
+func (s *server) githubAuthPollHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
+		return
+	}
+	if !s.requireWorkbenchAuth(w, r) {
+		return
+	}
+	var input struct {
+		FlowID string `json:"flowId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil || input.FlowID == "" {
+		writeError(w, http.StatusBadRequest, "缺少授权流程标识。")
+		return
+	}
+	result, err := githubauth.PollDeviceFlow(input.FlowID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *server) githubAuthClientIDHandler(w http.ResponseWriter, r *http.Request) {
+	if !s.requireWorkbenchAuth(w, r) {
+		return
+	}
+	if r.Method == http.MethodGet {
+		value, source := githubauth.ClientIDSource()
+		writeJSON(w, http.StatusOK, map[string]string{
+			"clientId": value,
+			"source":   source,
+		})
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
+		return
+	}
+	var input struct {
+		ClientID string `json:"clientId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, "请求内容无法识别。")
+		return
+	}
+	if err := githubauth.SaveClientID(input.ClientID); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	value, source := githubauth.ClientIDSource()
+	writeJSON(w, http.StatusOK, map[string]string{
+		"clientId": value,
+		"source":   source,
+	})
+}
+
+func (s *server) githubAuthTokenHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
+		return
+	}
+	if !s.requireWorkbenchAuth(w, r) {
+		return
+	}
+	var input struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil || strings.TrimSpace(input.Token) == "" {
+		writeError(w, http.StatusBadRequest, "请填写 GitHub Token。")
+		return
+	}
+	status, err := githubauth.SaveManualToken(input.Token)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, status)
+}
+
+func (s *server) githubAuthLogoutHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
+		return
+	}
+	if !s.requireWorkbenchAuth(w, r) {
+		return
+	}
+	if err := githubauth.Logout(); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"loggedOut": true})
 }
 
 // robotOneBotSyncHandler is the only composite write used by system plugins.

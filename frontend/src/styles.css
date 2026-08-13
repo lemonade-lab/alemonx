@@ -1542,8 +1542,8 @@ button {
 .app-settings-sidebar {
   background: var(--theme-surface-raised);
   border-right: 1px solid var(--theme-border-default);
-  display: grid;
-  align-content: start;
+  display: flex;
+  flex-direction: column;
   gap: 8px;
   padding: 18px 12px;
 }
@@ -1584,6 +1584,48 @@ button {
 .app-settings-nav button:focus-visible {
   outline: 2px solid var(--theme-accent);
   outline-offset: 2px;
+}
+
+.app-settings-stop-wrap {
+  border-top: 1px solid var(--theme-border-default);
+  display: grid;
+  gap: 6px;
+  margin-top: auto;
+  padding-top: 10px;
+}
+
+.app-settings-stop {
+  align-items: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: var(--theme-danger);
+  cursor: pointer;
+  display: flex;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  gap: 9px;
+  min-height: 36px;
+  padding: 0 9px;
+  text-align: left;
+}
+
+.app-settings-stop:hover:not(:disabled) {
+  background: var(--theme-danger-soft);
+  border-color: var(--theme-danger);
+}
+
+.app-settings-stop:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.app-settings-stop-message {
+  color: var(--theme-text-muted);
+  font-size: 11px;
+  line-height: 1.4;
+  padding: 0 2px;
 }
 
 .app-settings-content {
@@ -1691,8 +1733,102 @@ button {
   justify-content: flex-end;
 }
 
-.settings-update-panel .settings-service-card {
-  order: 10;
+.settings-redis-address {
+  align-items: center;
+  background: var(--theme-surface-raised);
+  border-radius: 7px;
+  display: flex;
+  gap: 8px;
+  padding: 8px 9px;
+}
+
+.settings-redis-address > span {
+  color: var(--theme-text-muted);
+  flex: 0 0 auto;
+  font-size: 11px;
+}
+
+.settings-redis-address > code {
+  color: var(--theme-text-strong);
+  flex: 1 1 auto;
+  font-size: 11px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-redis-address > button {
+  align-items: center;
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 4px;
+}
+
+.settings-redis-form {
+  align-items: end;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.settings-redis-field {
+  color: var(--theme-text-secondary);
+  display: grid;
+  font-size: 11px;
+  font-weight: 600;
+  gap: 5px;
+}
+
+.settings-redis-field input {
+  background: var(--theme-surface-raised);
+  border: 1px solid var(--theme-border-default);
+  border-radius: 7px;
+  color: var(--theme-text-primary);
+  font: inherit;
+  font-size: 12px;
+  min-height: 32px;
+  padding: 0 8px;
+  width: 100%;
+}
+
+.settings-redis-field input:focus-visible {
+  outline: 2px solid var(--theme-accent);
+  outline-offset: 1px;
+}
+
+.settings-redis-toggle {
+  align-items: center;
+  display: flex;
+  grid-column: 1 / -1;
+  gap: 8px;
+  min-height: 32px;
+}
+
+.settings-redis-toggle input {
+  accent-color: var(--theme-accent);
+  flex: 0 0 auto;
+}
+
+.settings-redis-toggle > span {
+  display: grid;
+  gap: 2px;
+}
+
+.settings-redis-toggle strong {
+  color: var(--theme-text-strong);
+  font-size: 11px;
+}
+
+.settings-redis-toggle small {
+  color: var(--theme-text-muted);
+  font-size: 10px;
+}
+
+.settings-redis-note {
+  color: var(--theme-text-muted);
+  font-size: 10px;
+  line-height: 1.5;
 }
 
 .settings-network-panel {
@@ -1991,6 +2127,7 @@ button {
   .app-settings-nav button { flex: 0 0 auto; }
   .app-settings-body { padding: 16px; }
   .settings-service-card > footer > button { flex: 1 1 0; }
+  .settings-redis-form { grid-template-columns: 1fr; }
   .settings-network-route { grid-template-columns: auto minmax(0, 1fr); }
   .settings-network-route-actions { grid-column: 2; grid-row: 2; grid-template-columns: minmax(0, 1fr) auto; justify-items: stretch; }
   .settings-network-route-actions select { width: 100%; }

@@ -1,6 +1,7 @@
 import { ArrowLeft, Settings, X } from 'lucide-react'
 import { ThemeToggle } from './ThemeToggle'
 import { Button } from './Button'
+import { GitHubAuthControl } from './GitHubAuthControl'
 
 type GuideHeaderProps = {
   onBack: () => void
@@ -35,6 +36,7 @@ export function GuideHeader({
           ALemonX
         </a>
         <ThemeToggle />
+        <GitHubAuthControl />
         {showBack && (
           <Button
             variant="icon"

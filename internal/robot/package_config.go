@@ -19,15 +19,15 @@ import (
 // PackageConfig is the workbench-facing shape of a package's AlemonJS
 // declaration plus its current values from alemon.config.yaml.
 type PackageConfig struct {
-	Package       string                    `json:"package"`
-	Namespace     string                    `json:"namespace"`
-	Fields        []packageschema.Field     `json:"fields"`
-	Values        map[string]any            `json:"values"`
+	Package       string                     `json:"package"`
+	Namespace     string                     `json:"namespace"`
+	Fields        []packageschema.Field      `json:"fields"`
+	Values        map[string]any             `json:"values"`
 	ConfigSource  packageschema.ConfigSource `json:"configSource,omitempty"`
-	Logo          string                    `json:"logo,omitempty"`
-	Commands      []packageschema.Command   `json:"commands,omitempty"`
-	Platforms     []packageschema.Platform  `json:"platforms,omitempty"`
-	WebServerPort bool                      `json:"webServerPort,omitempty"`
+	Logo          string                     `json:"logo,omitempty"`
+	Commands      []packageschema.Command    `json:"commands,omitempty"`
+	Platforms     []packageschema.Platform   `json:"platforms,omitempty"`
+	WebServerPort bool                       `json:"webServerPort,omitempty"`
 }
 
 var packageNamePattern = regexp.MustCompile(`^(?:@[a-zA-Z0-9][a-zA-Z0-9._-]*/)?[a-zA-Z0-9][a-zA-Z0-9._-]*$`)
@@ -233,7 +233,7 @@ func (m Manager) SaveLogin(root, login, packageName string) (Result, error) {
 	}
 	content := ""
 	if err == nil {
-		content = current.Output
+		content = stripYAMLBOM(current.Output)
 	}
 	content = setTopLevelScalar(content, "login", strconv.Quote(login))
 	if platformValue != "" {
@@ -262,6 +262,8 @@ func setTopLevelScalar(content, key, value string) string {
 }
 
 func readConfigValues(content string, namespaces []string, fields []packageschema.Field) map[string]any {
+	content = stripYAMLBOM(content)
+	content = dedupeYAMLSections(content)
 	root := map[string]any{}
 	if strings.TrimSpace(content) != "" {
 		if err := yaml.Unmarshal([]byte(content), &root); err != nil {
@@ -302,17 +304,25 @@ func readConfigValues(content string, namespaces []string, fields []packageschem
 // section is regenerated in schema order; other sections and their comments
 // are preserved verbatim.
 func mergeConfigValuesWithLegacy(content, namespace, legacyNamespace string, fields []packageschema.Field, values map[string]any) (string, error) {
+	content = stripYAMLBOM(content)
 	lines := strings.Split(strings.TrimRight(content, "\n"), "\n")
 	if len(lines) == 1 && lines[0] == "" {
 		lines = nil
 	}
 	legacyLines := []string{}
 	if legacyNamespace != "" {
+		lines = keepLastYAMLSections(lines, yamlKey(legacyNamespace)+":")
 		if legacyStart, legacyEnd := findYAMLSection(lines, yamlKey(legacyNamespace)+":"); legacyStart >= 0 {
 			legacyLines = append(legacyLines, lines[legacyStart+1:legacyEnd]...)
+			lines = removeYAMLSection(lines, yamlKey(legacyNamespace)+":")
 		}
-		lines = removeYAMLSection(lines, yamlKey(legacyNamespace)+":")
 	}
+	// A Windows editor can leave a UTF-8 BOM in front of the first section;
+	// an older save then appended a clean replacement. After the BOM is
+	// stripped both sections share the same key, and a duplicate top-level key
+	// makes the whole file unparseable. Use the newest occurrence as the base
+	// and rebuild one canonical section by keeping only that last occurrence.
+	lines = keepLastYAMLSections(lines, yamlKey(namespace)+":")
 	start, end := findYAMLSection(lines, yamlKey(namespace)+":")
 	existingLines := []string{}
 	if start >= 0 {
@@ -499,14 +509,188 @@ func findYAMLSection(lines []string, key string) (int, int) {
 // removeYAMLSection drops the top-level section matching key, preserving every
 // other line.
 func removeYAMLSection(lines []string, key string) []string {
-	start, end := findYAMLSection(lines, key)
-	if start < 0 {
+	return removeYAMLSections(lines, key)
+}
+
+// removeYAMLSections drops every top-level section whose key is listed. All
+// occurrences are removed so a file that accumulated duplicate sections (for
+// example a BOM-prefixed section plus a clean replacement) can be rebuilt
+// into one canonical section.
+func removeYAMLSections(lines []string, keys ...string) []string {
+	keySet := map[string]bool{}
+	for _, key := range keys {
+		if key != "" {
+			keySet[key] = true
+		}
+	}
+	if len(keySet) == 0 {
 		return lines
 	}
-	out := make([]string, 0, len(lines)-(end-start))
-	out = append(out, lines[:start]...)
-	out = append(out, lines[end:]...)
+	keep := make([]string, 0, len(lines))
+	removing := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if !removing && keySet[trimmed] {
+			removing = true
+			continue
+		}
+		if removing {
+			if len(line) > 0 && line[0] != ' ' && line[0] != '\t' && !keySet[trimmed] {
+				removing = false
+				keep = append(keep, line)
+			}
+			continue
+		}
+		keep = append(keep, line)
+	}
+	return keep
+}
+
+// keepLastYAMLSections removes every occurrence of the listed top-level keys
+// except the last one. A file that accumulated duplicate sections (for example
+// a BOM-prefixed section plus a clean replacement) can then be rebuilt into
+// one canonical section without losing the newest values.
+func keepLastYAMLSections(lines []string, keys ...string) []string {
+	keySet := map[string]bool{}
+	for _, key := range keys {
+		if key != "" {
+			keySet[key] = true
+		}
+	}
+	if len(keySet) == 0 {
+		return lines
+	}
+	type sectionSpan struct{ start, end int }
+	keyOf := map[int]string{}
+	var spans []sectionSpan
+	for index, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if !keySet[trimmed] {
+			continue
+		}
+		end := len(lines)
+		for j := index + 1; j < len(lines); j++ {
+			next := lines[j]
+			if next != "" && next[0] != ' ' && next[0] != '\t' && !keySet[strings.TrimSpace(next)] && !strings.HasPrefix(strings.TrimSpace(next), "#") {
+				end = j
+				break
+			}
+		}
+		spans = append(spans, sectionSpan{start: index, end: end})
+		keyOf[index] = trimmed
+	}
+	lastIndex := map[string]int{}
+	for index, span := range spans {
+		lastIndex[keyOf[span.start]] = index
+	}
+	remove := make([]bool, len(lines))
+	for index, span := range spans {
+		if lastIndex[keyOf[span.start]] == index {
+			continue
+		}
+		for line := span.start; line < span.end; line++ {
+			remove[line] = true
+		}
+	}
+	out := make([]string, 0, len(lines))
+	for index, line := range lines {
+		if !remove[index] {
+			out = append(out, line)
+		}
+	}
 	return out
+}
+
+// stripYAMLBOM removes a leading UTF-8 byte-order mark. Windows editors (for
+// example Notepad) write one by default, and a BOM in front of the first
+// section key silently turns "qq-bot:" into an unmatchable key.
+func stripYAMLBOM(content string) string {
+	return strings.TrimPrefix(content, "\uFEFF")
+}
+
+// dedupeYAMLSections keeps the last occurrence of each repeated top-level
+// mapping key. goccy/go-yaml rejects duplicate keys outright, so a file that
+// accumulated both a BOM-prefixed section and a clean replacement would
+// otherwise be unreadable until it was rewritten.
+func dedupeYAMLSections(content string) string {
+	content = stripYAMLBOM(content)
+	lines := strings.Split(content, "\n")
+	type sectionSpan struct{ start, end int }
+	var spans []sectionSpan
+	keys := map[int]string{}
+	for i := 0; i < len(lines); i++ {
+		line := lines[i]
+		if line == "" || line[0] == ' ' || line[0] == '\t' || strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue
+		}
+		key, ok := topLevelYAMLKey(strings.TrimSpace(line))
+		if !ok {
+			continue
+		}
+		end := len(lines)
+		for j := i + 1; j < len(lines); j++ {
+			next := lines[j]
+			if next != "" && next[0] != ' ' && next[0] != '\t' && !strings.HasPrefix(strings.TrimSpace(next), "#") {
+				end = j
+				break
+			}
+		}
+		spans = append(spans, sectionSpan{start: i, end: end})
+		keys[i] = key
+	}
+	if len(spans) < 2 {
+		return content
+	}
+	lastIndex := map[string]int{}
+	for index, span := range spans {
+		lastIndex[keys[span.start]] = index
+	}
+	remove := make([]bool, len(lines))
+	for index, span := range spans {
+		if lastIndex[keys[span.start]] == index {
+			continue
+		}
+		for line := span.start; line < span.end; line++ {
+			remove[line] = true
+		}
+	}
+	out := make([]string, 0, len(lines))
+	for index, line := range lines {
+		if remove[index] {
+			continue
+		}
+		out = append(out, line)
+	}
+	// Collapse the blank lines that separated a removed duplicate section.
+	compacted := make([]string, 0, len(out))
+	previousBlank := false
+	for _, line := range out {
+		blank := strings.TrimSpace(line) == ""
+		if blank && previousBlank {
+			continue
+		}
+		compacted = append(compacted, line)
+		previousBlank = blank
+	}
+	return strings.Join(compacted, "\n")
+}
+
+// topLevelYAMLKey extracts an unquoted or single-quoted mapping key from a
+// top-level "key: ..." line. Quoted keys with a colon or scope such as
+// "'@alemonjs/qq-bot':" are handled by stripping the surrounding quotes.
+func topLevelYAMLKey(line string) (string, bool) {
+	colon := strings.IndexByte(line, ':')
+	if colon <= 0 {
+		return "", false
+	}
+	key := strings.TrimSpace(line[:colon])
+	if len(key) >= 2 && key[0] == '\'' && key[len(key)-1] == '\'' {
+		key = key[1 : len(key)-1]
+	}
+	if key == "" || strings.ContainsAny(key, " \t") {
+		return "", false
+	}
+	return key, true
 }
 
 func yamlKey(value string) string {

@@ -1,27 +1,37 @@
-import { useState } from 'react'
-import { KeyRound, Network, RefreshCw, UsersRound } from 'lucide-react'
+import { useState, type ComponentType } from 'react'
+import {
+  Database,
+  KeyRound,
+  Network,
+  Power,
+  RefreshCw,
+  Server,
+  UsersRound
+} from 'lucide-react'
 import { AccountManagementPage } from './AccountManagement'
 import { AuthControl } from './AuthControl'
 import { SetupUpdateButton } from './SetupUpdateButton'
 import { NetworkSettingsPanel } from './NetworkSettingsPanel'
+import { GithubSettingsPanel } from './GithubSettingsPanel'
+import { GithubMark } from './GithubMark'
+import { ServiceControlCard } from './ServiceControlCard'
+import { ConfirmDialog } from './ConfirmDialog'
+import { RedisSettingsPanel } from './RedisSettingsPanel'
 
-type SettingsSection = 'update' | 'network' | 'auth' | 'accounts'
+type SettingsSection =
+  | 'auth'
+  | 'accounts'
+  | 'github'
+  | 'network'
+  | 'update'
+  | 'service'
+  | 'redis'
 
 const sections: Array<{
   id: SettingsSection
   label: string
-  icon: typeof RefreshCw
+  icon: ComponentType<{ className?: string }>
 }> = [
-  {
-    id: 'update',
-    label: '更新',
-    icon: RefreshCw
-  },
-  {
-    id: 'network',
-    label: '网络',
-    icon: Network
-  },
   {
     id: 'auth',
     label: '认证',
@@ -31,11 +41,39 @@ const sections: Array<{
     id: 'accounts',
     label: '账户',
     icon: UsersRound
+  },
+  {
+    id: 'github',
+    label: 'GitHub',
+    icon: GithubMark
+  },
+  {
+    id: 'network',
+    label: '网络',
+    icon: Network
+  },
+  {
+    id: 'update',
+    label: '更新',
+    icon: RefreshCw
+  },
+  {
+    id: 'service',
+    label: '服务',
+    icon: Server
+  },
+  {
+    id: 'redis',
+    label: 'Redis',
+    icon: Database
   }
 ]
 
 export function AppSettingsPanel() {
   const [active, setActive] = useState<SettingsSection>('update')
+  const [stopBusy, setStopBusy] = useState(false)
+  const [stopConfirm, setStopConfirm] = useState(false)
+  const [stopMessage, setStopMessage] = useState('')
   const activePanelID = `app-settings-panel-${active}`
   const activateTab = (next: SettingsSection) => {
     setActive(next)
@@ -49,6 +87,27 @@ export function AppSettingsPanel() {
       (currentIndex + direction + sections.length) % sections.length
     const next = sections[nextIndex].id
     activateTab(next)
+  }
+  const stopService = async () => {
+    setStopBusy(true)
+    setStopMessage('')
+    try {
+      const response = await fetch('/api/v1/system/service', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'stop', confirm: true })
+      })
+      const result = (await response.json()) as {
+        output?: string
+        error?: string
+      }
+      if (!response.ok) throw new Error(result.error || '停止服务失败。')
+      setStopMessage(result.output || '服务已停止，工作台即将断开连接。')
+    } catch (reason) {
+      setStopMessage(reason instanceof Error ? reason.message : '停止服务失败。')
+    } finally {
+      setStopBusy(false)
+    }
   }
 
   return (
@@ -94,6 +153,22 @@ export function AppSettingsPanel() {
             )
           })}
         </div>
+        <div className="app-settings-stop-wrap">
+          <button
+            className="app-settings-stop"
+            type="button"
+            onClick={() => setStopConfirm(true)}
+            disabled={stopBusy}
+            aria-label="停止 AlemonX 服务"
+            title="停止 AlemonX 服务并关闭工作台"
+          >
+            <Power className="size-4" />
+            <span>停止</span>
+          </button>
+          {stopMessage && (
+            <small className="app-settings-stop-message">{stopMessage}</small>
+          )}
+        </div>
       </aside>
       <section
         className="app-settings-content"
@@ -104,10 +179,25 @@ export function AppSettingsPanel() {
         <div className="app-settings-body">
           {active === 'update' && <SetupUpdateButton embedded />}
           {active === 'network' && <NetworkSettingsPanel />}
+          {active === 'github' && <GithubSettingsPanel />}
           {active === 'auth' && <AuthControl embedded />}
           {active === 'accounts' && <AccountManagementPage />}
+          {active === 'service' && <ServiceControlCard />}
+          {active === 'redis' && <RedisSettingsPanel />}
         </div>
       </section>
+      <ConfirmDialog
+        open={stopConfirm}
+        title="停止 AlemonX"
+        message="确认停止 AlemonX 服务并关闭工作台连接吗？"
+        confirmLabel="确认"
+        busy={stopBusy}
+        onCancel={() => setStopConfirm(false)}
+        onConfirm={() => {
+          setStopConfirm(false)
+          void stopService()
+        }}
+      />
     </div>
   )
 }

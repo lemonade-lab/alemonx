@@ -24,6 +24,26 @@ func interruptManagedProcess(command *exec.Cmd) error {
 }
 
 func forceStopManagedProcess(command *exec.Cmd) error {
+	if command.Process == nil {
+		return nil
+	}
+	// A package manager such as npm is normally a cmd.exe batch shim whose
+	// actual server runs as a descendant. Killing only the direct child would
+	// leave that descendant alive, and the descendant's inherited stdout/stderr
+	// pipe handles would keep command.Wait() blocked forever. Terminate the
+	// whole tree, then fall back to a direct kill if taskkill is unavailable.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if output, err := exec.CommandContext(
+		ctx,
+		"taskkill",
+		"/PID", strconv.Itoa(command.Process.Pid),
+		"/T", "/F",
+	).CombinedOutput(); err == nil {
+		return nil
+	} else {
+		_ = output
+	}
 	return command.Process.Kill()
 }
 

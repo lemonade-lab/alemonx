@@ -854,6 +854,45 @@ func TestStopDevelopmentWithoutProcessFinishesImmediately(t *testing.T) {
 	}
 }
 
+func TestWaitForManagedProcessExitTimesOutWhileStopping(t *testing.T) {
+	root := t.TempDir()
+	s := newStatefulTestServer()
+	s.mu.Lock()
+	s.stopping[root] = true
+	s.mu.Unlock()
+
+	original := managedProcessStopTimeout
+	managedProcessStopTimeout = 150 * time.Millisecond
+	defer func() { managedProcessStopTimeout = original }()
+
+	// The channel never receives: this simulates a Windows descendant that
+	// inherited the output pipe and keeps command.Wait() blocked.
+	blocked := make(chan error)
+	started := time.Now()
+	err, timedOut := s.waitForManagedProcessExit(root, blocked)
+	if !timedOut || err == nil {
+		t.Fatalf("waitForManagedProcessExit = (%v, %v), want a timeout error", err, timedOut)
+	}
+	if elapsed := time.Since(started); elapsed > 3*time.Second {
+		t.Fatalf("stop wait took %v, expected the bounded deadline", elapsed)
+	}
+}
+
+func TestWaitForManagedProcessExitReturnsWhenProcessExits(t *testing.T) {
+	root := t.TempDir()
+	s := newStatefulTestServer()
+	s.mu.Lock()
+	s.stopping[root] = true
+	s.mu.Unlock()
+
+	finished := make(chan error, 1)
+	finished <- errors.New("process exited")
+	err, timedOut := s.waitForManagedProcessExit(root, finished)
+	if timedOut || err == nil || err.Error() != "process exited" {
+		t.Fatalf("waitForManagedProcessExit = (%v, %v), want the exit error", err, timedOut)
+	}
+}
+
 func TestCompletePendingStopTasks(t *testing.T) {
 	root := t.TempDir()
 	finished := time.Now()
@@ -1326,6 +1365,9 @@ func TestLocalServiceAPIBootstrapInjectedWhenDeclared(t *testing.T) {
 	body := response.Body.String()
 	if !strings.Contains(body, "__alxApiCompat") || !strings.Contains(body, "/api/v1/services/alemonx-qq/luckylillia-webui/") {
 		t.Fatalf("compat bootstrap missing from proxied HTML: %s", body)
+	}
+	if !strings.Contains(body, "EventSource") {
+		t.Fatalf("compat bootstrap must also rebase EventSource URLs: %s", body)
 	}
 	if !strings.Contains(body, "<base href=") {
 		t.Fatalf("rewritten HTML lacks base href: %s", body)

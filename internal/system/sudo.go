@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -69,19 +70,29 @@ var sudoCommand = func(ctx context.Context, password []byte, program string, arg
 func RunSudoCommand(ctx context.Context, password []byte, program string, args []string) (string, error) {
 	defer clearSecret(password)
 	program = strings.TrimSpace(program)
-	if len(password) == 0 {
-		return "", errors.New("请输入当前系统账户的 sudo 密码")
-	}
 	if program == "" || strings.ContainsAny(program, "/\\\x00\r\n") {
 		return "", errors.New("系统权限操作命令无效")
-	}
-	if _, err := exec.LookPath("sudo"); err != nil {
-		return "", errors.New("当前系统未安装 sudo，无法使用工作台密码授权")
 	}
 	if _, err := exec.LookPath(program); err != nil {
 		return "", fmt.Errorf("当前系统未找到所需命令 %s", program)
 	}
-	output, err := sudoCommand(ctx, password, program, append([]string(nil), args...))
+	var (
+		output []byte
+		err    error
+	)
+	if os.Geteuid() == 0 {
+		// The host already runs as root; sudo is neither required nor always
+		// installed (common on minimal container images).
+		output, err = exec.CommandContext(ctx, program, append([]string(nil), args...)...).CombinedOutput()
+	} else {
+		if len(password) == 0 {
+			return "", errors.New("请输入当前系统账户的 sudo 密码")
+		}
+		if _, lookErr := exec.LookPath("sudo"); lookErr != nil {
+			return "", errors.New("当前系统未安装 sudo，无法使用工作台密码授权")
+		}
+		output, err = sudoCommand(ctx, password, program, append([]string(nil), args...))
+	}
 	text := strings.TrimSpace(string(output))
 	if err == nil {
 		return "✓ 系统操作已完成。", nil

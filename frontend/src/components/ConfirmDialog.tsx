@@ -23,7 +23,7 @@ export function ConfirmDialog({
   message,
   confirmLabel = '确认继续',
   cancelLabel = '取消',
-  subtitle = '此操作会修改当前机器人项目或其运行状态。',
+  subtitle = '',
   busy,
   destructive = false,
   onCancel,

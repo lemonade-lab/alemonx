@@ -85,6 +85,10 @@ func StartService() (string, error) {
 		}
 		return "后台服务已启动。", nil
 	case "linux":
+		if home, homeErr := os.UserHomeDir(); homeErr == nil {
+			_ = ensureSystemdUserUnitKillMode(filepath.Join(home, ".config", "systemd", "user", "alx.service"))
+		}
+		_ = exec.Command("systemctl", "--user", "daemon-reload").Run()
 		if output, err := exec.Command("systemctl", "--user", "start", "alx.service").CombinedOutput(); err != nil {
 			return "", fmt.Errorf("启动后台服务失败：%s", strings.TrimSpace(string(output)))
 		}
@@ -163,7 +167,7 @@ func RestartForeground(port string) error {
 // it. It is used when the current foreground instance owns the listening port:
 // the caller can close that instance first and then schedule StartService.
 func PrepareService(port string) (string, error) {
-	return installService(port, false)
+	return installService(port, "0.0.0.0", false)
 }
 
 // ScheduleServiceStart starts a previously registered service after a short
@@ -237,15 +241,22 @@ func UninstallService() (string, error) {
 	return "后台服务已移除。alx 命令文件仍保留，便于以后重新安装。", nil
 }
 
-// InstallService registers the current binary as a user-level background service.
-func InstallService(port string) (string, error) {
-	return installService(port, true)
+// InstallService registers the current binary as a user-level background
+// service bound to the given host.
+func InstallService(port, host string) (string, error) {
+	return installService(port, host, true)
 }
 
-func installService(port string, start bool) (string, error) {
+func installService(port, host string, start bool) (string, error) {
 	value, err := strconv.ParseUint(port, 10, 16)
 	if err != nil || value == 0 {
 		return "", errors.New("端口应为 1 到 65535 的数字")
+	}
+	if strings.TrimSpace(host) == "" {
+		return "", errors.New("监听地址不能为空")
+	}
+	if strings.ContainsAny(host, " \t\"'&|;<>$`") {
+		return "", errors.New("监听地址包含不安全的字符")
 	}
 	executable, err := os.Executable()
 	if err != nil {
@@ -262,11 +273,11 @@ func installService(port string, start bool) (string, error) {
 	var result string
 	switch runtime.GOOS {
 	case "darwin":
-		result, err = installLaunchAgent(executable, port, start)
+		result, err = installLaunchAgent(executable, host, port, start)
 	case "linux":
-		result, err = installSystemdUserService(executable, port, start)
+		result, err = installSystemdUserService(executable, host, port, start)
 	case "windows":
-		result, err = installScheduledTask(executable, port, start)
+		result, err = installScheduledTask(executable, host, port, start)
 	default:
 		return "", fmt.Errorf("暂不支持在 %s 上注册后台服务", runtime.GOOS)
 	}
@@ -345,7 +356,7 @@ func OpenBrowser(port string) error {
 	return nil
 }
 
-func installLaunchAgent(executable, port string, start bool) (string, error) {
+func installLaunchAgent(executable, host, port string, start bool) (string, error) {
 	path, err := launchAgentPath()
 	if err != nil {
 		return "", err
@@ -361,8 +372,8 @@ func installLaunchAgent(executable, port string, start bool) (string, error) {
 	logs := filepath.Join(home, "Library", "Logs", "alx.log")
 	plist := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict><key>Label</key><string>%s</string><key>ProgramArguments</key><array><string>%s</string><string>serve</string><string>--port</string><string>%s</string></array><key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>StandardOutPath</key><string>%s</string><key>StandardErrorPath</key><string>%s</string></dict></plist>
-`, serviceName, xmlEscape(executable), xmlEscape(port), xmlEscape(logs), xmlEscape(logs))
+<plist version="1.0"><dict><key>Label</key><string>%s</string><key>ProgramArguments</key><array><string>%s</string><string>serve</string><string>--port</string><string>%s</string><string>--host</string><string>%s</string></array><key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>StandardOutPath</key><string>%s</string><key>StandardErrorPath</key><string>%s</string></dict></plist>
+`, serviceName, xmlEscape(executable), xmlEscape(port), xmlEscape(host), xmlEscape(logs), xmlEscape(logs))
 	if err := os.WriteFile(path, []byte(plist), 0644); err != nil {
 		return "", err
 	}
@@ -377,7 +388,7 @@ func installLaunchAgent(executable, port string, start bool) (string, error) {
 	if output, err := exec.Command("launchctl", "kickstart", "-k", "gui/"+uid+"/"+serviceName).CombinedOutput(); err != nil {
 		return "", fmt.Errorf("启动后台服务失败：%s", strings.TrimSpace(string(output)))
 	}
-	return "已注册后台服务。登录后会自动运行，访问地址：http://127.0.0.1:" + port, nil
+	return "已注册后台服务。登录后会自动运行，访问地址：http://" + displayHost(host) + ":" + port, nil
 }
 
 func launchAgentPath() (string, error) {
@@ -388,7 +399,7 @@ func launchAgentPath() (string, error) {
 	return filepath.Join(home, "Library", "LaunchAgents", serviceName+".plist"), nil
 }
 
-func installSystemdUserService(executable, port string, start bool) (string, error) {
+func installSystemdUserService(executable, host, port string, start bool) (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
@@ -398,7 +409,7 @@ func installSystemdUserService(executable, port string, start bool) (string, err
 		return "", err
 	}
 	path := filepath.Join(directory, "alx.service")
-	content := fmt.Sprintf("[Unit]\nDescription=ALemonX\n[Service]\nExecStart=%s serve --port %s\nRestart=on-failure\n[Install]\nWantedBy=default.target\n", shellQuote(executable), port)
+	content := fmt.Sprintf("[Unit]\nDescription=ALemonX\n[Service]\nExecStart=%s serve --port %s --host %s\nRestart=on-failure\nKillMode=process\n[Install]\nWantedBy=default.target\n", shellQuote(executable), port, host)
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 		return "", err
 	}
@@ -415,10 +426,51 @@ func installSystemdUserService(executable, port string, start bool) (string, err
 	if !start {
 		return "已注册 systemd 用户服务；当前前台实例关闭后会自动启动。", nil
 	}
-	return "已注册 systemd 用户服务，访问地址：http://127.0.0.1:" + port, nil
+	return "已注册 systemd 用户服务，访问地址：http://" + displayHost(host) + ":" + port, nil
 }
 
-func installScheduledTask(executable, port string, start bool) (string, error) {
+// ensureSystemdUserUnitKillMode upgrades an existing ALemonX user unit so a
+// service restart no longer reaps detached plugin background processes.
+// systemd's default KillMode=control-group kills the entire service cgroup,
+// which includes NapCat/LLBot processes that the plugins started in their own
+// process groups. KillMode=process keeps only the service process itself in
+// scope for the restart.
+func ensureSystemdUserUnitKillMode(path string) error {
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	text := string(data)
+	if strings.Contains(text, "KillMode=process") {
+		return nil
+	}
+	lines := strings.Split(text, "\n")
+	out := make([]string, 0, len(lines)+1)
+	inService := false
+	inserted := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "[Service]" {
+			inService = true
+		} else if strings.HasPrefix(trimmed, "[") {
+			inService = false
+		}
+		out = append(out, line)
+		if inService && !inserted && strings.HasPrefix(trimmed, "ExecStart=") {
+			out = append(out, "KillMode=process")
+			inserted = true
+		}
+	}
+	if !inserted {
+		return nil // Unrecognized layout; never corrupt a hand-written unit.
+	}
+	return os.WriteFile(path, []byte(strings.Join(out, "\n")), 0644)
+}
+
+func installScheduledTask(executable, host, port string, start bool) (string, error) {
 	logs, err := serviceLogPath()
 	if err != nil {
 		return "", err
@@ -429,7 +481,7 @@ func installScheduledTask(executable, port string, start bool) (string, error) {
 	// The task scheduler does not retain an application's stdout/stderr. Run
 	// through cmd.exe so `alx logs` can expose the same diagnostics as macOS
 	// and Linux managed services.
-	command := `cmd.exe /d /s /c ""` + executable + `" serve --port ` + port + ` >> "` + logs + `" 2>&1"`
+	command := `cmd.exe /d /s /c ""` + executable + `" serve --port ` + port + ` --host ` + host + ` >> "` + logs + `" 2>&1"`
 	if output, err := exec.Command("schtasks", "/Create", "/TN", "ALemonX", "/SC", "ONLOGON", "/TR", command, "/F").CombinedOutput(); err != nil {
 		return "", fmt.Errorf("注册计划任务失败：%s", strings.TrimSpace(string(output)))
 	}
@@ -439,7 +491,16 @@ func installScheduledTask(executable, port string, start bool) (string, error) {
 	if output, err := exec.Command("schtasks", "/Run", "/TN", "ALemonX").CombinedOutput(); err != nil {
 		return "", fmt.Errorf("启动后台服务失败：%s", strings.TrimSpace(string(output)))
 	}
-	return "已注册登录启动任务，访问地址：http://127.0.0.1:" + port, nil
+	return "已注册登录启动任务，访问地址：http://" + displayHost(host) + ":" + port, nil
+}
+
+// displayHost presents a wildcard bind address as the local loopback address
+// in user-facing messages.
+func displayHost(host string) string {
+	if host == "0.0.0.0" || host == "::" {
+		return "127.0.0.1"
+	}
+	return host
 }
 
 func xmlEscape(value string) string {

@@ -111,6 +111,7 @@ import { useIsMobileViewport } from '../hooks/useIsMobileViewport'
 import { TestCenter } from './TestCenter'
 import { DesktopWindow } from './DesktopWindow'
 import { SSHControl } from './SSHControl'
+import { GitHubAuthControl } from './GitHubAuthControl'
 import { ConfigFieldsEditor, ConfigSourceLinks } from './PackageConfigFields'
 import { sameConfigValues } from './configFieldUtils'
 import {
@@ -136,10 +137,10 @@ import {
   useRobotPM2StatusQuery,
   useRobotPM2ProcessesQuery,
   useLazyAppPortQuery,
+	useLazyTestPortQuery,
   useLazyRobotPortsQuery,
-  useLazyTestPortQuery,
   useSaveAppPortMutation,
-  useSaveTestPortMutation,
+	useSaveTestPortMutation,
   useRobotAppsQuery,
   useRobotWebViewsQuery,
   useSetAppEnabledMutation,
@@ -1000,12 +1001,12 @@ export function Dashboard({
   const [appPortDialog, setAppPortDialog] = useStoreState(false)
   const [appPortValue, setAppPortValue] = useStoreState('')
   const [appPortBusy, setAppPortBusy] = useStoreState(false)
+	const [testPortDialog, setTestPortDialog] = useStoreState(false)
+	const [testPortValue, setTestPortValue] = useStoreState('')
+	const [testPortBusy, setTestPortBusy] = useStoreState(false)
   const [appLaunching, setAppLaunching] = useStoreState(false)
   const [appContentOpen, setAppContentOpen] = useStoreState(false)
   const [appMinimized, setAppMinimized] = useStoreState(false)
-  const [testPortDialog, setTestPortDialog] = useStoreState(false)
-  const [testPortValue, setTestPortValue] = useStoreState('')
-  const [testPortBusy, setTestPortBusy] = useStoreState(false)
   const [testLaunching, setTestLaunching] = useStoreState(false)
   const [testContentOpen, setTestContentOpen] = useStoreState(false)
   const [testMinimized, setTestMinimized] = useStoreState(false)
@@ -1408,8 +1409,8 @@ export function Dashboard({
   const [startRobotTask] = useStartRobotTaskMutation()
   const [loadAppPort] = useLazyAppPortQuery()
   const [saveAppPort] = useSaveAppPortMutation()
-  const [loadTestPort] = useLazyTestPortQuery()
-  const [saveTestPort] = useSaveTestPortMutation()
+	const [loadTestPort] = useLazyTestPortQuery()
+	const [saveTestPort] = useSaveTestPortMutation()
   const { data: robotWebViews = [] } = useRobotWebViewsQuery(root, {
     skip: !root
   })
@@ -1621,33 +1622,6 @@ export function Dashboard({
       setAppLaunching(false)
     }
   }
-  // 插件页面按 web.serverPort 声明决定是否必须先配置并启动应用端口。
-  const openWebView = async (entry: (typeof robotWebViews)[number]) => {
-    if (!root) return
-    try {
-      if (!entry.requiresServerPort) {
-        setSelectedWebViewID(entry.id)
-        setAppContentOpen(true)
-        setAppMinimized(false)
-        activateFloatingWindow('app')
-        return
-      }
-      const info = await loadAppPort(root, true).unwrap()
-      if (!info.configured) {
-        setPendingWebViewID(entry.id)
-        setAppPortValue(String(info.port))
-        setAppPortDialog(true)
-        return
-      }
-      setAppLaunching(true)
-      await launchApp()
-      setSelectedWebViewID(entry.id)
-    } catch (reason) {
-      showOutput(operationErrorMessage(reason, '无法打开插件页面。'), true)
-    } finally {
-      setAppLaunching(false)
-    }
-  }
   const launchApp = async () => {
     if (!root) return
     try {
@@ -1683,56 +1657,48 @@ export function Dashboard({
       return false
     }
   }
-  // "测试" = 机器人 + 测试端口（alemon.config.yaml 顶层 port，
-  // testone 沙盒的 /testone WebSocket 由后端同源代理）。机制与 "应用" 一致：
-  // 读取端口，未配置则先让用户输入并保存，然后启动开发模式，最后打开测试台。
+  // "测试" = 隔离的 testone 沙盒：后台临时嗅探空闲端口并用临时无 login
+  // 配置启动，testone 的 /testone WebSocket 由后端同源代理，用户无需配置
+  // 任何端口或登录，也不会影响机器人原有的运行形态。
   const openTest = async () => {
     if (!root || testLaunching) return
     setTestLaunching(true)
     try {
-      const info = await loadTestPort(root, true).unwrap()
-      if (info.sandbox === false) {
-        showOutput(
-          '当前机器人配置了登录连接（platform/login），testone 沙盒需要不配置登录才能连接。请先在“机器人配置”中移除登录连接后重试。',
-          true
-        )
-        return
-      }
-      if (info.configured) {
-        await launchTest()
-      } else {
-        setTestPortValue(String(info.port))
-        setTestPortDialog(true)
-      }
+		const info = await loadTestPort(root, true).unwrap()
+		if (info.configured) {
+			await launchTest()
+		} else {
+			setTestPortValue(String(info.port))
+			setTestPortDialog(true)
+		}
     } catch (reason) {
-      showOutput(operationErrorMessage(reason, '无法读取测试端口。'), true)
+      showOutput(operationErrorMessage(reason, '测试台启动失败。'), true)
     } finally {
       setTestLaunching(false)
     }
   }
   openTestRef.current = () => void openTest()
-  const confirmTestPort = async () => {
-    if (!root) return
-    const port = Number(testPortValue.trim())
-    if (!Number.isInteger(port) || port < 1 || port > 65535) {
-      showOutput('测试端口应为 1-65535 之间的整数。', true)
-      return
-    }
-    setTestPortBusy(true)
-    try {
-      await saveTestPort({ root, port }).unwrap()
-      await refreshConfigDraft()
-      setTestPortDialog(false)
-      // Launch happens after the dialog closes; reflect it on the toolbar icon.
-      setTestLaunching(true)
-      await launchTest()
-    } catch (reason) {
-      showOutput(operationErrorMessage(reason, '测试端口保存失败。'), true)
-    } finally {
-      setTestPortBusy(false)
-      setTestLaunching(false)
-    }
-  }
+	const confirmTestPort = async () => {
+		if (!root) return
+		const port = Number(testPortValue.trim())
+		if (!Number.isInteger(port) || port < 1 || port > 65535) {
+			showOutput('测试端口应为 1-65535 之间的整数。', true)
+			return
+		}
+		setTestPortBusy(true)
+		try {
+			await saveTestPort({ root, port }).unwrap()
+			await refreshConfigDraft()
+			setTestPortDialog(false)
+			setTestLaunching(true)
+			await launchTest()
+		} catch (reason) {
+			showOutput(operationErrorMessage(reason, '测试端口保存失败。'), true)
+		} finally {
+			setTestPortBusy(false)
+			setTestLaunching(false)
+		}
+	}
   const launchTest = async () => {
     if (!root) return
     try {
@@ -1755,6 +1721,14 @@ export function Dashboard({
       activateFloatingWindow('test')
     } catch (reason) {
       showOutput(operationErrorMessage(reason, '测试服务启动失败。'), true)
+    }
+  }
+  const stopTestSandbox = async () => {
+    if (!root) return
+    try {
+      await startRobotTask({ root, action: 'dev-stop' }).unwrap()
+    } catch {
+      // 沙盒可能已自行退出；关闭窗口无需打扰用户。
     }
   }
   const checkTestReachable = async () => {
@@ -2955,6 +2929,7 @@ export function Dashboard({
               >
                 <Code2 className="size-4" />
               </Button>
+              <GitHubAuthControl />
               <SSHControl />
               <Button
                 variant="icon"
@@ -3068,51 +3043,37 @@ export function Dashboard({
               </footer>
             </form>
           </Modal>
-          <Modal
-            open={testPortDialog}
-            ariaLabel="设置测试端口"
-            // 与应用端口弹窗一致：不点遮罩关闭，避免输入时误关。
-          >
-            <form
-              className="grid w-full max-w-sm gap-4 rounded-xl border border-slate-200 bg-white p-5 shadow-[0_20px_58px_rgb(28_26_23/0.22)]"
-              onSubmit={event => {
-                event.preventDefault()
-                void confirmTestPort()
-              }}
-              onMouseDown={event => event.stopPropagation()}
-            >
-              <div className="grid gap-1">
-                <strong className="text-sm text-ink-950">配置测试端口</strong>
-              </div>
-              <label className="grid gap-1.5 text-xs font-medium text-slate-600">
-                测试端口（1-65535）
-                <input
-                  className="h-10 rounded-md border border-slate-300 px-3 text-sm text-slate-800 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
-                  value={testPortValue}
-                  onChange={event => {
-                    setTestPortValue(event.target.value)
-                  }}
-                  type="number"
-                  min={1}
-                  max={65535}
-                  autoFocus
-                />
-              </label>
-              <footer className="flex justify-end gap-2">
-                <button
-                  type="button"
-                  className="secondary-button"
-                  onClick={() => setTestPortDialog(false)}
-                  disabled={testPortBusy}
-                >
-                  取消
-                </button>
-                <button className="primary-button" disabled={testPortBusy}>
-                  {testPortBusy ? '保存中…' : '启动测试'}
-                </button>
-              </footer>
-            </form>
-          </Modal>
+		  <Modal open={testPortDialog} ariaLabel="设置测试端口">
+			<form
+			  className="grid w-full max-w-sm gap-4 rounded-xl border border-slate-200 bg-white p-5 shadow-[0_20px_58px_rgb(28_26_23/0.22)]"
+			  onSubmit={event => {
+				event.preventDefault()
+				void confirmTestPort()
+			  }}
+			  onMouseDown={event => event.stopPropagation()}
+			>
+			  <div className="grid gap-1">
+				<strong className="text-sm text-ink-950">配置测试端口</strong>
+				<span className="text-xs text-slate-500">用于当前机器人的测试台（testone）。</span>
+			  </div>
+			  <label className="grid gap-1.5 text-xs font-medium text-slate-600">
+				测试端口（1-65535）
+				<input
+				  className="h-10 rounded-md border border-slate-300 px-3 text-sm text-slate-800 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
+				  value={testPortValue}
+				  onChange={event => setTestPortValue(event.target.value)}
+				  type="number"
+				  min={1}
+				  max={65535}
+				  autoFocus
+				/>
+			  </label>
+			  <footer className="flex justify-end gap-2">
+				<button type="button" className="secondary-button" onClick={() => setTestPortDialog(false)} disabled={testPortBusy}>取消</button>
+				<button className="primary-button" disabled={testPortBusy}>{testPortBusy ? '保存中…' : '启动测试'}</button>
+			  </footer>
+			</form>
+		  </Modal>
           <DirectoryPicker
             open={directoryPickerOpen}
             onClose={() => setDirectoryPickerOpen(false)}
@@ -3272,13 +3233,6 @@ export function Dashboard({
           zIndex={windowLayers.app}
           webviews={robotWebViews}
           selectedWebViewID={selectedWebViewID}
-          onSelectWebView={entry => {
-            if (!entry.id) {
-              setSelectedWebViewID('')
-              return
-            }
-            void openWebView(entry)
-          }}
           onActivate={() => activateFloatingWindow('app')}
           onMinimize={() => setAppMinimized(true)}
           onClose={() => {
@@ -3297,6 +3251,8 @@ export function Dashboard({
           onClose={() => {
             setTestContentOpen(false)
             setTestMinimized(false)
+            // 关闭测试窗口即停止隔离沙盒，进程与临时配置一并清理。
+            void stopTestSandbox()
           }}
         />
       )}
@@ -8107,8 +8063,7 @@ function AppEmbed({
   onActivate,
   minimized,
   webviews,
-  selectedWebViewID,
-  onSelectWebView
+  selectedWebViewID
 }: {
   root: string
   onClose: () => void
@@ -8123,7 +8078,6 @@ function AppEmbed({
     logo?: string
   }>
   selectedWebViewID: string
-  onSelectWebView: (entry: (typeof webviews)[number]) => void
 }) {
   const token = robotAppToken(root)
   const appSrc = `/api/v1/robot/app/${token}/`
@@ -8150,33 +8104,6 @@ function AppEmbed({
       height={680}
     >
       <div className="flex min-h-0 flex-1 flex-col">
-        <div className="flex items-center gap-1 overflow-x-auto border-b border-slate-200 bg-slate-50 px-2 py-1.5">
-          <button
-            className={`shrink-0 rounded-md px-2.5 py-1 text-xs font-semibold ${
-              !selectedWebView
-                ? 'bg-white text-brand-700 shadow-sm'
-                : 'text-slate-500 hover:bg-white/70'
-            }`}
-            onClick={() => onSelectWebView({ id: '', name: '', package: '' })}
-          >
-            机器人应用
-          </button>
-          {webviews.map(entry => (
-            <button
-              key={entry.id}
-              className={`flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-semibold ${
-                selectedWebViewID === entry.id
-                  ? 'bg-white text-brand-700 shadow-sm'
-                  : 'text-slate-500 hover:bg-white/70'
-              }`}
-              onClick={() => onSelectWebView(entry)}
-              title={entry.package}
-            >
-              <PlatformLogo logo={entry.logo} className="size-3.5" />
-              {entry.name}
-            </button>
-          ))}
-        </div>
         <iframe
           className="min-h-0 flex-1 border-0"
           src={frameSrc}

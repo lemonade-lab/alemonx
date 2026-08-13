@@ -58,10 +58,10 @@ func TestScopedConnectionPackageReadsLegacyKey(t *testing.T) {
 	writeWebViewFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
 	writeWebViewFixture(t, filepath.Join(root, "node_modules", "@alemonjs", "onebot", "package.json"), `{
   "name":"@alemonjs/onebot",
-  "alemonjs":{
-    "config":[{"name":"token","type":"string","required":true,"description":"token"}],
-    "desktop":{"platform":[{"name":"onebot"}]}
-  }
+	"alemonjs":{
+		"config":[{"name":"token","type":"string","required":true,"description":"token"}],
+		"desktop":{"platform":[{"name":"onebot"}]}
+	}
 }`)
 	writeWebViewFixture(t, filepath.Join(root, "alemon.config.yaml"), `'@alemonjs/onebot':
   token: "legacy"
@@ -115,6 +115,91 @@ func TestSaveScopedConnectionMigratesLegacyKey(t *testing.T) {
 	}
 	if !strings.Contains(output, `token: "new"`) || !strings.Contains(output, `url: "ws://new"`) {
 		t.Fatalf("saved config misses new values:\n%s", output)
+	}
+}
+
+// TestConfigValuesSurviveWindowsBOM covers a UTF-8 byte-order mark written by
+// Windows editors. The BOM must not turn the first section key into an
+// unmatchable value, otherwise required fields always look empty.
+func TestConfigValuesSurviveWindowsBOM(t *testing.T) {
+	root := t.TempDir()
+	writeWebViewFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
+	writeWebViewFixture(t, filepath.Join(root, "node_modules", "@alemonjs", "qq-bot", "package.json"), `{
+  "name":"@alemonjs/qq-bot",
+  "alemonjs":{
+    "config":[
+      {"name":"appid","type":"string","required":true,"description":"AppID"},
+      {"name":"token","type":"string","required":true,"description":"token"}
+    ],
+    "desktop":{"platform":[{"name":"qq-bot","value":"@alemonjs/qq-bot"}]}
+  }
+}`)
+	writeWebViewFixture(t, filepath.Join(root, "alemon.config.yaml"), "\uFEFFqq-bot:\n  appid: \"123\"\n  token: \"abc\"\n")
+
+	config, err := (Manager{}).PackageConfig(root, "@alemonjs/qq-bot")
+	if err != nil {
+		t.Fatalf("PackageConfig: %v", err)
+	}
+	if config.Namespace != "qq-bot" {
+		t.Fatalf("namespace = %q, want qq-bot", config.Namespace)
+	}
+	if config.Values["appid"] != "123" || config.Values["token"] != "abc" {
+		t.Fatalf("values = %#v, want BOM-prefixed section to be readable", config.Values)
+	}
+
+	preflight, err := (Manager{}).RuntimePreflight(root)
+	if err != nil {
+		t.Fatalf("RuntimePreflight: %v", err)
+	}
+	if len(preflight.Missing) != 0 {
+		t.Fatalf("preflight missing = %v, want none with a BOM-prefixed config", preflight.Missing)
+	}
+}
+
+// TestSaveRemovesDuplicateSections repairs files that accumulated a
+// BOM-prefixed section plus a clean replacement. Duplicate top-level keys make
+// the whole file unparseable, so every save must collapse them into one
+// canonical section carrying the newest values.
+func TestSaveRemovesDuplicateSections(t *testing.T) {
+	root := t.TempDir()
+	writeWebViewFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
+	writeWebViewFixture(t, filepath.Join(root, "node_modules", "@alemonjs", "qq-bot", "package.json"), `{
+  "name":"@alemonjs/qq-bot",
+  "alemonjs":{
+    "config":[
+      {"name":"appid","type":"string","required":true,"description":"AppID"},
+      {"name":"token","type":"string","required":true,"description":"token"}
+    ],
+    "desktop":{"platform":[{"name":"qq-bot","value":"@alemonjs/qq-bot"}]}
+  }
+}`)
+	// The old BOM-prefixed section plus the clean replacement an older save
+	// appended afterwards. After stripping the BOM, both keys are "qq-bot:".
+	writeWebViewFixture(t, filepath.Join(root, "alemon.config.yaml"), "\uFEFFqq-bot:\n  appid: \"old\"\n  token: \"old-token\"\n\nqq-bot:\n  appid: \"new\"\n  token: \"new-token\"\n")
+
+	if _, err := (Manager{}).SavePackageConfig(root, "@alemonjs/qq-bot", map[string]any{
+		"appid": "saved",
+		"token": "saved-token",
+	}); err != nil {
+		t.Fatalf("SavePackageConfig: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "alemon.config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := string(data)
+	if count := strings.Count(output, "qq-bot:"); count != 1 {
+		t.Fatalf("saved config has %d qq-bot sections, want exactly one:\n%s", count, output)
+	}
+	if strings.Contains(output, "old-token") {
+		t.Fatalf("saved config kept the stale duplicate section:\n%s", output)
+	}
+	config, err := (Manager{}).PackageConfig(root, "@alemonjs/qq-bot")
+	if err != nil {
+		t.Fatalf("PackageConfig after save: %v", err)
+	}
+	if config.Values["appid"] != "saved" || config.Values["token"] != "saved-token" {
+		t.Fatalf("values after save = %#v, want the freshly saved values", config.Values)
 	}
 }
 

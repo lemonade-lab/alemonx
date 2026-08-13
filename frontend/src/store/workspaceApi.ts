@@ -143,6 +143,17 @@ export type SystemNetworkCheck = {
   latencyMs?: number
   message: string
 }
+export type SystemRedisStatus = {
+  running: boolean
+  managed: boolean
+  external: boolean
+  skipped: boolean
+  port: number
+  address: string
+  message: string
+  autoStart: boolean
+  disabled: boolean
+}
 export type SystemCurrentRobot = {
   root: string
   name: string
@@ -306,7 +317,8 @@ export const workspaceApi = createApi({
     'SetupUpdate',
     'SetupPlugins',
     'EnvironmentReport',
-    'SystemNetwork'
+    'SystemNetwork',
+    'SystemRedis'
   ],
   endpoints: build => ({
     goals: build.query<unknown[], void>({ query: () => 'goals' }),
@@ -485,6 +497,28 @@ export const workspaceApi = createApi({
     systemNetwork: build.query<SystemNetworkSettings, void>({
       query: () => 'system/network',
       providesTags: ['SystemNetwork']
+    }),
+    systemRedis: build.query<SystemRedisStatus, void>({
+      query: () => 'system/redis',
+      providesTags: ['SystemRedis']
+    }),
+    controlSystemRedis: build.mutation<
+      SystemRedisStatus,
+      'start' | 'stop' | 'restart'
+    >({
+      query: action => ({
+        url: 'system/redis',
+        method: 'POST',
+        body: { action }
+      }),
+      invalidatesTags: ['SystemRedis']
+    }),
+    saveSystemRedisConfig: build.mutation<
+      SystemRedisStatus,
+      { port: number; autoStart: boolean; disabled: boolean }
+    >({
+      query: body => ({ url: 'system/redis', method: 'PUT', body }),
+      invalidatesTags: ['SystemRedis']
     }),
     saveSystemNetwork: build.mutation<
       SystemNetworkSettings,
@@ -863,8 +897,11 @@ export const {
   useLazySetupPluginDevelopmentLogsQuery,
   useSystemMcpQuery,
   useSystemNetworkQuery,
+  useSystemRedisQuery,
   useSaveSystemNetworkMutation,
   useTestSystemNetworkMutation,
+  useControlSystemRedisMutation,
+  useSaveSystemRedisConfigMutation,
   useSetSystemCurrentRobotMutation,
   useStartSetupPluginTaskMutation,
   useCatalogQuery,

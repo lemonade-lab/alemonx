@@ -622,6 +622,7 @@ func (m Manager) RuntimePreflight(root string) (RuntimePreflight, error) {
 	if err != nil && !os.IsNotExist(err) {
 		return RuntimePreflight{}, fmt.Errorf("无法读取机器人运行配置：%w", err)
 	}
+	content = []byte(stripYAMLBOM(string(content)))
 	preflight := RuntimePreflight{Missing: []string{}, Summary: []string{}}
 	dependencies, dependencyErr := m.RuntimeDependencies(root)
 	if dependencyErr != nil {
