@@ -12,15 +12,15 @@ import {
   Plus,
   RefreshCw,
   Tags,
-  Trash2,
+  Trash2
 } from 'lucide-react'
 import { ConfirmDialog } from './ConfirmDialog'
 import { DesktopWindow } from './DesktopWindow'
 import { Tabs } from './Tabs'
 import {
-	useInitializeGitMutation,
-	useGitWorkspaceActionMutation,
-	useGitWorkspaceQuery
+  useInitializeGitMutation,
+  useGitWorkspaceActionMutation,
+  useGitWorkspaceQuery
 } from '../store/workspaceApi'
 
 type Project = { name: string; path: string }
@@ -194,7 +194,8 @@ export function RobotGitControl({
     refetch
   } = useGitWorkspaceQuery(gitQueryArgs, { skip: !root })
   const [run, { isLoading }] = useGitWorkspaceActionMutation()
-	const [initializeGit, { isLoading: isInitializing }] = useInitializeGitMutation()
+  const [initializeGit, { isLoading: isInitializing }] =
+    useInitializeGitMutation()
   const fetchedBranchView = useRef(false)
   useEffect(() => {
     if (tab !== 'branch' || fetchedBranchView.current || !root) return
@@ -211,10 +212,12 @@ export function RobotGitControl({
   const [tagMessage, setTagMessage] = useStoreState('')
   const [remoteName, setRemoteName] = useStoreState('origin')
   const [remoteURL, setRemoteURL] = useStoreState('')
-	const [authorName, setAuthorName] = useStoreState('')
-	const [authorEmail, setAuthorEmail] = useStoreState('')
-	const [repository, setRepository] = useStoreState('')
-	const [initialMessage, setInitialMessage] = useStoreState('chore: initialize project')
+  const [authorName, setAuthorName] = useStoreState('')
+  const [authorEmail, setAuthorEmail] = useStoreState('')
+  const [repository, setRepository] = useStoreState('')
+  const [initialMessage, setInitialMessage] = useStoreState(
+    'chore: initialize project'
+  )
   if (!project) return null
 
   const execute = async (request: NonNullable<Pending>) => {
@@ -236,21 +239,21 @@ export function RobotGitControl({
   }
   const request = (action: Action, value?: string, message?: string) =>
     setPending({ action, value, message })
-	const initialize = async () => {
-		try {
-			const result = await initializeGit({
-				root,
-				authorName: authorName.trim(),
-				authorEmail: authorEmail.trim(),
-				repository: repository.trim(),
-				message: initialMessage.trim()
-			}).unwrap()
-			setOutput(result.output || 'Git 仓库已初始化。')
-			await refetch()
-		} catch (reason) {
-			setOutput(reason instanceof Error ? reason.message : 'Git 初始化未完成。')
-		}
-	}
+  const initialize = async () => {
+    try {
+      const result = await initializeGit({
+        root,
+        authorName: authorName.trim(),
+        authorEmail: authorEmail.trim(),
+        repository: repository.trim(),
+        message: initialMessage.trim()
+      }).unwrap()
+      setOutput(result.output || 'Git 仓库已初始化。')
+      await refetch()
+    } catch (reason) {
+      setOutput(reason instanceof Error ? reason.message : 'Git 初始化未完成。')
+    }
+  }
   const changes = data?.changes ?? []
   const changeTree = buildChangeTree(changes)
   const syncText = !data?.upstream
@@ -661,7 +664,9 @@ export function RobotGitControl({
       minimized={minimized}
       title={`${project.name} · Git`}
       subtitle={data?.gitRoot || project.path}
-      icon={<GitBranch className="size-4 shrink-0 text-brand-600 dark:text-brand-200" />}
+      icon={
+        <GitBranch className="size-4 shrink-0 text-brand-600 dark:text-brand-200" />
+      }
       zIndex={zIndex}
       onActivate={onActivate}
       onClose={onClose}
@@ -681,99 +686,129 @@ export function RobotGitControl({
         </button>
       }
     >
-        {isInitialLoading ? (
-          <p className="grid min-h-40 place-items-center text-sm text-slate-500">
-            正在读取 Git 状态…
-          </p>
-        ) : error ? (
-          <p className="grid min-h-40 place-items-center text-sm text-slate-500">
-            无法读取 Git 状态，请确认目录可访问。
-          </p>
-        ) : !data?.repository ? (
-	          <section className="grid min-h-56 content-center gap-4 p-6 text-center">
-            <GitBranch className="size-8 text-slate-400" />
-            <strong className="text-sm font-semibold text-slate-800">
-              此机器人目录尚未初始化 Git
-            </strong>
-            <span className="text-xs text-slate-500">
-              填写本项目的 Git 信息后初始化；不会修改你的全局 Git 身份。
-            </span>
-			<div className="mx-auto grid w-full max-w-md gap-3 text-left">
-			  <label className="grid gap-1 text-xs font-semibold text-slate-600">
-				提交姓名
-				<input className="h-9 rounded-md border border-slate-300 px-2.5 text-sm font-normal outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100" autoFocus value={authorName} onChange={event => setAuthorName(event.target.value)} placeholder="你的姓名" />
-			  </label>
-			  <label className="grid gap-1 text-xs font-semibold text-slate-600">
-				提交邮箱
-				<input className="h-9 rounded-md border border-slate-300 px-2.5 text-sm font-normal outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100" type="email" value={authorEmail} onChange={event => setAuthorEmail(event.target.value)} placeholder="name@example.com" />
-			  </label>
-			  <label className="grid gap-1 text-xs font-semibold text-slate-600">
-				远程仓库（可选）
-				<input className="h-9 rounded-md border border-slate-300 px-2.5 text-sm font-normal outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100" value={repository} onChange={event => setRepository(event.target.value)} placeholder="https://github.com/owner/repo.git" />
-			  </label>
-			  <label className="grid gap-1 text-xs font-semibold text-slate-600">
-				首个提交说明
-				<input className="h-9 rounded-md border border-slate-300 px-2.5 text-sm font-normal outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100" value={initialMessage} onChange={event => setInitialMessage(event.target.value)} />
-			  </label>
-			  <button className="primary-button justify-self-center" disabled={isInitializing || !authorName.trim() || !authorEmail.trim()} onClick={() => void initialize()}>
-				{isInitializing ? '正在初始化…' : '填写 Git 信息并初始化'}
-			  </button>
-			</div>
-			{output && <pre className="mx-auto w-full max-w-md overflow-auto rounded-lg bg-slate-950 p-3 text-left text-xs leading-5 text-slate-200">{output}</pre>}
-          </section>
-        ) : (
-          <div className="git-workspace-content grid min-h-0 content-start gap-3 overflow-auto p-4">
-            <Tabs
-              ariaLabel="Git 功能"
-              items={tabItems.map(item => {
-                const Icon = item.icon
-                return {
-                  id: item.id,
-                  icon: <Icon className="size-3.5" />,
-                  label: item.label
-                }
-              })}
-              onChange={setTab}
-              value={tab}
-              variant="pill"
-            />
-            {panel}
-            {output && (
-              <pre className="overflow-auto rounded-lg bg-slate-950 p-3 text-xs leading-5 text-slate-200">
-                {output}
-              </pre>
-            )}
+      {isInitialLoading ? (
+        <p className="grid min-h-40 place-items-center text-sm text-slate-500">
+          正在读取 Git 状态…
+        </p>
+      ) : error ? (
+        <p className="grid min-h-40 place-items-center text-sm text-slate-500">
+          无法读取 Git 状态，请确认目录可访问。
+        </p>
+      ) : !data?.repository ? (
+        <section className="grid min-h-56 content-center gap-4 p-6 text-center">
+          <strong className="text-sm font-semibold text-slate-800">
+            此机器人目录尚未初始化 Git
+          </strong>
+          <span className="text-xs text-slate-500">
+            填写本项目的 Git 信息后初始化；不会修改你的全局 Git 身份。
+          </span>
+          <div className="mx-auto grid w-full max-w-md gap-3 text-left">
+            <label className="grid gap-1 text-xs font-semibold text-slate-600">
+              提交姓名
+              <input
+                className="h-9 rounded-md border border-slate-300 px-2.5 text-sm font-normal outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
+                autoFocus
+                value={authorName}
+                onChange={event => setAuthorName(event.target.value)}
+                placeholder="你的姓名"
+              />
+            </label>
+            <label className="grid gap-1 text-xs font-semibold text-slate-600">
+              提交邮箱
+              <input
+                className="h-9 rounded-md border border-slate-300 px-2.5 text-sm font-normal outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
+                type="email"
+                value={authorEmail}
+                onChange={event => setAuthorEmail(event.target.value)}
+                placeholder="name@example.com"
+              />
+            </label>
+            <label className="grid gap-1 text-xs font-semibold text-slate-600">
+              远程仓库（可选）
+              <input
+                className="h-9 rounded-md border border-slate-300 px-2.5 text-sm font-normal outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
+                value={repository}
+                onChange={event => setRepository(event.target.value)}
+                placeholder="https://github.com/owner/repo.git"
+              />
+            </label>
+            <label className="grid gap-1 text-xs font-semibold text-slate-600">
+              首个提交说明
+              <input
+                className="h-9 rounded-md border border-slate-300 px-2.5 text-sm font-normal outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
+                value={initialMessage}
+                onChange={event => setInitialMessage(event.target.value)}
+              />
+            </label>
+            <button
+              className="primary-button justify-self-center"
+              disabled={
+                isInitializing || !authorName.trim() || !authorEmail.trim()
+              }
+              onClick={() => void initialize()}
+            >
+              {isInitializing ? '正在初始化…' : '填写 Git 信息并初始化'}
+            </button>
           </div>
-        )}
-        <ConfirmDialog
-          open={pending !== null}
-          title={confirm?.title || '确认 Git 操作'}
-          subtitle={
-            confirm?.destructive
-              ? '此操作会修改本地 Git 历史或配置，无法自动恢复。'
-              : '操作将只在当前机器人目录执行。'
-          }
-          message={
-            pending?.action === 'commit'
-              ? `将提交工作区全部 ${changes.length} 项变更：\n${changes
-                  .map(item => item.path)
-                  .slice(0, 5)
-                  .join(
-                    '\n'
-                  )}${changes.length > 5 ? `\n… 共 ${changes.length} 项` : ''}\n\n说明：${pending.message}`
-              : pending?.value
-                ? `目标：${pending.value}${pending.message ? `\n说明：${pending.message}` : ''}`
-                : pending?.message
-                  ? `说明：${pending.message}`
-                  : '请确认继续。'
-          }
-          confirmLabel={confirm?.confirm || '确认'}
-          busy={isLoading}
-          onCancel={() => setPending(null)}
-          onConfirm={() => {
-            if (pending) void execute(pending)
-          }}
-        />
+          {output && (
+            <pre className="mx-auto w-full max-w-md overflow-auto rounded-lg bg-slate-950 p-3 text-left text-xs leading-5 text-slate-200">
+              {output}
+            </pre>
+          )}
+        </section>
+      ) : (
+        <div className="git-workspace-content grid min-h-0 content-start gap-3 overflow-auto p-4">
+          <Tabs
+            ariaLabel="Git 功能"
+            items={tabItems.map(item => {
+              const Icon = item.icon
+              return {
+                id: item.id,
+                icon: <Icon className="size-3.5" />,
+                label: item.label
+              }
+            })}
+            onChange={setTab}
+            value={tab}
+            variant="pill"
+          />
+          {panel}
+          {output && (
+            <pre className="overflow-auto rounded-lg bg-slate-950 p-3 text-xs leading-5 text-slate-200">
+              {output}
+            </pre>
+          )}
+        </div>
+      )}
+      <ConfirmDialog
+        open={pending !== null}
+        title={confirm?.title || '确认 Git 操作'}
+        subtitle={
+          confirm?.destructive
+            ? '此操作会修改本地 Git 历史或配置，无法自动恢复。'
+            : '操作将只在当前机器人目录执行。'
+        }
+        message={
+          pending?.action === 'commit'
+            ? `将提交工作区全部 ${changes.length} 项变更：\n${changes
+                .map(item => item.path)
+                .slice(0, 5)
+                .join(
+                  '\n'
+                )}${changes.length > 5 ? `\n… 共 ${changes.length} 项` : ''}\n\n说明：${pending.message}`
+            : pending?.value
+              ? `目标：${pending.value}${pending.message ? `\n说明：${pending.message}` : ''}`
+              : pending?.message
+                ? `说明：${pending.message}`
+                : '请确认继续。'
+        }
+        confirmLabel={confirm?.confirm || '确认'}
+        busy={isLoading}
+        onCancel={() => setPending(null)}
+        onConfirm={() => {
+          if (pending) void execute(pending)
+        }}
+      />
     </DesktopWindow>
   )
 }
