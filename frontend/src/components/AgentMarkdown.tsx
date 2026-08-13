@@ -3,6 +3,7 @@ import { type ReactNode } from 'react'
 import Markdown from 'markdown-to-jsx'
 import { Check, Copy } from 'lucide-react'
 import { highlightCode } from './highlight'
+import './AgentMarkdown.scss'
 
 // 从代码块内容提取语言标签（```tsx 等第一行）。
 function detectLanguage(content: string): string {
@@ -40,7 +41,9 @@ function CodeBlock({
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(
-        codeText.replace(/^```[a-zA-Z0-9_+-]*\s*\n?/, '').replace(/\n```\s*$/, '')
+        codeText
+          .replace(/^```[a-zA-Z0-9_+-]*\s*\n?/, '')
+          .replace(/\n```\s*$/, '')
       )
       setCopied(true)
       setTimeout(() => setCopied(false), 1800)
@@ -63,7 +66,9 @@ function CodeBlock({
           <span className="agent-codeblock-lang">代码</span>
         )}
         <div className="agent-codeblock-actions">
-          {streaming && <span className="agent-codeblock-streaming">生成中…</span>}
+          {streaming && (
+            <span className="agent-codeblock-streaming">生成中…</span>
+          )}
           <button
             className="agent-codeblock-copy"
             onClick={() => void copy()}

@@ -109,7 +109,9 @@ import { AccountManagementPage } from './AccountManagement'
 import { RobotGitControl } from './RobotGitControl'
 import { useIsMobileViewport } from '../hooks/useIsMobileViewport'
 import { TestCenter } from './TestCenter'
+import { LiveChat } from './LiveChat'
 import { DesktopWindow } from './DesktopWindow'
+import { qqChatWindowStorageKey } from './qqChatStorage'
 import { SSHControl } from './SSHControl'
 import { GitHubAuthControl } from './GitHubAuthControl'
 import { ConfigFieldsEditor, ConfigSourceLinks } from './PackageConfigFields'
@@ -137,10 +139,10 @@ import {
   useRobotPM2StatusQuery,
   useRobotPM2ProcessesQuery,
   useLazyAppPortQuery,
-	useLazyTestPortQuery,
+  useLazyTestPortQuery,
   useLazyRobotPortsQuery,
   useSaveAppPortMutation,
-	useSaveTestPortMutation,
+  useSaveTestPortMutation,
   useRobotAppsQuery,
   useRobotWebViewsQuery,
   useSetAppEnabledMutation,
@@ -220,6 +222,7 @@ type FloatingWindowID =
   | 'git'
   | 'app'
   | 'test'
+  | 'live'
   | 'pm2Logs'
   | 'pm2Status'
   | 'ops'
@@ -241,6 +244,7 @@ type Props = {
     git: { open: boolean; minimized: boolean }
     app: { open: boolean; minimized: boolean }
     test: { open: boolean; minimized: boolean }
+    live: { open: boolean; minimized: boolean }
     pm2Logs: { open: boolean; minimized: boolean }
     pm2Status: { open: boolean; minimized: boolean }
     ops: { open: boolean; minimized: boolean }
@@ -1001,15 +1005,21 @@ export function Dashboard({
   const [appPortDialog, setAppPortDialog] = useStoreState(false)
   const [appPortValue, setAppPortValue] = useStoreState('')
   const [appPortBusy, setAppPortBusy] = useStoreState(false)
-	const [testPortDialog, setTestPortDialog] = useStoreState(false)
-	const [testPortValue, setTestPortValue] = useStoreState('')
-	const [testPortBusy, setTestPortBusy] = useStoreState(false)
+  const [testPortDialog, setTestPortDialog] = useStoreState(false)
+  const [testPortValue, setTestPortValue] = useStoreState('')
+  const [testPortBusy, setTestPortBusy] = useStoreState(false)
+  const [livePortDialog, setLivePortDialog] = useStoreState(false)
+  const [livePortValue, setLivePortValue] = useStoreState('')
+  const [livePortBusy, setLivePortBusy] = useStoreState(false)
+  const [liveLoginRequest, setLiveLoginRequest] = useStoreState(0)
   const [appLaunching, setAppLaunching] = useStoreState(false)
   const [appContentOpen, setAppContentOpen] = useStoreState(false)
   const [appMinimized, setAppMinimized] = useStoreState(false)
   const [testLaunching, setTestLaunching] = useStoreState(false)
   const [testContentOpen, setTestContentOpen] = useStoreState(false)
   const [testMinimized, setTestMinimized] = useStoreState(false)
+  const [liveContentOpen, setLiveContentOpen] = useStoreState(false)
+  const [liveMinimized, setLiveMinimized] = useStoreState(false)
   const [selectedWebViewID, setSelectedWebViewID] = useStoreState('')
   const [pendingWebViewID, setPendingWebViewID] = useStoreState('')
   const [gitMinimized, setGitMinimized] = useStoreState(false)
@@ -1025,14 +1035,16 @@ export function Dashboard({
       git: 102,
       app: 103,
       test: 104,
-      pm2Logs: 105,
-      pm2Status: 106,
-      ops: 107
+      live: 105,
+      pm2Logs: 106,
+      pm2Status: 107,
+      ops: 108
     }
   )
-  const nextWindowLayer = useRef(107)
+  const nextWindowLayer = useRef(108)
   const openAppRef = useRef<() => void>(() => {})
   const openTestRef = useRef<() => void>(() => {})
+  const openLiveRef = useRef<() => void>(() => {})
   const [invalidDirectory, setInvalidDirectory] = useStoreState('')
   const [pendingBackpackRemoval, setPendingBackpackRemoval] = useStoreState('')
   const [pendingProjectRemoval, setPendingProjectRemoval] = useStoreState<
@@ -1085,6 +1097,7 @@ export function Dashboard({
       git: { open: Boolean(gitProject), minimized: gitMinimized },
       app: { open: appContentOpen, minimized: appMinimized },
       test: { open: testContentOpen, minimized: testMinimized },
+      live: { open: liveContentOpen, minimized: liveMinimized },
       pm2Logs: { open: pm2LogsOpen, minimized: pm2LogsMinimized },
       pm2Status: { open: pm2ProcessesOpen, minimized: pm2ProcessesMinimized },
       ops: { open: opsOpen, minimized: opsMinimized },
@@ -1116,7 +1129,9 @@ export function Dashboard({
     setupPlugins,
     systemWindows,
     testContentOpen,
-    testMinimized
+    testMinimized,
+    liveContentOpen,
+    liveMinimized
   ])
   useEffect(() => {
     const toggleTerminal = () => {
@@ -1409,8 +1424,8 @@ export function Dashboard({
   const [startRobotTask] = useStartRobotTaskMutation()
   const [loadAppPort] = useLazyAppPortQuery()
   const [saveAppPort] = useSaveAppPortMutation()
-	const [loadTestPort] = useLazyTestPortQuery()
-	const [saveTestPort] = useSaveTestPortMutation()
+  const [loadTestPort] = useLazyTestPortQuery()
+  const [saveTestPort] = useSaveTestPortMutation()
   const { data: robotWebViews = [] } = useRobotWebViewsQuery(root, {
     skip: !root
   })
@@ -1664,13 +1679,13 @@ export function Dashboard({
     if (!root || testLaunching) return
     setTestLaunching(true)
     try {
-		const info = await loadTestPort(root, true).unwrap()
-		if (info.configured) {
-			await launchTest()
-		} else {
-			setTestPortValue(String(info.port))
-			setTestPortDialog(true)
-		}
+      const info = await loadTestPort(root, true).unwrap()
+      if (info.configured) {
+        await launchTest()
+      } else {
+        setTestPortValue(String(info.port))
+        setTestPortDialog(true)
+      }
     } catch (reason) {
       showOutput(operationErrorMessage(reason, '测试台启动失败。'), true)
     } finally {
@@ -1678,27 +1693,27 @@ export function Dashboard({
     }
   }
   openTestRef.current = () => void openTest()
-	const confirmTestPort = async () => {
-		if (!root) return
-		const port = Number(testPortValue.trim())
-		if (!Number.isInteger(port) || port < 1 || port > 65535) {
-			showOutput('测试端口应为 1-65535 之间的整数。', true)
-			return
-		}
-		setTestPortBusy(true)
-		try {
-			await saveTestPort({ root, port }).unwrap()
-			await refreshConfigDraft()
-			setTestPortDialog(false)
-			setTestLaunching(true)
-			await launchTest()
-		} catch (reason) {
-			showOutput(operationErrorMessage(reason, '测试端口保存失败。'), true)
-		} finally {
-			setTestPortBusy(false)
-			setTestLaunching(false)
-		}
-	}
+  const confirmTestPort = async () => {
+    if (!root) return
+    const port = Number(testPortValue.trim())
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      showOutput('服务端口应为 1-65535 之间的整数。', true)
+      return
+    }
+    setTestPortBusy(true)
+    try {
+      await saveTestPort({ root, port }).unwrap()
+      await refreshConfigDraft()
+      setTestPortDialog(false)
+      setTestLaunching(true)
+      await launchTest()
+    } catch (reason) {
+      showOutput(operationErrorMessage(reason, '服务端口保存失败。'), true)
+    } finally {
+      setTestPortBusy(false)
+      setTestLaunching(false)
+    }
+  }
   const launchTest = async () => {
     if (!root) return
     try {
@@ -1742,6 +1757,53 @@ export function Dashboard({
       return false
     }
   }
+  const requestLiveLogin = () => {
+    markUserNavigation()
+    closeTemporaryContentPage()
+    setPage('robot')
+    setSection('runtime')
+    setLiveLoginRequest(value => value + 1)
+  }
+  const openLive = async () => {
+    if (!root) return
+    try {
+      const info = await loadTestPort(root, true).unwrap()
+      if (!info.configured) {
+        setLivePortValue(String(info.port))
+        setLivePortDialog(true)
+        return
+      }
+      // Open the chat window even when the CBP endpoint is temporarily
+      // unreachable. Its own connection state explains what is wrong, while
+      // attempting to start again here conflicts with an existing robot
+      // process and prevents the user from seeing the chat window at all.
+      setLiveContentOpen(true)
+      setLiveMinimized(false)
+      activateFloatingWindow('live')
+    } catch (reason) {
+      showOutput(operationErrorMessage(reason, '在线聊天不可用。'), true)
+    }
+  }
+  openLiveRef.current = () => void openLive()
+  const confirmLivePort = async () => {
+    if (!root) return
+    const port = Number(livePortValue.trim())
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      showOutput('CBP 服务端口应为 1-65535 之间的整数。', true)
+      return
+    }
+    setLivePortBusy(true)
+    try {
+      await saveTestPort({ root, port }).unwrap()
+      await refreshConfigDraft()
+      setLivePortDialog(false)
+      requestLiveLogin()
+    } catch (reason) {
+      showOutput(operationErrorMessage(reason, 'CBP 服务端口保存失败。'), true)
+    } finally {
+      setLivePortBusy(false)
+    }
+  }
   useEffect(() => {
     const toggleGit = () => {
       activateFloatingWindow('git')
@@ -1767,6 +1829,14 @@ export function Dashboard({
         return
       }
       openTestRef.current()
+    }
+    const toggleLive = () => {
+      activateFloatingWindow('live')
+      if (liveContentOpen) {
+        setLiveMinimized(value => !value)
+        return
+      }
+      openLiveRef.current()
     }
     const togglePM2Logs = () => {
       activateFloatingWindow('pm2Logs')
@@ -1808,6 +1878,7 @@ export function Dashboard({
     window.addEventListener('alx:desktop-git-toggle', toggleGit)
     window.addEventListener('alx:desktop-app-toggle', toggleApp)
     window.addEventListener('alx:desktop-test-toggle', toggleTest)
+    window.addEventListener('alx:desktop-live-toggle', toggleLive)
     window.addEventListener('alx:desktop-pm2-logs-toggle', togglePM2Logs)
     window.addEventListener('alx:desktop-pm2-status-toggle', togglePM2Status)
     window.addEventListener('alx:desktop-ops-toggle', toggleOps)
@@ -1816,6 +1887,7 @@ export function Dashboard({
       window.removeEventListener('alx:desktop-git-toggle', toggleGit)
       window.removeEventListener('alx:desktop-app-toggle', toggleApp)
       window.removeEventListener('alx:desktop-test-toggle', toggleTest)
+      window.removeEventListener('alx:desktop-live-toggle', toggleLive)
       window.removeEventListener('alx:desktop-pm2-logs-toggle', togglePM2Logs)
       window.removeEventListener(
         'alx:desktop-pm2-status-toggle',
@@ -1834,6 +1906,8 @@ export function Dashboard({
     setGitProject,
     setTestMinimized,
     testContentOpen,
+    liveContentOpen,
+    setLiveMinimized,
     pm2LogsOpen,
     pm2ProcessesOpen,
     setPM2LogsMinimized,
@@ -2682,6 +2756,7 @@ export function Dashboard({
           pm2Running={Boolean(pm2Status?.running)}
           onSaveLogin={saveRuntimeLogin}
           onSavePackageConfig={savePackageConfig}
+          liveLoginRequest={liveLoginRequest}
           developerMode={developerMode}
         />
       )}
@@ -3043,37 +3118,93 @@ export function Dashboard({
               </footer>
             </form>
           </Modal>
-		  <Modal open={testPortDialog} ariaLabel="设置测试端口">
-			<form
-			  className="grid w-full max-w-sm gap-4 rounded-xl border border-slate-200 bg-white p-5 shadow-[0_20px_58px_rgb(28_26_23/0.22)]"
-			  onSubmit={event => {
-				event.preventDefault()
-				void confirmTestPort()
-			  }}
-			  onMouseDown={event => event.stopPropagation()}
-			>
-			  <div className="grid gap-1">
-				<strong className="text-sm text-ink-950">配置测试端口</strong>
-				<span className="text-xs text-slate-500">用于当前机器人的测试台（testone）。</span>
-			  </div>
-			  <label className="grid gap-1.5 text-xs font-medium text-slate-600">
-				测试端口（1-65535）
-				<input
-				  className="h-10 rounded-md border border-slate-300 px-3 text-sm text-slate-800 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
-				  value={testPortValue}
-				  onChange={event => setTestPortValue(event.target.value)}
-				  type="number"
-				  min={1}
-				  max={65535}
-				  autoFocus
-				/>
-			  </label>
-			  <footer className="flex justify-end gap-2">
-				<button type="button" className="secondary-button" onClick={() => setTestPortDialog(false)} disabled={testPortBusy}>取消</button>
-				<button className="primary-button" disabled={testPortBusy}>{testPortBusy ? '保存中…' : '启动测试'}</button>
-			  </footer>
-			</form>
-		  </Modal>
+          <Modal open={testPortDialog} ariaLabel="设置服务端口">
+            <form
+              className="grid w-full max-w-sm gap-4 rounded-xl border border-slate-200 bg-white p-5 shadow-[0_20px_58px_rgb(28_26_23/0.22)]"
+              onSubmit={event => {
+                event.preventDefault()
+                void confirmTestPort()
+              }}
+              onMouseDown={event => event.stopPropagation()}
+            >
+              <div className="grid gap-1">
+                <strong className="text-sm text-ink-950">配置服务端口</strong>
+                <span className="text-xs text-slate-500">
+                  用于当前机器人的测试台（testone）。
+                </span>
+              </div>
+              <label className="grid gap-1.5 text-xs font-medium text-slate-600">
+                服务端口（1-65535）
+                <input
+                  className="h-10 rounded-md border border-slate-300 px-3 text-sm text-slate-800 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
+                  value={testPortValue}
+                  onChange={event => setTestPortValue(event.target.value)}
+                  type="number"
+                  min={1}
+                  max={65535}
+                  autoFocus
+                />
+              </label>
+              <footer className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={() => setTestPortDialog(false)}
+                  disabled={testPortBusy}
+                >
+                  取消
+                </button>
+                <button className="primary-button" disabled={testPortBusy}>
+                  {testPortBusy ? '保存中…' : '启动测试'}
+                </button>
+              </footer>
+            </form>
+          </Modal>
+          <Modal open={livePortDialog} ariaLabel="配置在线聊天端口">
+            <form
+              className="grid w-full max-w-sm gap-4 rounded-xl border border-slate-200 bg-white p-5 shadow-[0_20px_58px_rgb(28_26_23/0.22)]"
+              onSubmit={event => {
+                event.preventDefault()
+                void confirmLivePort()
+              }}
+              onMouseDown={event => event.stopPropagation()}
+            >
+              <div className="grid gap-1">
+                <strong className="text-sm text-ink-950">
+                  配置 CBP 服务端口
+                </strong>
+                <span className="text-xs leading-5 text-slate-500">
+                  在线聊天通过 AlemonJS 已登录机器人的 CBP
+                  连接通信。保存后将打开登录并启动弹窗。
+                </span>
+              </div>
+              <label className="grid gap-1.5 text-xs font-medium text-slate-600">
+                CBP 服务端口（1-65535）
+                <input
+                  className="h-10 rounded-md border border-slate-300 px-3 text-sm text-slate-800 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
+                  value={livePortValue}
+                  onChange={event => setLivePortValue(event.target.value)}
+                  type="number"
+                  min={1}
+                  max={65535}
+                  autoFocus
+                />
+              </label>
+              <footer className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={() => setLivePortDialog(false)}
+                  disabled={livePortBusy}
+                >
+                  取消
+                </button>
+                <button className="primary-button" disabled={livePortBusy}>
+                  {livePortBusy ? '保存中…' : '继续登录'}
+                </button>
+              </footer>
+            </form>
+          </Modal>
           <DirectoryPicker
             open={directoryPickerOpen}
             onClose={() => setDirectoryPickerOpen(false)}
@@ -3203,6 +3334,7 @@ export function Dashboard({
                     onOpenApp={() => void openApp()}
                     testLaunching={testLaunching}
                     onOpenTest={() => void openTest()}
+                    onOpenLive={() => void openLive()}
                     onPage={selectPage}
                     onSection={openSection}
                     onBuildMode={mode => {
@@ -3253,6 +3385,19 @@ export function Dashboard({
             setTestMinimized(false)
             // 关闭测试窗口即停止隔离沙盒，进程与临时配置一并清理。
             void stopTestSandbox()
+          }}
+        />
+      )}
+      {liveContentOpen && (
+        <LiveChatWindow
+          root={root}
+          minimized={liveMinimized}
+          zIndex={windowLayers.live}
+          onActivate={() => activateFloatingWindow('live')}
+          onMinimize={() => setLiveMinimized(true)}
+          onClose={() => {
+            setLiveContentOpen(false)
+            setLiveMinimized(false)
           }}
         />
       )}
@@ -5001,13 +5146,19 @@ function EmptyWorkspace({
   onClone: () => void
 }) {
   return (
-    <section className="bot-workspace empty-workspace">
-      <span>◈</span>
-      <div>
-        <strong>开始管理你的机器人</strong>
-        <p>选择已有目录，或从 Git 克隆一个新的机器人项目。</p>
+    <section className="grid min-h-full content-center justify-items-center p-0 text-center">
+      <span className="inline-flex size-8 items-center justify-center rounded-[10px] bg-(--theme-accent-soft) text-lg text-(--theme-accent-text)">
+        ◈
+      </span>
+      <div className="grid gap-1.5">
+        <strong className="my-2 text-sm text-(--theme-text-primary)">
+          开始管理你的机器人
+        </strong>
+        <p className="m-0 text-xs text-(--theme-text-muted)">
+          选择已有目录，或从 Git 克隆一个新的机器人项目。
+        </p>
       </div>
-      <footer>
+      <footer className="flex flex-wrap justify-center gap-2">
         <button className="secondary-button" onClick={onClone}>
           <GitBranch className="size-3.5" />从 Git 克隆
         </button>
@@ -5030,14 +5181,25 @@ function InvalidWorkspace({
   onChoose: () => void
 }) {
   return (
-    <section className="bot-workspace invalid-workspace">
-      <i>!</i>
-      <div>
-        <strong>机器人目录不可用</strong>
-        <span title={project.path}>{project.path}</span>
-        <small>{reason || '目录不存在或不再是可管理的机器人项目。'}</small>
+    <section className="mx-auto my-7 grid w-full max-w-155 grid-cols-[auto_minmax(0,1fr)] items-center gap-3.5 rounded-panel border border-(--theme-danger) bg-(--theme-warning-soft) p-4">
+      <i className="inline-flex size-9.5 items-center justify-center rounded-[10px] bg-(--theme-danger-soft) text-lg font-extrabold not-italic text-(--theme-danger-text)">
+        !
+      </i>
+      <div className="grid min-w-0 gap-1">
+        <strong className="text-[0.92rem] text-(--theme-danger-text)">
+          机器人目录不可用
+        </strong>
+        <span
+          className="truncate text-[0.74rem] text-(--theme-text-muted)"
+          title={project.path}
+        >
+          {project.path}
+        </span>
+        <small className="truncate text-[0.74rem] text-(--theme-text-muted)">
+          {reason || '目录不存在或不再是可管理的机器人项目。'}
+        </small>
       </div>
-      <footer>
+      <footer className="col-span-full flex justify-end gap-2 border-t border-(--theme-danger-soft) pt-3">
         <button className="secondary-button" onClick={onRemove}>
           移除旧目录
         </button>
@@ -7008,6 +7170,7 @@ function RuntimePanel({
   onRun,
   onSaveLogin,
   onSavePackageConfig,
+  liveLoginRequest,
   developerMode
 }: {
   overview?: RuntimeOverview
@@ -7031,6 +7194,7 @@ function RuntimePanel({
     packageName: string,
     values: Record<string, unknown>
   ) => Promise<boolean>
+  liveLoginRequest: number
   developerMode: boolean
 }) {
   type PendingAction = { label: string; note: string; execute: () => void }
@@ -7039,6 +7203,7 @@ function RuntimePanel({
     label: string
     note: string
     preflight: RuntimePreflight
+    requireLogin?: boolean
   }
   const [customLogin, setCustomLogin] = useStoreState('')
   const [customPackage, setCustomPackage] = useStoreState('')
@@ -7090,6 +7255,14 @@ function RuntimePanel({
   >({})
   const [loginDialogError, setLoginDialogError] = useStoreState('')
   const [loginDialogBusy, setLoginDialogBusy] = useStoreState(false)
+  const askStartRef = useRef<
+    (
+      action: string,
+      label: string,
+      note: string,
+      requireLogin?: boolean
+    ) => Promise<void>
+  >(() => Promise.resolve())
   const persistentReady = overview?.pm2Configured && overview.hasStartScript
   const pm2Managed = Boolean(pm2Status?.managed)
   const pm2LocalRunning = pm2Running
@@ -7184,7 +7357,12 @@ function RuntimePanel({
   // "谁最后启动谁为准": starting a new mode automatically stops the previous
   // one (the backend stops a running PM2 service before a local start, and a
   // local process before a background start). No upfront block here.
-  const askStart = async (action: string, label: string, note: string) => {
+  const askStart = async (
+    action: string,
+    label: string,
+    note: string,
+    requireLogin = false
+  ) => {
     try {
       // Bypass the 1-hour query cache so a just-installed connection package is
       // already reflected when the start dialog opens.
@@ -7203,13 +7381,29 @@ function RuntimePanel({
       if (platform?.installed && platform.package)
         void loadConnectionConfig(platform.package)
       setLoginDialogError('')
-      setLoginChoice({ action, label, note, preflight })
+      setLoginChoice({ action, label, note, preflight, requireLogin })
     } catch (reason) {
       setValidationMessage(
         operationErrorMessage(reason, '无法完成运行前检查。')
       )
     }
   }
+  askStartRef.current = askStart
+  const handledLiveLoginRequest = useRef(0)
+  useEffect(() => {
+    if (
+      !liveLoginRequest ||
+      handledLiveLoginRequest.current === liveLoginRequest
+    )
+      return
+    handledLiveLoginRequest.current = liveLoginRequest
+    void askStartRef.current(
+      'app',
+      '登录并启动机器人',
+      '在线聊天需要机器人以登录连接运行；启动后可重新打开聊天。',
+      true
+    )
+  }, [liveLoginRequest])
   const closeLoginDialog = () => {
     setLoginChoice(null)
     setLoginDialogError('')
@@ -7311,6 +7505,10 @@ function RuntimePanel({
         ? selectedPlatform
         : '')
     const hasLogin = Boolean(login)
+    if (loginChoice.requireLogin && !hasLogin) {
+      setLoginDialogError('在线聊天必须选择或填写登录连接后才能启动。')
+      return
+    }
     const missing = (connectionConfig?.fields ?? [])
       .filter(
         field =>
@@ -7556,14 +7754,18 @@ function RuntimePanel({
                       isMissingConfigValue(connectionValues[field.name])
                   )
                   .map(field => field.description || field.name)
-                const blocked = userLogin && missing.length > 0
+                const blocked =
+                  (loginChoice.requireLogin && !userLogin) ||
+                  (userLogin && missing.length > 0)
                 return (
                   <button
                     className="primary-button"
                     disabled={loginDialogBusy || busy || blocked}
                     title={
                       blocked
-                        ? `请先填写必填项：${missing.join('、')}`
+                        ? !userLogin
+                          ? '在线聊天必须选择或填写登录连接。'
+                          : `请先填写必填项：${missing.join('、')}`
                         : userLogin
                           ? '会先保存当前连接配置，再启动机器人。'
                           : '无 login 启动机器人。'
@@ -8144,10 +8346,49 @@ function TestCenterWindow({
       zIndex={zIndex}
       onActivate={onActivate}
       initialPosition={{ left: 72, top: 56 }}
-      width={980}
-      height={680}
+      width={1180}
+      height={760}
     >
       <TestCenter root={root} />
+    </DesktopWindow>
+  )
+}
+
+function LiveChatWindow({
+  root,
+  minimized,
+  zIndex,
+  onClose,
+  onMinimize,
+  onActivate
+}: {
+  root: string
+  minimized: boolean
+  zIndex: number
+  onClose: () => void
+  onMinimize: () => void
+  onActivate: () => void
+}) {
+  return (
+    <DesktopWindow
+      id="live"
+      open
+      minimized={minimized}
+      title="在线聊天"
+      subtitle=""
+      icon={
+        <MessageSquare className="size-4 shrink-0 text-brand-600 dark:text-brand-200" />
+      }
+      onClose={onClose}
+      onMinimize={onMinimize}
+      zIndex={zIndex}
+      onActivate={onActivate}
+      initialPosition={{ left: 92, top: 72 }}
+      width={1180}
+      height={760}
+      storageKey={qqChatWindowStorageKey(root)}
+    >
+      <LiveChat root={root} />
     </DesktopWindow>
   )
 }
@@ -8168,6 +8409,7 @@ function ControlCard({
   onOpenOps,
   onOpenApp,
   onOpenTest,
+  onOpenLive,
   onPage,
   onSection,
   onBuildMode,
@@ -8189,6 +8431,7 @@ function ControlCard({
   onOpenOps: () => void
   onOpenApp: () => void
   onOpenTest: () => void
+  onOpenLive: () => void
   onPage: (page: Page) => void
   onSection: (section: Section) => void
   onBuildMode: (mode: 'manifest' | 'npm' | 'git') => void
@@ -8378,7 +8621,7 @@ function ControlCard({
         )}
         {project && (
           <footer
-            className="control-quick-actions mt-2 grid grid-cols-4 gap-1 border-t border-slate-100 pt-2 dark:border-slate-700"
+            className="control-quick-actions mt-2 grid grid-cols-5 gap-1 border-t border-slate-100 pt-2 dark:border-slate-700"
             title={project.path}
           >
             <button
@@ -8425,6 +8668,15 @@ function ControlCard({
                 <FlaskConical className="size-3.5" />
               )}
               <span>测试</span>
+            </button>
+            <button
+              className="inline-flex min-h-8 items-center justify-center gap-1 rounded-md px-1 text-[11px] text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-700 dark:hover:text-slate-200"
+              onClick={onOpenLive}
+              aria-label="打开在线聊天"
+              title="连接已登录机器人的 CBP 在线聊天"
+            >
+              <MessageSquare className="size-3.5" />
+              <span>聊天</span>
             </button>
             <button
               className="inline-flex min-h-8 items-center justify-center gap-1 rounded-md px-1 text-[11px] text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-700 dark:hover:text-slate-200"
@@ -9284,14 +9536,20 @@ function OperationLog({
     failed && /没有权限|访问权限|permission denied|eacces/i.test(output)
   return (
     <aside
-      className={`robot-output ${failed ? 'failed' : 'completed'}`}
+      className={`fixed bottom-5.5 right-5.5 z-80 grid max-h-[min(240px,38vh)] w-[min(420px,calc(100vw-44px))] gap-2 overflow-auto rounded-panel border p-3 text-(--theme-text-primary) shadow-[0_16px_38px_rgb(28_26_23/0.13)] ${failed ? 'border-(--theme-danger) bg-(--theme-danger-soft)' : 'border-(--theme-accent-soft-border) bg-(--theme-success-soft)'}`}
       aria-live="polite"
       aria-label="最近操作结果"
     >
-      <header>
-        <div>
-          <i>{failed ? '!' : '✓'}</i>
-          <strong>
+      <header className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <i
+            className={`inline-flex size-5 items-center justify-center rounded-full text-xs not-italic font-bold ${failed ? 'bg-(--theme-danger) text-white' : 'bg-(--theme-success-soft) text-(--theme-success-text)'}`}
+          >
+            {failed ? '!' : '✓'}
+          </i>
+          <strong
+            className={`text-xs ${failed ? 'text-(--theme-danger-text)' : 'text-(--theme-success-text)'}`}
+          >
             {needsPermission
               ? '需要访问授权'
               : failed
@@ -9299,12 +9557,18 @@ function OperationLog({
                 : '操作已完成'}
           </strong>
         </div>
-        <button onClick={onClose} aria-label="关闭操作结果">
+        <button
+          className="text-button size-7 min-h-7 p-0"
+          onClick={onClose}
+          aria-label="关闭操作结果"
+        >
           ×
         </button>
       </header>
-      <pre>{output}</pre>
-      <small>
+      <pre className="m-0 max-h-45 overflow-auto whitespace-pre-wrap rounded-md bg-(--theme-surface-code) p-2.5 font-mono text-[0.73rem] leading-relaxed text-(--theme-text-code)">
+        {output}
+      </pre>
+      <small className="text-[11px] text-(--theme-text-muted)">
         {needsPermission ? '授权完成后，请回到这里重新执行本次操作。' : ''}
       </small>
     </aside>

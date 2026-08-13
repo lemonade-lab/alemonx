@@ -28,7 +28,7 @@ func (m Manager) Ports(root string) ([]RobotPort, error) {
 		items = append(items, RobotPort{Kind: "app", Label: "应用端口", Port: app.Port, Configured: true})
 	}
 	if test.Configured {
-		items = append(items, RobotPort{Kind: "test", Label: "测试端口", Port: test.Port, Configured: true})
+		items = append(items, RobotPort{Kind: "test", Label: "服务端口", Port: test.Port, Configured: true})
 	}
 	return items, nil
 }

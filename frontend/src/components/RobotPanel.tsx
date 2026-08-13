@@ -25,7 +25,12 @@ export function RobotPanel({
 }: Props) {
   return (
     <BotWorkspace
-      className={['robot-panel', className].filter(Boolean).join(' ')}
+      className={[
+        'max-w-190 [container-name:robot-panel] [container-type:inline-size]',
+        className
+      ]
+        .filter(Boolean)
+        .join(' ')}
       header={<RobotPanelHeader {...header} className={headerClassName} />}
     >
       {children}

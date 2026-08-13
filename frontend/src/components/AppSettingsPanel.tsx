@@ -19,13 +19,7 @@ import { ConfirmDialog } from './ConfirmDialog'
 import { RedisSettingsPanel } from './RedisSettingsPanel'
 
 type SettingsSection =
-  | 'auth'
-  | 'accounts'
-  | 'github'
-  | 'network'
-  | 'update'
-  | 'service'
-  | 'redis'
+  'auth' | 'accounts' | 'github' | 'network' | 'update' | 'service' | 'redis'
 
 const sections: Array<{
   id: SettingsSection
@@ -104,22 +98,36 @@ export function AppSettingsPanel() {
       if (!response.ok) throw new Error(result.error || '停止服务失败。')
       setStopMessage(result.output || '服务已停止，工作台即将断开连接。')
     } catch (reason) {
-      setStopMessage(reason instanceof Error ? reason.message : '停止服务失败。')
+      setStopMessage(
+        reason instanceof Error ? reason.message : '停止服务失败。'
+      )
     } finally {
       setStopBusy(false)
     }
   }
 
   return (
-    <div className="app-settings-shell">
-      <aside className="app-settings-sidebar" aria-label="设置分类">
-        <div className="app-settings-nav" role="tablist" aria-label="设置页面">
+    <div
+      className="grid h-full min-h-0 grid-cols-[176px_minmax(0,1fr)] bg-(--theme-surface-panel)"
+      data-app-settings-shell
+    >
+      <aside
+        className="flex flex-col gap-2 border-r border-(--theme-border-default) bg-(--theme-surface-raised) px-3 py-4.5"
+        data-app-settings-sidebar
+        aria-label="设置分类"
+      >
+        <div
+          className="grid gap-1"
+          data-app-settings-nav
+          role="tablist"
+          aria-label="设置页面"
+        >
           {sections.map(item => {
             const Icon = item.icon
             const selected = item.id === active
             return (
               <button
-                className={selected ? 'active' : ''}
+                className={`flex min-h-9 items-center gap-2 rounded-lg border px-2.5 text-left text-xs font-semibold transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-(--theme-accent) ${selected ? 'border-(--theme-accent-soft-border) bg-(--theme-accent-soft) text-(--theme-accent-text)' : 'border-transparent bg-transparent text-(--theme-text-secondary) hover:bg-(--theme-surface-hover) hover:text-(--theme-text-strong)'}`}
                 key={item.id}
                 id={`app-settings-tab-${item.id}`}
                 role="tab"
@@ -153,9 +161,9 @@ export function AppSettingsPanel() {
             )
           })}
         </div>
-        <div className="app-settings-stop-wrap">
+        <div className="mt-auto grid gap-1.5 border-t border-(--theme-border-default) pt-2.5">
           <button
-            className="app-settings-stop"
+            className="flex min-h-9 items-center gap-2 rounded-lg border border-transparent bg-transparent px-2.5 text-left text-xs font-semibold text-(--theme-danger) transition hover:border-(--theme-danger) hover:bg-(--theme-danger-soft) disabled:cursor-not-allowed disabled:opacity-55"
             type="button"
             onClick={() => setStopConfirm(true)}
             disabled={stopBusy}
@@ -166,17 +174,22 @@ export function AppSettingsPanel() {
             <span>停止</span>
           </button>
           {stopMessage && (
-            <small className="app-settings-stop-message">{stopMessage}</small>
+            <small className="px-0.5 text-[11px] leading-snug text-(--theme-text-muted)">
+              {stopMessage}
+            </small>
           )}
         </div>
       </aside>
       <section
-        className="app-settings-content"
+        className="min-h-0 bg-(--theme-surface-panel)"
         id={activePanelID}
         role="tabpanel"
         aria-labelledby={`app-settings-tab-${active}`}
       >
-        <div className="app-settings-body">
+        <div
+          className="h-full min-h-0 overflow-auto px-6 py-5 pb-7 [&_.account-management]:mx-auto [&_.account-management]:max-w-190 [&_.account-management_[data-robot-panel-header]]:hidden"
+          data-app-settings-body
+        >
           {active === 'update' && <SetupUpdateButton embedded />}
           {active === 'network' && <NetworkSettingsPanel />}
           {active === 'github' && <GithubSettingsPanel />}

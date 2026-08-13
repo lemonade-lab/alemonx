@@ -49,7 +49,7 @@ func (Manager) TestPort(root string) (TestPortInfo, error) {
 // existing value or appending a new one.
 func (Manager) SaveTestPort(root string, port int) (Result, error) {
 	if port < 1 || port > 65535 {
-		return Result{}, errors.New("测试端口应在 1-65535 之间")
+		return Result{}, errors.New("服务端口应在 1-65535 之间")
 	}
 	project, err := projectPath(root)
 	if err != nil {
@@ -74,11 +74,11 @@ func (Manager) SaveTestPort(root string, port int) (Result, error) {
 	}
 	if err := os.WriteFile(configFile, []byte(text), 0644); err != nil {
 		if permissionError(err) {
-			return Result{}, permissionAdvice("保存测试端口")
+			return Result{}, permissionAdvice("保存服务端口")
 		}
-		return Result{}, fmt.Errorf("无法保存测试端口：%w", err)
+		return Result{}, fmt.Errorf("无法保存服务端口：%w", err)
 	}
-	return Result{Path: configFile, Output: "测试端口已设置为 " + strconv.Itoa(port) + "。"}, nil
+	return Result{Path: configFile, Output: "服务端口已设置为 " + strconv.Itoa(port) + "。"}, nil
 }
 
 // TestSandboxAvailable reports whether the robot is configured to start in

@@ -139,7 +139,7 @@ func TestRobotProxiesRejectUnconfiguredPorts(t *testing.T) {
 
 	test := httptest.NewRecorder()
 	s.robotTestHandler(test, httptest.NewRequest(http.MethodGet, "/api/v1/robot/test/?"+query, nil))
-	if test.Code != http.StatusConflict || !strings.Contains(test.Body.String(), "测试端口") {
+	if test.Code != http.StatusConflict || !strings.Contains(test.Body.String(), "服务端口") {
 		t.Fatalf("unconfigured test proxy = %d, %s", test.Code, test.Body.String())
 	}
 }

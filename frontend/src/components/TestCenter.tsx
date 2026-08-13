@@ -75,7 +75,7 @@ export function TestCenter({ root }: { root: string }) {
       const info = result.data
       if (!info?.configured || !Number.isInteger(info.port)) {
         testoneStore.dispatch(wsCancel())
-        setConnectionError('测试端口未配置或配置已失效，请关闭后重新打开测试并确认端口。')
+        setConnectionError('服务端口未配置或配置已失效，请关闭后重新打开测试并确认端口。')
         return
       }
       testoneStore.dispatch(

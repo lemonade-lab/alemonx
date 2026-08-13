@@ -63,6 +63,7 @@ export function DesktopWindow({
   initialPosition,
   width = 860,
   height = 620,
+  storageKey,
   children
 }: {
   id: string
@@ -80,6 +81,7 @@ export function DesktopWindow({
   initialPosition?: { left: number; top: number }
   width?: number
   height?: number
+  storageKey?: string
   children: ReactNode
 }) {
   const [windowRect, setWindowRect] = useState(() => ({
@@ -89,6 +91,7 @@ export function DesktopWindow({
     height
   }))
   const [maximized, setMaximized] = useState(false)
+  const [layoutReady, setLayoutReady] = useState(!storageKey)
   const restoreRect = useRef<typeof windowRect | null>(null)
   const windowRef = useRef<HTMLElement>(null)
   const isPadView = useIsPadViewport()
@@ -108,6 +111,24 @@ export function DesktopWindow({
     left: number
     top: number
   } | null>(null)
+
+  useEffect(() => {
+    if (!storageKey) return
+    setLayoutReady(false)
+    try {
+      const saved = JSON.parse(localStorage.getItem(storageKey) || 'null') as { rect?: typeof windowRect; maximized?: boolean } | null
+      if (saved?.rect && Number.isFinite(saved.rect.left) && Number.isFinite(saved.rect.top) && Number.isFinite(saved.rect.width) && Number.isFinite(saved.rect.height)) {
+        setWindowRect(saved.rect)
+      }
+      if (saved?.maximized) setMaximized(true)
+    } catch { /* An invalid local layout should never prevent opening chat. */ }
+    setLayoutReady(true)
+  }, [storageKey])
+
+  useEffect(() => {
+    if (!storageKey || !open || !layoutReady) return
+    localStorage.setItem(storageKey, JSON.stringify({ rect: windowRect, maximized }))
+  }, [layoutReady, maximized, open, storageKey, windowRect])
 
   useLayoutEffect(() => {
     if (!open) return

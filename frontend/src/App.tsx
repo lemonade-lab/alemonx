@@ -36,6 +36,7 @@ import {
   FlaskConical,
   GitBranch,
   Home,
+  MessageSquare,
   Monitor,
   Settings,
   ShieldCheck,
@@ -66,6 +67,7 @@ type DockWindows = {
   git: DockWindowState
   app: DockWindowState
   test: DockWindowState
+  live: DockWindowState
   pm2Logs: DockWindowState
   pm2Status: DockWindowState
   ops: DockWindowState
@@ -115,6 +117,7 @@ const emptyDockWindows: DockWindows = {
   git: closedDockWindow,
   app: closedDockWindow,
   test: closedDockWindow,
+  live: closedDockWindow,
   pm2Logs: closedDockWindow,
   pm2Status: closedDockWindow,
   ops: closedDockWindow,
@@ -490,6 +493,7 @@ export default function App() {
         state.terminal,
         state.git,
         state.app,
+        state.live,
         state.pm2Logs,
         state.pm2Status,
         state.ops,
@@ -528,6 +532,7 @@ export default function App() {
       dockWindows.terminal,
       dockWindows.git,
       dockWindows.app,
+      dockWindows.live,
       dockWindows.pm2Logs,
       dockWindows.pm2Status,
       dockWindows.ops,
@@ -569,6 +574,9 @@ export default function App() {
           }
           onTest={() =>
             window.dispatchEvent(new CustomEvent('alx:desktop-test-toggle'))
+          }
+          onLive={() =>
+            window.dispatchEvent(new CustomEvent('alx:desktop-live-toggle'))
           }
           onPM2Logs={() =>
             window.dispatchEvent(new CustomEvent('alx:desktop-pm2-logs-toggle'))
@@ -710,6 +718,7 @@ function WorkbenchDock({
   onGit,
   onApp,
   onTest,
+  onLive,
   onPM2Logs,
   onPM2Status,
   onOps,
@@ -724,6 +733,7 @@ function WorkbenchDock({
   onGit: () => void
   onApp: () => void
   onTest: () => void
+  onLive: () => void
   onPM2Logs: () => void
   onPM2Status: () => void
   onOps: () => void
@@ -734,6 +744,7 @@ function WorkbenchDock({
     windows.git,
     windows.app,
     windows.test,
+    windows.live,
     windows.pm2Logs,
     windows.pm2Status,
     windows.ops,
@@ -806,6 +817,18 @@ function WorkbenchDock({
             >
               <FlaskConical className="size-5" />
               <span>测试</span>
+            </button>
+          </div>
+        )}
+        {windows.live.open && (
+          <div className="workbench-dock-apps">
+            <button
+              className={windows.live.minimized ? '' : 'active'}
+              onClick={onLive}
+              title={windows.live.minimized ? '恢复在线聊天' : '最小化在线聊天'}
+            >
+              <MessageSquare className="size-5" />
+              <span>聊天</span>
             </button>
           </div>
         )}

@@ -5,7 +5,9 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -300,6 +302,20 @@ type webViewRuntime struct {
 	streams map[string]map[chan json.RawMessage]struct{}
 }
 
+// liveUpload is deliberately short lived. It binds a temporary file to one
+// validated robot root and one browser CBP device id; it is never a general
+// purpose file-read endpoint.
+type liveUpload struct {
+	ID        string
+	Root      string
+	DeviceID  string
+	Path      string
+	Filename  string
+	Size      int64
+	MIMEType  string
+	ExpiresAt time.Time
+}
+
 type server struct {
 	version           string
 	assets            fs.FS
@@ -370,6 +386,8 @@ type server struct {
 	runPrivilegedCommand  func(context.Context, []byte, string, []string) (string, error)
 	installEnvironment    func(context.Context, string) (string, error)
 	redisManager          *redis.Manager
+	liveUploadsMu         sync.Mutex
+	liveUploads           map[string]liveUpload
 }
 
 type pluginStatusSnapshot struct {
@@ -720,7 +738,7 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	downloadBroker := newPluginDownloadBroker(networkManager)
 	downloadBroker.setRegistry(plugins)
 	plugins.SetRunnerEnvironmentProvider(downloadBroker.environment)
-	s := &server{version: version, assets: assets, static: http.FileServer(http.FS(assets)), checker: system.NewChecker(), network: networkManager, plugins: plugins, auth: identity, ai: aiManager, agentSessions: sessionStore, agentTaskStore: taskStore, agentTasks: tasks, taskService: &agent.TaskService{Manager: tasks}, goalStore: goalStore, opsStore: opsStore, opsProjects: opsProjects, opsBackground: startBackground, opsPaused: opsStartupErr != nil, goalSchedulerStop: make(chan struct{}), goalRunning: map[string]bool{}, agentConfirms: newAgentConfirmManager(), development: map[string]developmentProcess{}, webviewRuntimes: map[string]*webViewRuntime{}, stopping: map[string]bool{}, consoleCache: map[string]consoleSnapshot{}, outputBuffers: map[string]*operationOutputBuffer{}, directoryRoots: managedDirectoryRoots(), events: newRobotEventHub(), eventGateway: newEventGateway(), operationEvents: operationEvents, operations: operationEvents.snapshot(), opsEvents: newOpsEventHub(), mcpEvents: newMCPEventHub(), mcpMonitorStop: make(chan struct{}), pluginEventsStop: make(chan struct{}), updateMonitorStop: make(chan struct{}), updateState: updateStatusState{Update: releases.Update{Current: version}}, nodeID: fmt.Sprintf("%s-%d", hostname(), os.Getpid()), pluginStatusCache: map[string]*pluginStatusSnapshot{}, hostContexts: map[string]pluginHostContext{}, privilegeStore: privileges, pluginDownloadBroker: downloadBroker, sudoAttempts: map[string]sudoAttempt{}, runPrivilegedCommand: system.RunSudoCommand, installEnvironment: system.InstallEnvironment}
+	s := &server{version: version, assets: assets, static: http.FileServer(http.FS(assets)), checker: system.NewChecker(), network: networkManager, plugins: plugins, auth: identity, ai: aiManager, agentSessions: sessionStore, agentTaskStore: taskStore, agentTasks: tasks, taskService: &agent.TaskService{Manager: tasks}, goalStore: goalStore, opsStore: opsStore, opsProjects: opsProjects, opsBackground: startBackground, opsPaused: opsStartupErr != nil, goalSchedulerStop: make(chan struct{}), goalRunning: map[string]bool{}, agentConfirms: newAgentConfirmManager(), development: map[string]developmentProcess{}, webviewRuntimes: map[string]*webViewRuntime{}, stopping: map[string]bool{}, consoleCache: map[string]consoleSnapshot{}, outputBuffers: map[string]*operationOutputBuffer{}, directoryRoots: managedDirectoryRoots(), events: newRobotEventHub(), eventGateway: newEventGateway(), operationEvents: operationEvents, operations: operationEvents.snapshot(), opsEvents: newOpsEventHub(), mcpEvents: newMCPEventHub(), mcpMonitorStop: make(chan struct{}), pluginEventsStop: make(chan struct{}), updateMonitorStop: make(chan struct{}), updateState: updateStatusState{Update: releases.Update{Current: version}}, nodeID: fmt.Sprintf("%s-%d", hostname(), os.Getpid()), pluginStatusCache: map[string]*pluginStatusSnapshot{}, hostContexts: map[string]pluginHostContext{}, privilegeStore: privileges, pluginDownloadBroker: downloadBroker, sudoAttempts: map[string]sudoAttempt{}, runPrivilegedCommand: system.RunSudoCommand, installEnvironment: system.InstallEnvironment, liveUploads: map[string]liveUpload{}}
 	s.redisManager = redis.NewManager(filepath.Join(filepath.Dir(taskStore.TasksDir()), "alx-redis.json"))
 	if options.RedisPort > 0 || options.RedisDisabled {
 		status := s.redisManager.Status()
@@ -1047,6 +1065,8 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	mux.HandleFunc("/api/v1/robot/test-port", s.robotTestPortHandler)
 	mux.HandleFunc("/api/v1/robot/ports", s.robotPortsHandler)
 	mux.HandleFunc("/api/v1/robot/test/", s.robotTestHandler)
+	mux.HandleFunc("/api/v1/robot/live/upload", s.robotLiveUploadHandler)
+	mux.HandleFunc("/api/v1/robot/live/", s.robotLiveHandler)
 	mux.HandleFunc("/api/v1/robot/runtime", s.robotRuntimeHandler)
 	mux.HandleFunc("/api/v1/robot/runtime/preflight", s.robotRuntimePreflightHandler)
 	mux.HandleFunc("/api/v1/robot/runtime/repair", s.robotRuntimeRepairHandler)
@@ -3891,7 +3911,7 @@ func (s *server) robotTestPortHandler(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if !info.Configured {
-				writeError(w, http.StatusConflict, "请先为当前机器人配置测试端口（port）。")
+				writeError(w, http.StatusConflict, "请先为当前机器人配置服务端口（port）。")
 				return
 			}
 			reachable, port, err := s.robots.TestPortReachable(root)
@@ -4279,7 +4299,7 @@ func (s *server) robotTasksHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !info.Configured {
-			writeError(w, http.StatusConflict, "请先为当前机器人配置测试端口（port）。")
+			writeError(w, http.StatusConflict, "请先为当前机器人配置服务端口（port）。")
 			return
 		}
 	}
@@ -4324,6 +4344,15 @@ func (s *server) robotTasksHandler(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, dependencyErr.Error())
 			return
 		}
+		// qq-bot Actions are served by the platform adapter. Current AlemonJS
+		// releases run that adapter through IPC, while their CBP server only
+		// forwards full-receive browser Actions to WebSocket platform clients.
+		// Apply the guarded compatibility bridge before booting the robot so the
+		// running adapter can actually receive and answer tool requests.
+		if _, patchErr := robot.EnsureCBPIPCActionBridge(input.Root); patchErr != nil {
+			writeError(w, http.StatusBadRequest, patchErr.Error())
+			return
+		}
 		if s.developmentRunning(input.Root) {
 			writeError(w, http.StatusConflict, "当前目录已有前台或开发进程正在运行；请先停止后再启动。")
 			return
@@ -4349,7 +4378,7 @@ func (s *server) robotTasksHandler(w http.ResponseWriter, r *http.Request) {
 		if readyKind == "test" {
 			info, _ := s.robots.TestPort(input.Root)
 			if !s.waitPortFreeOn(info.Port, 0) {
-				writeError(w, http.StatusConflict, "测试端口仍被占用；请停止当前机器人的测试进程后重试。")
+				writeError(w, http.StatusConflict, "服务端口仍被占用；请停止当前机器人的测试进程后重试。")
 				return
 			}
 		}
@@ -4663,7 +4692,7 @@ func (s *server) robotStartPortBlockers(root, readyKind string) []string {
 		if err != nil || !info.Configured {
 			return nil
 		}
-		ports = []robot.RobotPort{{Port: info.Port, Label: "测试端口"}}
+		ports = []robot.RobotPort{{Port: info.Port, Label: "服务端口"}}
 	}
 	var blockers []string
 	seen := map[int]bool{}
@@ -5503,10 +5532,186 @@ func (s *server) robotTestHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !info.Configured {
-		writeError(w, http.StatusConflict, "请先为当前机器人配置测试端口（port）。")
+		writeError(w, http.StatusConflict, "请先为当前机器人配置服务端口（port）。")
 		return
 	}
 	s.proxyRobotTest(w, r, root, info.Port)
+}
+
+// robotLiveHandler connects the workbench to the robot's normal CBP server as
+// a full-receive client. Unlike /testone this is not a sandbox endpoint: the
+// platform adapter remains logged in and CBP routes action/API requests to it.
+// The browser cannot choose the CBP role or full-receive privilege: the local
+// proxy injects those headers. It supplies a validated device id only so CBP
+// can correlate this browser's action requests and responses; the framework,
+// rather than a platform-specific UI, remains the protocol authority.
+func (s *server) robotLiveHandler(w http.ResponseWriter, r *http.Request) {
+	const mount = "/api/v1/robot/live/"
+	root, _ := robotAppRootFromPath(r.URL.Path, mount)
+	if root == "" {
+		root = r.URL.Query().Get("root")
+	}
+	if root == "" {
+		writeError(w, http.StatusBadRequest, "请选择机器人目录。")
+		return
+	}
+	// Existing robot processes were started before the workbench feature was
+	// added. Make the bridge available here too; they need one restart to load
+	// it, but new starts are patched before their platform child is forked.
+	if _, err := robot.EnsureCBPIPCActionBridge(root); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	info, err := s.robots.TestPort(root)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if !info.Configured {
+		writeError(w, http.StatusConflict, "请先为当前机器人配置 CBP 端口（port）。")
+		return
+	}
+	deviceID := strings.TrimSpace(r.URL.Query().Get("deviceId"))
+	if !regexp.MustCompile(`^alemonx-live-[A-Za-z0-9-]{8,96}$`).MatchString(deviceID) {
+		writeError(w, http.StatusBadRequest, "在线聊天连接标识无效。")
+		return
+	}
+	s.proxyRobotLive(w, r, info.Port, deviceID)
+}
+
+const (
+	liveUploadMaxBytes = 100 << 20 // QQ Bot itself rejects media over 100 MiB.
+	liveUploadTTL      = 10 * time.Minute
+)
+
+var liveDeviceIDPattern = regexp.MustCompile(`^alemonx-live-[A-Za-z0-9-]{8,96}$`)
+
+// robotLiveUploadHandler accepts only one browser-selected file for an active
+// robot chat session. Files are stored in the selected robot directory so the
+// locally running qq-bot process can consume the returned absolute path. The
+// matching DELETE is issued when the CBP action resolves; TTL cleanup prevents
+// a browser crash from accumulating files.
+func (s *server) robotLiveUploadHandler(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodPost:
+		s.robotLiveUploadCreate(w, r)
+	case http.MethodDelete:
+		s.robotLiveUploadDelete(w, r)
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
+	}
+}
+
+func validLiveDeviceID(value string) bool {
+	return liveDeviceIDPattern.MatchString(strings.TrimSpace(value))
+}
+
+func (s *server) robotLiveUploadCreate(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, liveUploadMaxBytes+1<<20)
+	if err := r.ParseMultipartForm(liveUploadMaxBytes + 1<<20); err != nil {
+		writeError(w, http.StatusRequestEntityTooLarge, "文件超过 100 MiB 限制或上传格式无效。")
+		return
+	}
+	root := strings.TrimSpace(r.FormValue("root"))
+	deviceID := strings.TrimSpace(r.FormValue("deviceId"))
+	if root == "" || !validLiveDeviceID(deviceID) {
+		writeError(w, http.StatusBadRequest, "机器人目录或聊天连接标识无效。")
+		return
+	}
+	validated, err := s.robots.Validate(root)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	source, header, err := r.FormFile("file")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "请选择要发送的文件。")
+		return
+	}
+	defer source.Close()
+	filename := filepath.Base(strings.TrimSpace(header.Filename))
+	if filename == "." || filename == "" || len(filename) > 180 {
+		writeError(w, http.StatusBadRequest, "文件名无效。")
+		return
+	}
+	idBytes := make([]byte, 16)
+	if _, err := rand.Read(idBytes); err != nil {
+		writeError(w, http.StatusInternalServerError, "无法创建临时上传标识。")
+		return
+	}
+	id := hex.EncodeToString(idBytes)
+	directory := filepath.Join(validated.Path, ".alemonx-live-uploads")
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		writeError(w, http.StatusInternalServerError, "无法创建机器人临时文件目录。")
+		return
+	}
+	path := filepath.Join(directory, id+"-"+filename)
+	destination, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "无法暂存上传文件。")
+		return
+	}
+	size, copyErr := io.Copy(destination, io.LimitReader(source, liveUploadMaxBytes+1))
+	closeErr := destination.Close()
+	if copyErr != nil || closeErr != nil || size > liveUploadMaxBytes {
+		_ = os.Remove(path)
+		if size > liveUploadMaxBytes {
+			writeError(w, http.StatusRequestEntityTooLarge, "文件超过 100 MiB 限制。")
+		} else {
+			writeError(w, http.StatusInternalServerError, "文件暂存失败。")
+		}
+		return
+	}
+	item := liveUpload{ID: id, Root: validated.Path, DeviceID: deviceID, Path: path, Filename: filename, Size: size, MIMEType: header.Header.Get("Content-Type"), ExpiresAt: time.Now().Add(liveUploadTTL)}
+	s.liveUploadsMu.Lock()
+	if s.liveUploads == nil {
+		s.liveUploads = map[string]liveUpload{}
+	}
+	s.liveUploads[id] = item
+	s.liveUploadsMu.Unlock()
+	time.AfterFunc(liveUploadTTL, func() { s.removeLiveUpload(id) })
+	writeJSON(w, http.StatusCreated, map[string]any{"uploadId": item.ID, "path": item.Path, "filename": item.Filename, "size": item.Size, "mimeType": item.MIMEType})
+}
+
+func (s *server) robotLiveUploadDelete(w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		Root     string `json:"root"`
+		DeviceID string `json:"deviceId"`
+		UploadID string `json:"uploadId"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 8<<10)).Decode(&request); err != nil || !validLiveDeviceID(request.DeviceID) || strings.TrimSpace(request.UploadID) == "" {
+		writeError(w, http.StatusBadRequest, "临时上传清理请求无效。")
+		return
+	}
+	validated, err := s.robots.Validate(strings.TrimSpace(request.Root))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	s.liveUploadsMu.Lock()
+	item, exists := s.liveUploads[request.UploadID]
+	if exists && item.Root == validated.Path && item.DeviceID == request.DeviceID {
+		delete(s.liveUploads, request.UploadID)
+	}
+	s.liveUploadsMu.Unlock()
+	if !exists || item.Root != validated.Path || item.DeviceID != request.DeviceID {
+		writeError(w, http.StatusNotFound, "临时上传不存在或不属于当前聊天会话。")
+		return
+	}
+	_ = os.Remove(item.Path)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *server) removeLiveUpload(id string) {
+	s.liveUploadsMu.Lock()
+	item, exists := s.liveUploads[id]
+	if exists {
+		delete(s.liveUploads, id)
+	}
+	s.liveUploadsMu.Unlock()
+	if exists {
+		_ = os.Remove(item.Path)
+	}
 }
 
 func (s *server) proxyRobotTest(w http.ResponseWriter, r *http.Request, root string, port int) {
@@ -5530,6 +5735,34 @@ func (s *server) proxyRobotTest(w http.ResponseWriter, r *http.Request, root str
 		},
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, _ error) {
 			writeError(w, http.StatusBadGateway, "机器人测试服务尚未启动或无法连接。请先在“运行”中启动开发模式。")
+		},
+	}
+	proxy.ServeHTTP(w, r)
+}
+
+// proxyRobotLive preserves CBP's WebSocket upgrade while adding the headers
+// that identify this connection as a full-receive application client. Native
+// browser WebSockets cannot set those headers themselves, which is precisely
+// why this trusted local hop owns them.
+func (s *server) proxyRobotLive(w http.ResponseWriter, r *http.Request, port int, deviceID string) {
+	target, err := url.Parse("http://127.0.0.1:" + strconv.Itoa(port))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "在线聊天服务地址无效。")
+		return
+	}
+	proxy := &httputil.ReverseProxy{
+		Director: func(request *http.Request) {
+			request.URL.Scheme = target.Scheme
+			request.URL.Host = target.Host
+			request.URL.Path = "/"
+			request.URL.RawPath = ""
+			request.Host = target.Host
+			request.Header.Set("User-Agent", "client")
+			request.Header.Set("X-Device-ID", deviceID)
+			request.Header.Set("X-Full-Receive", "1")
+		},
+		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, _ error) {
+			writeError(w, http.StatusBadGateway, "机器人 CBP 服务尚未启动或无法连接。请先启动已登录的机器人。")
 		},
 	}
 	proxy.ServeHTTP(w, r)

@@ -16,7 +16,7 @@ func TestPortsReturnsAppAndTestPorts(t *testing.T) {
 	}
 	want := []RobotPort{
 		{Kind: "app", Label: "应用端口", Port: 19191, Configured: true},
-		{Kind: "test", Label: "测试端口", Port: 17222, Configured: true},
+		{Kind: "test", Label: "服务端口", Port: 17222, Configured: true},
 	}
 	if !reflect.DeepEqual(ports, want) {
 		t.Fatalf("Ports = %#v, want %#v", ports, want)

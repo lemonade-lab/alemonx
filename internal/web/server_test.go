@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -568,6 +569,7 @@ func newStatefulTestServer() *server {
 		pm2Status:      func(string) (robot.PM2Status, error) { return robot.PM2Status{}, nil },
 		directoryRoots: managedDirectoryRoots(),
 		events:         newRobotEventHub(),
+		liveUploads:    map[string]liveUpload{},
 	}
 }
 
@@ -715,6 +717,69 @@ func writeFixture(t *testing.T, root, name, content string) {
 	}
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRobotLiveUploadIsBoundToRobotAndDeviceAndCleansUp(t *testing.T) {
+	root := t.TempDir()
+	writeFixture(t, root, "package.json", `{"name":"demo","version":"1.0.0"}`)
+	s := newStatefulTestServer()
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	if err := writer.WriteField("root", root); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.WriteField("deviceId", "alemonx-live-test-upload"); err != nil {
+		t.Fatal(err)
+	}
+	part, err := writer.CreateFormFile("file", "hello.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write([]byte("hello QQ")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/robot/live/upload", body)
+	request.Header.Set("Content-Type", writer.FormDataContentType())
+	response := httptest.NewRecorder()
+	s.robotLiveUploadHandler(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("upload = %d %s", response.Code, response.Body.String())
+	}
+	var uploaded struct {
+		UploadID string `json:"uploadId"`
+		Path     string `json:"path"`
+		Filename string `json:"filename"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &uploaded); err != nil {
+		t.Fatal(err)
+	}
+	if uploaded.UploadID == "" || uploaded.Filename != "hello.txt" || !strings.HasPrefix(uploaded.Path, filepath.Join(root, ".alemonx-live-uploads")) {
+		t.Fatalf("unexpected upload response: %+v", uploaded)
+	}
+	if _, err := os.Stat(uploaded.Path); err != nil {
+		t.Fatalf("staged file missing: %v", err)
+	}
+	wrongBody := strings.NewReader(`{"root":` + strconv.Quote(root) + `,"deviceId":"alemonx-live-other-device","uploadId":` + strconv.Quote(uploaded.UploadID) + `}`)
+	wrong := httptest.NewRecorder()
+	s.robotLiveUploadHandler(wrong, httptest.NewRequest(http.MethodDelete, "/api/v1/robot/live/upload", wrongBody))
+	if wrong.Code != http.StatusNotFound {
+		t.Fatalf("cross-device cleanup = %d %s", wrong.Code, wrong.Body.String())
+	}
+	if _, err := os.Stat(uploaded.Path); err != nil {
+		t.Fatalf("cross-device cleanup removed file: %v", err)
+	}
+	deleteBody := strings.NewReader(`{"root":` + strconv.Quote(root) + `,"deviceId":"alemonx-live-test-upload","uploadId":` + strconv.Quote(uploaded.UploadID) + `}`)
+	deleted := httptest.NewRecorder()
+	s.robotLiveUploadHandler(deleted, httptest.NewRequest(http.MethodDelete, "/api/v1/robot/live/upload", deleteBody))
+	if deleted.Code != http.StatusNoContent {
+		t.Fatalf("cleanup = %d %s", deleted.Code, deleted.Body.String())
+	}
+	if _, err := os.Stat(uploaded.Path); !os.IsNotExist(err) {
+		t.Fatalf("staged file still exists: %v", err)
 	}
 }
 
@@ -1562,6 +1627,57 @@ func TestLocalServiceWebSocketProxyPreservesBinaryFrames(t *testing.T) {
 	}
 	if got, want := string(response), "echo:\x00\x01\x02"; got != want {
 		t.Fatalf("response = %q, want %q", got, want)
+	}
+}
+
+func TestRobotLiveProxyUsesFullReceiveCBPClient(t *testing.T) {
+	var receivedHeader http.Header
+	upstream := newIPv4TestServer(t, websocket.Handler(func(connection *websocket.Conn) {
+		receivedHeader = connection.Request().Header.Clone()
+		defer connection.Close()
+		var message string
+		if err := websocket.Message.Receive(connection, &message); err == nil {
+			_ = websocket.Message.Send(connection, "echo:"+message)
+		}
+	}))
+	parsed, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, rawPort, err := net.SplitHostPort(parsed.Host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	writeFixture(t, root, "package.json", `{"name":"demo","version":"1.0.0"}`)
+	writeFixture(t, root, "alemon.config.yaml", "port: "+rawPort+"\n")
+	s := newStatefulTestServer()
+	proxy := newIPv4TestServer(t, http.HandlerFunc(s.robotLiveHandler))
+	token := robotAppToken(root)
+	endpoint := "ws" + strings.TrimPrefix(proxy.URL, "http") + "/api/v1/robot/live/" + token + "/?deviceId=alemonx-live-test-connection"
+	client, err := websocket.Dial(endpoint, "", proxy.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if err := websocket.Message.Send(client, "hello"); err != nil {
+		t.Fatal(err)
+	}
+	var response string
+	if err := websocket.Message.Receive(client, &response); err != nil {
+		t.Fatal(err)
+	}
+	if response != "echo:hello" {
+		t.Fatalf("response = %q", response)
+	}
+	if got := receivedHeader.Get("X-Full-Receive"); got != "1" {
+		t.Fatalf("X-Full-Receive = %q, want 1", got)
+	}
+	if got := receivedHeader.Get("X-Device-Id"); got != "alemonx-live-test-connection" {
+		t.Fatalf("X-Device-Id = %q", got)
+	}
+	if got := receivedHeader.Get("User-Agent"); got != "client" {
+		t.Fatalf("User-Agent = %q, want client", got)
 	}
 }
 

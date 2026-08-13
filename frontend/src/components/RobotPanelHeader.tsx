@@ -30,19 +30,41 @@ export function RobotPanelHeader({
 }: RobotPanelHeaderProps) {
   return (
     <header
-      className={['bot-page-header', className].filter(Boolean).join(' ')}
+      data-robot-panel-header
+      className={[
+        'sticky top-2.5 z-5 mx-2.5 mt-2.5 flex min-h-13 flex-wrap items-center justify-between gap-2 rounded-[10px] border border-(--theme-border-default) bg-(--theme-surface-panel) px-4 shadow-[0_4px_14px_var(--theme-shadow-soft)]',
+        className
+      ]
+        .filter(Boolean)
+        .join(' ')}
     >
-      <div className="robot-panel-header-leading">
-        {icon && <span className="bot-page-header-icon">{icon}</span>}
-        <div className="bot-page-header-meta">
+      <div className="flex min-w-0 flex-1 items-center gap-3">
+        {icon && (
+          <span className="inline-flex size-7.5 shrink-0 items-center justify-center rounded-[9px] border border-(--theme-accent-soft-border) bg-(--theme-accent-soft) text-(--theme-accent-text)">
+            {icon}
+          </span>
+        )}
+        <div className="grid min-w-0 gap-0.5">
           {eyebrow && (
-            <div className="robot-panel-header-eyebrow">{eyebrow}</div>
+            <div className="text-[0.7rem] leading-tight text-(--theme-text-muted)">
+              {eyebrow}
+            </div>
           )}
-          <div className="robot-panel-header-title">{title}</div>
-          {description && <small>{description}</small>}
+          <div className="min-w-0 text-[0.84rem] leading-tight font-semibold text-(--theme-text-strong)">
+            {title}
+          </div>
+          {description && (
+            <small className="max-w-90 truncate text-[0.7rem] leading-tight text-(--theme-text-muted)">
+              {description}
+            </small>
+          )}
         </div>
       </div>
-      {actions && <div className="robot-panel-header-actions">{actions}</div>}
+      {actions && (
+        <div className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-2 [&_.icon-button]:shrink-0">
+          {actions}
+        </div>
+      )}
     </header>
   )
 }
