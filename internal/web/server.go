@@ -601,7 +601,14 @@ func githubMirrors(repository string) []mirror {
 }
 
 func NewServer(version string, staticFiles fs.FS, templateFiles ...fs.FS) http.Handler {
-	return NewServerRuntime(version, staticFiles, templateFiles...).Handler
+	identity, err := access.New()
+	if err != nil {
+		panic(err)
+	}
+	// A bare handler has no lifecycle hook for stopping background workers.
+	// Keep it suitable for embedding and tests; executable entrypoints must use
+	// NewServerRuntime and call Shutdown during process termination.
+	return newServerRuntimeWithAuth(version, staticFiles, identity, false, templateFiles...).Handler
 }
 
 func NewServerRuntime(version string, staticFiles fs.FS, templateFiles ...fs.FS) *ServerRuntime {
@@ -609,16 +616,20 @@ func NewServerRuntime(version string, staticFiles fs.FS, templateFiles ...fs.FS)
 	if err != nil {
 		panic(err)
 	}
-	return NewServerRuntimeWithAuth(version, staticFiles, identity, templateFiles...)
+	return newServerRuntimeWithAuth(version, staticFiles, identity, true, templateFiles...)
 }
 
 // NewServerWithAuth permits tests and embedders to provide an isolated auth
 // store instead of reading the current user's alx configuration.
 func NewServerWithAuth(version string, staticFiles fs.FS, identity *access.Manager, templateFiles ...fs.FS) http.Handler {
-	return NewServerRuntimeWithAuth(version, staticFiles, identity, templateFiles...).Handler
+	return newServerRuntimeWithAuth(version, staticFiles, identity, false, templateFiles...).Handler
 }
 
 func NewServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *access.Manager, templateFiles ...fs.FS) *ServerRuntime {
+	return newServerRuntimeWithAuth(version, staticFiles, identity, true, templateFiles...)
+}
+
+func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *access.Manager, startBackground bool, templateFiles ...fs.FS) *ServerRuntime {
 	// Rehydrate command paths on every service start so a managed Node remains
 	// usable after restart without writing to the machine-wide PATH.
 	system.RefreshCommandEnvironment("node", "npm", "npx", "git", "docker")
@@ -845,39 +856,41 @@ func NewServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 			_ = s.goalStore.UpdateRunByTask(current.ID, status, current.LastError)
 		}
 	})
-	// Register observers before starting background loops so startup
-	// reconciliation and the first scheduled/monitor event cannot bypass
-	// GoalRun or MaintenanceRun state synchronization.
-	s.startGoalScheduler()
-	if s.alertWorker != nil {
-		if err := s.alertWorker.Start(context.Background()); err != nil {
-			s.opsPaused = true
-			_ = opsStore.AppendSignal(agent.OpsSignal{Kind: "alert_delivery", Status: "unavailable", Message: err.Error(), Timestamp: time.Now()})
-			log.Printf("AI 运维告警 Worker 未启动，自动维护已暂停: %v", err)
+	if startBackground {
+		// Register observers before starting background loops so startup
+		// reconciliation and the first scheduled/monitor event cannot bypass
+		// GoalRun or MaintenanceRun state synchronization.
+		s.startGoalScheduler()
+		if s.alertWorker != nil {
+			if err := s.alertWorker.Start(context.Background()); err != nil {
+				s.opsPaused = true
+				_ = opsStore.AppendSignal(agent.OpsSignal{Kind: "alert_delivery", Status: "unavailable", Message: err.Error(), Timestamp: time.Now()})
+				log.Printf("AI 运维告警 Worker 未启动，自动维护已暂停: %v", err)
+			}
 		}
+		if s.opsMonitor != nil {
+			_ = s.opsMonitor.Start(context.Background())
+		}
+		// Kill any previously supervised robot process that survived a restart so a
+		// stray node cannot keep the app port occupied.
+		cleanupStaleProcesses()
+		// A dev/app process is supervised only in memory. After a workbench restart
+		// there is no longer a live supervisor, so persisted "running" local tasks
+		// must not keep the UI in a false running/stopping state.
+		s.reconcileRecoveredLocalOperations()
+		// Poll plugin roots so adding/removing a plugin directory or editing a
+		// manifest is reflected without a restart or manual refresh.
+		// Filesystem notifications avoid a recurring one-second directory scan. A
+		// 60-second fingerprint pass remains as a recovery path for missed events.
+		if watcher, err := s.plugins.StartFSWatch(time.Minute); err == nil {
+			s.pluginWatcher = watcher
+		} else {
+			s.pluginWatcher = s.plugins.StartWatch(time.Minute)
+		}
+		s.startPluginEventBridge()
+		s.startMCPStatusMonitor()
+		s.startUpdateStatusMonitor()
 	}
-	if s.opsMonitor != nil {
-		_ = s.opsMonitor.Start(context.Background())
-	}
-	// Kill any previously supervised robot process that survived a restart so a
-	// stray node cannot keep the app port occupied.
-	cleanupStaleProcesses()
-	// A dev/app process is supervised only in memory. After a workbench restart
-	// there is no longer a live supervisor, so persisted "running" local tasks
-	// must not keep the UI in a false running/stopping state.
-	s.reconcileRecoveredLocalOperations()
-	// Poll plugin roots so adding/removing a plugin directory or editing a
-	// manifest is reflected without a restart or manual refresh.
-	// Filesystem notifications avoid a recurring one-second directory scan. A
-	// 60-second fingerprint pass remains as a recovery path for missed events.
-	if watcher, err := s.plugins.StartFSWatch(time.Minute); err == nil {
-		s.pluginWatcher = watcher
-	} else {
-		s.pluginWatcher = s.plugins.StartWatch(time.Minute)
-	}
-	s.startPluginEventBridge()
-	s.startMCPStatusMonitor()
-	s.startUpdateStatusMonitor()
 	if len(templateFiles) > 0 {
 		templates, err := fs.Sub(templateFiles[0], "templates")
 		if err != nil {

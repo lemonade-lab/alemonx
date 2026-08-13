@@ -240,7 +240,7 @@ func newSudoActionTestServer(t *testing.T, run func(context.Context, []byte, str
 		t.Fatal(err)
 	}
 	key := runtime.GOOS + "-" + runtime.GOARCH
-	manifest := `{"id":"fixture-system","name":"Fixture","version":"1.0.0","entry":{"` + key + `":"runner"},"web":{"root":"web"},"privilegedOperations":[{"action":"prepare-runtime","title":"准备系统运行环境","description":"安装插件需要的系统运行环境。","authorization":"password","platforms":["` + runtime.GOOS + `"],"commands":[{"program":"go","args":["version"]}]}]}`
+	manifest := `{"id":"fixture-system","name":"Fixture","version":"1.0.0","entry":{"` + key + `":"runner"},"web":{"root":"web"},"privilegedOperations":[{"action":"prepare-runtime","runnerAction":"prepare-runtime-runner","title":"准备系统运行环境","description":"安装插件需要的系统运行环境。","authorization":"password","platforms":["` + runtime.GOOS + `"],"commands":[{"program":"go","args":["version"]}]}]}`
 	if err := os.WriteFile(filepath.Join(pluginRoot, "alx.json"), []byte(manifest), 0o600); err != nil {
 		t.Fatal(err)
 	}
