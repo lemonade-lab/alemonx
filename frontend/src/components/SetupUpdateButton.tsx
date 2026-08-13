@@ -14,6 +14,7 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useId, useState } from 'react'
 import { ConfirmDialog } from './ConfirmDialog'
+import { DownloadProgress } from './DownloadProgress'
 import { Tabs } from './Tabs'
 import {
   useLazySetupUpdateQuery,
@@ -72,6 +73,7 @@ export function SetupUpdateButton({ embedded = false }: { embedded?: boolean }) 
   const [file, setFile] = useStoreState<File | null>(null)
   const [uploadProgress, setUploadProgress] = useStoreState<number | null>(null)
   const [uploadError, setUploadError] = useStoreState('')
+  const [browserDownloadNotice, setBrowserDownloadNotice] = useStoreState('')
   const [staged, setStaged] = useStoreState(false)
   const [busy, setBusy] = useStoreState(false)
   const [message, setMessage] = useStoreState('')
@@ -553,21 +555,29 @@ export function SetupUpdateButton({ embedded = false }: { embedded?: boolean }) 
                     </span>
                   </div>
                   {data.platformMatched && data.integrityReady ? (
-                    <Button
-                      className="inline-flex min-h-9 justify-self-end rounded-md bg-brand-600 px-3 text-xs font-semibold text-white transition hover:bg-brand-700 disabled:opacity-60"
-                      disabled={busy}
-                      onClick={() => {
-                        setFile(null)
-                        if (data.downloadReady) setConfirmRestart(true)
-                        else void download()
-                      }}
-                    >
-                      {busy
-                        ? '正在下载…'
-                        : data.downloadReady
-                          ? '更新并重启'
-                          : '下载更新'}
-                    </Button>
+                    <>
+                      <Button
+                        className="inline-flex min-h-9 justify-self-end rounded-md bg-brand-600 px-3 text-xs font-semibold text-white transition hover:bg-brand-700 disabled:opacity-60"
+                        disabled={busy}
+                        onClick={() => {
+                          setFile(null)
+                          if (data.downloadReady) setConfirmRestart(true)
+                          else void download()
+                        }}
+                      >
+                        {busy
+                          ? '正在下载…'
+                          : data.downloadReady
+                            ? '更新并重启'
+                            : '下载更新'}
+                      </Button>
+                      {busy && !data.downloadReady && (
+                        <DownloadProgress
+                          label="正在下载并校验更新包"
+                          detail="由 AlemonX 从发布源下载；完成校验后才会提示安装。"
+                        />
+                      )}
+                    </>
                   ) : (
                     <p className="rounded-lg border border-amber-200 bg-amber-50 p-2.5 text-xs leading-5 text-amber-800">
                       {data.platformMatched
@@ -629,6 +639,11 @@ export function SetupUpdateButton({ embedded = false }: { embedded?: boolean }) 
                         href={asset.url}
                         target="_blank"
                         rel="noreferrer"
+                        onClick={() =>
+                          setBrowserDownloadNotice(
+                            '下载已交给浏览器，请在浏览器下载栏查看实际进度；完成后回到这里选择 .zip 安装包。'
+                          )
+                        }
                       >
                         <Download className="size-3.5 shrink-0" />
                         <span className="min-w-0 truncate">{asset.name}</span>
@@ -636,6 +651,13 @@ export function SetupUpdateButton({ embedded = false }: { embedded?: boolean }) 
                       </a>
                     ))}
                   </div>
+                  {browserDownloadNotice && (
+                    <DownloadProgress
+                      handoff
+                      label="已开始浏览器下载"
+                      detail={browserDownloadNotice}
+                    />
+                  )}
                 </>
               )}
               <section

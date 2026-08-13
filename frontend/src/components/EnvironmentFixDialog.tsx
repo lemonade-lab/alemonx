@@ -1,6 +1,7 @@
 import { ArrowUpRight, Download, Loader2, X } from 'lucide-react'
 import { useState } from 'react'
 import { Modal } from './Modal'
+import { DownloadProgress } from './DownloadProgress'
 
 type Check = { id: string; name: string; suggestion: string }
 
@@ -52,6 +53,7 @@ export function EnvironmentFixDialog({
   const options = links[check.id] ?? []
   const [installing, setInstalling] = useState(false)
   const [message, setMessage] = useState('')
+  const [browserDownloadNotice, setBrowserDownloadNotice] = useState('')
   const canInstallOnServer =
     (platform.startsWith('linux/') ||
       platform.startsWith('darwin/') ||
@@ -130,6 +132,16 @@ export function EnvironmentFixDialog({
               {installing ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}
               {installing ? '正在服务器安装…' : `安装 ${check.name}`}
             </button>
+            {installing && (
+              <DownloadProgress
+                label={`正在安装 ${check.name}`}
+                detail={
+                  isManagedNode
+                    ? '正在下载、校验并安装环境包。'
+                    : '正在执行系统安装；下载安装过程可能需要一些时间。'
+                }
+              />
+            )}
             <small className="text-xs leading-5 text-slate-500">
               {isManagedNode
                 ? <>可在“设置 → 网络与镜像 → Node.js 环境包”切换镜像、直连或自定义镜像。Linux/macOS 安装在 AlemonX 缓存目录；Windows 使用已校验的 MSI 静默安装。</>
@@ -149,6 +161,11 @@ export function EnvironmentFixDialog({
               target="_blank"
               rel="noreferrer"
               key={option.href}
+              onClick={() =>
+                setBrowserDownloadNotice(
+                  '下载已交给浏览器，请在浏览器下载栏查看实际进度。'
+                )
+              }
             >
               <span className="grid min-w-0 gap-1">
                 <strong className="text-sm font-semibold">
@@ -162,6 +179,14 @@ export function EnvironmentFixDialog({
             </a>
             ))}
           </div>
+        )}
+        {browserDownloadNotice && (
+          <DownloadProgress
+            className="mt-4"
+            handoff
+            label="已开始浏览器下载"
+            detail={browserDownloadNotice}
+          />
         )}
         {message && (
           <p className="mt-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs leading-5 text-slate-600">

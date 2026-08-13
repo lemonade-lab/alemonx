@@ -26,6 +26,8 @@
 | Linux ppc64le / s390x / riscv64 | 对应的 `alx-linux-<架构>.zip` |
 | FreeBSD x64 / ARM64 | 对应的 `alx-freebsd-<架构>.zip` |
 
+Windows x64、macOS Apple Silicon 与 Linux x64 是每个版本的必备安装包。其余架构会尽力构建并在成功时随 Release 发布；若某次未生成对应压缩包，请使用该系统的必备架构包或等待后续版本。
+
 Windows 直接运行 `alx.exe`。macOS / Linux / FreeBSD：
 
 ```bash

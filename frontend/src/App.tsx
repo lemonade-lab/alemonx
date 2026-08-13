@@ -14,6 +14,7 @@ import { DesktopWindow } from './components/DesktopWindow'
 import { isWindowHeaderInteractiveTarget } from './components/desktopWindowInteraction'
 import { registerDesktopWindowShortcut } from './components/desktopWindowShortcuts'
 import { EnvironmentFixDialog } from './components/EnvironmentFixDialog'
+import { DownloadProgress } from './components/DownloadProgress'
 import { ErrorNotice } from './components/ErrorNotice'
 import {
   isPadViewport,
@@ -896,6 +897,7 @@ function FlowView({
   const [selectedMirror, setSelectedMirror] = useStoreState<Mirror | null>(null)
   const [releaseURL, setReleaseURL] = useStoreState<string | null>(null)
   const [selectedAssetURL, setSelectedAssetURL] = useStoreState<string | null>(null)
+  const [browserDownloadNotice, setBrowserDownloadNotice] = useStoreState('')
   const [folderError, setFolderError] = useStoreState('')
   const automaticCheck = useRef<string | null>(null)
   const currentStepElement = useRef<HTMLButtonElement | null>(null)
@@ -1075,6 +1077,13 @@ function FlowView({
       </div>
       {selectedRelease && releaseAssets.assets.length === 0 && (
         <p>该版本没有可直接下载的安装包，请返回选择其他版本。</p>
+      )}
+      {browserDownloadNotice && (
+        <DownloadProgress
+          handoff
+          label="已开始浏览器下载"
+          detail={browserDownloadNotice}
+        />
       )}
     </>
   )
@@ -1667,9 +1676,22 @@ function FlowView({
               href={goal.downloadUrl}
               target="_blank"
               rel="noreferrer"
+              onClick={() =>
+                setBrowserDownloadNotice(
+                  '下载已交给浏览器，请在浏览器下载栏查看实际进度。'
+                )
+              }
             >
               下载 Android APK
             </a>
+          )}
+          {browserDownloadNotice && (
+            <DownloadProgress
+              handoff
+              className="mt-4"
+              label="已开始浏览器下载"
+              detail={browserDownloadNotice}
+            />
           )}
         </>
       )
@@ -1930,6 +1952,11 @@ function FlowView({
                 href={mirrorURL(selectedMirror, selectedAssetURL)}
                 target="_blank"
                 rel="noreferrer"
+                onClick={() =>
+                  setBrowserDownloadNotice(
+                    '下载已交给浏览器，请在浏览器下载栏查看实际进度。'
+                  )
+                }
               >
                 开始下载
               </a>
@@ -1980,6 +2007,11 @@ function FlowView({
               href={mirrorURL(selectedMirror, selectedAssetURL)}
               target="_blank"
               rel="noreferrer"
+              onClick={() =>
+                setBrowserDownloadNotice(
+                  '下载已交给浏览器，请在浏览器下载栏查看实际进度。'
+                )
+              }
             >
               开始下载
             </a>

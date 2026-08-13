@@ -26,28 +26,38 @@ jobs:
       - run: yarn lint && yarn build
         working-directory: frontend
       - run: go test ./internal/... && go vet ./internal/... && go build -o /tmp/alemonx .
+      # A release must retain one verified package for each primary desktop
+      # system. Extra architectures are best-effort in the packaging matrix.
+      - run: CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -o /tmp/alx-windows-amd64.exe .
+      - run: CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -o /tmp/alx-darwin-arm64 .
 
   package:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: verify
     runs-on: ubuntu-latest
     strategy:
+      # Do not cancel other packages when an optional architecture cannot be
+      # built by one dependency. Its job log remains available for diagnosis.
+      fail-fast: false
       matrix:
         include:
-          - { goos: windows, goarch: amd64, binary: alx.exe, bundle: alx-windows-amd64.zip }
-          - { goos: windows, goarch: arm64, binary: alx.exe, bundle: alx-windows-arm64.zip }
-          - { goos: windows, goarch: 386, binary: alx.exe, bundle: alx-windows-386.zip }
-          - { goos: darwin, goarch: arm64, binary: alx, bundle: alx-darwin-arm64.zip }
-          - { goos: darwin, goarch: amd64, binary: alx, bundle: alx-darwin-amd64.zip }
-          - { goos: linux, goarch: amd64, binary: alx, bundle: alx-linux-amd64.zip }
-          - { goos: linux, goarch: arm64, binary: alx, bundle: alx-linux-arm64.zip }
-          - { goos: linux, goarch: arm, goarm: 7, binary: alx, bundle: alx-linux-armv7.zip }
-          - { goos: linux, goarch: 386, binary: alx, bundle: alx-linux-386.zip }
-          - { goos: linux, goarch: ppc64le, binary: alx, bundle: alx-linux-ppc64le.zip }
-          - { goos: linux, goarch: s390x, binary: alx, bundle: alx-linux-s390x.zip }
-          - { goos: linux, goarch: riscv64, binary: alx, bundle: alx-linux-riscv64.zip }
-          - { goos: freebsd, goarch: amd64, binary: alx, bundle: alx-freebsd-amd64.zip }
-          - { goos: freebsd, goarch: arm64, binary: alx, bundle: alx-freebsd-arm64.zip }
+          # Required: one maintained package for each primary system.
+          - { goos: windows, goarch: amd64, binary: alx.exe, bundle: alx-windows-amd64.zip, optional: false }
+          - { goos: darwin, goarch: arm64, binary: alx, bundle: alx-darwin-arm64.zip, optional: false }
+          - { goos: linux, goarch: amd64, binary: alx, bundle: alx-linux-amd64.zip, optional: false }
+          # Best effort: publish when successful, without blocking a release.
+          - { goos: windows, goarch: arm64, binary: alx.exe, bundle: alx-windows-arm64.zip, optional: true }
+          - { goos: windows, goarch: 386, binary: alx.exe, bundle: alx-windows-386.zip, optional: true }
+          - { goos: darwin, goarch: amd64, binary: alx, bundle: alx-darwin-amd64.zip, optional: true }
+          - { goos: linux, goarch: arm64, binary: alx, bundle: alx-linux-arm64.zip, optional: true }
+          - { goos: linux, goarch: arm, goarm: 7, binary: alx, bundle: alx-linux-armv7.zip, optional: true }
+          - { goos: linux, goarch: 386, binary: alx, bundle: alx-linux-386.zip, optional: true }
+          - { goos: linux, goarch: ppc64le, binary: alx, bundle: alx-linux-ppc64le.zip, optional: true }
+          - { goos: linux, goarch: s390x, binary: alx, bundle: alx-linux-s390x.zip, optional: true }
+          - { goos: linux, goarch: riscv64, binary: alx, bundle: alx-linux-riscv64.zip, optional: true }
+          - { goos: freebsd, goarch: amd64, binary: alx, bundle: alx-freebsd-amd64.zip, optional: true }
+          - { goos: freebsd, goarch: arm64, binary: alx, bundle: alx-freebsd-arm64.zip, optional: true }
+    continue-on-error: ${{ matrix.optional }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

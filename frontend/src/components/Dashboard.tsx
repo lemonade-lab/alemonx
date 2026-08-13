@@ -103,6 +103,7 @@ import { PackageManifestPanel } from './PackageManifestPanel'
 import { AgentChatPage } from './AgentChat'
 import { ErrorNotice } from './ErrorNotice'
 import { ConfirmDialog } from './ConfirmDialog'
+import { DownloadProgress } from './DownloadProgress'
 import { GLOBAL_MODAL_Z_INDEX, Modal } from './Modal'
 import { AccountManagementPage } from './AccountManagement'
 import { RobotGitControl } from './RobotGitControl'
@@ -5823,6 +5824,12 @@ function SystemPluginCenter({
               <p className="m-0 text-xs text-amber-600">
                 该版本没有可用的 zip / tar.gz 插件包。
               </p>
+            )}
+            {installing && (
+              <DownloadProgress
+                label={`正在下载 ${installTarget.name}`}
+                detail="正在从选定 Release 下载、解包并校验插件；请保持此窗口打开。"
+              />
             )}
             <div className="flex justify-end gap-2">
               <Button
