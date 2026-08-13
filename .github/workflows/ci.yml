@@ -35,9 +35,19 @@ jobs:
       matrix:
         include:
           - { goos: windows, goarch: amd64, binary: alx.exe, bundle: alx-windows-amd64.zip }
+          - { goos: windows, goarch: arm64, binary: alx.exe, bundle: alx-windows-arm64.zip }
+          - { goos: windows, goarch: 386, binary: alx.exe, bundle: alx-windows-386.zip }
           - { goos: darwin, goarch: arm64, binary: alx, bundle: alx-darwin-arm64.zip }
           - { goos: darwin, goarch: amd64, binary: alx, bundle: alx-darwin-amd64.zip }
           - { goos: linux, goarch: amd64, binary: alx, bundle: alx-linux-amd64.zip }
+          - { goos: linux, goarch: arm64, binary: alx, bundle: alx-linux-arm64.zip }
+          - { goos: linux, goarch: arm, goarm: 7, binary: alx, bundle: alx-linux-armv7.zip }
+          - { goos: linux, goarch: 386, binary: alx, bundle: alx-linux-386.zip }
+          - { goos: linux, goarch: ppc64le, binary: alx, bundle: alx-linux-ppc64le.zip }
+          - { goos: linux, goarch: s390x, binary: alx, bundle: alx-linux-s390x.zip }
+          - { goos: linux, goarch: riscv64, binary: alx, bundle: alx-linux-riscv64.zip }
+          - { goos: freebsd, goarch: amd64, binary: alx, bundle: alx-freebsd-amd64.zip }
+          - { goos: freebsd, goarch: arm64, binary: alx, bundle: alx-freebsd-arm64.zip }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -53,7 +63,7 @@ jobs:
         working-directory: frontend
       - run: |
           mkdir -p bundle release
-          CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -trimpath -ldflags "-s -w -X main.Version=${GITHUB_REF_NAME}" -o "bundle/${{ matrix.binary }}" .
+          GOARM=${{ matrix.goarm }} CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -trimpath -ldflags "-s -w -X main.Version=${GITHUB_REF_NAME}" -o "bundle/${{ matrix.binary }}" .
           printf '{"version":"%s","platform":"%s","architecture":"%s"}\n' "${GITHUB_REF_NAME}" "${{ matrix.goos }}" "${{ matrix.goarch }}" > bundle/alx-update.json
           (cd bundle && zip -r "../release/${{ matrix.bundle }}" .)
           (cd release && sha256sum "${{ matrix.bundle }}" > "${{ matrix.bundle }}.sha256")
@@ -78,7 +88,15 @@ jobs:
           release_base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}"
           checksum() { awk -v name="$1" '$2 == name { print $1 }' release/SHA256SUMS; }
           cat release/*.sha256 > release/SHA256SUMS
-          printf '{"tag":"%s","name":"AlemonX %s","url":"https://github.com/%s/releases/tag/%s","assets":[{"name":"alx-windows-amd64.zip","url":"%s/alx-windows-amd64.zip","sha256":"%s"},{"name":"alx-darwin-arm64.zip","url":"%s/alx-darwin-arm64.zip","sha256":"%s"},{"name":"alx-darwin-amd64.zip","url":"%s/alx-darwin-amd64.zip","sha256":"%s"},{"name":"alx-linux-amd64.zip","url":"%s/alx-linux-amd64.zip","sha256":"%s"},{"name":"SHA256SUMS","url":"%s/SHA256SUMS"}]}' "${GITHUB_REF_NAME}" "${GITHUB_REF_NAME}" "${GITHUB_REPOSITORY}" "${GITHUB_REF_NAME}" "$release_base" "$(checksum alx-windows-amd64.zip)" "$release_base" "$(checksum alx-darwin-arm64.zip)" "$release_base" "$(checksum alx-darwin-amd64.zip)" "$release_base" "$(checksum alx-linux-amd64.zip)" "$release_base" > release/alx-update-index.json
+          printf '{"tag":"%s","name":"AlemonX %s","url":"https://github.com/%s/releases/tag/%s","assets":[' "${GITHUB_REF_NAME}" "${GITHUB_REF_NAME}" "${GITHUB_REPOSITORY}" "${GITHUB_REF_NAME}" > release/alx-update-index.json
+          first=1
+          for archive in release/*.zip; do
+            name="${archive##*/}"
+            [ "$first" = 1 ] || printf ',' >> release/alx-update-index.json
+            first=0
+            printf '{"name":"%s","url":"%s/%s","sha256":"%s"}' "$name" "$release_base" "$name" "$(checksum "$name")" >> release/alx-update-index.json
+          done
+          printf ',{"name":"SHA256SUMS","url":"%s/SHA256SUMS"}]}' "$release_base" >> release/alx-update-index.json
           rm release/*.sha256
           gh release create "${GITHUB_REF_NAME}" release/* --generate-notes
         env:

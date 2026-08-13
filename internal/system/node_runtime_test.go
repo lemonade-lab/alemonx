@@ -7,6 +7,20 @@ import (
 	"testing"
 )
 
+func TestNodeArchitecture(t *testing.T) {
+	for architecture, want := range map[string]string{
+		"amd64": "x64", "arm64": "arm64", "386": "x86", "arm": "armv7l",
+		"ppc64le": "ppc64le", "s390x": "s390x", "riscv64": "riscv64",
+	} {
+		if got := nodeArchitecture(architecture); got != want {
+			t.Fatalf("nodeArchitecture(%q) = %q, want %q", architecture, got, want)
+		}
+	}
+	if got := nodeArchitecture("mips64"); got != "" {
+		t.Fatalf("nodeArchitecture(mips64) = %q, want empty", got)
+	}
+}
+
 func TestManagedNodeCommandResolvesBundledRuntime(t *testing.T) {
 	cache := t.TempDir()
 	previous := userCacheDir

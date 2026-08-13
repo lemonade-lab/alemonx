@@ -2,18 +2,11 @@
 
 > 创建、运行、管理和扩展 AlemonJS 机器人；也能让 AI Agent 在你的确认下协助维护项目。
 
-[下载最新版](https://github.com/lemonade-lab/alemonx/releases) · [MCP 文档](docs/mcp.md) · [系统插件开发](docs/plugin-development.md)
+[下载最新版](https://github.com/lemonade-lab/alemonx/releases) · [命令行](docs/cli.md) · [MCP 文档](docs/mcp.md) · [系统插件开发](docs/plugin-development.md)
 
 ![ALemonX 工作台：多机器人项目管理、运行配置与 Agent 协作](docs/images/alemonx-workbench.png)
 
-ALemonX（`alx`）将 AlemonJS 机器人的环境检查、项目导入、配置、运行日志、插件、连接、Git 与发布收进同一个本地工作台。
 
-## 能做什么
-
-- 用引导创建机器人，或导入本地项目、从 GitHub/Gitee 克隆仓库。
-- 管理运行、依赖检查、日志与 PM2。
-- 配置连接、插件、本地 `packages/` 与发布信息。
-- 通过受控 MCP 让 Codex 等 AI Agent 协作维护项目。
 
 ## 开始使用
 
@@ -21,12 +14,19 @@ ALemonX（`alx`）将 AlemonJS 机器人的环境检查、项目导入、配置�
 
 | 系统 | 下载文件 |
 | --- | --- |
-| Windows 64 位 | `alx-windows-amd64.zip` |
+| Windows x64 | `alx-windows-amd64.zip` |
+| Windows ARM64 | `alx-windows-arm64.zip` |
+| Windows 32 位 | `alx-windows-386.zip` |
 | macOS Apple Silicon | `alx-darwin-arm64.zip` |
 | macOS Intel | `alx-darwin-amd64.zip` |
-| Linux 64 位 | `alx-linux-amd64.zip` |
+| Linux x64 | `alx-linux-amd64.zip` |
+| Linux ARM64 | `alx-linux-arm64.zip` |
+| Linux ARMv7 | `alx-linux-armv7.zip` |
+| Linux 32 位 x86 | `alx-linux-386.zip` |
+| Linux ppc64le / s390x / riscv64 | 对应的 `alx-linux-<架构>.zip` |
+| FreeBSD x64 / ARM64 | 对应的 `alx-freebsd-<架构>.zip` |
 
-Windows 直接运行 `alx.exe`。macOS / Linux：
+Windows 直接运行 `alx.exe`。macOS / Linux / FreeBSD：
 
 ```bash
 chmod +x alx
@@ -34,6 +34,8 @@ chmod +x alx
 ```
 
 在浏览器打开终端显示的本地地址（默认 `http://127.0.0.1:17390`），即可开始创建、部署或管理机器人。
+
+Windows、macOS 与 Linux 支持在工作台中一键注册后台服务。FreeBSD 提供前台运行与自动更新；请使用系统自身的 rc.d、daemon 或服务管理方案进行常驻托管。FreeBSD 的 Node.js 请使用系统包管理器安装，工作台不会自动下载 Node 运行时。
 
 ## 操作可控
 
@@ -62,5 +64,6 @@ cd frontend && yarn lint && yarn build
 ## 文档
 
 - [MCP 控制面](docs/mcp.md)
+- [命令行](docs/cli.md)
 - [系统插件开发](docs/plugin-development.md)
 - [插件 WebView 规范](docs/webview.md)

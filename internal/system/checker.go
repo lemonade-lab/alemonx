@@ -64,10 +64,10 @@ func (c *Checker) CheckGoal(goalID, variant string) Report {
 
 func (c *Checker) platform() Check {
 	switch runtime.GOOS {
-	case "darwin", "windows", "linux":
+	case "darwin", "windows", "linux", "freebsd":
 		return Check{ID: "platform", Name: "当前系统", Status: "ready", Detail: runtime.GOOS + "（" + runtime.GOARCH + "）"}
 	default:
-		return Check{ID: "platform", Name: "当前系统", Status: "missing", Detail: "暂未支持 " + runtime.GOOS, Suggestion: "请在 Windows、macOS 或 Linux 上运行此工具。"}
+		return Check{ID: "platform", Name: "当前系统", Status: "missing", Detail: "暂未支持 " + runtime.GOOS, Suggestion: "请在 Windows、macOS、Linux 或 FreeBSD 上运行此工具。"}
 	}
 }
 

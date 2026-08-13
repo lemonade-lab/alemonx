@@ -51,6 +51,33 @@ func TestMatchingAssetForRequiresExactPlatformAndArchitecture(t *testing.T) {
 	}
 }
 
+func TestMatchingAssetForSupportsExtendedArchitectures(t *testing.T) {
+	assets := []Asset{
+		{Name: "alx-linux-armv7.zip", URL: "linux-arm"},
+		{Name: "alx-linux-386.zip", URL: "linux-386"},
+		{Name: "alx-linux-ppc64le.zip", URL: "linux-ppc64le"},
+		{Name: "alx-linux-s390x.zip", URL: "linux-s390x"},
+		{Name: "alx-linux-riscv64.zip", URL: "linux-riscv64"},
+		{Name: "alx-windows-arm64.zip", URL: "windows-arm64"},
+		{Name: "alx-freebsd-amd64.zip", URL: "freebsd-amd64"},
+	}
+	for _, test := range []struct {
+		platform, architecture, want string
+	}{
+		{"linux", "arm", "linux-arm"},
+		{"linux", "386", "linux-386"},
+		{"linux", "ppc64le", "linux-ppc64le"},
+		{"linux", "s390x", "linux-s390x"},
+		{"linux", "riscv64", "linux-riscv64"},
+		{"windows", "arm64", "windows-arm64"},
+		{"freebsd", "amd64", "freebsd-amd64"},
+	} {
+		if got := matchingAssetFor(assets, test.platform, test.architecture); got.URL != test.want {
+			t.Fatalf("matchingAssetFor(%s/%s) = %#v, want %q", test.platform, test.architecture, got, test.want)
+		}
+	}
+}
+
 func TestUpdateForReleaseUsesIndexChecksum(t *testing.T) {
 	checksum := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	item := Item{

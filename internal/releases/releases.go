@@ -166,14 +166,34 @@ func matchingAssetFor(assets []Asset, platform, architecture string) Asset {
 		tokens := assetNameTokens(asset.Name)
 		system := (platform == "darwin" && (tokens["darwin"] || tokens["macos"] || tokens["mac"])) ||
 			(platform == "windows" && (tokens["windows"] || tokens["win32"])) ||
-			(platform == "linux" && tokens["linux"])
-		arch := (architecture == "arm64" && (tokens["arm64"] || tokens["aarch64"])) ||
-			(architecture == "amd64" && (tokens["amd64"] || tokens["x64"] || tokens["x86_64"]))
+			(platform == "linux" && tokens["linux"]) ||
+			(platform == "freebsd" && tokens["freebsd"])
+		arch := assetMatchesArchitecture(tokens, architecture)
 		if system && arch {
 			return asset
 		}
 	}
 	return Asset{}
+}
+
+// assetMatchesArchitecture accepts both Go architecture names and common
+// release-file spellings. Keeping this mapping in the update selector lets a
+// new release matrix add architectures without changing browser/API behavior.
+func assetMatchesArchitecture(tokens map[string]bool, architecture string) bool {
+	switch architecture {
+	case "amd64":
+		return tokens["amd64"] || tokens["x64"] || tokens["x86_64"]
+	case "arm64":
+		return tokens["arm64"] || tokens["aarch64"]
+	case "386":
+		return tokens["386"] || tokens["i386"] || tokens["x86"]
+	case "arm":
+		return tokens["arm"] || tokens["armv7"] || tokens["armv7l"] || tokens["armhf"]
+	case "ppc64le", "s390x", "riscv64":
+		return tokens[architecture]
+	default:
+		return tokens[architecture]
+	}
 }
 
 func assetNameTokens(name string) map[string]bool {

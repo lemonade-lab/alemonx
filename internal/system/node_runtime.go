@@ -95,7 +95,7 @@ func latestNodeLTS(ctx context.Context) (string, error) {
 }
 
 func nodeAssetName(version string) (string, error) {
-	arch := map[string]string{"amd64": "x64", "arm64": "arm64"}[runtime.GOARCH]
+	arch := nodeArchitecture(runtime.GOARCH)
 	if arch == "" {
 		return "", fmt.Errorf("Node.js 托管安装暂不支持 %s/%s", runtime.GOOS, runtime.GOARCH)
 	}
@@ -110,6 +110,18 @@ func nodeAssetName(version string) (string, error) {
 	default:
 		return "", fmt.Errorf("Node.js 托管安装暂不支持 %s", runtime.GOOS)
 	}
+}
+
+func nodeArchitecture(architecture string) string {
+	return map[string]string{
+		"amd64":   "x64",
+		"arm64":   "arm64",
+		"386":     "x86",
+		"arm":     "armv7l",
+		"ppc64le": "ppc64le",
+		"s390x":   "s390x",
+		"riscv64": "riscv64",
+	}[architecture]
 }
 
 func nodeChecksum(ctx context.Context, raw, asset string) (string, error) {
@@ -189,7 +201,7 @@ func installNodeArchive(ctx context.Context, archive, version string) (string, e
 	if err != nil {
 		return "", err
 	}
-	name := "node-" + version + "-" + runtime.GOOS + "-" + map[string]string{"amd64": "x64", "arm64": "arm64"}[runtime.GOARCH]
+	name := "node-" + version + "-" + runtime.GOOS + "-" + nodeArchitecture(runtime.GOARCH)
 	target := filepath.Join(base, "installed", name)
 	bin := filepath.Join(target, "bin")
 	if info, err := os.Stat(filepath.Join(bin, "node")); err == nil && !info.IsDir() {

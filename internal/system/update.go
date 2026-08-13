@@ -885,7 +885,8 @@ func verifyBinaryPlatform(path string) error {
 			return errors.New("更新包中的程序不是 Windows 可执行文件")
 		}
 		defer file.Close()
-		if runtime.GOARCH == "amd64" && file.FileHeader.Machine != pe.IMAGE_FILE_MACHINE_AMD64 {
+		expected, ok := expectedPEMachine(runtime.GOARCH)
+		if !ok || file.FileHeader.Machine != expected {
 			return errors.New("更新包与当前 Windows 架构不匹配")
 		}
 	case "darwin":
@@ -897,17 +898,52 @@ func verifyBinaryPlatform(path string) error {
 		if runtime.GOARCH == "arm64" && file.Cpu != macho.CpuArm64 || runtime.GOARCH == "amd64" && file.Cpu != macho.CpuAmd64 {
 			return errors.New("更新包与当前 macOS 架构不匹配")
 		}
-	case "linux":
+	case "linux", "freebsd":
 		file, err := elf.Open(path)
 		if err != nil {
-			return errors.New("更新包中的程序不是 Linux 可执行文件")
+			return errors.New("更新包中的程序不是当前系统可执行文件")
 		}
 		defer file.Close()
-		if runtime.GOARCH == "arm64" && file.Machine != elf.EM_AARCH64 || runtime.GOARCH == "amd64" && file.Machine != elf.EM_X86_64 {
-			return errors.New("更新包与当前 Linux 架构不匹配")
+		expected, ok := expectedELFMachine(runtime.GOARCH)
+		if !ok || file.Machine != expected {
+			return errors.New("更新包与当前系统架构不匹配")
 		}
 	}
 	return nil
+}
+
+func expectedPEMachine(architecture string) (uint16, bool) {
+	switch architecture {
+	case "amd64":
+		return pe.IMAGE_FILE_MACHINE_AMD64, true
+	case "arm64":
+		return pe.IMAGE_FILE_MACHINE_ARM64, true
+	case "386":
+		return pe.IMAGE_FILE_MACHINE_I386, true
+	default:
+		return 0, false
+	}
+}
+
+func expectedELFMachine(architecture string) (elf.Machine, bool) {
+	switch architecture {
+	case "amd64":
+		return elf.EM_X86_64, true
+	case "arm64":
+		return elf.EM_AARCH64, true
+	case "386":
+		return elf.EM_386, true
+	case "arm":
+		return elf.EM_ARM, true
+	case "ppc64le":
+		return elf.EM_PPC64, true
+	case "s390x":
+		return elf.EM_S390, true
+	case "riscv64":
+		return elf.EM_RISCV, true
+	default:
+		return 0, false
+	}
 }
 
 func unzipBinary(source, directory string) (string, error) {

@@ -34,7 +34,7 @@ plugins/
   "name": "示例状态",
   "version": "1.0.0",
   "runtime": "node",
-  "entry": { "darwin-arm64": "runner/main.mjs", "linux-amd64": "runner/main.mjs", "windows-amd64": "runner/main.mjs" },
+  "entry": { "darwin-arm64": "runner/main.mjs", "linux-amd64": "runner/main.mjs", "linux-arm64": "runner/main.mjs", "windows-amd64": "runner/main.mjs", "windows-arm64": "runner/main.mjs" },
   "web": { "root": "web" },
   "navigation": { "label": "示例", "icon": "circle", "order": 10 }
 }
@@ -202,7 +202,10 @@ try {
 my-plugin-darwin-arm64.zip
 my-plugin-darwin-amd64.zip
 my-plugin-linux-amd64.zip
+my-plugin-linux-arm64.zip
+my-plugin-linux-armv7.zip
 my-plugin-windows-amd64.zip
+my-plugin-windows-arm64.zip
 ```
 
 压缩包内应包含插件目录、`alx.json`、`web/` 和当前平台的 `dist/` 执行器。Release 同时应发布 `SHA256SUMS`。CI 应从 Git tag 写入 `alx.json.version`，因此 `v1.2.3` Release 的清单版本必须为 `1.2.3`。

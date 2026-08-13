@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -162,6 +163,42 @@ func main() {
 				log.Fatal(err)
 			}
 			fmt.Println(result)
+			return
+		case "logs":
+			logLines, logArguments, logErr := option(arguments[1:], "--lines", "200")
+			if logErr != nil {
+				log.Fatal(logErr)
+			}
+			followLogs, logArguments := flagPresent(logArguments, "--follow")
+			if len(logArguments) != 0 {
+				usage()
+				return
+			}
+			lines, parseErr := strconv.Atoi(logLines)
+			if parseErr != nil || lines <= 0 {
+				log.Fatal("--lines 必须是正整数")
+			}
+			if err := system.StreamServiceLogs(lines, followLogs, os.Stdout); err != nil {
+				log.Fatal(err)
+			}
+			return
+		case "health":
+			if len(arguments) != 1 {
+				usage()
+				return
+			}
+			health, healthErr := system.LocalHealth(port, 3*time.Second)
+			if healthErr != nil {
+				log.Fatal(healthErr)
+			}
+			fmt.Println(health)
+			return
+		case "doctor":
+			if len(arguments) != 1 {
+				usage()
+				return
+			}
+			printDoctor(port)
 			return
 		case "start":
 			if len(arguments) != 1 {
@@ -450,6 +487,27 @@ func serviceAction(action func() (string, error)) {
 	fmt.Println(result)
 }
 
+func printDoctor(port string) {
+	status, statusErr := system.ServiceStatus()
+	if statusErr != nil {
+		fmt.Printf("后台服务：无法读取（%v）\n", statusErr)
+	} else {
+		fmt.Println("后台服务：" + status)
+	}
+	if health, healthErr := system.LocalHealth(port, 3*time.Second); healthErr != nil {
+		fmt.Println("HTTP 健康：不可用（" + healthErr.Error() + "）")
+	} else {
+		fmt.Println("HTTP 健康：" + health)
+	}
+	for _, check := range system.NewChecker().CheckGoal("develop", "").Checks {
+		fmt.Printf("%s：%s", check.Name, check.Detail)
+		if check.Suggestion != "" {
+			fmt.Printf("（%s）", check.Suggestion)
+		}
+		fmt.Println()
+	}
+}
+
 func option(arguments []string, name, fallback string) (string, []string, error) {
 	value := fallback
 	remaining := make([]string, 0, len(arguments))
@@ -498,6 +556,9 @@ func usage() {
   alx open [--port 17390]            打开浏览器
   alx update                         检查并更新 alx
   alx status                         查看后台服务状态
+  alx health [--port 17390]          检查本机 AlemonX HTTP 健康状态
+  alx doctor [--port 17390]          汇总服务、健康和开发环境诊断
+  alx logs [--lines 200] [--follow]  查看后台服务日志（Ctrl+C 结束跟随）
   alx start | stop | restart         管理后台服务
   alx uninstall --yes                移除后台服务
   alx plugin list                     查看已发现的 Setup 插件

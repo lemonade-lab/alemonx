@@ -419,7 +419,17 @@ func installSystemdUserService(executable, port string, start bool) (string, err
 }
 
 func installScheduledTask(executable, port string, start bool) (string, error) {
-	command := `"` + executable + `" serve --port ` + port
+	logs, err := serviceLogPath()
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(filepath.Dir(logs), 0755); err != nil {
+		return "", fmt.Errorf("无法创建服务日志目录：%w", err)
+	}
+	// The task scheduler does not retain an application's stdout/stderr. Run
+	// through cmd.exe so `alx logs` can expose the same diagnostics as macOS
+	// and Linux managed services.
+	command := `cmd.exe /d /s /c ""` + executable + `" serve --port ` + port + ` >> "` + logs + `" 2>&1"`
 	if output, err := exec.Command("schtasks", "/Create", "/TN", "ALemonX", "/SC", "ONLOGON", "/TR", command, "/F").CombinedOutput(); err != nil {
 		return "", fmt.Errorf("注册计划任务失败：%s", strings.TrimSpace(string(output)))
 	}

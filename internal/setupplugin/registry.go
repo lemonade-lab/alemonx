@@ -1800,10 +1800,27 @@ func compatibleAsset(name string) bool {
 	}
 	system := (runtime.GOOS == "darwin" && (tokens["darwin"] || tokens["macos"] || tokens["mac"])) ||
 		(runtime.GOOS == "windows" && (tokens["windows"] || tokens["win32"])) ||
-		(runtime.GOOS == "linux" && tokens["linux"])
-	architecture := (runtime.GOARCH == "arm64" && (tokens["arm64"] || tokens["aarch64"])) ||
-		(runtime.GOARCH == "amd64" && (tokens["amd64"] || tokens["x64"] || tokens["x86_64"]))
+		(runtime.GOOS == "linux" && tokens["linux"]) ||
+		(runtime.GOOS == "freebsd" && tokens["freebsd"])
+	architecture := assetMatchesArchitecture(tokens, runtime.GOARCH)
 	return system && architecture
+}
+
+func assetMatchesArchitecture(tokens map[string]bool, architecture string) bool {
+	switch architecture {
+	case "amd64":
+		return tokens["amd64"] || tokens["x64"] || tokens["x86_64"]
+	case "arm64":
+		return tokens["arm64"] || tokens["aarch64"]
+	case "386":
+		return tokens["386"] || tokens["i386"] || tokens["x86"]
+	case "arm":
+		return tokens["arm"] || tokens["armv7"] || tokens["armv7l"] || tokens["armhf"]
+	case "ppc64le", "s390x", "riscv64":
+		return tokens[architecture]
+	default:
+		return tokens[architecture]
+	}
 }
 
 func defaultReleaseURL(repository string) string {

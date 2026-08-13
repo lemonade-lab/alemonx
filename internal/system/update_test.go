@@ -3,6 +3,8 @@ package system
 import (
 	"archive/zip"
 	"crypto/sha256"
+	"debug/elf"
+	"debug/pe"
 	"fmt"
 	"io"
 	"os"
@@ -11,6 +13,24 @@ import (
 	"strings"
 	"testing"
 )
+
+func TestExpectedBinaryMachinesCoverReleaseArchitectures(t *testing.T) {
+	for architecture, want := range map[string]elf.Machine{
+		"amd64": elf.EM_X86_64, "arm64": elf.EM_AARCH64, "386": elf.EM_386,
+		"arm": elf.EM_ARM, "ppc64le": elf.EM_PPC64, "s390x": elf.EM_S390, "riscv64": elf.EM_RISCV,
+	} {
+		if got, ok := expectedELFMachine(architecture); !ok || got != want {
+			t.Fatalf("expectedELFMachine(%q) = %v, %t; want %v, true", architecture, got, ok, want)
+		}
+	}
+	for architecture, want := range map[string]uint16{
+		"amd64": pe.IMAGE_FILE_MACHINE_AMD64, "arm64": pe.IMAGE_FILE_MACHINE_ARM64, "386": pe.IMAGE_FILE_MACHINE_I386,
+	} {
+		if got, ok := expectedPEMachine(architecture); !ok || got != want {
+			t.Fatalf("expectedPEMachine(%q) = %v, %t; want %v, true", architecture, got, ok, want)
+		}
+	}
+}
 
 func TestWindowsRestartScriptQuotesPathsAndHandlesNoAppArguments(t *testing.T) {
 	script := windowsRestartScript(`C:\Program Files\ALemonX\alx.exe`, `C:\Program Files\ALemonX\alx.exe.new.exe`, `C:\Program Files\ALemonX\alx.previous.exe`, nil, "17390")
