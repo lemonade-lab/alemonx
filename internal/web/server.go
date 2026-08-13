@@ -317,6 +317,8 @@ type server struct {
 	goalSchedulerMu   sync.Mutex
 	goalRunning       map[string]bool
 	opsStore          agent.OpsRepository
+	opsProjects       *agent.OpsProjectStore
+	opsBackground     bool
 	pm2Guard          *GuardedPM2Executor
 	opsOrchestrator   *agent.OpsOrchestrator
 	alerts            agent.AlertManager
@@ -676,13 +678,11 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 			}
 		}
 	}
-	// Local authentication has a single bootstrap account. Persist its admin
-	// role on first server start so production mode never relies on a client
-	// supplied role header and does not lock out the account that enabled auth.
-	if authStatus, authErr := identity.Status(""); authErr == nil && authStatus.Enabled && strings.TrimSpace(authStatus.Account) != "" {
-		if _, roleErr := opsStore.GetRole(authStatus.Account); roleErr != nil {
-			_ = opsStore.SaveRole(agent.OpsRoleBinding{Account: authStatus.Account, Role: "admin", Updated: time.Now()})
-		}
+	opsProjects := agent.NewOpsProjectStore(filepath.Join(filepath.Dir(taskStore.TasksDir()), "ops-projects.json"))
+	// Existing policy files represent an explicit choice in older versions.
+	// Listing a missing incident directory is read-only and does not create it.
+	if policies, listErr := opsStore.ListPolicies(); listErr == nil {
+		_ = opsProjects.MigratePolicies(policies)
 	}
 	operationEvents := newOperationEventStore(filepath.Join(filepath.Dir(taskStore.TasksDir()), "operations", "events.db"))
 	privileges, privilegeErr := newPrivilegeStoreAt(filepath.Join(filepath.Dir(taskStore.TasksDir()), "privileges"))
@@ -693,7 +693,7 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	downloadBroker := newPluginDownloadBroker(networkManager)
 	downloadBroker.setRegistry(plugins)
 	plugins.SetRunnerEnvironmentProvider(downloadBroker.environment)
-	s := &server{version: version, assets: assets, static: http.FileServer(http.FS(assets)), checker: system.NewChecker(), network: networkManager, plugins: plugins, auth: identity, ai: aiManager, agentSessions: sessionStore, agentTaskStore: taskStore, agentTasks: tasks, taskService: &agent.TaskService{Manager: tasks}, goalStore: goalStore, opsStore: opsStore, opsPaused: opsStartupErr != nil, goalSchedulerStop: make(chan struct{}), goalRunning: map[string]bool{}, agentConfirms: newAgentConfirmManager(), development: map[string]developmentProcess{}, webviewRuntimes: map[string]*webViewRuntime{}, stopping: map[string]bool{}, consoleCache: map[string]consoleSnapshot{}, outputBuffers: map[string]*operationOutputBuffer{}, directoryRoots: managedDirectoryRoots(), events: newRobotEventHub(), eventGateway: newEventGateway(), operationEvents: operationEvents, operations: operationEvents.snapshot(), opsEvents: newOpsEventHub(), mcpEvents: newMCPEventHub(), mcpMonitorStop: make(chan struct{}), pluginEventsStop: make(chan struct{}), updateMonitorStop: make(chan struct{}), updateState: updateStatusState{Update: releases.Update{Current: version}}, nodeID: fmt.Sprintf("%s-%d", hostname(), os.Getpid()), pluginStatusCache: map[string]*pluginStatusSnapshot{}, hostContexts: map[string]pluginHostContext{}, privilegeStore: privileges, pluginDownloadBroker: downloadBroker, sudoAttempts: map[string]sudoAttempt{}, runPrivilegedCommand: system.RunSudoCommand, installEnvironment: system.InstallEnvironment}
+	s := &server{version: version, assets: assets, static: http.FileServer(http.FS(assets)), checker: system.NewChecker(), network: networkManager, plugins: plugins, auth: identity, ai: aiManager, agentSessions: sessionStore, agentTaskStore: taskStore, agentTasks: tasks, taskService: &agent.TaskService{Manager: tasks}, goalStore: goalStore, opsStore: opsStore, opsProjects: opsProjects, opsBackground: startBackground, opsPaused: opsStartupErr != nil, goalSchedulerStop: make(chan struct{}), goalRunning: map[string]bool{}, agentConfirms: newAgentConfirmManager(), development: map[string]developmentProcess{}, webviewRuntimes: map[string]*webViewRuntime{}, stopping: map[string]bool{}, consoleCache: map[string]consoleSnapshot{}, outputBuffers: map[string]*operationOutputBuffer{}, directoryRoots: managedDirectoryRoots(), events: newRobotEventHub(), eventGateway: newEventGateway(), operationEvents: operationEvents, operations: operationEvents.snapshot(), opsEvents: newOpsEventHub(), mcpEvents: newMCPEventHub(), mcpMonitorStop: make(chan struct{}), pluginEventsStop: make(chan struct{}), updateMonitorStop: make(chan struct{}), updateState: updateStatusState{Update: releases.Update{Current: version}}, nodeID: fmt.Sprintf("%s-%d", hostname(), os.Getpid()), pluginStatusCache: map[string]*pluginStatusSnapshot{}, hostContexts: map[string]pluginHostContext{}, privilegeStore: privileges, pluginDownloadBroker: downloadBroker, sudoAttempts: map[string]sudoAttempt{}, runPrivilegedCommand: system.RunSudoCommand, installEnvironment: system.InstallEnvironment}
 	s.pluginDevelopment = newPluginDevelopmentManager(plugins, filepath.Join(filepath.Dir(taskStore.TasksDir()), "setup-plugins", "development.json"))
 	if opsStartupErr != nil {
 		log.Printf("AI 运维 SQLite 初始化失败，已回退 JSON 并暂停自动维护: %v", opsStartupErr)
@@ -730,8 +730,13 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	pm2Guard := GuardedPM2Executor{Robots: s.robots, Leases: agent.NewLeaseManager(opsStore), Store: opsStore, Emergency: func() bool { return s.opsPaused }}
 	s.pm2Guard = &pm2Guard
 	s.opsOrchestrator = &agent.OpsOrchestrator{
-		Store:  opsStore,
-		Policy: func(root string) (agent.OpsPolicy, error) { return opsStore.GetPolicy(root) },
+		Store: opsStore,
+		Policy: func(root string) (agent.OpsPolicy, error) {
+			if !s.opsEnabled(root) {
+				return agent.OpsPolicy{}, errors.New("该项目未启用高级运维")
+			}
+			return s.opsPolicy(root)
+		},
 		AI: func(incident agent.Incident, policy agent.OpsPolicy) (agent.AutoFixDecision, error) {
 			providers, err := s.ai.List()
 			if err != nil {
@@ -754,9 +759,15 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 			return agent.AutoFixDecision{}, errors.New("没有可用的 AI Provider")
 		},
 		PM2Guarded: func(root, action, owner string) (string, error) {
+			if !s.opsEnabled(root) {
+				return "", errors.New("该项目未启用高级运维")
+			}
 			return pm2Guard.Run(context.Background(), root, action, owner)
 		},
 		StartFix: func(incident agent.Incident, _ agent.AutoFixDecision) (string, error) {
+			if !s.opsEnabled(incident.ProjectRoot) {
+				return "", errors.New("该项目未启用高级运维")
+			}
 			if s.opsPaused {
 				return "", errors.New("全局 AI 运维已暂停")
 			}
@@ -786,14 +797,18 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	if webhook := strings.TrimSpace(os.Getenv("ALX_OPS_WEBHOOK_URL")); webhook != "" {
 		s.alerts.Sinks = []agent.AlertSink{agent.WebhookAlertSink{URL: webhook, Secret: os.Getenv("ALX_OPS_WEBHOOK_SECRET")}}
 	}
-	s.opsMonitor = s.newOpsMonitor()
 	_ = s.agentTasks.ReconcileStartup()
 	_ = s.goalStore.ReconcileRuns(s.agentTasks.List())
-	_ = s.opsStore.ReconcileMaintenance(s.agentTasks.List())
+	if len(s.monitorableRoots()) > 0 {
+		s.opsMonitor = s.newOpsMonitor()
+		_ = s.opsStore.ReconcileMaintenance(s.agentTasks.List())
+	}
 	s.agentTasks.SetObserver(func(previous, current agent.AgentTask) {
 		if previous.Status != current.Status && s.opsStore != nil {
 			status := string(current.Status)
 			if status == string(agent.TaskCompleted) || status == string(agent.TaskFailed) || status == string(agent.TaskCancelled) {
+				// A missing maintenance record is a harmless no-op. This observer
+				// never creates policy or incident files for ordinary agent tasks.
 				_ = s.opsStore.TransitionMaintenanceForTask(current.ID, status, current.LastError)
 				if status == string(agent.TaskCompleted) {
 					if runs, runsErr := s.opsStore.ListMaintenance(); runsErr == nil {
@@ -861,14 +876,14 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 		// reconciliation and the first scheduled/monitor event cannot bypass
 		// GoalRun or MaintenanceRun state synchronization.
 		s.startGoalScheduler()
-		if s.alertWorker != nil {
+		if len(s.monitorableRoots()) > 0 && s.alertWorker != nil {
 			if err := s.alertWorker.Start(context.Background()); err != nil {
 				s.opsPaused = true
 				_ = opsStore.AppendSignal(agent.OpsSignal{Kind: "alert_delivery", Status: "unavailable", Message: err.Error(), Timestamp: time.Now()})
 				log.Printf("AI 运维告警 Worker 未启动，自动维护已暂停: %v", err)
 			}
 		}
-		if s.opsMonitor != nil {
+		if len(s.monitorableRoots()) > 0 && s.opsMonitor != nil {
 			_ = s.opsMonitor.Start(context.Background())
 		}
 		// Kill any previously supervised robot process that survived a restart so a
@@ -1066,12 +1081,8 @@ func (s *server) authSetupHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	// The account that establishes local authentication is the only implicit
-	// administrator. Later authenticated accounts default to viewer unless an
-	// existing admin creates an explicit role binding.
-	if s.opsStore != nil {
-		_ = s.opsStore.SaveRole(agent.OpsRoleBinding{Account: strings.TrimSpace(input.Account), Role: "admin", Updated: time.Now()})
-	}
+	// Operations roles are created only after a project explicitly opts in to
+	// advanced operations. Authentication itself must not create incident data.
 	s.setAuthCookie(w, token)
 	writeJSON(w, http.StatusCreated, map[string]any{"enabled": true, "account": strings.TrimSpace(input.Account)})
 }
@@ -4312,13 +4323,10 @@ func (s *server) robotTasksHandler(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		var result robot.Result
 		var err error
-		if strings.HasPrefix(input.Action, "pm2") && s.pm2Guard != nil {
-			var output string
-			output, err = s.pm2Guard.Run(context.Background(), input.Root, input.Action, created.ID)
-			result = robot.Result{Path: input.Root, Output: output}
-		} else {
-			result, err = s.robots.Run(input.Root, input.Action, input.Message, input.Package, input.Version, input.Tag, input.Token, input.Confirm == "true")
-		}
+		// A user-initiated PM2 action is an ordinary robot runtime action. It
+		// must never require an AI-operations lease, budget, policy or key.
+		// GuardedPM2Executor remains reserved for advanced automatic maintenance.
+		result, err = s.robots.Run(input.Root, input.Action, input.Message, input.Package, input.Version, input.Tag, input.Token, input.Confirm == "true")
 		finished := time.Now()
 		s.mu.Lock()
 		var snapshot operationTask
@@ -4507,11 +4515,8 @@ func (s *server) stopPM2ForStart(root string) error {
 	}
 	// pm2-delete removes the process entirely, which is more reliable than a
 	// graceful stop for guaranteeing the port is released before a local start.
-	if s.pm2Guard != nil {
-		_, stopErr := s.pm2Guard.Run(context.Background(), root, "pm2-delete", "system-local-start")
-		return stopErr
-	}
-	return errors.New("PM2 围栏执行器未初始化")
+	_, stopErr := s.robots.Run(root, "pm2-delete", "", "", "", "", "", true)
+	return stopErr
 }
 
 // stopLocalForStart stops a supervised local (dev/app) process so a new

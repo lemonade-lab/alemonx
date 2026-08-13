@@ -2,9 +2,31 @@ package agent
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
+
+func TestOpsProjectStoreDefaultsDisabledAndPreservesExplicitDisable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ops-projects.json")
+	store := NewOpsProjectStore(path)
+	if state, known, err := store.State("/robot/a"); err != nil || known || state.Enabled {
+		t.Fatalf("missing state = %#v known=%v err=%v", state, known, err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("read-only default must not create state file: %v", err)
+	}
+	if err := store.SetEnabled("/robot/a", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MigratePolicies([]OpsPolicy{{ProjectRoot: "/robot/a"}}); err != nil {
+		t.Fatal(err)
+	}
+	if state, known, err := store.State("/robot/a"); err != nil || !known || state.Enabled {
+		t.Fatalf("explicit disabled state must win: %#v known=%v err=%v", state, known, err)
+	}
+}
 
 func TestErrorFingerprintNormalizesVolatileValues(t *testing.T) {
 	a := ErrorFingerprint("/srv/app", "api", "Error requestId=abc user=1001 port 127.0.0.1:3000", "src/api.ts:42")

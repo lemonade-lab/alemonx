@@ -29,6 +29,94 @@ type canaryReadiness struct {
 	Checks []canaryReadinessCheck `json:"checks"`
 }
 
+type opsProjectStatus struct {
+	Root         string          `json:"root"`
+	Enabled      bool            `json:"enabled"`
+	Mode         string          `json:"mode"`
+	Message      string          `json:"message"`
+	Capabilities map[string]bool `json:"capabilities"`
+	AIAvailable  bool            `json:"aiAvailable"`
+}
+
+func (s *server) opsEnabled(root string) bool {
+	if s == nil || s.opsProjects == nil {
+		// Keeps focused legacy tests with hand-built server values compatible.
+		return true
+	}
+	state, known, err := s.opsProjects.State(root)
+	return err == nil && known && state.Enabled
+}
+
+func (s *server) opsStatus(root string) opsProjectStatus {
+	status := opsProjectStatus{
+		Root: filepath.Clean(root), Enabled: s.opsEnabled(root),
+		Capabilities: map[string]bool{"observe": false, "pm2": false, "aiAnalysis": false, "autoRepair": false, "alerts": false},
+	}
+	if !status.Enabled {
+		status.Mode, status.Message = "disabled", "高级运维尚未启用；机器人启动、测试和 PM2 运行不受它影响。"
+		return status
+	}
+	policy, _ := s.opsPolicy(root)
+	status.Mode = policy.Mode
+	status.Message = "正在观察该机器人项目的运行问题。"
+	status.Capabilities["observe"] = true
+	status.Capabilities["pm2"] = policy.AllowPM2Control
+	status.Capabilities["autoRepair"] = policy.AllowCodeChanges
+	if s.ai != nil {
+		if providers, err := s.ai.List(); err == nil {
+			for _, provider := range providers {
+				if provider.HasKey {
+					status.AIAvailable = true
+					break
+				}
+			}
+		}
+	}
+	status.Capabilities["aiAnalysis"] = status.AIAvailable
+	status.Capabilities["alerts"] = len(s.alerts.Sinks) > 0
+	return status
+}
+
+func (s *server) opsPolicy(root string) (agent.OpsPolicy, error) {
+	policy := agent.DefaultOpsPolicy(root)
+	if !s.opsEnabled(root) {
+		return policy, nil
+	}
+	stored, err := s.opsStore.GetPolicy(root)
+	if err == nil {
+		return stored, nil
+	}
+	return policy, nil
+}
+
+func (s *server) startOpsServices() {
+	if !s.opsBackground || len(s.monitorableRoots()) == 0 {
+		return
+	}
+	if s.opsMonitor == nil {
+		s.opsMonitor = s.newOpsMonitor()
+	}
+	if s.alertWorker != nil && !s.alertWorker.Running() {
+		if err := s.alertWorker.Start(context.Background()); err != nil {
+			s.opsPaused = true
+			_ = s.opsStore.AppendSignal(agent.OpsSignal{Kind: "alert_delivery", Status: "unavailable", Message: err.Error(), Timestamp: time.Now()})
+		}
+	}
+	_ = s.opsMonitor.Start(context.Background())
+}
+
+func (s *server) stopOpsServicesIfUnused() {
+	if len(s.monitorableRoots()) != 0 {
+		return
+	}
+	if s.opsMonitor != nil {
+		_ = s.opsMonitor.Stop()
+	}
+	if s.alertWorker != nil {
+		_ = s.alertWorker.Stop()
+	}
+}
+
 func (s *server) canaryReadiness(root string) canaryReadiness {
 	report := canaryReadiness{Root: root}
 	add := func(name string, passed bool, detail string) {
@@ -47,10 +135,7 @@ func (s *server) canaryReadiness(root string) canaryReadiness {
 		}
 	}
 	add("authenticated_operator", authReady, "本地身份认证必须启用")
-	policy, policyErr := s.opsStore.GetPolicy(root)
-	if policyErr != nil {
-		policy = agent.OpsPolicy{ProjectRoot: root, Mode: "observe"}
-	}
+	policy, _ := s.opsPolicy(root)
 	add("project_allowlist", policy.AutoAllowed, "项目必须已加入自动维护白名单")
 	add("pm2_permission", policy.AllowPM2Control, "canary 首期至少允许受围栏保护的 PM2 操作")
 	verificationReady := !policy.AllowCodeChanges
@@ -154,7 +239,7 @@ func (s *server) requireOpsRole(w http.ResponseWriter, r *http.Request, required
 func (s *server) monitorableRoots() []string {
 	out := make([]string, 0, len(s.directoryRoots))
 	for _, root := range s.directoryRoots {
-		if _, err := s.robots.Validate(root); err == nil {
+		if _, err := s.robots.Validate(root); err == nil && s.opsEnabled(root) {
 			out = append(out, root)
 		}
 	}
@@ -164,10 +249,10 @@ func (s *server) monitorableRoots() []string {
 func (s *server) newOpsMonitor() *agent.OpsMonitor {
 	aggregator := agent.NewIncidentAggregator(s.opsStore)
 	return &agent.OpsMonitor{
-		Aggregator:  aggregator,
-		CursorStore: s.opsStore,
-		BatchSource: robot.PM2LogBatchSource{Robots: s.robots},
-		BatchRoots:  s.monitorableRoots(),
+		Aggregator:   aggregator,
+		CursorStore:  s.opsStore,
+		BatchSource:  robot.PM2LogBatchSource{Robots: s.robots},
+		BatchRootsFn: s.monitorableRoots,
 		BatchProcess: func(root string) []string {
 			items, err := s.robots.PM2Processes(root)
 			if err != nil || len(items) == 0 {
@@ -270,6 +355,9 @@ func (s *server) newOpsMonitor() *agent.OpsMonitor {
 			if _, err := s.robots.Validate(signal.ProjectRoot); err != nil {
 				return
 			}
+			if !s.opsEnabled(signal.ProjectRoot) {
+				return
+			}
 			s.publishOpsEvent(opsEvent{Type: "signal.changed", Root: signal.ProjectRoot})
 			_ = s.opsStore.AppendSignal(signal)
 			if signal.Kind == "process_exit" || signal.Status == "error" {
@@ -283,6 +371,9 @@ func (s *server) newOpsMonitor() *agent.OpsMonitor {
 			}
 		},
 		OnIncident: func(incident agent.Incident, _ bool) {
+			if !s.opsEnabled(incident.ProjectRoot) {
+				return
+			}
 			s.publishOpsEvent(opsEvent{Type: "incident.changed", Root: incident.ProjectRoot})
 			if s.opsPaused {
 				incident.Status = agent.IncidentTodo
@@ -334,6 +425,10 @@ func (s *server) newOpsMonitor() *agent.OpsMonitor {
 			if runs, err := s.opsStore.ListMaintenance(); err == nil {
 				for _, run := range runs {
 					if run.Status == "observing" {
+						incident, incidentErr := s.opsStore.GetIncident(run.IncidentID)
+						if incidentErr != nil || !s.opsEnabled(incident.ProjectRoot) {
+							continue
+						}
 						_ = s.opsOrchestrator.Observe(run.IncidentID)
 					}
 				}
@@ -401,6 +496,63 @@ func (s *server) opsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/ops"), "/")
 	parts := strings.Split(path, "/")
+	if path == "status" && r.Method == http.MethodGet {
+		root := strings.TrimSpace(r.URL.Query().Get("root"))
+		if root == "" {
+			writeError(w, http.StatusBadRequest, "缺少 root")
+			return
+		}
+		if _, err := s.robots.Validate(root); err != nil {
+			writeError(w, http.StatusBadRequest, "项目根目录无效")
+			return
+		}
+		writeJSON(w, http.StatusOK, s.opsStatus(root))
+		return
+	}
+	if (path == "enable" || path == "disable") && r.Method == http.MethodPost {
+		if !s.requireOpsRole(w, r, "admin", "ops."+path, "project") {
+			return
+		}
+		var input struct {
+			Root string `json:"root"`
+		}
+		if json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&input) != nil || strings.TrimSpace(input.Root) == "" {
+			writeError(w, http.StatusBadRequest, "缺少 root")
+			return
+		}
+		if _, err := s.robots.Validate(input.Root); err != nil {
+			writeError(w, http.StatusBadRequest, "项目根目录无效")
+			return
+		}
+		if path == "enable" {
+			if err := s.opsProjects.SetEnabled(input.Root, true); err != nil {
+				writeError(w, http.StatusInternalServerError, "无法保存高级运维状态")
+				return
+			}
+			if _, err := s.opsStore.GetPolicy(input.Root); err != nil {
+				if err := s.opsStore.SavePolicy(agent.DefaultOpsPolicy(input.Root)); err != nil {
+					writeError(w, http.StatusInternalServerError, "无法初始化默认运维策略")
+					return
+				}
+			}
+			s.startOpsServices()
+		} else {
+			if err := s.opsProjects.SetEnabled(input.Root, false); err != nil {
+				writeError(w, http.StatusInternalServerError, "无法保存高级运维状态")
+				return
+			}
+			s.stopOpsServicesIfUnused()
+		}
+		writeJSON(w, http.StatusOK, s.opsStatus(input.Root))
+		return
+	}
+	// Project-scoped operations may only read or mutate an explicitly enabled
+	// project. This check is intentionally before policy access so a missing
+	// policy file can never leak its local path into ordinary startup/UI flows.
+	if root := strings.TrimSpace(r.URL.Query().Get("root")); root != "" && !s.opsEnabled(root) {
+		writeJSON(w, http.StatusOK, s.opsStatus(root))
+		return
+	}
 	if path == "incidents" && r.Method == http.MethodGet {
 		items, err := s.opsStore.ListIncidents()
 		if err != nil {

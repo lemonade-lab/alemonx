@@ -128,6 +128,21 @@ type OpsPolicy struct {
 	SingleApproval      bool      `json:"singleApproval"`
 }
 
+// DefaultOpsPolicy is the safe, observation-only policy used when a project
+// has explicitly enabled advanced operations but has no persisted policy yet.
+// It never authorizes AI, code changes, PM2 automation or external alerts.
+func DefaultOpsPolicy(root string) OpsPolicy {
+	return OpsPolicy{
+		ProjectRoot:         filepath.Clean(root),
+		Mode:                "observe",
+		MaxModifiedFiles:    10,
+		MaxPM2Actions:       3,
+		ObservationMinutes:  5,
+		FailureCircuitBreak: 3,
+		Version:             1,
+	}
+}
+
 type OpsBudget struct {
 	TokenLimit      int `json:"tokenLimit"`
 	UsedTokens      int `json:"usedTokens"`

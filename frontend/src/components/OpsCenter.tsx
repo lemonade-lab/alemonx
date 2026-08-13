@@ -48,6 +48,13 @@ type CanaryReadiness = {
   ready: boolean
   checks: Array<{ name: string; passed: boolean; detail: string }>
 }
+type OpsStatus = {
+  enabled: boolean
+  mode: string
+  message: string
+  aiAvailable: boolean
+  capabilities: Record<string, boolean>
+}
 
 const METRIC_ITEMS: Array<{ key: keyof Metrics; label: string }> = [
   { key: 'incidents', label: '事件' },
@@ -123,12 +130,28 @@ export function OpsCenter({ root, onBack }: { root: string; onBack?: () => void 
     maxPm2Actions: 3
   })
   const [paused, setPaused] = useState(false)
+	const [opsStatus, setOpsStatus] = useState<OpsStatus | null>(null)
   const [busy, setBusy] = useState(false)
   const [confirmStop, setConfirmStop] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState<Incident | null>(null)
   const [confirmDeleteTodo, setConfirmDeleteTodo] = useState<Todo | null>(null)
   const [operationReason, setOperationReason] = useState('')
   const load = useCallback(async () => {
+	  const statusResponse = await fetch(`/api/v1/ops/status?root=${encodeURIComponent(root)}`)
+	  if (!statusResponse.ok) return
+	  const status = (await statusResponse.json()) as OpsStatus
+	  setOpsStatus(status)
+	  if (!status.enabled) {
+		setIncidents([])
+		setTodos([])
+		setMaintenance([])
+		setMetrics(null)
+		setAudits([])
+		setAlerts([])
+		setLeases([])
+		setReadiness(null)
+		return
+	  }
     const [i, t, m, x, p, a, h, l, readinessResponse] = await Promise.all([
       fetch('/api/v1/ops/incidents'),
       fetch('/api/v1/ops/todos'),
@@ -215,6 +238,19 @@ export function OpsCenter({ root, onBack }: { root: string; onBack?: () => void 
       setBusy(false)
     }
   }
+	const toggleOps = async (enabled: boolean) => {
+		setBusy(true)
+		try {
+			await fetch(`/api/v1/ops/${enabled ? 'enable' : 'disable'}`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ root })
+			})
+			await load()
+		} finally {
+			setBusy(false)
+		}
+	}
   return (
     <section
       className="workspace-content system-feature-page ops-panel mx-auto max-w-215"
@@ -229,7 +265,7 @@ export function OpsCenter({ root, onBack }: { root: string; onBack?: () => void 
             {root}
           </strong>
           <span className="block truncate text-xs text-slate-400 dark:text-slate-500">
-            {paused ? '监控已暂停' : '监控运行中'}
+			{opsStatus?.enabled ? (paused ? '监控已暂停' : '监控运行中') : '高级运维未启用'}
           </span>
         </div>
         <div className="flex shrink-0 gap-2">
@@ -238,7 +274,7 @@ export function OpsCenter({ root, onBack }: { root: string; onBack?: () => void 
               返回运行
             </button>
           )}
-          <button
+		  {opsStatus?.enabled && <button
             className="secondary-button"
             disabled={busy}
             onClick={() => {
@@ -248,16 +284,26 @@ export function OpsCenter({ root, onBack }: { root: string; onBack?: () => void 
             }}
           >
             {paused ? '恢复采集' : '暂停采集'}
-          </button>
-          <button
+          </button>}
+		  {opsStatus?.enabled && <button
             className="danger-button"
             disabled={busy}
             onClick={() => setConfirmStop(true)}
           >
             紧急停止
-          </button>
+          </button>}
+		  {opsStatus?.enabled && <button className="secondary-button" disabled={busy} onClick={() => void toggleOps(false)}>关闭高级运维</button>}
         </div>
       </header>
+	  {opsStatus && !opsStatus.enabled && (
+		<div className="mx-2.5 my-4 rounded-lg border border-(--theme-border-default) bg-(--theme-surface-panel) p-5 text-sm text-(--theme-text-muted)">
+		  <strong className="mb-2 block text-(--theme-text-strong)">高级运维默认关闭</strong>
+		  <p className="mb-4">{opsStatus.message}</p>
+		  <p className="mb-4 text-xs">启用后仅开始观察此项目的运行问题，不会调用 AI、修改代码、操作 PM2 或发送外部告警。</p>
+		  <button className="primary-button" disabled={busy} onClick={() => void toggleOps(true)}>启用高级运维</button>
+		</div>
+	  )}
+	  {opsStatus?.enabled && <>
       {metrics && (
         <div className="ops-metrics mx-2.5 mb-4 grid grid-cols-2 gap-3">
           {METRIC_ITEMS.map(({ key, label }) => (
@@ -579,6 +625,7 @@ export function OpsCenter({ root, onBack }: { root: string; onBack?: () => void 
           </section>
         </div>
       )}
+	  </>}
       <ConfirmDialog
         open={confirmStop}
         title="紧急停止"

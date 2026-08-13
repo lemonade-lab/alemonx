@@ -38,13 +38,16 @@ type LogBatchSource interface {
 // OpsMonitor is a process-local polling loop. PM2 integration supplies a log
 // source, while aggregation and persistence remain independent and testable.
 type OpsMonitor struct {
-	Source          OpsLogSource
-	Stream          OpsStreamSource
-	Signals         OpsSignalSource
-	Aggregator      *IncidentAggregator
-	CursorStore     LogCursorStore
-	BatchSource     LogBatchSource
-	BatchRoots      []string
+	Source      OpsLogSource
+	Stream      OpsStreamSource
+	Signals     OpsSignalSource
+	Aggregator  *IncidentAggregator
+	CursorStore LogCursorStore
+	BatchSource LogBatchSource
+	BatchRoots  []string
+	// BatchRootsFn is evaluated for every poll so enabling or disabling a
+	// project takes effect without restarting the workbench.
+	BatchRootsFn    func() []string
 	BatchProcess    func(string) []string
 	Lease           LeaseManager
 	LeaseKey        string
@@ -64,6 +67,13 @@ type OpsMonitor struct {
 	fallbackStarted bool
 	fallbackCancel  context.CancelFunc
 	lastBatchProbe  time.Time
+}
+
+func (m *OpsMonitor) batchRoots() []string {
+	if m.BatchRootsFn != nil {
+		return m.BatchRootsFn()
+	}
+	return m.BatchRoots
 }
 
 func (m *OpsMonitor) Start(ctx context.Context) error {
@@ -158,7 +168,7 @@ func (m *OpsMonitor) poll(ctx context.Context) {
 		m.mu.Unlock()
 	}
 	if m.BatchSource != nil && !fallbackActive {
-		for _, root := range m.BatchRoots {
+		for _, root := range m.batchRoots() {
 			processes := []string{"pm2"}
 			if m.BatchProcess != nil && len(m.BatchProcess(root)) > 0 {
 				processes = m.BatchProcess(root)
@@ -199,7 +209,7 @@ func (m *OpsMonitor) tryRestoreBatch(ctx context.Context) {
 	}
 	m.lastBatchProbe = time.Now()
 	m.mu.Unlock()
-	for _, root := range m.BatchRoots {
+	for _, root := range m.batchRoots() {
 		processes := []string{"pm2"}
 		if m.BatchProcess != nil && len(m.BatchProcess(root)) > 0 {
 			processes = m.BatchProcess(root)
@@ -238,7 +248,7 @@ func (m *OpsMonitor) startFallback(ctx context.Context) {
 	m.fallbackCancel = fallbackCancel
 	m.mu.Unlock()
 	if m.CursorStore != nil {
-		for _, root := range m.BatchRoots {
+		for _, root := range m.batchRoots() {
 			processes := []string{"pm2"}
 			if m.BatchProcess != nil && len(m.BatchProcess(root)) > 0 {
 				processes = m.BatchProcess(root)

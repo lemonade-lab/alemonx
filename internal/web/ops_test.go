@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -59,6 +60,48 @@ func TestOpsPolicyRequiresAutoWhitelist(t *testing.T) {
 	s.opsHandler(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("observe policy should save, got %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestOpsStatusIsDisabledWithoutIncidentFiles(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "package.json"), []byte(`{"name":"ops-test"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	base := t.TempDir()
+	incidents := filepath.Join(base, "incidents")
+	s := &server{opsStore: agent.NewOpsStoreAt(incidents), opsProjects: agent.NewOpsProjectStore(filepath.Join(base, "ops-projects.json")), robots: robot.Manager{}}
+	rec := httptest.NewRecorder()
+	s.opsHandler(rec, httptest.NewRequest(http.MethodGet, "/api/v1/ops/status?root="+root, nil))
+	if rec.Code != http.StatusOK || !bytes.Contains(rec.Body.Bytes(), []byte(`"enabled":false`)) || !bytes.Contains(rec.Body.Bytes(), []byte(`"mode":"disabled"`)) {
+		t.Fatalf("disabled status response: %d %s", rec.Code, rec.Body.String())
+	}
+	if _, err := os.Stat(incidents); !os.IsNotExist(err) {
+		t.Fatalf("disabled status must not create incidents directory: %v", err)
+	}
+}
+
+func TestOpsEnableCreatesObservePolicyAndDisableKeepsIt(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "package.json"), []byte(`{"name":"ops-test"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	base := t.TempDir()
+	store := agent.NewOpsStoreAt(filepath.Join(base, "incidents"))
+	s := &server{opsStore: store, opsProjects: agent.NewOpsProjectStore(filepath.Join(base, "ops-projects.json")), robots: robot.Manager{}}
+	for _, action := range []string{"enable", "disable"} {
+		rec := httptest.NewRecorder()
+		s.opsHandler(rec, httptest.NewRequest(http.MethodPost, "/api/v1/ops/"+action, bytes.NewBufferString(`{"root":`+strconv.Quote(root)+`}`)))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s response: %d %s", action, rec.Code, rec.Body.String())
+		}
+	}
+	policy, err := store.GetPolicy(root)
+	if err != nil || policy.Mode != "observe" || policy.AllowCodeChanges || policy.AllowPM2Control || policy.AutoAllowed {
+		t.Fatalf("default policy = %#v err=%v", policy, err)
+	}
+	if state := s.opsStatus(root); state.Enabled || state.Mode != "disabled" {
+		t.Fatalf("disabled status = %#v", state)
 	}
 }
 
