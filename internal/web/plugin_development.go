@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"alemonx/internal/setupplugin"
+	"alemonx/internal/system"
 )
 
 const pluginDevelopmentLogLimit = 256 << 10
@@ -423,8 +424,13 @@ func (m *pluginDevelopmentManager) build(id string) (pluginDevelopmentView, erro
 	log := &pluginDevelopmentLog{}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
-	run := exec.CommandContext(ctx, command.Program, expandDevelopmentArgs(command.Args, 0)...)
+	program, args, environment, notice := system.PrepareDevelopmentCommand(command.Program, expandDevelopmentArgs(command.Args, 0))
+	run := exec.CommandContext(ctx, program, args...)
 	run.Dir, run.Stdout, run.Stderr = source, log, log
+	run.Env = environment
+	if notice != "" {
+		_, _ = log.Write([]byte(notice + "\n"))
+	}
 	err := run.Run()
 	m.mu.Lock()
 	if m.sessions[id] != session || session.operation != "构建" {
@@ -559,9 +565,13 @@ func startPluginDevelopmentCommand(source string, command *setupplugin.CommandSp
 		return nil, errors.New("缺少开发命令")
 	}
 	log := &pluginDevelopmentLog{}
-	run := exec.Command(command.Program, expandDevelopmentArgs(command.Args, port)...)
+	program, args, environment, notice := system.PrepareDevelopmentCommand(command.Program, expandDevelopmentArgs(command.Args, port))
+	run := exec.Command(program, args...)
 	run.Dir, run.Stdout, run.Stderr = source, log, log
-	run.Env = append(os.Environ(), "ALX_PLUGIN_DEV_PORT="+strconv.Itoa(port), "ALX_PLUGIN_SOURCE="+source)
+	run.Env = append(environment, "ALX_PLUGIN_DEV_PORT="+strconv.Itoa(port), "ALX_PLUGIN_SOURCE="+source)
+	if notice != "" {
+		_, _ = log.Write([]byte(notice + "\n"))
+	}
 	configureManagedProcess(run)
 	if err := run.Start(); err != nil {
 		return nil, err

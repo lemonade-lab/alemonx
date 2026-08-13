@@ -863,10 +863,13 @@ func (r *Registry) RunResultWithProgress(id, actionID string, params map[string]
 	if err != nil {
 		return ActionResult{}, err
 	}
-	command := exec.Command(entry.name, entry.args...)
+	program, args, environment, _ := system.PrepareDevelopmentCommand(entry.name, entry.args)
+	command := exec.Command(program, args...)
 	command.Dir = plugin.Source
-	if environment := r.environmentForRunner(plugin, actionID); len(environment) > 0 {
-		command.Env = append(os.Environ(), environment...)
+	if runnerEnvironment := r.environmentForRunner(plugin, actionID); len(runnerEnvironment) > 0 {
+		command.Env = append(environment, runnerEnvironment...)
+	} else {
+		command.Env = environment
 	}
 	command.Stdin = strings.NewReader(string(payload))
 	stdout, err := command.StdoutPipe()
