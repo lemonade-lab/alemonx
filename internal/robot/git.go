@@ -103,7 +103,7 @@ func GitReleaseStatus(root string) (GitStatus, error) {
 	status.GitReady = true
 	gitRoot, err := gitRun(path, "rev-parse", "--show-toplevel")
 	if err != nil || !sameWorkspacePath(path, gitRoot) {
-		status.Issues = append(status.Issues, "所选目录不是 Git 仓库根目录；可在此目录初始化独立 Git 仓库。")
+		status.Issues = append(status.Issues, "所选目录不是 Git 仓库根目录")
 		return status, nil
 	}
 	if repository, err := gitRun(path, "remote", "get-url", "origin"); err != nil {
