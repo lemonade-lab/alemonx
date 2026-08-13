@@ -3,6 +3,8 @@ package web
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -75,6 +77,31 @@ func TestPluginDownloadBrokerGrantHasBoundedUses(t *testing.T) {
 	}
 	if broker.consume("token") {
 		t.Fatal("exhausted grant must not authorize another download")
+	}
+}
+
+func TestPluginDownloadBrokerClearCacheLeavesNoDownloadEntries(t *testing.T) {
+	broker := newPluginDownloadBroker(nil)
+	broker.cacheDir = t.TempDir()
+	directory := filepath.Join(broker.cacheDir, "cached-resource")
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "body"), []byte("cached QQ archive"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writePluginDownloadMeta(filepath.Join(directory, "meta.json"), pluginDownloadCacheMeta{URL: "https://example.test/qq.zip", Size: 17, LastAccess: time.Now().UTC().Format(time.RFC3339Nano)}); err != nil {
+		t.Fatal(err)
+	}
+	if summary := broker.cacheSummary(); summary.Entries != 1 || summary.Bytes != 17 {
+		t.Fatalf("cache summary = %#v", summary)
+	}
+	summary, err := broker.clearCache()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Entries != 0 || summary.Bytes != 0 {
+		t.Fatalf("cleared cache summary = %#v", summary)
 	}
 }
 

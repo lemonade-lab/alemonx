@@ -43,6 +43,12 @@ type pluginDownloadCacheMeta struct {
 	LastAccess   string `json:"lastAccess"`
 }
 
+type pluginDownloadCacheSummary struct {
+	Bytes   int64 `json:"bytes"`
+	Limit   int64 `json:"limit"`
+	Entries int   `json:"entries"`
+}
+
 // pluginDownloadBroker is a generic HTTP(S) transport for installed system
 // plugins. It deliberately knows neither release providers nor plugin asset
 // names: a capability token establishes the calling plugin, while the host
@@ -326,12 +332,31 @@ func serveCachedPluginDownload(w http.ResponseWriter, meta pluginDownloadCacheMe
 }
 
 func (b *pluginDownloadBroker) cleanupCache() {
-	entries := []struct {
-		body   string
-		meta   string
-		size   int64
-		access time.Time
-	}{}
+	entries, total := b.cacheEntries()
+	if total <= pluginDownloadCacheLimit {
+		return
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].access.Before(entries[j].access) })
+	for _, entry := range entries {
+		if total <= pluginDownloadCacheLimit {
+			break
+		}
+		_ = os.Remove(entry.body)
+		_ = os.Remove(entry.meta)
+		_ = os.Remove(filepath.Dir(entry.body))
+		total -= entry.size
+	}
+}
+
+type pluginDownloadCacheEntry struct {
+	body   string
+	meta   string
+	size   int64
+	access time.Time
+}
+
+func (b *pluginDownloadBroker) cacheEntries() ([]pluginDownloadCacheEntry, int64) {
+	entries := []pluginDownloadCacheEntry{}
 	var total int64
 	_ = filepath.WalkDir(b.cacheDir, func(path string, entry os.DirEntry, err error) error {
 		if err != nil || entry.IsDir() || entry.Name() != "meta.json" {
@@ -347,28 +372,34 @@ func (b *pluginDownloadBroker) cleanupCache() {
 			return nil
 		}
 		access, _ := time.Parse(time.RFC3339Nano, meta.LastAccess)
-		entries = append(entries, struct {
-			body   string
-			meta   string
-			size   int64
-			access time.Time
-		}{body, path, info.Size(), access})
+		entries = append(entries, pluginDownloadCacheEntry{body: body, meta: path, size: info.Size(), access: access})
 		total += info.Size()
 		return nil
 	})
-	if total <= pluginDownloadCacheLimit {
-		return
+	return entries, total
+}
+
+func (b *pluginDownloadBroker) cacheSummary() pluginDownloadCacheSummary {
+	entries, bytes := b.cacheEntries()
+	return pluginDownloadCacheSummary{Bytes: bytes, Limit: pluginDownloadCacheLimit, Entries: len(entries)}
+}
+
+// clearCache removes only broker-owned response bodies and metadata. Installed
+// plugins and their own data directories are outside cacheDir and untouched.
+func (b *pluginDownloadBroker) clearCache() (pluginDownloadCacheSummary, error) {
+	if b == nil || strings.TrimSpace(b.cacheDir) == "" {
+		return pluginDownloadCacheSummary{}, errors.New("插件下载缓存不可用")
 	}
-	sort.Slice(entries, func(i, j int) bool { return entries[i].access.Before(entries[j].access) })
+	entries, err := os.ReadDir(b.cacheDir)
+	if err != nil && !os.IsNotExist(err) {
+		return pluginDownloadCacheSummary{}, err
+	}
 	for _, entry := range entries {
-		if total <= pluginDownloadCacheLimit {
-			break
+		if err := os.RemoveAll(filepath.Join(b.cacheDir, entry.Name())); err != nil && !os.IsNotExist(err) {
+			return pluginDownloadCacheSummary{}, err
 		}
-		_ = os.Remove(entry.body)
-		_ = os.Remove(entry.meta)
-		_ = os.Remove(filepath.Dir(entry.body))
-		total -= entry.size
 	}
+	return b.cacheSummary(), nil
 }
 
 func (b *pluginDownloadBroker) plugin(id string) (setupplugin.Plugin, error) {

@@ -120,7 +120,6 @@ import {
   useCatalogVersionsQuery,
   useGitStatusQuery,
   useGitWorkspaceQuery,
-  useInitializeGitMutation,
   useLazyRobotConsoleQuery,
   useLazyRobotFileQuery,
   useLazyPackageConfigQuery,
@@ -152,9 +151,11 @@ import {
   useLazySetupPluginReleasesQuery,
   useLazySetupPluginVersionsQuery,
   useSetupPluginCacheQuery,
+  usePluginDownloadCacheQuery,
   useSwitchSetupPluginVersionMutation,
   useDeleteSetupPluginVersionMutation,
   useCleanupSetupPluginCacheMutation,
+  useClearPluginDownloadCacheMutation,
   useSetupPluginDevelopmentQuery,
   useRegisterSetupPluginDevelopmentMutation,
   useRunSetupPluginDevelopmentMutation,
@@ -1391,7 +1392,6 @@ export function Dashboard({
   const [writeRobotFile] = useWriteRobotFileMutation()
   const [writePackageConfig] = useWritePackageConfigMutation()
   const [saveRobotLogin] = useSaveRobotLoginMutation()
-  const [initializeGit] = useInitializeGitMutation()
   const fileSaveTimers = useRef(new Map<string, number>())
   useEffect(
     () => () => {
@@ -2291,32 +2291,6 @@ export function Dashboard({
     }
   }
 
-  async function initializeProjectGit(values: {
-    authorName: string
-    authorEmail: string
-    repository: string
-    message: string
-  }): Promise<boolean> {
-    if (!root) return false
-    setBusy(true)
-    try {
-      const result = await initializeGit({ root, ...values }).unwrap()
-      showOutput(result.output ?? 'Git 仓库已初始化。')
-      return true
-    } catch (reason) {
-      showOutput(
-        operationErrorMessage(
-          reason,
-          'Git 初始化未完成，请检查所选机器人目录。'
-        ),
-        true
-      )
-      return false
-    } finally {
-      setBusy(false)
-    }
-  }
-
   async function chooseDirectories() {
     setDirectoryPickerOpen(true)
   }
@@ -2843,7 +2817,6 @@ export function Dashboard({
                 busy={busy}
                 version={releaseVersion}
                 onVersionChange={setReleaseVersion}
-                onInitialize={initializeProjectGit}
               />
             )}
             {output && (
@@ -4238,115 +4211,6 @@ function isCompleteGitRepositoryURL(value: string) {
   )
 }
 
-function GitInitializeDialog({
-  open,
-  values,
-  busy,
-  onClose,
-  onChange,
-  onConfirm
-}: {
-  open: boolean
-  values: {
-    authorName: string
-    authorEmail: string
-    repository: string
-    message: string
-  }
-  busy: boolean
-  onClose: () => void
-  onChange: (values: {
-    authorName: string
-    authorEmail: string
-    repository: string
-    message: string
-  }) => void
-  onConfirm: () => Promise<void>
-}) {
-  if (!open) return null
-  const update = (key: keyof typeof values, value: string) =>
-    onChange({ ...values, [key]: value })
-  return (
-    <Modal open ariaLabel="填写 Git 初始化信息">
-      <section
-        className="git-dialog grid w-full max-w-lg grid-rows-[auto_1fr_auto] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_22px_58px_rgb(28_26_23/0.25)]"
-        role="dialog"
-        aria-label="填写 Git 初始化信息"
-      >
-        <header className="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
-          <div className="grid gap-1">
-            <strong className="text-sm font-semibold text-slate-900">
-              初始化 Git 仓库
-            </strong>
-            <span className="text-xs text-slate-500">
-              仅修改当前项目，不会改动你的全局 Git 身份。
-            </span>
-          </div>
-          <button
-            className="icon-button size-8 p-0"
-            onClick={onClose}
-            aria-label="关闭"
-          >
-            <X className="size-4" />
-          </button>
-        </header>
-        <div className="grid gap-3 p-4">
-          <label className="grid gap-1 text-xs font-semibold text-slate-600">
-            提交姓名
-            <input
-              className="h-9 rounded-md border border-slate-300 px-2.5 text-sm font-normal outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
-              autoFocus
-              value={values.authorName}
-              onChange={event => update('authorName', event.target.value)}
-              placeholder="你的姓名"
-            />
-          </label>
-          <label className="grid gap-1 text-xs font-semibold text-slate-600">
-            提交邮箱
-            <input
-              className="h-9 rounded-md border border-slate-300 px-2.5 text-sm font-normal outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
-              type="email"
-              value={values.authorEmail}
-              onChange={event => update('authorEmail', event.target.value)}
-              placeholder="name@example.com"
-            />
-          </label>
-          <label className="grid gap-1 text-xs font-semibold text-slate-600">
-            远程仓库（可选）
-            <input
-              className="h-9 rounded-md border border-slate-300 px-2.5 text-sm font-normal outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
-              value={values.repository}
-              onChange={event => update('repository', event.target.value)}
-              placeholder="https://github.com/owner/repo.git"
-            />
-          </label>
-          <label className="grid gap-1 text-xs font-semibold text-slate-600">
-            首个提交说明
-            <input
-              className="h-9 rounded-md border border-slate-300 px-2.5 text-sm font-normal outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
-              value={values.message}
-              onChange={event => update('message', event.target.value)}
-            />
-          </label>
-        </div>
-        <footer className="flex justify-end gap-2 border-t border-slate-200 px-4 py-3">
-          <button className="secondary-button" onClick={onClose}>
-            取消
-          </button>
-          <button
-            className="primary-button"
-            disabled={
-              busy || !values.authorName.trim() || !values.authorEmail.trim()
-            }
-            onClick={() => void onConfirm()}
-          >
-            {busy ? '正在初始化…' : '确认初始化'}
-          </button>
-        </footer>
-      </section>
-    </Modal>
-  )
-}
 function ProjectItem({
   project,
   active,
@@ -5263,6 +5127,8 @@ function SystemPluginCenter({
   const [cleanupCache, { isLoading: cleaningCache }] =
     useCleanupSetupPluginCacheMutation()
   const { data: cacheSummary } = useSetupPluginCacheQuery()
+	const { data: downloadCacheSummary, refetch: refetchDownloadCache } = usePluginDownloadCacheQuery()
+	const [clearDownloadCache, { isLoading: clearingDownloadCache }] = useClearPluginDownloadCacheMutation()
 	const { data: developmentData, refetch: refetchDevelopment } = useSetupPluginDevelopmentQuery()
 	const [registerDevelopment, { isLoading: registeringDevelopment }] = useRegisterSetupPluginDevelopmentMutation()
 	const [runDevelopment, { isLoading: runningDevelopment }] = useRunSetupPluginDevelopmentMutation()
@@ -5335,6 +5201,16 @@ function SystemPluginCenter({
 		} catch (reason) {
 			setMessage(operationErrorMessage(reason, '移除源码开发会话失败。'))
 			await refetchDevelopment()
+		}
+	}
+	const clearDownloads = async () => {
+		if (!window.confirm('清理系统插件下载缓存？不会删除已安装插件、NapCat、LuckyLillia 或其配置；下次需要时会自动重新下载。')) return
+		try {
+			await clearDownloadCache().unwrap()
+			await refetchDownloadCache()
+			setMessage('已清理系统插件下载缓存。')
+		} catch (reason) {
+			setMessage(operationErrorMessage(reason, '下载缓存清理失败。'))
 		}
 	}
   const toggle = async (plugin: SetupPlugin) => {
@@ -5472,6 +5348,10 @@ function SystemPluginCenter({
 			{registeringDevelopment ? '正在登记…' : '开发插件'}
 		</Button>
       </header>
+		<section className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-2.5 text-xs dark:border-slate-800 dark:bg-slate-900/50">
+			<div className="min-w-0"><strong className="text-slate-700 dark:text-slate-200">下载资源缓存</strong><span className="ml-2 text-slate-500 dark:text-slate-400">{downloadCacheSummary ? `${(downloadCacheSummary.bytes / 1024 / 1024).toFixed(1)} MB · ${downloadCacheSummary.entries} 项` : '正在读取…'}</span><p className="m-0 mt-0.5 text-[11px] text-slate-400">包含插件下载的官方内核与运行时资源；不会影响已安装内容。</p></div>
+			<Button variant="secondary" size="sm" disabled={clearingDownloadCache || !downloadCacheSummary?.entries} onClick={() => void clearDownloads()}>{clearingDownloadCache ? '清理中…' : '清理下载缓存'}</Button>
+		</section>
 		{developmentItems.length > 0 && (
 			<section className="mb-3 grid gap-2 rounded-xl border border-violet-200 bg-violet-50/60 p-3 dark:border-violet-900/60 dark:bg-violet-950/20">
 				<div className="flex items-center gap-2 text-xs text-violet-800 dark:text-violet-200"><Code2 className="size-3.5" /><strong>源码开发会话</strong><span>已登记的本机源码目录</span></div>
@@ -8237,7 +8117,7 @@ function ControlCard({
                   className="font-medium text-brand-600 hover:underline dark:text-brand-300"
                   onClick={onGit}
                 >
-                  初始化
+                  填写 Git 信息并初始化
                 </button>
               </div>
             )}
@@ -9245,19 +9125,12 @@ function GitReleasePanelNext({
   root,
   busy,
   version,
-  onVersionChange,
-  onInitialize
+  onVersionChange
 }: {
   root: string
   busy: boolean
   version: string
   onVersionChange: (value: string) => void
-  onInitialize: (values: {
-    authorName: string
-    authorEmail: string
-    repository: string
-    message: string
-  }) => Promise<boolean>
 }) {
   type SourceCommit = {
     sha: string
@@ -9297,8 +9170,6 @@ function GitReleasePanelNext({
     error,
     refetch
   } = useGitStatusQuery(root, { skip: !root })
-  const [initializing, setInitializing] = useStoreState(false)
-  const [gitInitOpen, setGitInitOpen] = useStoreState(false)
   const [sourceCommit, setSourceCommit] = useStoreState('')
   const [sourceBranch, setSourceBranch] = useStoreState('')
   const [phase, setPhase] = useStoreState<
@@ -9311,12 +9182,6 @@ function GitReleasePanelNext({
   const [result, setResult] = useStoreState<PublishResult | null>(null)
   const [retryingTag, setRetryingTag] = useStoreState(false)
   const remoteBranchesRefreshed = useRef('')
-  const [gitInit, setGitInit] = useStoreState({
-    authorName: '',
-    authorEmail: '',
-    repository: '',
-    message: 'chore: initialize project'
-  })
   const status = error
     ? { issues: ['无法读取 Git 发布状态。'] }
     : (data as GitStatus | undefined)
@@ -9364,17 +9229,6 @@ function GitReleasePanelNext({
   const issues = status?.issues ?? []
   const blockingIssues = issues
   const ready = !loading && blockingIssues.length === 0 && !!sourceCommit
-  const needsInitialize =
-    !status?.gitReady ||
-    issues.some(item => item.includes('不是 Git 仓库根目录'))
-  const submitInitialize = async () => {
-    setInitializing(true)
-    try {
-      if (await onInitialize(gitInit)) await refetch()
-    } finally {
-      setInitializing(false)
-    }
-  }
   const refresh = () => {
     setPhase('source')
     setSession(null)
@@ -9767,15 +9621,11 @@ function GitReleasePanelNext({
                   <li key={item}>{item}</li>
                 ))}
               </ul>
-              {needsInitialize && (
-                <button
-                  className="inline-flex min-h-9 w-fit items-center justify-center rounded-lg bg-brand-600 px-3 text-xs font-semibold text-white transition hover:bg-brand-700 disabled:opacity-50"
-                  disabled={busy || initializing}
-                  onClick={() => setGitInitOpen(true)}
-                >
-                  填写 Git 信息并初始化
-                </button>
-              )}
+			  {!status?.gitReady && (
+				<p className="m-0 text-xs text-amber-800 dark:text-amber-300">
+				  请回到机器人目录的「Git 管理」，填写 Git 信息并初始化仓库后再发布。
+				</p>
+			  )}
               {status?.repository && (
                 <p className="m-0 text-xs text-amber-800 dark:text-amber-300">
                   远程仓库：
@@ -9811,17 +9661,6 @@ function GitReleasePanelNext({
           )}
         </>
       )}
-      <GitInitializeDialog
-        open={gitInitOpen}
-        values={gitInit}
-        busy={busy || initializing}
-        onClose={() => setGitInitOpen(false)}
-        onChange={setGitInit}
-        onConfirm={async () => {
-          await submitInitialize()
-          setGitInitOpen(false)
-        }}
-      />
     </RobotPanel>
   )
 }

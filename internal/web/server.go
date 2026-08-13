@@ -955,6 +955,7 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	mux.HandleFunc("/api/v1/system/environment/install", s.environmentInstallHandler)
 	mux.HandleFunc("/api/v1/system/network", s.systemNetworkHandler)
 	mux.HandleFunc(pluginDownloadBrokerPath, s.pluginDownloadBrokerHandler)
+	mux.HandleFunc("/api/v1/system/plugin-download-cache", s.pluginDownloadCacheHandler)
 	mux.HandleFunc("/api/v1/system/mcp", s.systemMCPHandler)
 	mux.HandleFunc("/api/v1/system/events", s.systemEventsHandler)
 	mux.HandleFunc("/api/v1/system/picker", s.systemPickerHandler)
@@ -3038,6 +3039,29 @@ func (s *server) pluginDownloadBrokerHandler(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	s.pluginDownloadBroker.serveHTTP(w, r)
+}
+
+// pluginDownloadCacheHandler manages the host-owned response cache used by
+// every installed system plugin. It is deliberately separate from release
+// version caching: clearing it never uninstalls a plugin or deletes its data.
+func (s *server) pluginDownloadCacheHandler(w http.ResponseWriter, r *http.Request) {
+	if s.pluginDownloadBroker == nil {
+		writeError(w, http.StatusServiceUnavailable, "插件下载缓存不可用。")
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, http.StatusOK, s.pluginDownloadBroker.cacheSummary())
+	case http.MethodDelete:
+		summary, err := s.pluginDownloadBroker.clearCache()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, summary)
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
+	}
 }
 
 func (s *server) systemServiceHandler(w http.ResponseWriter, r *http.Request) {

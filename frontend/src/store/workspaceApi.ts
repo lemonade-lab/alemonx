@@ -270,6 +270,11 @@ export type SetupPluginCacheSummary = {
   entries: number
   maxPerPlugin: number
 }
+export type PluginDownloadCacheSummary = {
+  bytes: number
+  limit: number
+  entries: number
+}
 
 export const workspaceApi = createApi({
   reducerPath: 'workspaceApi',
@@ -345,6 +350,10 @@ export const workspaceApi = createApi({
       query: () => 'setup/plugins/cache',
       providesTags: ['SetupPlugins']
     }),
+    pluginDownloadCache: build.query<PluginDownloadCacheSummary, void>({
+      query: () => 'system/plugin-download-cache',
+      providesTags: ['SetupPlugins']
+    }),
     setSetupPluginEnabled: build.mutation<
       { id: string; enabled: boolean },
       { pluginID: string; enabled: boolean }
@@ -401,6 +410,10 @@ export const workspaceApi = createApi({
     }),
     cleanupSetupPluginCache: build.mutation<SetupPluginCacheSummary, void>({
       query: () => ({ url: 'setup/plugins/cache', method: 'POST' }),
+      invalidatesTags: ['SetupPlugins']
+    }),
+    clearPluginDownloadCache: build.mutation<PluginDownloadCacheSummary, void>({
+      query: () => ({ url: 'system/plugin-download-cache', method: 'DELETE' }),
       invalidatesTags: ['SetupPlugins']
     }),
     setupPluginDevelopment: build.query<{ items: SetupPluginDevelopment[] }, void>({
@@ -786,12 +799,14 @@ export const {
   useSetupPluginVersionsQuery,
   useLazySetupPluginVersionsQuery,
   useSetupPluginCacheQuery,
+  usePluginDownloadCacheQuery,
   useSetSetupPluginEnabledMutation,
   useInstallSetupPluginMutation,
   useUninstallSetupPluginMutation,
   useSwitchSetupPluginVersionMutation,
   useDeleteSetupPluginVersionMutation,
   useCleanupSetupPluginCacheMutation,
+  useClearPluginDownloadCacheMutation,
   useSetupPluginDevelopmentQuery,
   useRegisterSetupPluginDevelopmentMutation,
   useRunSetupPluginDevelopmentMutation,
