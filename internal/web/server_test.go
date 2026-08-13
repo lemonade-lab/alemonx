@@ -661,6 +661,19 @@ func TestSystemCapabilityCatalogAndPluginIdentity(t *testing.T) {
 	}
 }
 
+func TestPluginWebInjectsHostCapabilityBridge(t *testing.T) {
+	content := rewriteSetupPluginWebHTML("<html><head></head><body>ok</body></html>")
+	if !strings.Contains(content, `host-bridge.js`) || strings.Contains(content, `finder-bridge.js`) {
+		t.Fatalf("plugin bridge injection = %q", content)
+	}
+	bridge := setupPluginHostBridge()
+	for _, want := range []string{"window.ALXHost", "desktop:{open", "clipboard:{read", "network:{fetch", "finder-request"} {
+		if !strings.Contains(bridge, want) {
+			t.Fatalf("host bridge missing %q", want)
+		}
+	}
+}
+
 func writeFixture(t *testing.T, root, name, content string) {
 	t.Helper()
 	path := filepath.Join(root, name)
@@ -1245,6 +1258,34 @@ func TestLocalServiceProxyKeepsManagementCookieIsolated(t *testing.T) {
 	cookies := response.Result().Cookies()
 	if len(cookies) != 1 || !strings.HasPrefix(cookies[0].Name, "alxsvc_") || cookies[0].Path != "/api/v1/services/alemonx-qq/napcat-webui/" {
 		t.Fatalf("service cookie was not isolated: %+v", cookies)
+	}
+}
+
+func TestLocalServiceStatusReportsGatewayCapability(t *testing.T) {
+	upstream := newIPv4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+	defer upstream.Close()
+	parsed, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, rawPort, err := net.SplitHostPort(parsed.Host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pluginsRoot := t.TempDir()
+	pluginRoot := filepath.Join(pluginsRoot, "service-status")
+	if err := os.MkdirAll(filepath.Join(pluginRoot, "web"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := fmt.Sprintf(`{"id":"service-status","name":"Service","version":"1.0.0","web":{"root":"web"},"services":[{"id":"ui","name":"UI","host":"127.0.0.1","port":%s,"websocket":true}]}`, rawPort)
+	if err := os.WriteFile(filepath.Join(pluginRoot, "alx.json"), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := &server{plugins: setupplugin.NewRegistry(pluginsRoot)}
+	response := httptest.NewRecorder()
+	s.localServiceStatusHandler(response, httptest.NewRequest(http.MethodGet, "/api/v1/system/services/status?plugin=service-status&service=ui", nil))
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"websocket":true`) || !strings.Contains(response.Body.String(), `"reachable":true`) {
+		t.Fatalf("service status = %d %s", response.Code, response.Body.String())
 	}
 }
 

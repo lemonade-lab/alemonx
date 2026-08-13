@@ -938,6 +938,7 @@ func NewServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	mux.HandleFunc("/api/v1/system/capabilities/notification", s.systemCapabilityNotificationHandler)
 	mux.HandleFunc("/api/v1/system/capabilities/info", s.systemCapabilityInfoHandler)
 	mux.HandleFunc("/api/v1/system/capabilities/network/fetch", s.systemCapabilityNetworkFetchHandler)
+	mux.HandleFunc("/api/v1/system/services/status", s.localServiceStatusHandler)
 	mux.HandleFunc("/api/v1/system/context/robot", s.systemCurrentRobotHandler)
 	mux.HandleFunc("/api/v1/system/privileged/status", s.privilegedStatusHandler)
 	mux.HandleFunc("/api/v1/system/privileged/preflight", s.privilegedPreflightHandler)
@@ -1553,11 +1554,6 @@ func (s *server) startPluginEventBridge() {
 
 func (s *server) setupPluginActionHandler(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/v1/setup/plugins/"), "/")
-	if s.plugins != nil && len(parts) > 0 && parts[0] != "" {
-		if plugin, err := s.plugins.Find(parts[0]); err == nil && plugin.DevelopmentSource && !s.requirePluginDevelopment(w, r) {
-			return
-		}
-	}
 	if len(parts) == 2 && parts[1] == "status" && r.Method == http.MethodGet {
 		action := strings.TrimSpace(r.URL.Query().Get("action"))
 		plugin, findErr := s.plugins.Find(parts[0])
@@ -2001,9 +1997,6 @@ func (s *server) setupPluginWebHandler(w http.ResponseWriter, r *http.Request) {
 	plugin, err := s.plugins.Find(parts[0])
 	if err != nil || plugin.Online || !plugin.Runnable || !plugin.Enabled {
 		writeError(w, http.StatusNotFound, "未找到插件 Web 界面。")
-		return
-	}
-	if plugin.DevelopmentSource && !s.requirePluginDevelopment(w, r) {
 		return
 	}
 	root, err := plugin.WebRoot()

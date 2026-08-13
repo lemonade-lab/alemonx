@@ -475,6 +475,50 @@ func (m *pluginDevelopmentManager) logs(id string) (string, error) {
 	return text.String(), nil
 }
 
+func (m *pluginDevelopmentManager) serviceLogs(id, serviceID string) (string, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	session := m.sessions[id]
+	if session == nil {
+		return "", errors.New("未登记该源码插件")
+	}
+	process := session.services[serviceID]
+	if process == nil {
+		return "", errors.New("该源码服务尚未启动")
+	}
+	if text := process.log.String(); text != "" {
+		return text, nil
+	}
+	return "尚无服务日志。", nil
+}
+
+func (m *pluginDevelopmentManager) restartService(id, serviceID string) (pluginDevelopmentView, error) {
+	m.mu.RLock()
+	session := m.sessions[id]
+	if session == nil {
+		m.mu.RUnlock()
+		return pluginDevelopmentView{}, errors.New("未登记该源码插件")
+	}
+	if !session.running {
+		m.mu.RUnlock()
+		return pluginDevelopmentView{}, errors.New("源码开发会话尚未启动")
+	}
+	found := false
+	for _, declaration := range session.plugin.Development.Services {
+		if declaration.ID == serviceID {
+			found = true
+			break
+		}
+	}
+	m.mu.RUnlock()
+	if !found {
+		return pluginDevelopmentView{}, errors.New("未声明该源码服务")
+	}
+	// A source session owns one dependent process topology. Restarting the
+	// session is safer than leaving another declared service with stale state.
+	return m.restart(id)
+}
+
 func (m *pluginDevelopmentManager) webTarget(id string) (setupplugin.Plugin, setupplugin.ServiceSpec, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -762,6 +806,35 @@ func (s *server) setupPluginDevelopmentHandler(w http.ResponseWriter, r *http.Re
 		writeJSON(w, http.StatusOK, map[string]string{"output": output})
 		return
 	}
+	if action == "services" && len(parts) == 3 {
+		serviceParts := strings.SplitN(parts[2], "/", 2)
+		if len(serviceParts) == 2 && serviceParts[0] != "" && serviceParts[1] == "logs" && r.Method == http.MethodGet {
+			output, err := s.pluginDevelopment.serviceLogs(id, serviceParts[0])
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]string{"output": output})
+			return
+		}
+		if len(serviceParts) == 2 && serviceParts[0] != "" && serviceParts[1] == "restart" && r.Method == http.MethodPost {
+			var input struct {
+				Confirm bool `json:"confirm"`
+			}
+			_ = json.NewDecoder(io.LimitReader(r.Body, 16<<10)).Decode(&input)
+			if !input.Confirm {
+				writeError(w, http.StatusBadRequest, "请确认重启源码服务。")
+				return
+			}
+			view, err := s.pluginDevelopment.restartService(id, serviceParts[0])
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, view)
+			return
+		}
+	}
 	if action == "remove" && r.Method == http.MethodDelete {
 		if err := s.pluginDevelopment.remove(id); err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
@@ -828,9 +901,9 @@ func (s *server) pluginDevelopmentWebProxy(w http.ResponseWriter, r *http.Reques
 	// prevents a stale entry module from presenting an older plugin UI while its
 	// current runner has already changed.
 	w.Header().Set("Cache-Control", "no-store, max-age=0")
-	if requestPath == "/finder-bridge.js" {
+	if requestPath == "/finder-bridge.js" || requestPath == "/host-bridge.js" {
 		w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
-		_, _ = io.WriteString(w, setupPluginFinderBridge())
+		_, _ = io.WriteString(w, setupPluginHostBridge())
 		return
 	}
 	plugin, service, ok := s.pluginDevelopment.webTarget(id)

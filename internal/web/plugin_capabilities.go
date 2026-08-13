@@ -369,9 +369,6 @@ func (s *server) hostCapabilityPlugin(w http.ResponseWriter, r *http.Request, pl
 		writeError(w, http.StatusNotFound, "系统插件未安装或已停用。")
 		return setupplugin.Plugin{}, false
 	}
-	if plugin.DevelopmentSource && !s.requirePluginDevelopment(w, r) {
-		return setupplugin.Plugin{}, false
-	}
 	return plugin, true
 }
 

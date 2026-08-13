@@ -112,6 +112,17 @@ Finder 请求只传 `{ "pluginId": "...", "pickerId": "..." }`。宿主从清单
 
 `network-context` 仅供界面展示脱敏状态，不能读取密码。runner 的下载 Broker 支持任意 HTTP(S) URL、重定向、一次重试和用户目录缓存；它不转发工作台 Cookie、Authorization 或内部身份头，也不会向插件暴露代理凭据。
 
+每个插件页面会自动获得无依赖的 `window.ALXHost` 小型 SDK。它只是对上述能力 API 的便捷封装，宿主仍会校验插件身份和当前登录会话：
+
+```js
+const paths = await window.ALXHost.finder.pick('my-status', 'runtime-directory')
+await window.ALXHost.desktop.open('my-status', paths[0])
+const { robot } = await window.ALXHost.context('my-status', ['robot'])
+await window.ALXHost.notification.send('my-status', '已完成', robot?.name || '未选择机器人')
+```
+
+`ALXHost.network.fetch` 仅提供 GET/HEAD 和最多 2 MiB 的响应，用于状态或元数据；大文件必须由插件 runner 通过下载 Broker 获取，以获得流式进度、取消、重试和缓存。
+
 ## 静态 Web 界面（必选）
 
 插件详情页会直接嵌入 `web.root/index.html`（同源 iframe）。界面用 `fetch` 调用本插件的**动作转发接口**：

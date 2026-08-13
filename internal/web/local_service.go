@@ -153,6 +153,30 @@ func (s *server) localServiceProxyHandler(w http.ResponseWriter, r *http.Request
 	proxy.ServeHTTP(w, r)
 }
 
+func (s *server) localServiceStatusHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
+		return
+	}
+	pluginID := strings.TrimSpace(r.URL.Query().Get("plugin"))
+	serviceID := strings.TrimSpace(r.URL.Query().Get("service"))
+	if pluginID == "" || serviceID == "" {
+		writeError(w, http.StatusBadRequest, "请指定插件和服务。")
+		return
+	}
+	plugin, service, _, err := s.resolveLocalService(localServiceURL(pluginID, serviceID))
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	reachable := localServiceReachable(r.Context(), service)
+	result := localServiceView{PluginID: plugin.ID, ID: service.ID, Name: service.Name, Reachable: reachable, ProxyURL: localServiceURL(plugin.ID, service.ID), Embed: service.Embed, WebSocket: service.WebSocket}
+	if !reachable {
+		result.Error = "服务未启动或无法连接"
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
 func (s *server) localServiceWebSocketHandler(w http.ResponseWriter, r *http.Request, plugin setupplugin.Plugin, service setupplugin.ServiceSpec, requestPath string) {
 	target, err := localServiceTarget(service, requestPath)
 	if err != nil {
