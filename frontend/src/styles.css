@@ -6161,6 +6161,7 @@ textarea:hover {
   border: 3px solid transparent;
   border-radius: 999px;
   min-height: 28px;
+  min-width: 28px;
 }
 *:hover::-webkit-scrollbar-thumb {
   background-color: rgb(104 100 92 / 0.52);

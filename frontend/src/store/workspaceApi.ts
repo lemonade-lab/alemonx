@@ -17,6 +17,8 @@ type RobotTask = {
   status: 'running' | 'completed' | 'failed'
   output?: string
   error?: string
+  createdAt?: string
+  finishedAt?: string
 }
 type CatalogGroup = {
   title: string
@@ -114,8 +116,10 @@ export type PM2Process = {
   restarts: number
   script: string
 }
-export type SystemNetworkMode = 'system' | 'manual' | 'direct' | 'mirror' | 'custom-mirror'
-export type SystemNetworkRoute = 'github' | 'gitee' | 'npm' | 'node' | 'cdn' | 'official'
+export type SystemNetworkMode =
+  'system' | 'manual' | 'direct' | 'mirror' | 'custom-mirror'
+export type SystemNetworkRoute =
+  'github' | 'gitee' | 'npm' | 'node' | 'cdn' | 'official'
 export type SystemNetworkRouteSettings = {
   mode: SystemNetworkMode
   mirrorUrl?: string
@@ -128,7 +132,9 @@ export type SystemNetworkMirrorPreset = {
 }
 export type SystemNetworkSettings = {
   routes: Record<SystemNetworkRoute, SystemNetworkRouteSettings>
-  mirrorPresets?: Partial<Record<SystemNetworkRoute, SystemNetworkMirrorPreset[]>>
+  mirrorPresets?: Partial<
+    Record<SystemNetworkRoute, SystemNetworkMirrorPreset[]>
+  >
 }
 export type SystemNetworkCheck = {
   ok: boolean
@@ -228,16 +234,23 @@ export type SetupPluginDevelopment = {
   source: string
   registered: boolean
   running: boolean
-  state: 'registered' | 'starting' | 'running' | 'stopping' | 'stopped' | 'building' | 'failed'
+  state:
+    | 'registered'
+    | 'starting'
+    | 'running'
+    | 'stopping'
+    | 'stopped'
+    | 'building'
+    | 'failed'
   busy: boolean
   runner?: string
   webMode?: string
   buildAvailable: boolean
   webUrl?: string
   webPort?: number
-	 sourceType: string
-	 privileges?: string[]
-	 services?: { id: string; port?: number; running: boolean; restart?: string }[]
+  sourceType: string
+  privileges?: string[]
+  services?: { id: string; port?: number; running: boolean; restart?: string }[]
   lastError?: string
   updatedAt: string
 }
@@ -306,7 +319,10 @@ export const workspaceApi = createApi({
         { type: 'EnvironmentReport', id: `${arg.goalId}:${arg.variant}` }
       ]
     }),
-    releases: build.query<unknown[], string | { app: string; refresh?: boolean }>({
+    releases: build.query<
+      unknown[],
+      string | { app: string; refresh?: boolean }
+    >({
       query: input => {
         const { app, refresh } =
           typeof input === 'string' ? { app: input } : input
@@ -416,19 +432,43 @@ export const workspaceApi = createApi({
       query: () => ({ url: 'system/plugin-download-cache', method: 'DELETE' }),
       invalidatesTags: ['SetupPlugins']
     }),
-    setupPluginDevelopment: build.query<{ items: SetupPluginDevelopment[] }, void>({
+    setupPluginDevelopment: build.query<
+      { items: SetupPluginDevelopment[] },
+      void
+    >({
       query: () => 'setup/plugins/development',
       providesTags: ['SetupPlugins']
     }),
-    registerSetupPluginDevelopment: build.mutation<SetupPluginDevelopment, { path: string }>({
-      query: body => ({ url: 'setup/plugins/development', method: 'POST', body }),
+    registerSetupPluginDevelopment: build.mutation<
+      SetupPluginDevelopment,
+      { path: string }
+    >({
+      query: body => ({
+        url: 'setup/plugins/development',
+        method: 'POST',
+        body
+      }),
       invalidatesTags: ['SetupPlugins']
     }),
-    runSetupPluginDevelopment: build.mutation<SetupPluginDevelopment, { pluginID: string; action: 'build' | 'start' | 'stop' | 'restart'; confirm?: boolean }>({
-      query: ({ pluginID, action, confirm = false }) => ({ url: `setup/plugins/development/${encodeURIComponent(pluginID)}/${action}`, method: 'POST', body: { confirm } }),
+    runSetupPluginDevelopment: build.mutation<
+      SetupPluginDevelopment,
+      {
+        pluginID: string
+        action: 'build' | 'start' | 'stop' | 'restart'
+        confirm?: boolean
+      }
+    >({
+      query: ({ pluginID, action, confirm = false }) => ({
+        url: `setup/plugins/development/${encodeURIComponent(pluginID)}/${action}`,
+        method: 'POST',
+        body: { confirm }
+      }),
       invalidatesTags: ['SetupPlugins']
     }),
-    removeSetupPluginDevelopment: build.mutation<{ id: string; removed: boolean }, string>({
+    removeSetupPluginDevelopment: build.mutation<
+      { id: string; removed: boolean },
+      string
+    >({
       query: pluginID => ({
         url: `setup/plugins/development/${encodeURIComponent(pluginID)}/remove`,
         method: 'DELETE'
@@ -436,7 +476,8 @@ export const workspaceApi = createApi({
       invalidatesTags: ['SetupPlugins']
     }),
     setupPluginDevelopmentLogs: build.query<{ output: string }, string>({
-      query: pluginID => `setup/plugins/development/${encodeURIComponent(pluginID)}/logs`
+      query: pluginID =>
+        `setup/plugins/development/${encodeURIComponent(pluginID)}/logs`
     }),
     systemMcp: build.query<{ running: boolean }, void>({
       query: () => 'system/mcp'
@@ -453,11 +494,16 @@ export const workspaceApi = createApi({
       invalidatesTags: ['SystemNetwork']
     }),
     testSystemNetwork: build.mutation<SystemNetworkCheck, SystemNetworkRoute>({
-      query: target => ({ url: `system/network?${new URLSearchParams({ target })}`, method: 'POST' })
+      query: target => ({
+        url: `system/network?${new URLSearchParams({ target })}`,
+        method: 'POST'
+      })
     }),
-    setSystemCurrentRobot: build.mutation<SystemCurrentRobot, { root: string }>({
-      query: body => ({ url: 'system/context/robot', method: 'POST', body })
-    }),
+    setSystemCurrentRobot: build.mutation<SystemCurrentRobot, { root: string }>(
+      {
+        query: body => ({ url: 'system/context/robot', method: 'POST', body })
+      }
+    ),
     startSetupPluginTask: build.mutation<
       RobotTask,
       {
@@ -562,7 +608,10 @@ export const workspaceApi = createApi({
     robotWebViews: build.query<WebViewEntry[], string>({
       query: root => `robot/webviews?${new URLSearchParams({ root })}`
     }),
-    robotAppPortProbe: build.query<{ reachable: boolean; port: number }, string>({
+    robotAppPortProbe: build.query<
+      { reachable: boolean; port: number },
+      string
+    >({
       query: root =>
         `robot/app-port?${new URLSearchParams({ root, probe: '1' })}`
     }),

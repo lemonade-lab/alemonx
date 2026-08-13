@@ -340,7 +340,23 @@ function PlatformLogo({
 }
 
 function projectName(path: string) {
-  return path.replace(/\/$/, '').split('/').pop() || path
+  const cleaned = path.replace(/[\\/]+$/, '')
+  const leaf = cleaned.split(/[\\/]/).filter(Boolean).pop()
+  return leaf || cleaned || path
+}
+
+function formatTaskTime(value?: string) {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  return date.toLocaleString('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
+  })
 }
 
 function isMissingConfigValue(value: unknown) {
@@ -1156,8 +1172,15 @@ export function Dashboard({
   )
   // Keep a stable array reference so effects depending on it do not re-run on
   // every render when the selector briefly yields null/undefined.
+  // Persisted projects may carry a stale full-path name from older releases
+  // (Windows separators were not split), so always derive the display name
+  // from the path here.
   const projects = useMemo(
-    () => (rawProjects ?? []) as Project[],
+    () =>
+      ((rawProjects ?? []) as Project[]).map(project => ({
+        ...project,
+        name: projectName(project.path)
+      })),
     [rawProjects]
   )
   const activeProjectID = useSelector(
@@ -3015,11 +3038,6 @@ export function Dashboard({
             >
               <div className="grid gap-1">
                 <strong className="text-sm text-ink-950">配置应用端口</strong>
-                <p className="text-xs leading-5 text-slate-500">
-                  应用是机器人的网页界面，需要 serverPort
-                  端口才能访问。输入后会自动保存到
-                  alemon.config.yaml；启动时会打开应用。
-                </p>
               </div>
               <label className="grid gap-1.5 text-xs font-medium text-slate-600">
                 应用端口（1-65535）
@@ -3065,11 +3083,6 @@ export function Dashboard({
             >
               <div className="grid gap-1">
                 <strong className="text-sm text-ink-950">配置测试端口</strong>
-                <p className="text-xs leading-5 text-slate-500">
-                  测试是机器人的沙盒测试台（testone），需要顶层 port （CBP
-                  端口）才能访问 /testone 服务。输入后会自动保存到
-                  alemon.config.yaml；启动时会打开测试台。
-                </p>
               </div>
               <label className="grid gap-1.5 text-xs font-medium text-slate-600">
                 测试端口（1-65535）
@@ -4874,6 +4887,14 @@ function OperationTasksPage({ root }: { root: string }) {
                         : '已完成'}
                   </small>
                 </span>
+                {item.createdAt && (
+                  <time
+                    className="ml-auto shrink-0 text-[11px] tabular-nums text-slate-400 dark:text-slate-500"
+                    dateTime={item.createdAt}
+                  >
+                    {formatTaskTime(item.createdAt)}
+                  </time>
+                )}
               </button>
             ))}
           </div>
@@ -7096,6 +7117,10 @@ function RuntimePanel({
   useEffect(() => {
     void refreshPorts()
   }, [refreshPorts])
+  const handleRefresh = () => {
+    onRefresh()
+    void refreshPorts()
+  }
   const [loginChoice, setLoginChoice] = useStoreState<LoginChoice | null>(null)
   const [connectionConfig, setConnectionConfig] = useStoreState<{
     package: string
@@ -7144,6 +7169,11 @@ function RuntimePanel({
     const next = { ...connectionValues, [name]: value }
     setConnectionValues(next)
     scheduleConnectionSave(next)
+    // A stale "请先填写必填项" banner from a previous start attempt must not
+    // outlive the edit that resolves it; the start button and the click-time
+    // validation share the same check, so once the banner is actionable it is
+    // already contradictory.
+    if (loginDialogError) setLoginDialogError('')
   }
   const ask = (label: string, note: string, execute: () => void) =>
     setPending({ label, note, execute })
@@ -7287,6 +7317,7 @@ function RuntimePanel({
     if (platform) {
       setCustomLogin(platform.id)
       setCustomPackage(platform.package)
+      setLoginDialogError('')
       void loadConnectionConfig(platform.package)
     }
   }
@@ -7378,7 +7409,7 @@ function RuntimePanel({
         <button
           className="icon-button size-9 shrink-0 p-0"
           disabled={loading}
-          onClick={onRefresh}
+          onClick={handleRefresh}
           aria-label="刷新运行状态"
           title="刷新运行状态"
         >
@@ -7592,93 +7623,97 @@ function RuntimePanel({
         </Modal>
       )}
       <section className="grid gap-3">
-        <section className="overflow-hidden rounded-xl border border-slate-200 bg-white">
-          <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
-            <div className="grid gap-1">
-              <strong className="flex items-center gap-2 text-sm font-semibold text-slate-800">
-                端口检查
-                <StatusDot
-                  active={
-                    portStatus.length > 0 &&
-                    portStatus.every(item => !item.occupied || item.owned)
-                  }
-                  label={
-                    portStatus.length > 0
-                      ? portStatus.some(item => item.occupied && !item.owned)
-                        ? '有端口被其他进程占用'
-                        : '可正常启动'
-                      : '检测中'
-                  }
-                />
-              </strong>
-              <span className="block text-xs text-slate-500">
-                启动前会主动确认机器人要绑定的端口没有被其他进程占用。
-              </span>
+        {portStatus.length > 0 || portStatusBusy || portStatusError ? (
+          <section className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+            <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+              <div className="grid gap-1">
+                <strong className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+                  端口检查
+                  <StatusDot
+                    active={
+                      portStatus.length > 0 &&
+                      portStatus.every(item => !item.occupied || item.owned)
+                    }
+                    label={
+                      portStatus.length > 0
+                        ? portStatus.some(item => item.occupied && !item.owned)
+                          ? '有端口被其他进程占用'
+                          : '可正常启动'
+                        : '检测中'
+                    }
+                  />
+                </strong>
+                <span className="block text-xs text-slate-500">
+                  启动前会主动确认机器人要绑定的端口没有被其他进程占用。
+                </span>
+              </div>
+              <button
+                className="text-button"
+                disabled={portStatusBusy}
+                onClick={() => void refreshPorts()}
+              >
+                {portStatusBusy ? '检测中…' : '重新检测'}
+              </button>
             </div>
-            <button
-              className="text-button"
-              disabled={portStatusBusy}
-              onClick={() => void refreshPorts()}
-            >
-              {portStatusBusy ? '检测中…' : '重新检测'}
-            </button>
-          </div>
-          <div className="divide-y divide-slate-100 border-t border-slate-100">
-            {portStatusError && (
-              <p className="m-0 px-4 py-3 text-xs leading-5 text-orange-700">
-                {portStatusError}
-              </p>
-            )}
-            {!portStatusError && portStatus.length === 0 && (
-              <p className="m-0 px-4 py-3 text-xs leading-5 text-slate-500">
-                {portStatusBusy ? '正在检测端口…' : '暂无可检测的端口。'}
-              </p>
-            )}
-            {!portStatusError &&
-              portStatus.map(item => {
-                const blocked = item.occupied && !item.owned
-                return (
-                  <div
-                    key={`${item.kind}:${item.port}`}
-                    className="flex flex-wrap items-center gap-2 px-4 py-2.5 text-xs"
-                  >
-                    <i
-                      className={cn(
-                        'inline-block size-2 rounded-full',
-                        blocked
-                          ? 'bg-red-500'
-                          : item.occupied
-                            ? 'bg-amber-500'
-                            : 'bg-emerald-500'
-                      )}
-                      aria-hidden="true"
-                    />
-                    <span className="font-semibold text-slate-700">
-                      {item.label}
-                    </span>
-                    <span className="text-slate-500">端口 {item.port}</span>
-                    {item.occupied ? (
-                      <span
-                        className={blocked ? 'text-red-600' : 'text-amber-600'}
-                      >
-                        {blocked
-                          ? `已被其他进程占用${
-                              item.pid
-                                ? `（PID ${item.pid}${
-                                    item.process ? `：${item.process}` : ''
-                                  }）`
-                                : ''
-                            }`
-                          : '由本机器人进程占用'}
+            <div className="divide-y divide-slate-100 border-t border-slate-100">
+              {portStatusError && (
+                <p className="m-0 px-4 py-3 text-xs leading-5 text-orange-700">
+                  {portStatusError}
+                </p>
+              )}
+              {!portStatusError && portStatus.length === 0 && (
+                <p className="m-0 px-4 py-3 text-xs leading-5 text-slate-500">
+                  {portStatusBusy ? '正在检测端口…' : '暂无可检测的端口。'}
+                </p>
+              )}
+              {!portStatusError &&
+                portStatus.map(item => {
+                  const blocked = item.occupied && !item.owned
+                  return (
+                    <div
+                      key={`${item.kind}:${item.port}`}
+                      className="flex flex-wrap items-center gap-2 px-4 py-2.5 text-xs"
+                    >
+                      <i
+                        className={cn(
+                          'inline-block size-2 rounded-full',
+                          blocked
+                            ? 'bg-red-500'
+                            : item.occupied
+                              ? 'bg-amber-500'
+                              : 'bg-emerald-500'
+                        )}
+                        aria-hidden="true"
+                      />
+                      <span className="font-semibold text-slate-700">
+                        {item.label}
                       </span>
-                    ) : (
-                      <span className="text-emerald-600">空闲</span>
-                    )}
-                  </div>
-                )
-              })}
-          </div>
-        </section>
+                      <span className="text-slate-500">端口 {item.port}</span>
+                      {item.occupied ? (
+                        <span
+                          className={
+                            blocked ? 'text-red-600' : 'text-amber-600'
+                          }
+                        >
+                          {blocked
+                            ? `已被其他进程占用${
+                                item.pid
+                                  ? `（PID ${item.pid}${
+                                      item.process ? `：${item.process}` : ''
+                                    }）`
+                                  : ''
+                              }`
+                            : '由本机器人进程占用'}
+                        </span>
+                      ) : (
+                        <span className="text-emerald-600">空闲</span>
+                      )}
+                    </div>
+                  )
+                })}
+            </div>
+          </section>
+        ) : null}
         <section className="overflow-hidden rounded-xl border border-slate-200 bg-white">
           <div className="divide-y divide-slate-200">
             <section className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">

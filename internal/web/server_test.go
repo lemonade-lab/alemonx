@@ -1289,6 +1289,87 @@ func TestLocalServiceStatusReportsGatewayCapability(t *testing.T) {
 	}
 }
 
+func TestLocalServiceAPIBootstrapInjectedWhenDeclared(t *testing.T) {
+	upstream := newIPv4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/":
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			_, _ = io.WriteString(w, "<!doctype html><html><head><title>LLBot</title></head><body>login</body></html>")
+		case "/app.js":
+			w.Header().Set("Content-Type", "application/javascript")
+			_, _ = io.WriteString(w, `fetch("/api/login-qrcode");`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+	parsed, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, rawPort, err := net.SplitHostPort(parsed.Host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pluginsRoot := t.TempDir()
+	pluginRoot := filepath.Join(pluginsRoot, "alemonx-qq")
+	if err := os.MkdirAll(filepath.Join(pluginRoot, "web"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := fmt.Sprintf(`{"id":"alemonx-qq","name":"QQ","version":"1.0.0","web":{"root":"web"},"services":[{"id":"luckylillia-webui","name":"LLBot","host":"127.0.0.1","port":%s,"basePath":"/","healthPath":"/","embed":true,"rewriteHtml":true,"rewriteApiBase":true}]}`, rawPort)
+	if err := os.WriteFile(filepath.Join(pluginRoot, "alx.json"), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := &server{plugins: setupplugin.NewRegistry(pluginsRoot)}
+	response := httptest.NewRecorder()
+	s.localServiceProxyHandler(response, httptest.NewRequest(http.MethodGet, "/api/v1/services/alemonx-qq/luckylillia-webui/", nil))
+	body := response.Body.String()
+	if !strings.Contains(body, "__alxApiCompat") || !strings.Contains(body, "/api/v1/services/alemonx-qq/luckylillia-webui/") {
+		t.Fatalf("compat bootstrap missing from proxied HTML: %s", body)
+	}
+	if !strings.Contains(body, "<base href=") {
+		t.Fatalf("rewritten HTML lacks base href: %s", body)
+	}
+
+	// Non-HTML assets pass through unmodified.
+	response = httptest.NewRecorder()
+	s.localServiceProxyHandler(response, httptest.NewRequest(http.MethodGet, "/api/v1/services/alemonx-qq/luckylillia-webui/app.js", nil))
+	if got := response.Body.String(); got != `fetch("/api/login-qrcode");` {
+		t.Fatalf("javascript asset was modified: %q", got)
+	}
+}
+
+func TestLocalServiceAPIBootstrapNotInjectedWithoutFlag(t *testing.T) {
+	upstream := newIPv4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = io.WriteString(w, "<!doctype html><html><head><title>x</title></head><body>plain</body></html>")
+	}))
+	defer upstream.Close()
+	parsed, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, rawPort, err := net.SplitHostPort(parsed.Host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pluginsRoot := t.TempDir()
+	pluginRoot := filepath.Join(pluginsRoot, "alemonx-qq")
+	if err := os.MkdirAll(filepath.Join(pluginRoot, "web"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := fmt.Sprintf(`{"id":"alemonx-qq","name":"QQ","version":"1.0.0","web":{"root":"web"},"services":[{"id":"webui","name":"WebUI","host":"127.0.0.1","port":%s,"rewriteHtml":true}]}`, rawPort)
+	if err := os.WriteFile(filepath.Join(pluginRoot, "alx.json"), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := &server{plugins: setupplugin.NewRegistry(pluginsRoot)}
+	response := httptest.NewRecorder()
+	s.localServiceProxyHandler(response, httptest.NewRequest(http.MethodGet, "/api/v1/services/alemonx-qq/webui/", nil))
+	if strings.Contains(response.Body.String(), "__alxApiCompat") {
+		t.Fatalf("compat bootstrap injected without rewriteApiBase: %s", response.Body.String())
+	}
+}
+
 func TestLocalServiceWebSocketRequiresManifestDeclaration(t *testing.T) {
 	upstream := newIPv4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
 	parsed, err := url.Parse(upstream.URL)

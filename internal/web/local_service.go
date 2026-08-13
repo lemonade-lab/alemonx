@@ -1,9 +1,12 @@
 package web
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -56,6 +59,50 @@ var localWebSocketFrameCodec = websocket.Codec{
 		frame.payloadType = payloadType
 		return nil
 	},
+}
+
+var (
+	htmlHeadPattern = regexp.MustCompile(`(?i)<head[^>]*>`)
+	scriptSrcPolicy = regexp.MustCompile(`(?i)(script-src[^;]*)`)
+)
+
+// embeddedAPICompatScript rebases root-relative /api/... requests inside an
+// embedded service page to the ALX service mount, so webapps that were written
+// for same-origin deployment (LLBot's WebUI is one) keep working behind the
+// proxy. It also normalizes the common "webui.port differs" redirect by
+// aligning the reported port with the current window, because the loopback
+// port is never reachable from the browser.
+const embeddedAPICompatScript = `<script>(function(){var m=%q;if(!m||window.__alxApiCompat)return;window.__alxApiCompat=true;function p(u){if(typeof u==="string"&&u.charAt(0)==="/"&&u.charAt(1)!=="/")return m+u.slice(1);return u}var f=window.fetch?window.fetch.bind(window):null;if(f){window.fetch=function(i,n){var u=null,x=i;if(typeof i==="string"){u=i;x=p(i)}else if(i&&typeof i.url==="string"){u=i.url;x=new Request(p(i.url),i)}var q=f(x,n);if(!u||u.indexOf("/api/login-info")===-1)return q;return q.then(function(r){return r.clone().text().then(function(t){try{var d=JSON.parse(t),port=Number(window.location.port)||(window.location.protocol==="https:"?443:80);if(d&&d.data&&d.data.webui&&d.data.webui.port){d.data.webui.port=port;var h=new Headers(r.headers);h.set("Content-Length",String(JSON.stringify(d).length));return new Response(JSON.stringify(d),{status:r.status,statusText:r.statusText,headers:h})}}catch(e){}return r})})}}var o=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(a,u){arguments[1]=p(u);return o.apply(this,arguments)}})();</script>`
+
+// injectEmbeddedAPIBootstrap adds the compatibility script to a rewritten
+// HTML document. Compressed bodies are left untouched, mirroring the HTML
+// rewrite path.
+func injectEmbeddedAPIBootstrap(response *http.Response, mount string) {
+	if response.StatusCode != http.StatusOK || !strings.HasPrefix(response.Header.Get("Content-Type"), "text/html") {
+		return
+	}
+	if encoding := response.Header.Get("Content-Encoding"); encoding != "" && encoding != "identity" {
+		return
+	}
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		return
+	}
+	_ = response.Body.Close()
+	script := fmt.Sprintf(embeddedAPICompatScript, mount)
+	document := string(body)
+	if head := htmlHeadPattern.FindString(document); head != "" {
+		document = strings.Replace(document, head, head+script, 1)
+	} else {
+		document = script + document
+	}
+	rewritten := []byte(document)
+	response.Body = io.NopCloser(bytes.NewReader(rewritten))
+	response.ContentLength = int64(len(rewritten))
+	response.Header.Set("Content-Length", strconv.Itoa(len(rewritten)))
+	if policy := response.Header.Get("Content-Security-Policy"); policy != "" && scriptSrcPolicy.MatchString(policy) {
+		response.Header.Set("Content-Security-Policy", scriptSrcPolicy.ReplaceAllString(policy, "$1 'unsafe-inline'"))
+	}
 }
 
 func (s *server) localServicesHandler(w http.ResponseWriter, r *http.Request) {
@@ -138,6 +185,9 @@ func (s *server) localServiceProxyHandler(w http.ResponseWriter, r *http.Request
 			}
 			if service.RewriteHTML {
 				modifyRobotAppResponse(response, target, mount, r.URL.Path, r)
+			}
+			if service.RewriteHTML && service.RewriteAPIBase {
+				injectEmbeddedAPIBootstrap(response, mount)
 			}
 			isolateLocalServiceCookies(response, cookiePrefix, mount)
 			if service.Embed {

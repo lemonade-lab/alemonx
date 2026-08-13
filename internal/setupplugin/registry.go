@@ -195,8 +195,14 @@ type ServiceSpec struct {
 	HealthPath  string `json:"healthPath,omitempty"`
 	Embed       bool   `json:"embed,omitempty"`
 	RewriteHTML bool   `json:"rewriteHtml,omitempty"`
-	SSE         bool   `json:"sse,omitempty"`
-	WebSocket   bool   `json:"websocket,omitempty"`
+	// RewriteAPIBase makes an embedded service compatible with webapps that
+	// call their own backend through root-relative /api/... fetch or XHR
+	// paths. The proxy injects a bootstrap that rebases those requests to the
+	// service mount (which requires RewriteHTML) and normalizes the common
+	// "my listening port differs" post-login redirect.
+	RewriteAPIBase bool `json:"rewriteApiBase,omitempty"`
+	SSE            bool `json:"sse,omitempty"`
+	WebSocket      bool `json:"websocket,omitempty"`
 }
 
 // SystemPickerSpec declares one named, host-owned Finder request. The
@@ -1568,7 +1574,7 @@ func (r *Registry) ensureCached(id, version, assetName string) (cacheVersion, er
 		return cacheVersion{}, err
 	}
 	defer os.Remove(temporaryArchive)
-	if err := os.Rename(temporaryArchive, packagePath); err != nil {
+	if err := moveIntoCache(temporaryArchive, packagePath); err != nil {
 		return cacheVersion{}, errors.New("保存插件缓存失败：" + err.Error())
 	}
 	staging, err := os.MkdirTemp(directory, ".extract-")

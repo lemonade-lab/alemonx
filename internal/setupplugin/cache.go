@@ -375,6 +375,55 @@ func copyTree(source, destination string) error {
 	})
 }
 
+// moveIntoCache moves the downloaded archive into the plugin cache. The
+// download lives in the system temp directory, which may sit on a different
+// filesystem than the cache (for example tmpfs /tmp versus a home directory
+// on disk); os.Rename then fails with EXDEV "invalid cross-device link". When
+// the rename fails, fall back to copying through a temporary file in the
+// destination directory and atomically renaming it there, which never crosses
+// a filesystem boundary.
+func moveIntoCache(source, destination string) error {
+	if err := os.Rename(source, destination); err == nil {
+		return nil
+	}
+	return copyIntoDirectory(source, filepath.Dir(destination), filepath.Base(destination))
+}
+
+func copyIntoDirectory(source, directory, name string) error {
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		return err
+	}
+	input, err := os.Open(source)
+	if err != nil {
+		return err
+	}
+	defer input.Close()
+	temporary, err := os.CreateTemp(directory, ".package-*")
+	if err != nil {
+		return err
+	}
+	temporaryPath := temporary.Name()
+	if _, err := io.Copy(temporary, input); err != nil {
+		_ = temporary.Close()
+		_ = os.Remove(temporaryPath)
+		return err
+	}
+	if err := temporary.Sync(); err != nil {
+		_ = temporary.Close()
+		_ = os.Remove(temporaryPath)
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		_ = os.Remove(temporaryPath)
+		return err
+	}
+	if err := os.Rename(temporaryPath, filepath.Join(directory, name)); err != nil {
+		_ = os.Remove(temporaryPath)
+		return err
+	}
+	return nil
+}
+
 func (r *Registry) Versions(id string) ([]CachedVersion, error) {
 	return r.cachedVersions(id)
 }
