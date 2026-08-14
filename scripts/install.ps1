@@ -3,7 +3,7 @@
 Installs the latest ALemonX release for the current Windows architecture.
 
 .EXAMPLE
-irm https://raw.githubusercontent.com/lemonade-lab/alemonjs-setup/main/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/lemonade-lab/alemonx/main/scripts/install.ps1 | iex
 #>
 
 [CmdletBinding()]

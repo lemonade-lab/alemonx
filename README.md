@@ -11,13 +11,13 @@
 macOS、Linux 或 FreeBSD 在终端执行：
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/lemonade-lab/alemonjs-setup/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/lemonade-lab/alemonx/main/scripts/install.sh | sh
 ```
 
 Windows 在 PowerShell 执行：
 
 ```powershell
-irm https://raw.githubusercontent.com/lemonade-lab/alemonjs-setup/main/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/lemonade-lab/alemonx/main/scripts/install.ps1 | iex
 ```
 
 ### 手动安装

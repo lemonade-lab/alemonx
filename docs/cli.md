@@ -5,13 +5,13 @@
 尚未安装时，不必前往 GitHub Releases。macOS、Linux、FreeBSD 可执行：
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/lemonade-lab/alemonjs-setup/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/lemonade-lab/alemonx/main/scripts/install.sh | sh
 ```
 
 Windows PowerShell 可执行：
 
 ```powershell
-irm https://raw.githubusercontent.com/lemonade-lab/alemonjs-setup/main/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/lemonade-lab/alemonx/main/scripts/install.ps1 | iex
 ```
 
 脚本会下载当前系统对应的最新正式包并校验 SHA-256；完成后重新打开终端即可运行 `alx`。

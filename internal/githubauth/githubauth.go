@@ -173,12 +173,12 @@ func StartDeviceFlow() (DeviceFlow, error) {
 		return DeviceFlow{}, errors.New("无法启动 GitHub 授权，请检查网络后重试")
 	}
 	var response struct {
-		DeviceCode      string `json:"device_code"`
-		UserCode        string `json:"user_code"`
-		VerificationURI string `json:"verification_uri"`
-		ExpiresIn       int    `json:"expires_in"`
-		Interval        int    `json:"interval"`
-		Error           string `json:"error"`
+		DeviceCode       string `json:"device_code"`
+		UserCode         string `json:"user_code"`
+		VerificationURI  string `json:"verification_uri"`
+		ExpiresIn        int    `json:"expires_in"`
+		Interval         int    `json:"interval"`
+		Error            string `json:"error"`
 		ErrorDescription string `json:"error_description"`
 	}
 	if err := json.Unmarshal(body, &response); err != nil {
@@ -345,7 +345,7 @@ func postForm(endpoint string, form url.Values) ([]byte, error) {
 	}
 	request.Header.Set("Accept", "application/json")
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	request.Header.Set("User-Agent", "alemonjs-setup")
+	request.Header.Set("User-Agent", "alemonx")
 	response, err := (&http.Client{Timeout: 15 * time.Second}).Do(request)
 	if err != nil {
 		return nil, err

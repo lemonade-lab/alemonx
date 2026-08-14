@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	defaultUserAgent = "alemonjs-setup"
+	defaultUserAgent = "alemonx"
 	maxBodyBytes     = 8 << 20
 	maxEntries       = 512
 )

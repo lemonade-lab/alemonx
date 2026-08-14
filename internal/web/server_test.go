@@ -30,6 +30,7 @@ import (
 	"alemonx/internal/setupplugin"
 	"alemonx/internal/system"
 	"alemonx/internal/systemnetwork"
+
 	"golang.org/x/net/websocket"
 )
 
@@ -1895,7 +1896,7 @@ func TestModifyRobotAppResponse(t *testing.T) {
 // TestRobotAppTokenRoundTrip verifies the root token survives a decode round
 // trip and that the legacy query form still resolves from the handler.
 func TestRobotAppTokenRoundTrip(t *testing.T) {
-	const root = "/Users/lemonade/Desktop/alemonjs-setup/alemonb"
+	const root = "/Users/lemonade/Desktop/alemonx/alemonb"
 	token := robotAppToken(root)
 	decoded, raw := robotAppRootFromPath("/api/v1/robot/app/"+token+"/apps/demo/", "/api/v1/robot/app/")
 	if decoded != root || raw != token {

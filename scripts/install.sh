@@ -1,6 +1,6 @@
 #!/bin/sh
 # Install the latest ALemonX release for macOS, Linux, or FreeBSD.
-# Usage: curl -fsSL https://raw.githubusercontent.com/lemonade-lab/alemonjs-setup/main/scripts/install.sh | sh
+# Usage: curl -fsSL https://raw.githubusercontent.com/lemonade-lab/alemonx/main/scripts/install.sh | sh
 
 set -eu
 
