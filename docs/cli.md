@@ -16,6 +16,14 @@ irm https://raw.githubusercontent.com/lemonade-lab/alemonx/main/scripts/install.
 
 脚本会下载当前系统对应的最新正式包并校验 SHA-256；完成后重新打开终端即可运行 `alx`。
 
+服务器无法直连 GitHub 时，脚本会自动依次尝试 `ghfast.top`、`ghproxy.net` 和 `gh-proxy.com`。若 GitHub Raw 也无法访问，可通过镜像取得脚本本身：
+
+```sh
+curl -fsSL https://ghfast.top/https://raw.githubusercontent.com/lemonade-lab/alemonx/main/scripts/install.sh | sh
+```
+
+也可设置 HTTPS 的 `ALX_DOWNLOAD_BASE` 来优先使用自建镜像；内置下载源会在它失败后继续尝试。
+
 ```bash
 # 打开与状态
 alx open

@@ -6,7 +6,14 @@ set -eu
 
 repository="${ALX_REPOSITORY:-lemonade-lab/alemonx}"
 install_dir="${ALX_INSTALL_DIR:-$HOME/.local/bin}"
-download_base="https://github.com/${repository}/releases/latest/download"
+official_download_base="https://github.com/${repository}/releases/latest/download"
+download_sources="
+${ALX_DOWNLOAD_BASE:-}
+${official_download_base}
+https://ghfast.top/https://github.com/${repository}/releases/latest/download
+https://ghproxy.net/https://github.com/${repository}/releases/latest/download
+https://gh-proxy.com/https://github.com/${repository}/releases/latest/download
+"
 
 fail() {
   printf '%s\n' "安装失败：$*" >&2
@@ -21,11 +28,11 @@ download() {
   url="$1"
   destination="$2"
   if command -v curl >/dev/null 2>&1; then
-    curl --fail --location --retry 2 --connect-timeout 10 --max-time 300 --silent --show-error "$url" --output "$destination"
+    curl --fail --location --connect-timeout 5 --max-time 300 --silent --show-error "$url" --output "$destination"
     return
   fi
   if command -v wget >/dev/null 2>&1; then
-    wget --quiet --timeout=10 --tries=3 --output-document="$destination" "$url"
+    wget --quiet --timeout=5 --tries=1 --output-document="$destination" "$url"
     return
   fi
   fail "需要 curl 或 wget 才能下载安装包。"
@@ -77,13 +84,33 @@ work_dir="$(mktemp -d "${TMPDIR:-/tmp}/alx-install.XXXXXX")"
 trap 'rm -rf "$work_dir"' EXIT HUP INT TERM
 
 printf '%s\n' "正在下载 ALemonX 最新版（${os}/${arch}）…"
-download "${download_base}/${asset}" "$work_dir/$asset" || fail "没有找到适用于 ${os}/${arch} 的安装包。"
-download "${download_base}/SHA256SUMS" "$work_dir/SHA256SUMS" || fail "无法下载安装包校验文件。"
+selected_download_source=""
+for download_base in $download_sources; do
+  download_base="${download_base%/}"
+  case "$download_base" in
+    https://*) ;;
+    *)
+      [ -n "$download_base" ] && printf '%s\n' "跳过非 HTTPS 下载源：$download_base" >&2
+      continue
+      ;;
+  esac
 
-expected_checksum="$(awk -v asset="$asset" '$2 == asset { print $1; exit }' "$work_dir/SHA256SUMS")"
-[ -n "$expected_checksum" ] || fail "校验文件中未找到 $asset。"
-actual_checksum="$(sha256_file "$work_dir/$asset")"
-[ "$expected_checksum" = "$actual_checksum" ] || fail "安装包校验失败，已取消安装。"
+  printf '%s\n' "尝试下载源：$download_base"
+  rm -f "$work_dir/$asset" "$work_dir/SHA256SUMS"
+  download "${download_base}/${asset}" "$work_dir/$asset" || continue
+  download "${download_base}/SHA256SUMS" "$work_dir/SHA256SUMS" || continue
+
+  expected_checksum="$(awk -v asset="$asset" '$2 == asset { print $1; exit }' "$work_dir/SHA256SUMS")"
+  [ -n "$expected_checksum" ] || continue
+  actual_checksum="$(sha256_file "$work_dir/$asset")"
+  if [ "$expected_checksum" = "$actual_checksum" ]; then
+    selected_download_source="$download_base"
+    break
+  fi
+  printf '%s\n' "下载源校验失败，尝试下一个下载源。" >&2
+done
+
+[ -n "$selected_download_source" ] || fail "官方下载源和备用镜像均不可用，或未找到适用于 ${os}/${arch} 的校验安装包。"
 
 unzip -q "$work_dir/$asset" -d "$work_dir/package"
 [ -f "$work_dir/package/alx" ] || fail "安装包中缺少 alx 可执行文件。"

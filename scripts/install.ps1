@@ -9,7 +9,8 @@ irm https://raw.githubusercontent.com/lemonade-lab/alemonx/main/scripts/install.
 [CmdletBinding()]
 param(
     [string]$Repository = $(if ($env:ALX_REPOSITORY) { $env:ALX_REPOSITORY } else { 'lemonade-lab/alemonx' }),
-    [string]$InstallDir = $(if ($env:ALX_INSTALL_DIR) { $env:ALX_INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA 'Programs\ALemonX' })
+    [string]$InstallDir = $(if ($env:ALX_INSTALL_DIR) { $env:ALX_INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA 'Programs\ALemonX' }),
+    [string]$DownloadBase = $env:ALX_DOWNLOAD_BASE
 )
 
 Set-StrictMode -Version Latest
@@ -38,7 +39,24 @@ function Add-UserPath([string]$Directory) {
 
 $architecture = Get-Architecture
 $asset = "alx-windows-$architecture.zip"
-$downloadBase = "https://github.com/$Repository/releases/latest/download"
+$officialDownloadBase = "https://github.com/$Repository/releases/latest/download"
+$downloadSources = @(
+    if ($DownloadBase) { $DownloadBase.TrimEnd('/') }
+    $officialDownloadBase
+    "https://ghfast.top/https://github.com/$Repository/releases/latest/download"
+    "https://ghproxy.net/https://github.com/$Repository/releases/latest/download"
+    "https://gh-proxy.com/https://github.com/$Repository/releases/latest/download"
+) | Select-Object -Unique
+
+foreach ($downloadSource in $downloadSources) {
+    try {
+        $downloadSourceUri = [uri]$downloadSource
+        if (-not $downloadSourceUri.IsAbsoluteUri -or $downloadSourceUri.Scheme -ne 'https') { throw 'not HTTPS' }
+    }
+    catch {
+        throw "下载源必须是 HTTPS 地址：$downloadSource"
+    }
+}
 $temporary = Join-Path ([IO.Path]::GetTempPath()) ("alx-install-" + [guid]::NewGuid())
 
 try {
@@ -46,14 +64,28 @@ try {
     $archive = Join-Path $temporary $asset
     $checksums = Join-Path $temporary 'SHA256SUMS'
     Write-Host "正在下载 ALemonX 最新版（windows/$architecture）…"
-    Invoke-WebRequest -Uri "$downloadBase/$asset" -OutFile $archive
-    Invoke-WebRequest -Uri "$downloadBase/SHA256SUMS" -OutFile $checksums
+    $selectedDownloadSource = $null
+    foreach ($downloadSource in $downloadSources) {
+        try {
+            Write-Host "尝试下载源：$downloadSource"
+            Remove-Item -LiteralPath $archive, $checksums -Force -ErrorAction SilentlyContinue
+            Invoke-WebRequest -Uri "$downloadSource/$asset" -OutFile $archive
+            Invoke-WebRequest -Uri "$downloadSource/SHA256SUMS" -OutFile $checksums
 
-    $checksumLine = Get-Content $checksums | Where-Object { $_ -match ("\s" + [regex]::Escape($asset) + '$') } | Select-Object -First 1
-    if (-not $checksumLine) { throw "校验文件中未找到 $asset。" }
-    $expected = $checksumLine.Split()[0]
-    $actual = (Get-FileHash -Algorithm SHA256 -Path $archive).Hash.ToLowerInvariant()
-    if ($expected.ToLowerInvariant() -ne $actual) { throw '安装包校验失败，已取消安装。' }
+            $checksumLine = Get-Content $checksums | Where-Object { $_ -match ("\s" + [regex]::Escape($asset) + '$') } | Select-Object -First 1
+            if (-not $checksumLine) { throw "校验文件中未找到 $asset。" }
+            $expected = $checksumLine.Split()[0]
+            $actual = (Get-FileHash -Algorithm SHA256 -Path $archive).Hash.ToLowerInvariant()
+            if ($expected.ToLowerInvariant() -ne $actual) { throw '安装包校验失败。' }
+
+            $selectedDownloadSource = $downloadSource
+            break
+        }
+        catch {
+            Write-Warning "下载源不可用，尝试下一个：$downloadSource"
+        }
+    }
+    if (-not $selectedDownloadSource) { throw "官方下载源和备用镜像均不可用，或未找到适用于 windows/$architecture 的校验安装包。" }
 
     $unpacked = Join-Path $temporary 'package'
     Expand-Archive -Path $archive -DestinationPath $unpacked
