@@ -783,6 +783,39 @@ func TestRobotLiveUploadIsBoundToRobotAndDeviceAndCleansUp(t *testing.T) {
 	}
 }
 
+func TestRobotLiveUploadRejectsEmptyFile(t *testing.T) {
+	root := t.TempDir()
+	writeFixture(t, root, "package.json", `{"name":"demo","version":"1.0.0"}`)
+	s := newStatefulTestServer()
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	if err := writer.WriteField("root", root); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.WriteField("deviceId", "alemonx-live-empty-upload"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.CreateFormFile("file", "empty.jpg"); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/robot/live/upload", body)
+	request.Header.Set("Content-Type", writer.FormDataContentType())
+	response := httptest.NewRecorder()
+	s.robotLiveUploadHandler(response, request)
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "文件为空") {
+		t.Fatalf("empty upload = %d %s", response.Code, response.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(root, ".alemonx-live-uploads")); err == nil {
+		entries, readErr := os.ReadDir(filepath.Join(root, ".alemonx-live-uploads"))
+		if readErr != nil || len(entries) != 0 {
+			t.Fatalf("empty upload left a staged file: %v", entries)
+		}
+	}
+}
+
 // TestRuntimeProcessOutputPrefersRunningProcess covers the case where both a
 // dev and an app run have history: the currently running one must win, and a
 // fresh dev run after an older foreground run must not be hidden.

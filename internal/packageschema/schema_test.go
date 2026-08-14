@@ -62,6 +62,19 @@ func TestParseRejectsInvalidRulePattern(t *testing.T) {
 	}
 }
 
+func TestOfficialScopedPackageUsesUnscopedNamespaceWithoutPlatform(t *testing.T) {
+	declaration, err := Parse([]byte(`{
+  "name":"@alemonjs/db",
+  "alemonjs":{"config":[{"name":"db","type":"object"}]}
+}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := declaration.ResolveNamespace(); got != "db" {
+		t.Fatalf("namespace = %q, want db", got)
+	}
+}
+
 func TestFieldValidateValue(t *testing.T) {
 	declaration, err := Parse([]byte(`{"name":"x","alemonjs":{"config":[
 	  {"name":"port","type":"number","rules":[{"pattern":"^[0-9]+$","message":"端口必须为数字"}]},

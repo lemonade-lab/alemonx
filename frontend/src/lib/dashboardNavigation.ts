@@ -1,4 +1,4 @@
-export type DashboardPage = 'robot' | 'build' | 'plugins' | 'connections'
+export type DashboardPage = 'robot' | 'build' | 'plugins' | 'connections' | 'modules'
 export type DashboardSection =
   | 'backpack'
   | 'config'
@@ -23,7 +23,8 @@ const dashboardPages = new Set<DashboardPage>([
   'robot',
   'build',
   'plugins',
-  'connections'
+  'connections',
+  'modules'
 ])
 const dashboardSections = new Set<DashboardSection>([
   'backpack',

@@ -5662,6 +5662,11 @@ func (s *server) robotLiveUploadCreate(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	if size == 0 {
+		_ = os.Remove(path)
+		writeError(w, http.StatusBadRequest, "文件为空，请重新选择后发送。")
+		return
+	}
 	item := liveUpload{ID: id, Root: validated.Path, DeviceID: deviceID, Path: path, Filename: filename, Size: size, MIMEType: header.Header.Get("Content-Type"), ExpiresAt: time.Now().Add(liveUploadTTL)}
 	s.liveUploadsMu.Lock()
 	if s.liveUploads == nil {

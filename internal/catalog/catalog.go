@@ -61,6 +61,7 @@ type PackageConfig struct {
 var sources = map[string]string{
 	"apps":        "https://raw.githubusercontent.com/lemonade-lab/alemonjs.dev/main/docs/apps.md",
 	"environment": "https://raw.githubusercontent.com/lemonade-lab/alemonjs.dev/main/docs/environment.md",
+	"modules":     "https://raw.githubusercontent.com/lemonade-lab/alemonjs.dev/main/docs/apps-module.md",
 }
 
 func Fetch(kind string) ([]Group, error) {
@@ -95,14 +96,23 @@ func Fetch(kind string) ([]Group, error) {
 			if item.URL == "" {
 				item.URL = references[item.Name]
 			}
-			if strings.HasPrefix(item.Name, "@alemonjs/") || item.Name == "alemonjs" {
-				item.Install = item.Name
-			} else if repository := repositoryInstallURL(item.URL); repository != "" {
-				item.Install = "git+" + repository
-			}
+			item.Install = catalogInstall(kind, *item)
 		}
 	}
 	return groups, nil
+}
+
+// catalogInstall keeps JS modules as project dependencies even when their
+// documentation happens to link to a source repository. Apps are deliberately
+// different: they are installed into the robot backpack and may use Git URLs.
+func catalogInstall(kind string, item Item) string {
+	if kind == "modules" || strings.HasPrefix(item.Name, "@alemonjs/") || item.Name == "alemonjs" {
+		return item.Name
+	}
+	if repository := repositoryInstallURL(item.URL); repository != "" {
+		return "git+" + repository
+	}
+	return ""
 }
 
 // jsDelivrURL converts a raw.githubusercontent.com URL into its jsDelivr CDN
@@ -480,6 +490,13 @@ func loadRepositoryFile(source, filename string) ([]byte, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
+	// A manifest defines executable configuration, so it must not silently be
+	// read from an eventually-consistent CDN snapshot of a moving branch. CDN
+	// files remain a resilience fallback, but GitHub/Gitee's source endpoint
+	// wins whenever it is reachable.
+	if filename == "package.json" {
+		candidates = preferAuthoritativeManifestCandidates(candidates)
+	}
 	client := systemnetwork.DefaultClient(10 * time.Second)
 	for _, candidate := range candidates {
 		response, fetchErr := httpcache.Get(client, candidate, 10*time.Minute)
@@ -489,6 +506,20 @@ func loadRepositoryFile(source, filename string) ([]byte, string, error) {
 		return response.Body, candidate, nil
 	}
 	return nil, "", fmt.Errorf("暂时无法读取在线文档")
+}
+
+func preferAuthoritativeManifestCandidates(candidates []string) []string {
+	primary := make([]string, 0, len(candidates))
+	fallback := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		parsed, err := url.Parse(candidate)
+		if err == nil && parsed.Host == "cdn.jsdelivr.net" {
+			fallback = append(fallback, candidate)
+			continue
+		}
+		primary = append(primary, candidate)
+	}
+	return append(primary, fallback...)
 }
 
 // repositoryFileCandidates keeps a catalog URL's file or directory context.

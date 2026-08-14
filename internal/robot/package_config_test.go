@@ -118,6 +118,36 @@ func TestSaveScopedConnectionMigratesLegacyKey(t *testing.T) {
 	}
 }
 
+func TestOfficialModuleConfigurationUsesUnscopedNamespace(t *testing.T) {
+	root := t.TempDir()
+	writeWebViewFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
+	writeWebViewFixture(t, filepath.Join(root, "node_modules", "@alemonjs", "db", "package.json"), `{
+  "name":"@alemonjs/db",
+  "alemonjs":{"config":[{"name":"db","type":"object","config":[{"name":"redis","type":"object","config":[{"name":"host","type":"string"}]}]}]}
+}`)
+	writeWebViewFixture(t, filepath.Join(root, "alemon.config.yaml"), "db:\n  redis:\n    host: localhost\n")
+
+	config, err := (Manager{}).PackageConfig(root, "@alemonjs/db")
+	if err != nil {
+		t.Fatalf("PackageConfig: %v", err)
+	}
+	if config.Namespace != "db" {
+		t.Fatalf("namespace = %q, want db", config.Namespace)
+	}
+	if _, err = (Manager{}).SavePackageConfig(root, "@alemonjs/db", map[string]any{
+		"db": map[string]any{"redis": map[string]any{"host": "127.0.0.1"}},
+	}); err != nil {
+		t.Fatalf("SavePackageConfig: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "alemon.config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "@alemonjs/db") || !strings.Contains(string(data), "db:") {
+		t.Fatalf("module configuration must use db key:\n%s", data)
+	}
+}
+
 // TestConfigValuesSurviveWindowsBOM covers a UTF-8 byte-order mark written by
 // Windows editors. The BOM must not turn the first section key into an
 // unmatchable value, otherwise required fields always look empty.

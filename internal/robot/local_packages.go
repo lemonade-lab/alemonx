@@ -76,27 +76,45 @@ func installLocalPackage(root, source string) (Result, error) {
 // unpacked into packages/: Yarn owns node_modules and package.json so the
 // selected adapter can participate in the robot runtime.
 func installConnectionPackage(root, source string) (Result, error) {
+	return installProjectDependency(root, source, "连接")
+}
+
+func removeConnectionPackage(root, source string) (Result, error) {
+	return removeProjectDependency(root, source, "连接")
+}
+
+// JS modules run with the robot project just like connection packages, but do
+// not declare a platform or participate in login selection.
+func installModulePackage(root, source string) (Result, error) {
+	return installProjectDependency(root, source, "模块")
+}
+
+func removeModulePackage(root, source string) (Result, error) {
+	return removeProjectDependency(root, source, "模块")
+}
+
+func installProjectDependency(root, source, kind string) (Result, error) {
 	manager, args, err := connectionPackageCommand(root, "add", source)
 	if err != nil {
 		return Result{}, err
 	}
 	output, err := runNamedPackageManager(root, manager, args...)
 	if err != nil {
-		return Result{Path: root, Output: output}, fmt.Errorf("安装连接包失败：%w", err)
+		return Result{Path: root, Output: output}, fmt.Errorf("安装%s包失败：%w", kind, err)
 	}
-	return Result{Path: root, Output: "已添加连接依赖 " + source + "。\n" + output}, nil
+	return Result{Path: root, Output: "已添加" + kind + "依赖 " + source + "。\n" + output}, nil
 }
 
-func removeConnectionPackage(root, source string) (Result, error) {
+func removeProjectDependency(root, source, kind string) (Result, error) {
 	manager, args, err := connectionPackageCommand(root, "remove", source)
 	if err != nil {
 		return Result{}, err
 	}
 	output, err := runNamedPackageManager(root, manager, args...)
 	if err != nil {
-		return Result{Path: root, Output: output}, fmt.Errorf("卸载连接包失败：%w", err)
+		return Result{Path: root, Output: output}, fmt.Errorf("卸载%s包失败：%w", kind, err)
 	}
-	return Result{Path: root, Output: "已移除连接依赖 " + source + "。\n" + output}, nil
+	return Result{Path: root, Output: "已移除" + kind + "依赖 " + source + "。\n" + output}, nil
 }
 
 // connectionPackageCommand follows the project itself: package.json's

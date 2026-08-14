@@ -1913,6 +1913,60 @@ button {
  * overlay and keeps the message surface usable at narrow widths. */
 .qq-live-backdrop { display: none; }
 .qq-live-sidebar-closed .qq-live-sidebar { display: none; }
+.qq-live-profile-backdrop { background: rgb(15 23 42 / 0.28); }
+.qq-live-profile-drawer {
+  box-shadow: -12px 0 28px rgb(15 23 42 / 0.16);
+  animation: qq-live-profile-drawer-in 160ms ease-out;
+}
+.qq-live-profile-drawer.qq-live-profile-drawer-docked {
+  animation: none;
+  box-shadow: none;
+}
+@keyframes qq-live-profile-drawer-in {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+.qq-live-shell .qq9-text-input {
+  appearance: none;
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  outline: 0 !important;
+}
+.qq-live-shell .qq9-text-input::placeholder { color: var(--theme-text-faint); }
+.qq9-copyable-value { cursor: default; }
+.qq9-copyable-tooltip {
+  align-items: flex-start;
+  background: var(--theme-surface-panel);
+  border: 1px solid var(--theme-border-strong);
+  border-radius: 8px;
+  box-shadow: var(--theme-shadow-pop);
+  color: var(--theme-text-primary);
+  display: flex;
+  font-size: 11px;
+  gap: 8px;
+  left: 50%;
+  max-width: min(320px, calc(100vw - 24px));
+  min-width: 180px;
+  padding: 8px;
+  position: absolute;
+  top: 100%;
+  transform: translateX(-50%);
+  width: max-content;
+  z-index: 70;
+}
+.qq9-copyable-tooltip button {
+  background: var(--theme-surface-hover);
+  border: 0;
+  border-radius: 5px;
+  color: var(--theme-accent-text);
+  cursor: pointer;
+  flex: 0 0 auto;
+  font: inherit;
+  padding: 4px 6px;
+}
+.qq9-copyable-tooltip button:hover { background: var(--theme-accent-soft); }
 .qq9-mention-chip { background: var(--theme-accent-soft); border-radius: 4px; color: var(--theme-accent-soft-text); font: inherit; padding: 0 3px; }.qq9-message-badge,.qq9-reaction-chip { display: inline-flex; align-items: center; border: 1px solid var(--theme-accent-soft-border); border-radius: 999px; color: var(--theme-accent-soft-text); font-size: 10px; margin-top: 4px; padding: 2px 6px; }.qq9-reaction-chip { background: var(--theme-accent-soft); cursor: pointer; }
 .qq9-popover-menu,.qq9-mention-menu { background: var(--theme-surface-panel); border: 1px solid var(--theme-border-strong); border-radius: 8px; box-shadow: var(--theme-shadow-pop); display: grid; gap: 2px; min-width: 136px; padding: 4px; position: absolute; z-index: 20; }
 .qq9-popover-menu button,.qq9-mention-menu button { background: transparent; border: 0; border-radius: 5px; color: var(--theme-text-secondary); cursor: pointer; font-size: 11px; padding: 7px 8px; text-align: left; white-space: nowrap; }
@@ -1932,7 +1986,7 @@ button {
   .qq-live-profile-drawer {
     bottom: 0;
     box-shadow: -12px 0 28px rgb(15 23 42 / .16);
-    display: block !important;
+    display: flex !important;
     position: absolute;
     right: 0;
     top: 0;

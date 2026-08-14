@@ -73,6 +73,24 @@ func TestRepositoryFileCandidatesPreferJsDelivr(t *testing.T) {
 	}
 }
 
+func TestPackageManifestCandidatesPreferAuthoritativeRepository(t *testing.T) {
+	parsed, err := url.Parse("https://github.com/lemonade-lab/alemonjs/tree/main/packages-ex/db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidates, err := repositoryFileCandidates(parsed, "package.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ordered := preferAuthoritativeManifestCandidates(candidates)
+	if len(ordered) == 0 || strings.Contains(ordered[0], "cdn.jsdelivr.net") {
+		t.Fatalf("manifest must prefer its source repository, got %v", ordered)
+	}
+	if !strings.Contains(strings.Join(ordered, " "), "cdn.jsdelivr.net") {
+		t.Fatalf("CDN fallback must remain available, got %v", ordered)
+	}
+}
+
 func TestGitTagHigherPrefersNewestSemanticTag(t *testing.T) {
 	if !gitTagHigher("v2.1.0", "v1.99.0") {
 		t.Fatal("newer semantic tag should sort first")
@@ -113,6 +131,19 @@ func TestCatalogUsesDescriptionHeaderInsteadOfSecondColumn(t *testing.T) {
 	}
 	if got := groups[0].Items[0].Name; got != "@alemonjs/discord" {
 		t.Fatalf("name = %q, want unbracketed package name", got)
+	}
+}
+
+func TestModuleCatalogAlwaysUsesNPMPackageName(t *testing.T) {
+	item := Item{
+		Name: "jsxp",
+		URL:  "https://github.com/lemonade-lab/lvyjs/tree/main/packages/jsxp",
+	}
+	if got := catalogInstall("modules", item); got != "jsxp" {
+		t.Fatalf("module install target = %q, want npm package name", got)
+	}
+	if got := catalogInstall("apps", item); !strings.HasPrefix(got, "git+") {
+		t.Fatalf("app install target = %q, want git package", got)
 	}
 }
 

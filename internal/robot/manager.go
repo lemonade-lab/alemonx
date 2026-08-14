@@ -1413,6 +1413,16 @@ func (m Manager) Run(root, action, message, packageName, version, tag, token str
 			return Result{}, errors.New("连接包名无效")
 		}
 		return removeConnectionPackage(root, packageName)
+	case "install-module":
+		if !allowedInstallPackage(packageName) {
+			return Result{}, errors.New("模块包名无效")
+		}
+		return installModulePackage(root, packageName)
+	case "uninstall-module":
+		if !allowedPackage(packageName) {
+			return Result{}, errors.New("模块包名无效")
+		}
+		return removeModulePackage(root, packageName)
 	case "git-init":
 		if _, err := run(root, "git", "init"); err != nil {
 			return Result{}, err

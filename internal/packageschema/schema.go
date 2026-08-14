@@ -158,13 +158,17 @@ func validateFields(fields []Field) error {
 }
 
 // ResolveNamespace returns the top-level YAML section key for this package's
-// configuration. Connection packages prefer the short desktop.platform name
-// (onebot), anything else falls back to the package name itself.
+// configuration. Official @alemonjs/* packages always use their unscoped
+// name (for example @alemonjs/db writes db:). A desktop.platform name can
+// still provide the same short key for connection packages.
 func (d *Declaration) ResolveNamespace() string {
 	namespace := d.Name
 	baseName := d.Name
 	if slash := strings.LastIndex(baseName, "/"); slash >= 0 {
 		baseName = baseName[slash+1:]
+	}
+	if strings.HasPrefix(d.Name, "@alemonjs/") && baseName != "" {
+		namespace = baseName
 	}
 	for _, platform := range d.Desktop.Platforms {
 		if !yamlNamePattern.MatchString(platform.Name) {

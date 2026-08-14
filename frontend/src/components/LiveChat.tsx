@@ -1,14 +1,20 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
-  Bell,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState
+} from 'react'
+import {
   Bot,
-  CheckCircle2,
-  CircleAlert,
+  Bell,
   ContactRound,
   FileImage,
   Heart,
   History,
   Loader2,
+  Menu,
   MessageCircle,
   Paperclip,
   Search,
@@ -24,7 +30,6 @@ import {
   isActionAvailable,
   qqActionCatalog,
   type QQActionDefinition,
-  type QQActionField,
   type QQScope
 } from './qqActionCatalog'
 import {
@@ -80,6 +85,12 @@ type Conversation = {
   lastEvent?: LiveEvent
   updatedAt: number
   synthetic?: boolean
+}
+type SystemNotification = {
+  id: string
+  title: string
+  message: string
+  createdAt: number
 }
 type ActionResult = { code?: number; message?: string; data?: unknown }
 type ActionState = 'success' | 'warning' | 'failed' | 'timeout' | 'cancelled'
@@ -270,7 +281,8 @@ function contactFromEvent(event: LiveEvent): QQContact | undefined {
     id: `user:${userID}`,
     label: event.UserName || userID,
     avatar: event.UserAvatar,
-    source: event.name === 'private.message.create' ? 'private' : 'conversation',
+    source:
+      event.name === 'private.message.create' ? 'private' : 'conversation',
     lastInteractionAt: event.CreateAt || Date.now()
   }
 }
@@ -280,7 +292,15 @@ type QQIdentity = { name: string; avatar?: string }
 function identityRecord(data: unknown) {
   const record = resultItems(data)[0]
   if (!record) return undefined
-  for (const key of ['data', 'bot', 'user', 'profile', 'group', 'guild', 'channel']) {
+  for (const key of [
+    'data',
+    'bot',
+    'user',
+    'profile',
+    'group',
+    'guild',
+    'channel'
+  ]) {
     const nested = record[key]
     if (nested && typeof nested === 'object' && !Array.isArray(nested))
       return nested as Record<string, unknown>
@@ -467,12 +487,6 @@ function redact(value: unknown): unknown {
   )
 }
 
-function getFormValue(values: Record<string, unknown>, field: QQActionField) {
-  const value = values[field.key]
-  if (field.kind === 'boolean') return Boolean(value)
-  return typeof value === 'string' ? value : ''
-}
-
 async function fileData(file: File) {
   const bytes = await file.arrayBuffer()
   let text = ''
@@ -616,6 +630,7 @@ export function LiveChat({ root }: { root: string }) {
   const [error, setError] = useState('')
   const [events, setEvents] = useState<LiveEvent[]>([])
   const [selected, setSelected] = useState('')
+  const selectedConversationRef = useRef('')
   const [text, setText] = useState('')
   const [drafts, setDrafts] = useState<Record<string, string>>({})
   const [attachment, setAttachment] = useState<File | null>(null)
@@ -627,6 +642,7 @@ export function LiveChat({ root }: { root: string }) {
   const [historyReadyRoot, setHistoryReadyRoot] = useState('')
   const [activeNav, setActiveNav] = useState<
     | 'messages'
+    | 'notifications'
     | 'contacts'
     | 'spaces'
     | 'favorites'
@@ -635,12 +651,20 @@ export function LiveChat({ root }: { root: string }) {
     | 'audit'
     | 'settings'
   >('messages')
+  const [systemNotifications, setSystemNotifications] = useState<
+    SystemNotification[]
+  >([])
+  const [unreadConversationIDs, setUnreadConversationIDs] = useState<
+    Record<string, true>
+  >({})
   const [rightOpen, setRightOpen] = useState(true)
   const [search, setSearch] = useState('')
   const [favorites, setFavorites] = useState<QQFavorite[]>([])
   const [contacts, setContacts] = useState<QQContact[]>([])
   const [spaces, setSpaces] = useState<QQSpace[]>([])
-  const [openedConversationIDs, setOpenedConversationIDs] = useState<string[]>([])
+  const [openedConversationIDs, setOpenedConversationIDs] = useState<string[]>(
+    []
+  )
   const [preferences, setPreferences] = useState<QQChatPreferences>({
     density: 'comfortable',
     fontSize: 'medium',
@@ -653,12 +677,24 @@ export function LiveChat({ root }: { root: string }) {
   const [profile, setProfile] = useState<ProfileState>({ status: 'idle' })
   const [members, setMembers] = useState<ProfileState>({ status: 'idle' })
   const [roles, setRoles] = useState<ProfileState>({ status: 'idle' })
-  const [groupBotState, setGroupBotState] = useState<ProfileState>({ status: 'idle' })
-  const [groupMuteSetting, setGroupMuteSetting] = useState<ProfileState>({ status: 'idle' })
-  const [joinRequests, setJoinRequests] = useState<ProfileState>({ status: 'idle' })
-  const [botProfile, setBotProfile] = useState<UserProfileState>({ status: 'idle' })
-  const [userProfile, setUserProfile] = useState<UserProfileState>({ status: 'idle' })
-  const [decorations, setDecorations] = useState<Record<string, MessageDecoration>>({})
+  const [groupBotState, setGroupBotState] = useState<ProfileState>({
+    status: 'idle'
+  })
+  const [groupMuteSetting, setGroupMuteSetting] = useState<ProfileState>({
+    status: 'idle'
+  })
+  const [joinRequests, setJoinRequests] = useState<ProfileState>({
+    status: 'idle'
+  })
+  const [botProfile, setBotProfile] = useState<UserProfileState>({
+    status: 'idle'
+  })
+  const [userProfile, setUserProfile] = useState<UserProfileState>({
+    status: 'idle'
+  })
+  const [decorations, setDecorations] = useState<
+    Record<string, MessageDecoration>
+  >({})
   const [typing, setTyping] = useState(false)
   const typingTimer = useRef<number | null>(null)
   const [connectionAttempt, setConnectionAttempt] = useState(0)
@@ -667,6 +703,38 @@ export function LiveChat({ root }: { root: string }) {
     () => profileIdentity(botProfile.data, { name: '机器人' }),
     [botProfile.data]
   )
+
+  const addSystemNotification = useCallback(
+    (title: string, message: string) => {
+      setSystemNotifications(current => [
+        {
+          id: crypto.randomUUID(),
+          title,
+          message,
+          createdAt: Date.now()
+        },
+        ...current
+      ].slice(0, 50))
+    },
+    []
+  )
+
+  useEffect(() => {
+    selectedConversationRef.current = selected
+    if (selected)
+      setUnreadConversationIDs(current => {
+        if (!current[selected]) return current
+        const next = { ...current }
+        delete next[selected]
+        return next
+      })
+  }, [selected])
+
+  useEffect(() => {
+    if (!error) return
+    addSystemNotification('系统提醒', error)
+    setError('')
+  }, [addSystemNotification, error])
 
   const cleanupUpload = useCallback(
     async (upload: Upload) => {
@@ -718,6 +786,8 @@ export function LiveChat({ root }: { root: string }) {
     setSpaces([])
     setOpenedConversationIDs([])
     setOpenedConversations([])
+    setSystemNotifications([])
+    setUnreadConversationIDs({})
     setBotProfile({ status: 'idle' })
     setUserProfile({ status: 'idle' })
     try {
@@ -738,11 +808,10 @@ export function LiveChat({ root }: { root: string }) {
         setSpaces(parsed.spaces || [])
         setOpenedConversationIDs(parsed.openedConversationIds || [])
         setPreferences(parsed.preferences)
-        // “会话资料” used to be a persistent left-side navigation state.
-        // Keep that legacy preference from reopening the chat into a detail
-        // pane; on desktop details now belong in the explicit right drawer.
+        // “会话资料”和“机器人能力”曾是持久化的侧栏页。
+        // 聊天窗口现在只保留社交场景中的操作，旧状态回到消息页。
         setActiveNav(
-          parsed.preferences.activeNav === 'profile'
+          ['profile', 'tools'].includes(parsed.preferences.activeNav)
             ? 'messages'
             : parsed.preferences.activeNav
         )
@@ -905,21 +974,38 @@ export function LiveChat({ root }: { root: string }) {
           payload.protocol === 'cbp' && payload.type === 'event'
             ? body?.event
             : undefined
-        if (event && isMessage(event))
-          setEvents(current => [
-            ...current.slice(-499),
-            { ...event, context: event }
-          ])
+        if (event && isMessage(event)) {
+          const received = { ...event, context: event }
+          setEvents(current => [...current.slice(-499), received])
+          const receivedConversationID = conversationID(received)
+          if (
+            !isBotMessage(received) &&
+            receivedConversationID !== selectedConversationRef.current
+          )
+            setUnreadConversationIDs(current => ({
+              ...current,
+              [receivedConversationID]: true
+            }))
+        }
       } catch {
         setError('收到无法识别的 QQ Bot 响应，操作未被标记为成功。')
       }
     }
-    connection.onerror = () =>
-      !closed && setError('无法连接到已登录机器人的 CBP 服务。')
+    let disconnectReported = false
+    const reportDisconnect = (message: string) => {
+      if (disconnectReported) return
+      disconnectReported = true
+      addSystemNotification('QQ Bot 当前未连接', message)
+    }
+    connection.onerror = () => {
+      if (closed) return
+      setState('failed')
+      reportDisconnect('无法连接到已登录机器人的 CBP 服务。')
+    }
     connection.onclose = event => {
       if (closed) return
       setState('failed')
-      setError(event.reason || '在线连接已断开。请确认机器人仍在运行。')
+      reportDisconnect(event.reason || '在线连接已断开。请确认机器人仍在运行。')
     }
     return () => {
       closed = true
@@ -930,7 +1016,7 @@ export function LiveChat({ root }: { root: string }) {
       connection.close(1000, 'window closed')
       if (socket.current === connection) socket.current = null
     }
-  }, [connectionAttempt, resolvePending, root])
+  }, [addSystemNotification, connectionAttempt, resolvePending, root])
 
   const reconnect = useCallback(() => {
     setError('')
@@ -944,7 +1030,8 @@ export function LiveChat({ root }: { root: string }) {
       const target = conversationTarget(event)
       if (target.endsWith(':')) continue
       const id = conversationID(event)
-      const privateChat = target.startsWith('c2c:') || target.startsWith('direct:')
+      const privateChat =
+        target.startsWith('c2c:') || target.startsWith('direct:')
       // New people are collected as contacts, but a private thread is only
       // created after the user explicitly opens that person from their avatar
       // or the contacts list.
@@ -954,22 +1041,20 @@ export function LiveChat({ root }: { root: string }) {
       // identifies the person / group / channel. Resolve that identity from
       // the local directory so an outgoing message cannot turn a chat into
       // a conversation named “机器人”.
-      const knownContact =
-        privateChat
-          ? contacts.find(
-              item =>
-                item.id ===
-                `user:${event.UserId || event.OpenId?.replace(/^C2C:/, '') || ''}`
-            )
-          : undefined
-      const knownSpace =
-        !privateChat
-          ? spaces.find(
-              item =>
-                item.id ===
-                `channel:${qqTarget(event).scope}:${qqTarget(event).targetId}`
-            )
-          : undefined
+      const knownContact = privateChat
+        ? contacts.find(
+            item =>
+              item.id ===
+              `user:${event.UserId || event.OpenId?.replace(/^C2C:/, '') || ''}`
+          )
+        : undefined
+      const knownSpace = !privateChat
+        ? spaces.find(
+            item =>
+              item.id ===
+              `channel:${qqTarget(event).scope}:${qqTarget(event).targetId}`
+          )
+        : undefined
       const identityEvent = knownContact
         ? {
             ...event,
@@ -1086,7 +1171,8 @@ export function LiveChat({ root }: { root: string }) {
   // A social inbox should open on the most recent thread.  The message column
   // itself is bottom-anchored, so this does not rely on an imperative scroll.
   useEffect(() => {
-    if (!selected && allConversations.length) setSelected(allConversations[0].id)
+    if (!selected && allConversations.length)
+      setSelected(allConversations[0].id)
   }, [allConversations, selected])
 
   const currentConversation = allConversations.find(
@@ -1176,8 +1262,7 @@ export function LiveChat({ root }: { root: string }) {
   )
 
   const requestAutoRead = useCallback(() => {
-    if (socket.current?.readyState !== WebSocket.OPEN)
-      return
+    if (socket.current?.readyState !== WebSocket.OPEN) return
     const request = (action: 'me.info' | 'me.guilds' | 'guild.list') => {
       const definition = qqActionCatalog.find(item => item.id === action)
       if (!definition) return
@@ -1214,6 +1299,8 @@ export function LiveChat({ root }: { root: string }) {
 
   const uploadFile = useCallback(
     async (file: File) => {
+      if (file.size === 0)
+        throw new Error('所选文件为空，请重新选择后发送。')
       const body = new FormData()
       body.append('root', root)
       body.append('deviceId', deviceID)
@@ -1257,11 +1344,13 @@ export function LiveChat({ root }: { root: string }) {
                 ? 'message.send.channel'
                 : 'message.send.target'
       const format = [
-        ...(value ? messageFormat(value, contacts) : []),
+        ...(value ? messageFormat(value, target.scope === 'group' ? contacts : []) : []),
         ...(upload
           ? [
               {
-                type: attachment?.type.startsWith('image/') ? 'Image' : 'File',
+                type: attachment?.type.startsWith('image/')
+                  ? 'ImageFile'
+                  : 'File',
                 value: upload.path,
                 name: fileName
               }
@@ -1368,35 +1457,94 @@ export function LiveChat({ root }: { root: string }) {
     [callAction, isQQ]
   )
 
-  const decorateMessage = useCallback((event: LiveEvent, action: 'message.pin' | 'message.unpin' | 'reaction.add' | 'reaction.remove', emoji = '👍') => {
-    if (!isQQ || !event.serverMessageID || !event.context || qqTarget(event.context).scope !== 'channel') return
-    const target = qqTarget(event.context)
-    const input = action.startsWith('reaction.')
-      ? { event: event.context, target, MessageId: event.serverMessageID, EmojiId: emoji }
-      : { event: event.context, target, MessageId: event.serverMessageID }
-    callAction(action, input, {
-      kind: 'tool', action, target: `${scopeName(target.scope)} ${target.targetId}`,
-      onResult: (_results, state) => {
-        if (state !== 'success') return
-        setDecorations(current => {
-          const previous = current[event.MessageId || event.serverMessageID || ''] || {}
-          const reactions = new Set(previous.reactions || [])
-          if (action === 'reaction.add') reactions.add(emoji)
-          if (action === 'reaction.remove') reactions.delete(emoji)
-          return { ...current, [event.MessageId || event.serverMessageID || '']: { pinned: action === 'message.pin' ? true : action === 'message.unpin' ? false : previous.pinned, reactions: [...reactions] } }
-        })
-      }
-    })
-  }, [callAction, isQQ])
+  const decorateMessage = useCallback(
+    (
+      event: LiveEvent,
+      action:
+        'message.pin' | 'message.unpin' | 'reaction.add' | 'reaction.remove',
+      emoji = '👍'
+    ) => {
+      if (
+        !isQQ ||
+        !event.serverMessageID ||
+        !event.context ||
+        qqTarget(event.context).scope !== 'channel'
+      )
+        return
+      const target = qqTarget(event.context)
+      const input = action.startsWith('reaction.')
+        ? {
+            event: event.context,
+            target,
+            MessageId: event.serverMessageID,
+            EmojiId: emoji
+          }
+        : { event: event.context, target, MessageId: event.serverMessageID }
+      callAction(action, input, {
+        kind: 'tool',
+        action,
+        target: `${scopeName(target.scope)} ${target.targetId}`,
+        onResult: (_results, state) => {
+          if (state !== 'success') return
+          setDecorations(current => {
+            const previous =
+              current[event.MessageId || event.serverMessageID || ''] || {}
+            const reactions = new Set(previous.reactions || [])
+            if (action === 'reaction.add') reactions.add(emoji)
+            if (action === 'reaction.remove') reactions.delete(emoji)
+            return {
+              ...current,
+              [event.MessageId || event.serverMessageID || '']: {
+                pinned:
+                  action === 'message.pin'
+                    ? true
+                    : action === 'message.unpin'
+                      ? false
+                      : previous.pinned,
+                reactions: [...reactions]
+              }
+            }
+          })
+        }
+      })
+    },
+    [callAction, isQQ]
+  )
 
-  const notifyTyping = useCallback((value: string) => {
-    if (!value || !currentEvent || !isQQ || qqTarget(currentEvent).scope !== 'c2c' || typing || socket.current?.readyState !== WebSocket.OPEN) return
-    setTyping(true)
-    const target = qqTarget(currentEvent)
-    callAction('message.input.notify', { event: currentEvent.context ?? currentEvent, target, params: { input_type: 1, input_second: 5 } }, { kind: 'typing', action: 'message.input.notify', target: `${scopeName(target.scope)} ${target.targetId}`, onResult: (_results, state, summary) => { if (state !== 'success') setError(`输入状态未能同步：${summary}`) } })
-    if (typingTimer.current) window.clearTimeout(typingTimer.current)
-    typingTimer.current = window.setTimeout(() => setTyping(false), 4_000)
-  }, [callAction, currentEvent, isQQ, typing])
+  const notifyTyping = useCallback(
+    (value: string) => {
+      if (
+        !value ||
+        !currentEvent ||
+        !isQQ ||
+        qqTarget(currentEvent).scope !== 'c2c' ||
+        typing ||
+        socket.current?.readyState !== WebSocket.OPEN
+      )
+        return
+      setTyping(true)
+      const target = qqTarget(currentEvent)
+      callAction(
+        'message.input.notify',
+        {
+          event: currentEvent.context ?? currentEvent,
+          target,
+          params: { input_type: 1, input_second: 5 }
+        },
+        {
+          kind: 'typing',
+          action: 'message.input.notify',
+          target: `${scopeName(target.scope)} ${target.targetId}`,
+          onResult: (_results, state, summary) => {
+            if (state !== 'success') setError(`输入状态未能同步：${summary}`)
+          }
+        }
+      )
+      if (typingTimer.current) window.clearTimeout(typingTimer.current)
+      typingTimer.current = window.setTimeout(() => setTyping(false), 4_000)
+    },
+    [callAction, currentEvent, isQQ, typing]
+  )
 
   const executeToolConfirmed = useCallback(async () => {
     if (!activeDefinition) return
@@ -1696,15 +1844,35 @@ export function LiveChat({ root }: { root: string }) {
                 setContacts(current =>
                   mergeDirectory(
                     current,
-                    [{ id: `user:${userID}`, label: identity.name, avatar: identity.avatar, source: 'member', lastInteractionAt: Date.now() }],
+                    [
+                      {
+                        id: `user:${userID}`,
+                        label: identity.name,
+                        avatar: identity.avatar,
+                        source: 'member',
+                        lastInteractionAt: Date.now()
+                      }
+                    ],
                     item => item.id,
                     item => item.lastInteractionAt
                   )
                 )
-                setUserProfile({ status: 'ready', data: results[0]?.data, label: identity.name, userID, updatedAt: Date.now() })
+                setUserProfile({
+                  status: 'ready',
+                  data: results[0]?.data,
+                  label: identity.name,
+                  userID,
+                  updatedAt: Date.now()
+                })
                 return
               }
-              setUserProfile({ status: nextState === 'timeout' ? 'failed' : 'unavailable', message: summary, label: event.UserName || userID, userID, updatedAt: Date.now() })
+              setUserProfile({
+                status: nextState === 'timeout' ? 'failed' : 'unavailable',
+                message: summary,
+                label: event.UserName || userID,
+                userID,
+                updatedAt: Date.now()
+              })
             }
           }
         )
@@ -1743,15 +1911,35 @@ export function LiveChat({ root }: { root: string }) {
                 setContacts(current =>
                   mergeDirectory(
                     current,
-                    [{ id: `user:${userID}`, label: identity.name, avatar: identity.avatar, source: 'member', lastInteractionAt: Date.now() }],
+                    [
+                      {
+                        id: `user:${userID}`,
+                        label: identity.name,
+                        avatar: identity.avatar,
+                        source: 'member',
+                        lastInteractionAt: Date.now()
+                      }
+                    ],
                     item => item.id,
                     item => item.lastInteractionAt
                   )
                 )
-                setUserProfile({ status: 'ready', data: results[0]?.data, label: identity.name, userID, updatedAt: Date.now() })
+                setUserProfile({
+                  status: 'ready',
+                  data: results[0]?.data,
+                  label: identity.name,
+                  userID,
+                  updatedAt: Date.now()
+                })
                 return
               }
-              setUserProfile({ status: nextState === 'timeout' ? 'failed' : 'unavailable', message: summary, label: event.UserName || userID, userID, updatedAt: Date.now() })
+              setUserProfile({
+                status: nextState === 'timeout' ? 'failed' : 'unavailable',
+                message: summary,
+                label: event.UserName || userID,
+                userID,
+                updatedAt: Date.now()
+              })
             }
           }
         )
@@ -1775,69 +1963,209 @@ export function LiveChat({ root }: { root: string }) {
   )
 
   const refreshChannelList = useCallback(() => {
-    if (!currentEvent || !isQQ || !['channel', 'direct'].includes(qqTarget(currentEvent).scope)) return
+    if (
+      !currentEvent ||
+      !isQQ ||
+      !['channel', 'direct'].includes(qqTarget(currentEvent).scope)
+    )
+      return
     const definition = qqActionCatalog.find(item => item.id === 'channel.list')
     if (!definition) return
-    callAction(definition.id, valuesToInput(definition, initialValues(definition, currentEvent), currentEvent), { kind: 'profile', action: definition.id, target: `${scopeName(qqTarget(currentEvent).scope)} ${qqTarget(currentEvent).targetId}` })
+    callAction(
+      definition.id,
+      valuesToInput(
+        definition,
+        initialValues(definition, currentEvent),
+        currentEvent
+      ),
+      {
+        kind: 'profile',
+        action: definition.id,
+        target: `${scopeName(qqTarget(currentEvent).scope)} ${qqTarget(currentEvent).targetId}`
+      }
+    )
   }, [callAction, currentEvent, isQQ])
 
-  const manageMember = useCallback((userID: string, actionID: 'member.info' | 'member.mute' | 'member.ban' | 'member.kick' | 'permission.get' | 'permission.set' | 'role.assign' | 'role.remove') => {
-    const definition = qqActionCatalog.find(item => item.id === actionID)
-    if (!definition) return
-    setActiveAction(actionID)
-    setFormValues({ ...initialValues(definition, currentEvent), UserId: userID, userId: userID })
-    setActiveNav('tools')
-    setRightOpen(true)
-  }, [currentEvent])
+  const manageMember = useCallback(
+    (
+      userID: string,
+      actionID:
+        | 'member.info'
+        | 'member.mute'
+        | 'member.ban'
+        | 'member.kick'
+        | 'permission.get'
+        | 'permission.set'
+        | 'role.assign'
+        | 'role.remove'
+    ) => {
+      const definition = qqActionCatalog.find(item => item.id === actionID)
+      if (!definition) return
+      setActiveAction(actionID)
+      setFormValues({
+        ...initialValues(definition, currentEvent),
+        UserId: userID,
+        userId: userID
+      })
+      setActiveNav('tools')
+      setRightOpen(true)
+    },
+    [currentEvent]
+  )
 
-  const manageRole = useCallback((roleID: string, actionID: 'role.create' | 'role.update' | 'role.delete') => {
-    const definition = qqActionCatalog.find(item => item.id === actionID)
-    if (!definition) return
-    setActiveAction(actionID)
-    setFormValues({ ...initialValues(definition, currentEvent), ...(roleID ? { RoleId: roleID } : {}) })
-    setActiveNav('tools')
-    setRightOpen(true)
-  }, [currentEvent])
+  const manageRole = useCallback(
+    (
+      roleID: string,
+      actionID: 'role.create' | 'role.update' | 'role.delete'
+    ) => {
+      const definition = qqActionCatalog.find(item => item.id === actionID)
+      if (!definition) return
+      setActiveAction(actionID)
+      setFormValues({
+        ...initialValues(definition, currentEvent),
+        ...(roleID ? { RoleId: roleID } : {})
+      })
+      setActiveNav('tools')
+      setRightOpen(true)
+    },
+    [currentEvent]
+  )
 
   const refreshRoles = useCallback(() => {
-    if (!currentEvent || !isQQ || !['channel', 'direct'].includes(qqTarget(currentEvent).scope)) return
+    if (
+      !currentEvent ||
+      !isQQ ||
+      !['channel', 'direct'].includes(qqTarget(currentEvent).scope)
+    )
+      return
     const definition = qqActionCatalog.find(item => item.id === 'role.list')
     if (!definition) return
     setRoles({ status: 'loading' })
-    const requestID = callAction(definition.id, valuesToInput(definition, initialValues(definition, currentEvent), currentEvent), { kind: 'profile', action: definition.id, target: `${scopeName(qqTarget(currentEvent).scope)} ${qqTarget(currentEvent).targetId}`, onResult: (results, nextState, summary) => setRoles(nextState === 'success' ? { status: 'ready', data: results[0]?.data, updatedAt: Date.now() } : { status: nextState === 'timeout' ? 'failed' : 'unavailable', message: summary, updatedAt: Date.now() }) })
-    if (!requestID) setRoles({ status: 'failed', message: '身份组列表请求未能发出。' })
+    const requestID = callAction(
+      definition.id,
+      valuesToInput(
+        definition,
+        initialValues(definition, currentEvent),
+        currentEvent
+      ),
+      {
+        kind: 'profile',
+        action: definition.id,
+        target: `${scopeName(qqTarget(currentEvent).scope)} ${qqTarget(currentEvent).targetId}`,
+        onResult: (results, nextState, summary) =>
+          setRoles(
+            nextState === 'success'
+              ? {
+                  status: 'ready',
+                  data: results[0]?.data,
+                  updatedAt: Date.now()
+                }
+              : {
+                  status: nextState === 'timeout' ? 'failed' : 'unavailable',
+                  message: summary,
+                  updatedAt: Date.now()
+                }
+          )
+      }
+    )
+    if (!requestID)
+      setRoles({ status: 'failed', message: '身份组列表请求未能发出。' })
   }, [callAction, currentEvent, isQQ])
 
   const refreshGroupManagement = useCallback(() => {
-    if (!currentEvent || !isQQ || qqTarget(currentEvent).scope !== 'group') return
-    const request = (actionID: 'group.botState' | 'group.mute.setting' | 'group.joinRequest.list', setState: React.Dispatch<React.SetStateAction<ProfileState>>) => {
+    if (!currentEvent || !isQQ || qqTarget(currentEvent).scope !== 'group')
+      return
+    const request = (
+      actionID:
+        'group.botState' | 'group.mute.setting' | 'group.joinRequest.list',
+      setState: React.Dispatch<React.SetStateAction<ProfileState>>
+    ) => {
       const definition = qqActionCatalog.find(item => item.id === actionID)
       if (!definition) return
       setState({ status: 'loading' })
-      callAction(actionID, valuesToInput(definition, initialValues(definition, currentEvent), currentEvent), { kind: 'profile', action: actionID, target: `群 ${qqTarget(currentEvent).targetId}`, onResult: (results, nextState, summary) => setState(nextState === 'success' ? { status: 'ready', data: results[0]?.data, updatedAt: Date.now() } : { status: nextState === 'timeout' ? 'failed' : 'unavailable', message: summary, updatedAt: Date.now() }) })
+      callAction(
+        actionID,
+        valuesToInput(
+          definition,
+          initialValues(definition, currentEvent),
+          currentEvent
+        ),
+        {
+          kind: 'profile',
+          action: actionID,
+          target: `群 ${qqTarget(currentEvent).targetId}`,
+          onResult: (results, nextState, summary) =>
+            setState(
+              nextState === 'success'
+                ? {
+                    status: 'ready',
+                    data: results[0]?.data,
+                    updatedAt: Date.now()
+                  }
+                : {
+                    status: nextState === 'timeout' ? 'failed' : 'unavailable',
+                    message: summary,
+                    updatedAt: Date.now()
+                  }
+            )
+        }
+      )
     }
     request('group.botState', setGroupBotState)
     request('group.mute.setting', setGroupMuteSetting)
     request('group.joinRequest.list', setJoinRequests)
   }, [callAction, currentEvent, isQQ])
 
-  const manageJoinRequest = useCallback((item: Record<string, unknown>, approve: boolean) => {
-    const definition = qqActionCatalog.find(action => action.id === 'group.joinRequest.approve')
-    if (!definition) return
-    setActiveAction(definition.id)
-    setFormValues({ ...initialValues(definition, currentEvent), memberOpenId: recordText(item, ['member_openid', 'user_id', 'userId', 'openid']), joinRequestId: recordText(item, ['join_request_id', 'joinRequestId', 'id']), op: approve ? 'approve' : 'decline' })
-    setActiveNav('tools')
-    setRightOpen(true)
-  }, [currentEvent])
+  const manageJoinRequest = useCallback(
+    (item: Record<string, unknown>, approve: boolean) => {
+      const definition = qqActionCatalog.find(
+        action => action.id === 'group.joinRequest.approve'
+      )
+      if (!definition) return
+      setActiveAction(definition.id)
+      setFormValues({
+        ...initialValues(definition, currentEvent),
+        memberOpenId: recordText(item, [
+          'member_openid',
+          'user_id',
+          'userId',
+          'openid'
+        ]),
+        joinRequestId: recordText(item, [
+          'join_request_id',
+          'joinRequestId',
+          'id'
+        ]),
+        op: approve ? 'approve' : 'decline'
+      })
+      setActiveNav('tools')
+      setRightOpen(true)
+    },
+    [currentEvent]
+  )
 
-  const manageChannel = useCallback((channelID: string, actionID: 'channel.create' | 'channel.update' | 'channel.delete' | 'channel.announce') => {
-    const definition = qqActionCatalog.find(item => item.id === actionID)
-    if (!definition) return
-    setActiveAction(actionID)
-    setFormValues({ ...initialValues(definition, currentEvent), ChannelId: channelID, channelId: channelID })
-    setActiveNav('tools')
-    setRightOpen(true)
-  }, [currentEvent])
+  const manageChannel = useCallback(
+    (
+      channelID: string,
+      actionID:
+        | 'channel.create'
+        | 'channel.update'
+        | 'channel.delete'
+        | 'channel.announce'
+    ) => {
+      const definition = qqActionCatalog.find(item => item.id === actionID)
+      if (!definition) return
+      setActiveAction(actionID)
+      setFormValues({
+        ...initialValues(definition, currentEvent),
+        ChannelId: channelID,
+        channelId: channelID
+      })
+      setActiveNav('tools')
+      setRightOpen(true)
+    },
+    [currentEvent]
+  )
 
   useEffect(() => {
     setProfile({ status: 'idle' })
@@ -1894,7 +2222,9 @@ export function LiveChat({ root }: { root: string }) {
     (contact: QQContact) => {
       const conversation = makeDirectConversation(contact)
       setOpenedConversationIDs(current =>
-        current.includes(conversation.id) ? current : [...current, conversation.id]
+        current.includes(conversation.id)
+          ? current
+          : [...current, conversation.id]
       )
       setOpenedConversations(current =>
         mergeDirectory(
@@ -1929,7 +2259,6 @@ export function LiveChat({ root }: { root: string }) {
     },
     [drafts]
   )
-
   const clearAudit = useCallback(() => setTools([]), [])
   const clearHistory = useCallback(() => {
     if (
@@ -1946,6 +2275,8 @@ export function LiveChat({ root }: { root: string }) {
     setSpaces([])
     setOpenedConversationIDs([])
     setOpenedConversations([])
+    setSystemNotifications([])
+    setUnreadConversationIDs({})
     setSelected('')
   }, [root])
   const resetLayout = useCallback(() => {
@@ -1999,9 +2330,11 @@ export function LiveChat({ root }: { root: string }) {
         search={search}
         setSearch={setSearch}
         state={state}
-        error={error}
         reconnect={reconnect}
         conversations={allConversations}
+        systemNotifications={systemNotifications}
+        clearSystemNotifications={() => setSystemNotifications([])}
+        unreadConversationIDs={unreadConversationIDs}
         selected={selected}
         selectConversation={id => {
           setSelected(id)
@@ -2014,18 +2347,18 @@ export function LiveChat({ root }: { root: string }) {
         messages={messages}
         isQQ={isQQ}
         text={text}
-      setText={value => {
-        setText(value)
-        setDrafts(current => ({ ...current, [selected]: value }))
-        notifyTyping(value)
-      }}
+        setText={value => {
+          setText(value)
+          setDrafts(current => ({ ...current, [selected]: value }))
+          notifyTyping(value)
+        }}
         attachment={attachment}
         setAttachment={setAttachment}
         attachmentInput={attachmentInput}
         send={send}
-      deleteMessage={deleteMessage}
-      decorateMessage={decorateMessage}
-      decorations={decorations}
+        deleteMessage={deleteMessage}
+        decorateMessage={decorateMessage}
+        decorations={decorations}
         toggleFavorite={toggleFavorite}
         favorites={favorites}
         contacts={contacts}
@@ -2034,22 +2367,22 @@ export function LiveChat({ root }: { root: string }) {
         setPreferences={setPreferences}
         profile={profile}
         refreshProfile={refreshProfile}
-      members={members}
-      refreshMembers={refreshMembers}
-      botProfile={botProfile}
-      botIdentity={botIdentity}
-      userProfile={userProfile}
-      refreshUserProfile={refreshUserProfile}
-      manageMember={manageMember}
-      manageChannel={manageChannel}
-      roles={roles}
-      refreshRoles={refreshRoles}
-      manageRole={manageRole}
-      groupBotState={groupBotState}
-      groupMuteSetting={groupMuteSetting}
-      joinRequests={joinRequests}
-      manageJoinRequest={manageJoinRequest}
-      groups={groups}
+        members={members}
+        refreshMembers={refreshMembers}
+        botProfile={botProfile}
+        botIdentity={botIdentity}
+        userProfile={userProfile}
+        refreshUserProfile={refreshUserProfile}
+        manageMember={manageMember}
+        manageChannel={manageChannel}
+        roles={roles}
+        refreshRoles={refreshRoles}
+        manageRole={manageRole}
+        groupBotState={groupBotState}
+        groupMuteSetting={groupMuteSetting}
+        joinRequests={joinRequests}
+        manageJoinRequest={manageJoinRequest}
+        groups={groups}
         showUnavailable={showUnavailable}
         setShowUnavailable={setShowUnavailable}
         activeDefinition={activeDefinition}
@@ -2088,6 +2421,7 @@ export function LiveChat({ root }: { root: string }) {
 type QQ9ShellProps = {
   activeNav:
     | 'messages'
+    | 'notifications'
     | 'contacts'
     | 'spaces'
     | 'favorites'
@@ -2098,6 +2432,7 @@ type QQ9ShellProps = {
   setActiveNav: (
     value:
       | 'messages'
+      | 'notifications'
       | 'contacts'
       | 'spaces'
       | 'favorites'
@@ -2111,9 +2446,11 @@ type QQ9ShellProps = {
   search: string
   setSearch: (value: string) => void
   state: 'connecting' | 'connected' | 'failed'
-  error: string
   reconnect: () => void
   conversations: Conversation[]
+  systemNotifications: SystemNotification[]
+  clearSystemNotifications: () => void
+  unreadConversationIDs: Record<string, true>
   selected: string
   selectConversation: (id: string) => void
   currentConversation?: Conversation
@@ -2128,7 +2465,12 @@ type QQ9ShellProps = {
   attachmentInput: React.RefObject<HTMLInputElement | null>
   send: () => Promise<void>
   deleteMessage: (event: LiveEvent) => void
-  decorateMessage: (event: LiveEvent, action: 'message.pin' | 'message.unpin' | 'reaction.add' | 'reaction.remove', emoji?: string) => void
+  decorateMessage: (
+    event: LiveEvent,
+    action:
+      'message.pin' | 'message.unpin' | 'reaction.add' | 'reaction.remove',
+    emoji?: string
+  ) => void
   decorations: Record<string, MessageDecoration>
   toggleFavorite: (event: LiveEvent) => void
   favorites: QQFavorite[]
@@ -2144,11 +2486,32 @@ type QQ9ShellProps = {
   botIdentity: QQIdentity
   userProfile: UserProfileState
   refreshUserProfile: (event: LiveEvent) => void
-  manageMember: (userID: string, actionID: 'member.info' | 'member.mute' | 'member.ban' | 'member.kick' | 'permission.get' | 'permission.set' | 'role.assign' | 'role.remove') => void
-  manageChannel: (channelID: string, actionID: 'channel.create' | 'channel.update' | 'channel.delete' | 'channel.announce') => void
+  manageMember: (
+    userID: string,
+    actionID:
+      | 'member.info'
+      | 'member.mute'
+      | 'member.ban'
+      | 'member.kick'
+      | 'permission.get'
+      | 'permission.set'
+      | 'role.assign'
+      | 'role.remove'
+  ) => void
+  manageChannel: (
+    channelID: string,
+    actionID:
+      | 'channel.create'
+      | 'channel.update'
+      | 'channel.delete'
+      | 'channel.announce'
+  ) => void
   roles: ProfileState
   refreshRoles: () => void
-  manageRole: (roleID: string, actionID: 'role.create' | 'role.update' | 'role.delete') => void
+  manageRole: (
+    roleID: string,
+    actionID: 'role.create' | 'role.update' | 'role.delete'
+  ) => void
   groupBotState: ProfileState
   groupMuteSetting: ProfileState
   joinRequests: ProfileState
@@ -2178,9 +2541,14 @@ function QQ9ChatShell(props: QQ9ShellProps) {
   const [profileOpen, setProfileOpen] = useState(false)
   const [botCardOpen, setBotCardOpen] = useState(false)
   const [conversationInfoOpen, setConversationInfoOpen] = useState(false)
+  const [wideProfile, setWideProfile] = useState(false)
+  const chatShell = useRef<HTMLDivElement | null>(null)
   const messageViewport = useRef<HTMLElement | null>(null)
   const followNewest = useRef(true)
   const conversationID = props.currentConversation?.id
+  const hasConversationProfile = ['group', 'channel'].includes(
+    props.currentScope
+  )
 
   // Follow incoming messages only while the reader is still close to the
   // bottom.  Once they scroll into history, preserve that reading position.
@@ -2211,9 +2579,6 @@ function QQ9ChatShell(props: QQ9ShellProps) {
     ['spaces', '群/频道', UsersRound],
     ['favorites', '收藏', Heart]
   ] as const
-  const workNav = [
-    ['tools', '机器人', Bot]
-  ] as const
   const density = props.preferences.density === 'compact' ? 'py-2' : 'py-3'
   const font =
     props.preferences.fontSize === 'small'
@@ -2231,11 +2596,11 @@ function QQ9ChatShell(props: QQ9ShellProps) {
   const title = (
     {
       messages: '消息',
+      notifications: '通知',
       contacts: '联系人',
       spaces: '群 / 频道',
       favorites: '收藏',
       profile: '会话资料',
-      tools: '机器人能力',
       audit: '操作记录',
       settings: '聊天设置'
     } as Record<string, string>
@@ -2254,19 +2619,38 @@ function QQ9ChatShell(props: QQ9ShellProps) {
     window.addEventListener('keydown', closeOnEscape)
     return () => window.removeEventListener('keydown', closeOnEscape)
   }, [rightOpen, setRightOpen])
+  useEffect(() => {
+    if (!hasConversationProfile) setProfileOpen(false)
+  }, [hasConversationProfile])
+  useLayoutEffect(() => {
+    const shell = chatShell.current
+    if (!shell) return
+    const update = () => setWideProfile(shell.clientWidth >= 1080)
+    update()
+    const observer = new ResizeObserver(update)
+    observer.observe(shell)
+    return () => observer.disconnect()
+  }, [])
   const profilePanel = (
     <QQ9Profile
       event={props.currentEvent}
       members={props.members}
       openContact={props.openContactConversation}
-      mentionContact={contact => props.setText(`${props.text}${props.text && !props.text.endsWith(' ') ? ' ' : ''}@${contact.label} `)}
+      mentionContact={contact =>
+        props.setText(
+          `${props.text}${props.text && !props.text.endsWith(' ') ? ' ' : ''}@${contact.label} `
+        )
+      }
     />
   )
+  const showProfileDrawer =
+    hasConversationProfile && (profileOpen || wideProfile)
   return (
     <div
+      ref={chatShell}
       className={`qq-live-shell qq-live-sidebar-${props.rightOpen ? 'open' : 'closed'} relative grid h-full min-h-0 flex-1 overflow-hidden bg-(--theme-surface-panel) text-(--theme-text-primary) [grid-template-columns:56px_272px_minmax(360px,1fr)] ${props.rightOpen ? '' : '[grid-template-columns:56px_minmax(360px,1fr)]'}`}
       style={
-        profileOpen
+        wideProfile && hasConversationProfile
           ? {
               gridTemplateColumns: props.rightOpen
                 ? '56px 272px minmax(0, 1fr) 320px'
@@ -2281,41 +2665,45 @@ function QQ9ChatShell(props: QQ9ShellProps) {
       >
         <div className="grid w-full gap-1.5">
           {primaryNav.map(([id, label, Icon]) => (
-            <button
-              key={id}
-              className={`flex h-11 w-full flex-col items-center justify-center gap-0.5 rounded-[10px] border-0 bg-transparent text-[9px] text-(--theme-text-muted) transition hover:bg-(--theme-accent-soft) hover:text-(--theme-accent-text) ${props.activeNav === id ? 'bg-(--theme-accent-soft) text-(--theme-accent-text)' : ''}`}
-              aria-label={label}
-              aria-current={props.activeNav === id ? 'page' : undefined}
-              onClick={() => {
-                props.setActiveNav(id)
-                props.setRightOpen(true)
-              }}
-              title={label}
-            >
-              <Icon className="size-[19px]" />
-              <span>{label}</span>
-            </button>
-          ))}
-        </div>
-        <div className="mt-0.5 grid w-full gap-1.5 border-t border-(--theme-border-default) pt-2.5">
-          {workNav.map(([id, label, Icon]) => (
-            <button
-              key={id}
-              className={`flex h-10 w-full flex-col items-center justify-center gap-0.5 rounded-[9px] border-0 bg-transparent text-[9px] text-(--theme-text-muted) transition hover:bg-(--theme-accent-soft) hover:text-(--theme-accent-text) ${props.activeNav === id ? 'bg-(--theme-accent-soft) text-(--theme-accent-text)' : ''}`}
-              aria-label={label}
-              aria-current={props.activeNav === id ? 'page' : undefined}
-              onClick={() => {
-                props.setActiveNav(id)
-                props.setRightOpen(true)
-              }}
-              title={label}
-            >
-              <Icon className="size-[18px]" />
-              <span>{label}</span>
-            </button>
+            <div key={id} className="relative">
+              <button
+                className={`flex h-11 w-full flex-col items-center justify-center gap-0.5 rounded-[10px] border-0 bg-transparent text-[9px] text-(--theme-text-muted) transition hover:bg-(--theme-accent-soft) hover:text-(--theme-accent-text) ${props.activeNav === id ? 'bg-(--theme-accent-soft) text-(--theme-accent-text)' : ''}`}
+                aria-label={label}
+                aria-current={props.activeNav === id ? 'page' : undefined}
+                onClick={() => {
+                  props.setActiveNav(id)
+                  props.setRightOpen(true)
+                }}
+                title={label}
+              >
+                <Icon className="size-[19px]" />
+                <span>{label}</span>
+              </button>
+            </div>
           ))}
         </div>
         <div className="mt-auto grid w-full gap-1.5">
+          <div className="relative">
+            <button
+              className={`flex h-10 w-full flex-col items-center justify-center gap-0.5 rounded-[9px] border-0 bg-transparent text-[9px] text-(--theme-text-muted) transition hover:bg-(--theme-accent-soft) hover:text-(--theme-accent-text) ${props.activeNav === 'notifications' ? 'bg-(--theme-accent-soft) text-(--theme-accent-text)' : ''}`}
+              aria-label="系统通知"
+              aria-current={props.activeNav === 'notifications' ? 'page' : undefined}
+              onClick={() => {
+                props.setActiveNav('notifications')
+                props.setRightOpen(true)
+              }}
+              title="系统通知"
+            >
+              <Bell className="size-[18px]" />
+              <span>通知</span>
+            </button>
+            {props.systemNotifications.length > 0 ? (
+              <span
+                className="pointer-events-none absolute right-1.5 top-1.5 size-2 rounded-full border-2 border-(--theme-surface-raised) bg-rose-500"
+                aria-label={`${props.systemNotifications.length} 条系统通知`}
+              />
+            ) : null}
+          </div>
           <div className="relative justify-self-center">
             <button
               className="inline-flex size-10 items-center justify-center overflow-hidden rounded-full border border-(--theme-border-default) bg-(--theme-surface-active) text-(--theme-text-secondary) transition hover:border-(--theme-accent-soft-border) hover:bg-(--theme-accent-soft) [&_img]:size-full [&_img]:object-cover"
@@ -2333,8 +2721,20 @@ function QQ9ChatShell(props: QQ9ShellProps) {
             <span
               className={`absolute -top-0.5 -right-0.5 size-3 rounded-full border-2 border-(--theme-surface-raised) ${props.state === 'connected' ? 'bg-emerald-500' : props.state === 'connecting' ? 'animate-pulse bg-amber-500' : 'bg-rose-500'}`}
               role="status"
-              aria-label={props.state === 'connected' ? 'QQ Bot 已连接' : props.state === 'connecting' ? '正在连接 QQ Bot' : 'QQ Bot 已断开'}
-              title={props.state === 'connected' ? 'QQ Bot 已连接' : props.state === 'connecting' ? '正在连接 QQ Bot' : 'QQ Bot 已断开'}
+              aria-label={
+                props.state === 'connected'
+                  ? 'QQ Bot 已连接'
+                  : props.state === 'connecting'
+                    ? '正在连接 QQ Bot'
+                    : 'QQ Bot 已断开'
+              }
+              title={
+                props.state === 'connected'
+                  ? 'QQ Bot 已连接'
+                  : props.state === 'connecting'
+                    ? '正在连接 QQ Bot'
+                    : 'QQ Bot 已断开'
+              }
             />
           </div>
           {botCardOpen && (
@@ -2344,16 +2744,37 @@ function QQ9ChatShell(props: QQ9ShellProps) {
             >
               <header className="flex items-center gap-2">
                 <span className="inline-flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-full border border-(--theme-border-default) bg-(--theme-surface-active) [&_img]:size-full [&_img]:object-cover">
-                  {props.botIdentity.avatar ? <img src={props.botIdentity.avatar} alt="" /> : <Bot className="size-4" />}
+                  {props.botIdentity.avatar ? (
+                    <img src={props.botIdentity.avatar} alt="" />
+                  ) : (
+                    <Bot className="size-4" />
+                  )}
                 </span>
                 <span className="min-w-0 flex-1">
-                  <strong className="block truncate text-xs">{props.botIdentity.name}</strong>
-                  <small className="block text-[10px] text-(--theme-text-muted)">当前 QQ Bot</small>
+                  <CopyableText
+                    className="text-xs font-bold"
+                    value={props.botIdentity.name}
+                  />
+                  <small className="block text-[10px] text-(--theme-text-muted)">
+                    当前 QQ Bot
+                  </small>
                 </span>
-                <button className="inline-flex size-6 items-center justify-center rounded-md border-0 bg-transparent text-(--theme-text-muted) hover:bg-(--theme-surface-hover)" onClick={() => setBotCardOpen(false)} aria-label="关闭机器人资料"><X className="size-3.5" /></button>
+                <button
+                  className="inline-flex size-6 items-center justify-center rounded-md border-0 bg-transparent text-(--theme-text-muted) hover:bg-(--theme-surface-hover)"
+                  onClick={() => setBotCardOpen(false)}
+                  aria-label="关闭机器人资料"
+                >
+                  <X className="size-3.5" />
+                </button>
               </header>
               <div className="mt-2 border-t border-(--theme-border-subtle) pt-2 text-[11px] text-(--theme-text-muted)">
-                {props.botProfile.status === 'ready' ? <ProfileRows data={props.botProfile.data} /> : props.botProfile.status === 'loading' ? '正在读取机器人资料…' : props.botProfile.message || '机器人资料将在连接后自动读取。'}
+                {props.botProfile.status === 'ready' ? (
+                  <ProfileRows data={props.botProfile.data} />
+                ) : props.botProfile.status === 'loading' ? (
+                  '正在读取机器人资料…'
+                ) : (
+                  props.botProfile.message || '机器人资料将在连接后自动读取。'
+                )}
               </div>
             </section>
           )}
@@ -2389,7 +2810,7 @@ function QQ9ChatShell(props: QQ9ShellProps) {
           <div className="flex items-center gap-1.5 rounded-lg border border-(--theme-border-subtle) bg-(--theme-surface-raised) px-2 text-(--theme-text-muted) focus-within:border-(--theme-accent-soft-border) focus-within:bg-(--theme-surface-input)">
             <Search className="size-4 shrink-0" />
             <input
-              className="min-w-0 flex-1 border-0 bg-transparent py-2 text-xs text-(--theme-text-primary) outline-none"
+              className="qq9-text-input min-w-0 flex-1 py-2 text-xs text-(--theme-text-primary)"
               value={props.search}
               onChange={event => props.setSearch(event.target.value)}
               placeholder={
@@ -2425,6 +2846,13 @@ function QQ9ChatShell(props: QQ9ShellProps) {
                       <time className="ml-auto shrink-0 text-[10px] text-(--theme-text-muted)">
                         {formatTime(item.updatedAt)}
                       </time>
+                      {props.unreadConversationIDs[item.id] ? (
+                        <span
+                          className="size-2 shrink-0 rounded-full bg-rose-500"
+                          aria-label="有未读消息"
+                          title="有未读消息"
+                        />
+                      ) : null}
                     </span>
                     <small
                       className="mt-0.5 block truncate text-[11px] text-(--theme-text-muted)"
@@ -2441,11 +2869,17 @@ function QQ9ChatShell(props: QQ9ShellProps) {
               ))}
               {!filteredConversations.length ? (
                 <p className="px-2 py-3 text-center text-[11px] leading-relaxed text-(--theme-text-muted)">
-                  QQ 消息到达后，会在本机建立会话。
+                  打开通知、联系人或群 / 频道后，会话会显示在这里。
                 </p>
               ) : null}
             </div>
           </>
+        ) : props.activeNav === 'notifications' ? (
+          <QQ9Notifications
+            notifications={props.systemNotifications}
+            clearNotifications={props.clearSystemNotifications}
+            reconnect={props.reconnect}
+          />
         ) : props.activeNav === 'contacts' ? (
           <QQ9Contacts
             contacts={props.contacts}
@@ -2469,8 +2903,6 @@ function QQ9ChatShell(props: QQ9ShellProps) {
           <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
             {profilePanel}
           </div>
-        ) : props.activeNav === 'tools' ? (
-          <QQ9ToolCenter {...props} />
         ) : props.activeNav === 'audit' ? (
           <QQ9Audit tools={props.tools} clear={props.clearAudit} />
         ) : (
@@ -2494,21 +2926,30 @@ function QQ9ChatShell(props: QQ9ShellProps) {
               onClick={() => setConversationInfoOpen(open => !open)}
             >
               <span className="inline-flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-full border border-(--theme-border-default) bg-(--theme-surface-active) text-xs font-bold text-(--theme-text-secondary) [&_img]:size-full [&_img]:object-cover">
-                {props.currentConversation?.avatar || props.currentEvent?.ChannelAvatar || props.currentEvent?.UserAvatar ? (
-                  <img src={props.currentConversation?.avatar || props.currentEvent?.ChannelAvatar || props.currentEvent?.UserAvatar} alt="" />
+                {props.currentConversation?.avatar ||
+                props.currentEvent?.ChannelAvatar ||
+                props.currentEvent?.UserAvatar ? (
+                  <img
+                    src={
+                      props.currentConversation?.avatar ||
+                      props.currentEvent?.ChannelAvatar ||
+                      props.currentEvent?.UserAvatar
+                    }
+                    alt=""
+                  />
                 ) : (
                   (props.currentConversation?.label || 'Q').slice(0, 1)
                 )}
               </span>
               <div className="min-w-0">
-              <strong className="block truncate text-sm">
-                {props.currentConversation?.label || '在线聊天'}
-              </strong>
-              <small className="mt-0.5 block text-[11px] text-(--theme-text-muted)">
-                {props.currentEvent
-                  ? scopeName(props.currentScope)
-                  : '选择会话后可发送消息'}
-              </small>
+                <strong className="block truncate text-sm">
+                  {props.currentConversation?.label || '在线聊天'}
+                </strong>
+                <small className="mt-0.5 block text-[11px] text-(--theme-text-muted)">
+                  {props.currentEvent
+                    ? scopeName(props.currentScope)
+                    : '选择会话后可发送消息'}
+                </small>
               </div>
             </button>
             {conversationInfoOpen && props.currentEvent ? (
@@ -2548,68 +2989,26 @@ function QQ9ChatShell(props: QQ9ShellProps) {
               </section>
             ) : null}
             <div className="flex gap-1">
-              {props.currentEvent && (
-                <button
-                  className="inline-flex size-7.5 items-center justify-center rounded-md border-0 bg-transparent text-(--theme-text-muted) hover:bg-(--theme-surface-hover) hover:text-(--theme-text-secondary)"
-                  title="会话资料"
-                  aria-label="打开会话资料"
-                  onClick={() => {
-                    if (window.matchMedia('(max-width: 759px)').matches) {
-                      props.setActiveNav('profile')
-                      props.setRightOpen(true)
-                    } else {
-                      setProfileOpen(true)
-                    }
-                  }}
-                >
-                  <Bell className="size-4" />
-                </button>
-              )}
+              {hasConversationProfile && !wideProfile && (
               <button
-                className="inline-flex size-7.5 items-center justify-center rounded-md border-0 bg-transparent text-(--theme-text-muted) hover:bg-(--theme-surface-hover) hover:text-(--theme-text-secondary)"
-                title={props.rightOpen ? '收起侧边栏' : '展开当前能力'}
-                aria-label={props.rightOpen ? '收起侧边栏' : '展开当前能力'}
-                onClick={() => props.setRightOpen(!props.rightOpen)}
+                className="inline-flex size-7.5 items-center justify-center rounded-md border-0 bg-transparent text-(--theme-text-muted) hover:bg-(--theme-surface-hover) hover:text-(--theme-text-secondary) disabled:cursor-not-allowed disabled:opacity-40"
+                title="打开会话资料"
+                aria-label="打开会话资料抽屉"
+                disabled={!props.currentEvent}
+                onClick={() => {
+                  if (window.matchMedia('(max-width: 759px)').matches) {
+                    props.setActiveNav('profile')
+                    props.setRightOpen(true)
+                  } else {
+                    setProfileOpen(true)
+                  }
+                }}
               >
-                {props.rightOpen ? (
-                  <X className="size-4" />
-                ) : (
-                  <MessageCircle className="size-4" />
-                )}
+                <Menu className="size-4" />
               </button>
+              )}
             </div>
           </header>
-          {props.state !== 'connected' && (
-            <div
-              className={`mx-4 mt-3 flex items-center justify-between gap-3 rounded-lg border px-3 py-2 text-xs ${
-                props.state === 'failed'
-                  ? 'border-(--theme-danger) bg-(--theme-danger-soft) text-(--theme-danger-text)'
-                  : 'border-(--theme-warning) bg-(--theme-warning-soft) text-(--theme-warning-text)'
-              }`}
-              role={props.state === 'failed' ? 'alert' : 'status'}
-            >
-              <div className="min-w-0">
-                <b className="block">
-                  {props.state === 'connecting'
-                    ? '正在连接 QQ Bot…'
-                    : 'QQ Bot 当前未连接'}
-                </b>
-                <span className="block pt-0.5 text-[11px] leading-relaxed">
-                  {props.state === 'connecting'
-                    ? '连接成功后即可发送消息和执行机器人操作。'
-                    : props.error || '请确认机器人已登录并正在运行。'}
-                </span>
-              </div>
-              {props.state === 'failed' && (
-                <button
-                  className="shrink-0 rounded-md border border-current bg-transparent px-2 py-1 text-[11px] font-medium"
-                  onClick={props.reconnect}
-                >
-                  重新连接
-                </button>
-              )}
-            </div>
-          )}
         </div>
         <section
           ref={messageViewport}
@@ -2621,14 +3020,6 @@ function QQ9ChatShell(props: QQ9ShellProps) {
             followNewest.current = distanceToBottom <= 96
           }}
         >
-          {props.error && props.state === 'connected' ? (
-            <p
-              className="mb-3.5 rounded-lg border border-[color-mix(in_srgb,var(--theme-danger)_28%,transparent)] bg-(--theme-danger-soft) px-2.5 py-2 text-xs text-(--theme-danger-text)"
-              role="alert"
-            >
-              {props.error}
-            </p>
-          ) : null}
           {props.currentConversation ? (
             <div className="flex min-h-full flex-col justify-end">
               {props.messages.map((event, index) => (
@@ -2641,10 +3032,22 @@ function QQ9ChatShell(props: QQ9ShellProps) {
                   favorite={favoriteFor(event)}
                   onFavorite={() => props.toggleFavorite(event)}
                   onDelete={() => props.deleteMessage(event)}
-                  decoration={props.decorations[event.MessageId || event.serverMessageID || '']}
-                  onDecorate={(action, emoji) => props.decorateMessage(event, action, emoji)}
-                  onOpenDirect={contact => props.openContactConversation(contact)}
-                  onMention={contact => props.setText(`${props.text}${props.text && !props.text.endsWith(' ') ? ' ' : ''}@${contact.label} `)}
+                  decoration={
+                    props.decorations[
+                      event.MessageId || event.serverMessageID || ''
+                    ]
+                  }
+                  onDecorate={(action, emoji) =>
+                    props.decorateMessage(event, action, emoji)
+                  }
+                  onOpenDirect={contact =>
+                    props.openContactConversation(contact)
+                  }
+                  onMention={contact =>
+                    props.setText(
+                      `${props.text}${props.text && !props.text.endsWith(' ') ? ' ' : ''}@${contact.label} `
+                    )
+                  }
                   onReadProfile={() => props.refreshUserProfile(event)}
                 />
               ))}
@@ -2656,7 +3059,7 @@ function QQ9ChatShell(props: QQ9ShellProps) {
                 选择一个 QQ 会话开始聊天
               </p>
               <small className="text-[11px]">
-                机器人能力和操作记录可从最左侧能力栏打开。
+                从左侧选择联系人或群聊，开始一段对话。
               </small>
             </div>
           )}
@@ -2668,6 +3071,7 @@ function QQ9ChatShell(props: QQ9ShellProps) {
         </section>
         <QQ9Composer
           currentConversation={props.currentConversation}
+          currentScope={props.currentScope}
           isQQ={props.isQQ}
           state={props.state}
           text={props.text}
@@ -2683,22 +3087,33 @@ function QQ9ChatShell(props: QQ9ShellProps) {
           }}
         />
       </main>
-      {profileOpen && (
-        <aside
-          className="qq-live-profile-drawer relative flex min-h-0 flex-col overflow-hidden border-l border-(--theme-border-default) bg-(--theme-surface-panel)"
-          aria-label="会话资料"
-        >
-          <button
-            className="absolute top-2 right-2 z-10 inline-flex size-8 items-center justify-center rounded-md border-0 bg-(--theme-surface-panel) text-(--theme-text-muted) hover:bg-(--theme-surface-hover)"
-            onClick={() => setProfileOpen(false)}
-            aria-label="关闭会话资料"
+      {showProfileDrawer && (
+        <>
+          {profileOpen && !wideProfile && (
+            <button
+              className="qq-live-profile-backdrop absolute inset-0 z-50 border-0"
+              onClick={() => setProfileOpen(false)}
+              aria-label="关闭会话资料"
+            />
+          )}
+          <aside
+            className={`qq-live-profile-drawer ${wideProfile ? 'qq-live-profile-drawer-docked relative z-10' : 'absolute top-0 right-0 bottom-0 z-[60]'} flex min-h-0 w-80 flex-col overflow-hidden border-l border-(--theme-border-default) bg-(--theme-surface-panel)`}
+            aria-label="会话资料"
           >
-            <X className="size-4" />
-          </button>
-          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pt-8">
-            {profilePanel}
-          </div>
-        </aside>
+            {!wideProfile && (
+              <button
+                className="absolute top-2 right-2 z-10 inline-flex size-8 items-center justify-center rounded-md border-0 bg-(--theme-surface-panel) text-(--theme-text-muted) hover:bg-(--theme-surface-hover)"
+                onClick={() => setProfileOpen(false)}
+                aria-label="关闭会话资料"
+              >
+                <X className="size-4" />
+              </button>
+            )}
+            <div className={`min-h-0 flex-1 overflow-y-auto overscroll-contain ${wideProfile ? 'pt-3' : 'pt-8'}`}>
+              {profilePanel}
+            </div>
+          </aside>
+        </>
       )}
     </div>
   )
@@ -2726,7 +3141,11 @@ function QQ9Message({
   onFavorite: () => void
   onDelete: () => void
   decoration?: MessageDecoration
-  onDecorate: (action: 'message.pin' | 'message.unpin' | 'reaction.add' | 'reaction.remove', emoji?: string) => void
+  onDecorate: (
+    action:
+      'message.pin' | 'message.unpin' | 'reaction.add' | 'reaction.remove',
+    emoji?: string
+  ) => void
   onOpenDirect: (contact: QQContact) => void
   onMention: (contact: QQContact) => void
   onReadProfile: () => void
@@ -2734,12 +3153,22 @@ function QQ9Message({
   const [menuOpen, setMenuOpen] = useState(false)
   const [avatarMenuOpen, setAvatarMenuOpen] = useState(false)
   const contact = contactFromEvent(event)
-  const canDelete = isQQ && mine && event.delivery === 'sent' && event.serverMessageID
-  const canDecorate = isQQ && Boolean(event.serverMessageID) && qqTarget(event.context ?? event).scope === 'channel'
+  const canDelete =
+    isQQ && mine && event.delivery === 'sent' && event.serverMessageID
+  const canDecorate =
+    isQQ &&
+    Boolean(event.serverMessageID) &&
+    qqTarget(event.context ?? event).scope === 'channel'
   const sender = mine
     ? { name: botIdentity.name, avatar: botIdentity.avatar }
-    : { name: event.UserName || event.UserId || '未知用户', avatar: event.UserAvatar }
-  const closeMenus = () => { setMenuOpen(false); setAvatarMenuOpen(false) }
+    : {
+        name: event.UserName || event.UserId || '未知用户',
+        avatar: event.UserAvatar
+      }
+  const closeMenus = () => {
+    setMenuOpen(false)
+    setAvatarMenuOpen(false)
+  }
   return (
     <article
       className={`mb-4.5 flex max-w-[82%] items-start gap-2 ${mine ? 'ml-auto flex-row-reverse' : ''}`}
@@ -2751,37 +3180,148 @@ function QQ9Message({
       <button
         className="relative inline-flex size-7.5 shrink-0 items-center justify-center overflow-hidden rounded-full border border-(--theme-border-default) bg-(--theme-surface-active) text-[13px] font-bold text-(--theme-text-secondary) [&_img]:size-full [&_img]:object-cover"
         disabled={!contact}
-        onContextMenu={contextEvent => { contextEvent.preventDefault(); setAvatarMenuOpen(true) }}
+        onContextMenu={contextEvent => {
+          contextEvent.preventDefault()
+          setAvatarMenuOpen(true)
+        }}
         onClick={() => contact && onOpenDirect(contact)}
         aria-label={contact ? `打开与 ${contact.label} 的私聊` : '头像'}
         title={contact ? `打开与 ${contact.label} 的私聊` : undefined}
       >
         {sender.avatar ? (
           <img src={sender.avatar} alt="" />
+        ) : mine ? (
+          <Bot className="size-4" aria-hidden="true" />
         ) : (
-          mine ? <Bot className="size-4" aria-hidden="true" /> : sender.name.slice(0, 1)
+          sender.name.slice(0, 1)
         )}
-        {avatarMenuOpen && contact ? <span className="qq9-popover-menu qq9-avatar-menu" role="menu" onClick={menuEvent => menuEvent.stopPropagation()}><button onClick={() => { onMention(contact); closeMenus() }}>提及 @{contact.label}</button><button onClick={() => { onOpenDirect(contact); closeMenus() }}>打开私聊</button><button onClick={() => { onReadProfile(); closeMenus() }}>读取完整资料</button></span> : null}
+        {avatarMenuOpen && contact ? (
+          <span
+            className="qq9-popover-menu qq9-avatar-menu"
+            role="menu"
+            onClick={menuEvent => menuEvent.stopPropagation()}
+          >
+            <button
+              onClick={() => {
+                onMention(contact)
+                closeMenus()
+              }}
+            >
+              提及 @{contact.label}
+            </button>
+            <button
+              onClick={() => {
+                onOpenDirect(contact)
+                closeMenus()
+              }}
+            >
+              打开私聊
+            </button>
+            <button
+              onClick={() => {
+                onReadProfile()
+                closeMenus()
+              }}
+            >
+              读取完整资料
+            </button>
+          </span>
+        ) : null}
       </button>
       <div className="min-w-0">
         <header
           className={`mb-1 flex items-baseline gap-1.5 ${mine ? 'flex-row-reverse' : ''}`}
         >
-          <b className="text-[11px] font-medium">
-            {sender.name}
-          </b>
+          <b className="text-[11px] font-medium">{sender.name}</b>
           <time className="text-[10px] text-(--theme-text-muted)">
             {formatTime(event.CreateAt)}
           </time>
         </header>
         <div
-          onContextMenu={contextEvent => { contextEvent.preventDefault(); setMenuOpen(true) }}
+          onContextMenu={contextEvent => {
+            contextEvent.preventDefault()
+            setMenuOpen(true)
+          }}
           className={`border border-(--theme-border-default) px-3 py-2 text-[length:inherit] leading-relaxed shadow-[0_1px_2px_var(--theme-shadow-soft)] ${mine ? 'rounded-[11px_5px_11px_11px] border-(--theme-accent-soft-border) bg-(--theme-accent-soft) text-(--theme-accent-soft-text)' : 'rounded-[5px_11px_11px_11px] bg-(--theme-surface-panel)'}`}
         >
-          <p className="m-0 wrap-anywhere whitespace-pre-wrap">{messageSegments(event).length ? messageSegments(event).map((segment, index) => segment.type === 'Mention' ? <mark className="qq9-mention-chip" key={index}>@{String((segment as Segment & { options?: { name?: string } }).options?.name || segment.value || '成员')}</mark> : <span key={index}>{String(segment.value ?? '')}</span>) : '（非文本消息）'}</p>
+          <p className="m-0 wrap-anywhere whitespace-pre-wrap">
+            {messageSegments(event).length
+              ? messageSegments(event).map((segment, index) =>
+                  segment.type === 'Mention' ? (
+                    <mark className="qq9-mention-chip" key={index}>
+                      @
+                      {String(
+                        (segment as Segment & { options?: { name?: string } })
+                          .options?.name ||
+                          segment.value ||
+                          '成员'
+                      )}
+                    </mark>
+                  ) : (
+                    <span key={index}>{String(segment.value ?? '')}</span>
+                  )
+                )
+              : '（非文本消息）'}
+          </p>
         </div>
-        {decoration?.pinned ? <span className="qq9-message-badge">已设为精华</span> : null}{decoration?.reactions?.map(emoji => <button className="qq9-reaction-chip" key={emoji} onClick={() => onDecorate('reaction.remove', emoji)} title="移除表态">{emoji}</button>)}
-        {menuOpen ? <div className="qq9-popover-menu qq9-message-menu" role="menu"><button onClick={() => { onFavorite(); closeMenus() }}>{favorite ? '取消收藏' : '收藏消息'}</button>{canDecorate ? <><button onClick={() => { onDecorate('reaction.add', '👍'); closeMenus() }}>添加 👍 表态</button><button onClick={() => { onDecorate(decoration?.pinned ? 'message.unpin' : 'message.pin'); closeMenus() }}>{decoration?.pinned ? '取消精华' : '设为精华'}</button></> : null}{canDelete ? <button className="danger" onClick={() => { onDelete(); closeMenus() }}>撤回消息</button> : null}</div> : null}
+        {decoration?.pinned ? (
+          <span className="qq9-message-badge">已设为精华</span>
+        ) : null}
+        {decoration?.reactions?.map(emoji => (
+          <button
+            className="qq9-reaction-chip"
+            key={emoji}
+            onClick={() => onDecorate('reaction.remove', emoji)}
+            title="移除表态"
+          >
+            {emoji}
+          </button>
+        ))}
+        {menuOpen ? (
+          <div className="qq9-popover-menu qq9-message-menu" role="menu">
+            <button
+              onClick={() => {
+                onFavorite()
+                closeMenus()
+              }}
+            >
+              {favorite ? '取消收藏' : '收藏消息'}
+            </button>
+            {canDecorate ? (
+              <>
+                <button
+                  onClick={() => {
+                    onDecorate('reaction.add', '👍')
+                    closeMenus()
+                  }}
+                >
+                  添加 👍 表态
+                </button>
+                <button
+                  onClick={() => {
+                    onDecorate(
+                      decoration?.pinned ? 'message.unpin' : 'message.pin'
+                    )
+                    closeMenus()
+                  }}
+                >
+                  {decoration?.pinned ? '取消精华' : '设为精华'}
+                </button>
+              </>
+            ) : null}
+            {canDelete ? (
+              <button
+                className="danger"
+                onClick={() => {
+                  onDelete()
+                  closeMenus()
+                }}
+              >
+                撤回消息
+              </button>
+            ) : null}
+          </div>
+        ) : null}
         <footer
           className={`mt-0.5 flex min-h-4 items-center gap-1 text-[10px] text-(--theme-text-muted) ${mine ? 'justify-end' : ''}`}
         >
@@ -2825,6 +3365,7 @@ function QQ9Message({
 
 function QQ9Composer({
   currentConversation,
+  currentScope,
   isQQ,
   state,
   text,
@@ -2838,6 +3379,7 @@ function QQ9Composer({
 }: Pick<
   QQ9ShellProps,
   | 'currentConversation'
+  | 'currentScope'
   | 'isQQ'
   | 'state'
   | 'text'
@@ -2849,8 +3391,16 @@ function QQ9Composer({
   | 'send'
 > & { openHistory: () => void }) {
   const [mentionOpen, setMentionOpen] = useState(false)
+  const canMention = currentScope === 'group'
   const mentionQuery = text.match(/(?:^|\s)@([^\s@]*)$/)?.[1] || ''
-  const mentionCandidates = contacts.filter(contact => contact.label.toLowerCase().includes(mentionQuery.toLowerCase())).slice(0, 8)
+  const mentionCandidates = (canMention ? contacts : [])
+    .filter(contact =>
+      contact.label.toLowerCase().includes(mentionQuery.toLowerCase())
+    )
+    .slice(0, 8)
+  useEffect(() => {
+    if (!canMention) setMentionOpen(false)
+  }, [canMention])
   if (!currentConversation)
     return (
       <footer className="border-t border-(--theme-border-default) p-3.5 text-[11px] text-(--theme-text-muted)">
@@ -2858,7 +3408,7 @@ function QQ9Composer({
       </footer>
     )
   return (
-    <footer className="relative z-10 shrink-0 overflow-visible border-t border-(--theme-border-default) bg-(--theme-surface-panel) px-4 pt-2.5 pb-[max(10px,env(safe-area-inset-bottom))] shadow-[0_-8px_24px_rgb(28_26_23/0.04)]">
+    <footer className="relative z-10 shrink-0 overflow-visible bg-(--theme-surface-page)   px-4 pt-2.5 pb-[max(10px,env(safe-area-inset-bottom))]">
       {attachment && (
         <div className="mb-1.5 flex items-center gap-1.5 rounded-md border border-(--theme-border-subtle) bg-(--theme-surface-raised) px-2 py-1 text-[11px]">
           <Paperclip className="size-3.5" />
@@ -2875,31 +3425,110 @@ function QQ9Composer({
       <div className="relative rounded-xl border border-(--theme-border-default) bg-(--theme-surface-input) p-2 shadow-[0_1px_2px_var(--theme-shadow-soft)] transition focus-within:border-(--theme-accent-soft-border) focus-within:ring-2 focus-within:ring-(--theme-accent-soft)">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-1">
-            <button className="inline-flex size-7 items-center justify-center rounded-md border-0 bg-transparent text-(--theme-text-muted) hover:bg-(--theme-surface-hover) hover:text-(--theme-accent-text) disabled:cursor-not-allowed disabled:opacity-40" onClick={() => setMentionOpen(value => !value)} title="提及成员" aria-label="提及成员"><span className="text-base leading-none">@</span></button>
-            <input ref={attachmentInput} className="hidden" type="file" onChange={event => setAttachment(event.target.files?.[0] || null)} />
-            <button className="inline-flex size-7 items-center justify-center rounded-md border-0 bg-transparent text-(--theme-text-muted) hover:bg-(--theme-surface-hover) hover:text-(--theme-accent-text)" title="图片或文件" aria-label="添加图片或文件" onClick={() => attachmentInput.current?.click()}><FileImage className="size-4" /></button>
-            <button className="inline-flex size-7 items-center justify-center rounded-md border-0 bg-transparent text-(--theme-text-muted) hover:bg-(--theme-surface-hover) hover:text-(--theme-accent-text)" title="添加附件" aria-label="添加附件" onClick={() => attachmentInput.current?.click()}><Paperclip className="size-4" /></button>
+            {canMention ? (
+              <button
+                className="inline-flex size-7 items-center justify-center rounded-md border-0 bg-transparent text-(--theme-text-muted) hover:bg-(--theme-surface-hover) hover:text-(--theme-accent-text) disabled:cursor-not-allowed disabled:opacity-40"
+                onClick={() => setMentionOpen(value => !value)}
+                title="提及成员"
+                aria-label="提及成员"
+              >
+                <span className="text-base leading-none">@</span>
+              </button>
+            ) : null}
+            <input
+              ref={attachmentInput}
+              className="hidden"
+              type="file"
+              onChange={event => setAttachment(event.target.files?.[0] || null)}
+            />
+            <button
+              className="inline-flex size-7 items-center justify-center rounded-md border-0 bg-transparent text-(--theme-text-muted) hover:bg-(--theme-surface-hover) hover:text-(--theme-accent-text)"
+              title="图片或文件"
+              aria-label="添加图片或文件"
+              onClick={() => attachmentInput.current?.click()}
+            >
+              <FileImage className="size-4" />
+            </button>
+            <button
+              className="inline-flex size-7 items-center justify-center rounded-md border-0 bg-transparent text-(--theme-text-muted) hover:bg-(--theme-surface-hover) hover:text-(--theme-accent-text)"
+              title="添加附件"
+              aria-label="添加附件"
+              onClick={() => attachmentInput.current?.click()}
+            >
+              <Paperclip className="size-4" />
+            </button>
           </div>
-          <button className="inline-flex size-7 items-center justify-center rounded-md border-0 bg-transparent text-(--theme-text-muted) hover:bg-(--theme-surface-hover) hover:text-(--theme-accent-text)" onClick={openHistory} title="聊天记录" aria-label="查看聊天记录"><History className="size-4" /></button>
+          <button
+            className="inline-flex size-7 items-center justify-center rounded-md border-0 bg-transparent text-(--theme-text-muted) hover:bg-(--theme-surface-hover) hover:text-(--theme-accent-text)"
+            onClick={openHistory}
+            title="聊天记录"
+            aria-label="查看聊天记录"
+          >
+            <History className="size-4" />
+          </button>
         </div>
         <textarea
-          className="mt-1.5 block h-18 min-h-12 max-h-30 box-border w-full max-w-full resize-none rounded-lg border-0 bg-transparent px-2 py-2 text-(--theme-text-primary) outline-none disabled:cursor-not-allowed disabled:opacity-55"
+          className="qq9-text-input mt-1.5 block h-18 min-h-12 max-h-30 box-border w-full max-w-full resize-none px-2 py-2 text-(--theme-text-primary) disabled:cursor-not-allowed disabled:opacity-55"
           value={text}
           disabled={!isQQ || state !== 'connected'}
           aria-label="消息内容"
-          onChange={event => { setText(event.target.value); setMentionOpen(/(?:^|\s)@[^\s@]*$/.test(event.target.value)) }}
+          onChange={event => {
+            setText(event.target.value)
+            setMentionOpen(
+              canMention && /(?:^|\s)@[^\s@]*$/.test(event.target.value)
+            )
+          }}
           onKeyDown={event => {
-            if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+            if (
+              event.key === 'Enter' &&
+              !event.shiftKey &&
+              !event.nativeEvent.isComposing
+            ) {
               event.preventDefault()
               void send()
             }
           }}
-          placeholder="以机器人身份发送消息"
         />
-        {mentionOpen && <div className="qq9-mention-menu" role="listbox">{mentionCandidates.map(contact => <button key={contact.id} onClick={() => { setText(text.replace(/@[^\s@]*$/, `@${contact.label} `)); setMentionOpen(false) }}><span className="qq9-avatar">{contact.avatar ? <img src={contact.avatar} alt="" /> : contact.label.slice(0, 1)}</span><span>{contact.label}</span></button>)}{!mentionCandidates.length && <p>暂无可提及成员；频道会话会自动读取成员。</p>}</div>}
+        {canMention && mentionOpen && (
+          <div className="qq9-mention-menu" role="listbox">
+            {mentionCandidates.map(contact => (
+              <button
+                key={contact.id}
+                onClick={() => {
+                  setText(text.replace(/@[^\s@]*$/, `@${contact.label} `))
+                  setMentionOpen(false)
+                }}
+              >
+                <span className="qq9-avatar">
+                  {contact.avatar ? (
+                    <img src={contact.avatar} alt="" />
+                  ) : (
+                    contact.label.slice(0, 1)
+                  )}
+                </span>
+                <span>{contact.label}</span>
+              </button>
+            ))}
+            {!mentionCandidates.length && (
+              <p>暂无可提及成员；群成员会自动读取。</p>
+            )}
+          </div>
+        )}
         <div className="flex items-center justify-between border-t border-(--theme-border-subtle) pt-2">
-          <small className="text-[10px] text-(--theme-text-muted)">Enter 发送 · Shift + Enter 换行</small>
-          <button className="inline-flex items-center gap-1 rounded-md border-0 bg-(--theme-accent) px-2.5 py-1.5 text-xs text-(--theme-accent-contrast) disabled:cursor-not-allowed disabled:opacity-45" disabled={!isQQ || (!text.trim() && !attachment) || state !== 'connected'} onClick={() => void send()} aria-label="发送消息"><Send className="size-4" />发送</button>
+          <small className="text-[10px] text-(--theme-text-muted)">
+            Enter 发送 · Shift + Enter 换行
+          </small>
+          <button
+            className="inline-flex items-center gap-1 rounded-md border-0 bg-(--theme-accent) px-2.5 py-1.5 text-xs text-(--theme-accent-contrast) disabled:cursor-not-allowed disabled:opacity-45"
+            disabled={
+              !isQQ || (!text.trim() && !attachment) || state !== 'connected'
+            }
+            onClick={() => void send()}
+            aria-label="发送消息"
+          >
+            <Send className="size-4" />
+            发送
+          </button>
         </div>
       </div>
     </footer>
@@ -2925,24 +3554,31 @@ function QQ9Profile({
     )
   return (
     <div className="min-h-0 px-2 py-3">
-      <section className="border-t border-(--theme-border-default) pt-3">
+      <section className=" pt-3">
         <b className="block text-xs">公告</b>
         <p className="mt-1 mb-0 text-[11px] leading-relaxed text-(--theme-text-muted)">
           当前 QQ Bot 未提供可安全读取的群公告内容。
         </p>
       </section>
-      <section className="mt-3 border-t border-(--theme-border-default) pt-3">
+      <section className="mt-3 pt-3">
         <header className="flex items-center justify-between">
           <div>
             <b className="block text-xs">成员</b>
             <small className="mt-0.5 block text-[10px] text-(--theme-text-muted)">
-              {members.message || '打开会话时会自动读取；无成员列表能力时使用已知发言者。'}
+              {members.message ||
+                '打开会话时会自动读取；无成员列表能力时使用已知发言者。'}
             </small>
           </div>
-          {members.status === 'loading' ? <Loader2 className="size-4 animate-spin text-(--theme-text-muted)" /> : null}
+          {members.status === 'loading' ? (
+            <Loader2 className="size-4 animate-spin text-(--theme-text-muted)" />
+          ) : null}
         </header>
         {members.status === 'ready' ? (
-          <MemberRows data={members.data} openContact={openContact} mentionContact={mentionContact} />
+          <MemberRows
+            data={members.data}
+            openContact={openContact}
+            mentionContact={mentionContact}
+          />
         ) : members.status === 'failed' || members.status === 'unavailable' ? (
           <p className="px-2 py-3 text-center text-[11px] leading-relaxed text-(--theme-text-muted)">
             {members.message}
@@ -2953,7 +3589,15 @@ function QQ9Profile({
   )
 }
 
-function MemberRows({ data, openContact, mentionContact }: { data: unknown; openContact: (contact: QQContact) => void; mentionContact: (contact: QQContact) => void }) {
+function MemberRows({
+  data,
+  openContact,
+  mentionContact
+}: {
+  data: unknown
+  openContact: (contact: QQContact) => void
+  mentionContact: (contact: QQContact) => void
+}) {
   const rows = resultItems(data)
   return (
     <div className="mt-2 grid gap-1">
@@ -2962,7 +3606,13 @@ function MemberRows({ data, openContact, mentionContact }: { data: unknown; open
           recordText(item, ['nick', 'username', 'name', 'user_name']) ||
           recordText(item, ['user_id', 'id', 'userId']) ||
           '未知成员'
-        const userID = recordText(item, ['user_id', 'id', 'userId', 'member_openid', 'openid'])
+        const userID = recordText(item, [
+          'user_id',
+          'id',
+          'userId',
+          'member_openid',
+          'openid'
+        ])
         const avatar = recordText(item, [
           'avatar',
           'avatar_url',
@@ -2973,16 +3623,33 @@ function MemberRows({ data, openContact, mentionContact }: { data: unknown; open
           'user_avatar',
           'userAvatar'
         ])
-        const contact: QQContact = { id: `user:${userID || name}`, label: name, avatar, source: 'member', lastInteractionAt: Date.now() }
+        const contact: QQContact = {
+          id: `user:${userID || name}`,
+          label: name,
+          avatar,
+          source: 'member',
+          lastInteractionAt: Date.now()
+        }
         return (
           <div
             className="group flex items-center gap-1.5 rounded-md px-1 py-1 text-[11px] hover:bg-(--theme-surface-hover)"
             key={`${name}:${index}`}
           >
-            <button className="inline-flex size-6 shrink-0 items-center justify-center overflow-hidden rounded-full border border-(--theme-border-default) bg-(--theme-surface-active) text-(--theme-text-secondary) [&_img]:size-full [&_img]:object-cover" onClick={() => openContact(contact)} title={`打开与 ${name} 的私聊`} aria-label={`打开与 ${name} 的私聊`}>
+            <button
+              className="inline-flex size-6 shrink-0 items-center justify-center overflow-hidden rounded-full border border-(--theme-border-default) bg-(--theme-surface-active) text-(--theme-text-secondary) [&_img]:size-full [&_img]:object-cover"
+              onClick={() => openContact(contact)}
+              title={`打开与 ${name} 的私聊`}
+              aria-label={`打开与 ${name} 的私聊`}
+            >
               {avatar ? <img src={avatar} alt="" /> : name.slice(0, 1)}
             </button>
-            <button className="min-w-0 flex-1 truncate border-0 bg-transparent p-0 text-left text-inherit" onClick={() => mentionContact(contact)} title={`提及 ${name}`}>{name}</button>
+            <button
+              className="min-w-0 flex-1 truncate border-0 bg-transparent p-0 text-left text-inherit"
+              onClick={() => mentionContact(contact)}
+              title={`提及 ${name}`}
+            >
+              {name}
+            </button>
           </div>
         )
       })}
@@ -2992,6 +3659,52 @@ function MemberRows({ data, openContact, mentionContact }: { data: unknown; open
         </p>
       )}
     </div>
+  )
+}
+
+function CopyableText({
+  value,
+  className = ''
+}: {
+  value: string
+  className?: string
+}) {
+  const [open, setOpen] = useState(false)
+  const [copied, setCopied] = useState(false)
+  const copy = async (event: React.MouseEvent<HTMLButtonElement>) => {
+    event.preventDefault()
+    event.stopPropagation()
+    try {
+      await navigator.clipboard.writeText(value)
+      setCopied(true)
+    } catch {
+      setCopied(false)
+    }
+  }
+  return (
+    <span
+      className={`qq9-copyable-value relative block min-w-0 ${className}`}
+      tabIndex={0}
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+      onFocus={() => setOpen(true)}
+      onBlur={event => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node))
+          setOpen(false)
+      }}
+    >
+      <span className="block truncate">{value}</span>
+      {open && (
+        <span className="qq9-copyable-tooltip" role="tooltip">
+          <span className="min-w-0 flex-1 wrap-anywhere whitespace-pre-wrap">
+            {value}
+          </span>
+          <button type="button" onClick={copy}>
+            {copied ? '已复制' : '复制'}
+          </button>
+        </span>
+      )}
+    </span>
   )
 }
 
@@ -3007,162 +3720,28 @@ function ProfileRows({ data }: { data: unknown }) {
       {Object.entries(data as Record<string, unknown>)
         .filter(([key]) => !/(token|secret|password)/i.test(key))
         .slice(0, 8)
-        .map(([key, value]) => (
-          <div
-            className="grid grid-cols-[82px_minmax(0,1fr)] gap-2 text-[11px]"
-            key={key}
-          >
-            <dt className="text-(--theme-text-muted)">{key}</dt>
-            <dd className="m-0 truncate">
-              {typeof value === 'string' || typeof value === 'number'
+        .map(([key, value]) => {
+          const displayValue =
+            typeof value === 'boolean'
+              ? value
+                ? '是'
+                : '否'
+              : typeof value === 'string' || typeof value === 'number'
                 ? String(value)
-                : '已返回结构化数据'}
-            </dd>
-          </div>
-        ))}
+                : '已返回结构化数据'
+          return (
+            <div
+              className="grid grid-cols-[82px_minmax(0,1fr)] gap-2 text-[11px]"
+              key={key}
+            >
+              <dt className="text-(--theme-text-muted)">{key}</dt>
+              <dd className="m-0 min-w-0">
+                <CopyableText value={displayValue} />
+              </dd>
+            </div>
+          )
+        })}
     </dl>
-  )
-}
-
-function QQ9ToolCenter(props: QQ9ShellProps) {
-  const [toolSearch, setToolSearch] = useState('')
-  const [showHighRisk, setShowHighRisk] = useState(false)
-  const query = toolSearch.trim().toLowerCase()
-  const matchesTool = (action: QQActionDefinition) =>
-    (!query ||
-      `${action.title} ${action.id} ${action.group} ${action.description || ''}`
-        .toLowerCase()
-        .includes(query)) &&
-    (!showHighRisk || action.risk === 'high')
-  const visibleActionCount = qqActionCatalog.filter(
-    action =>
-      matchesTool(action) &&
-      (props.showUnavailable ||
-        isActionAvailable(action, props.currentScopeForActions))
-  ).length
-  return (
-    <div className="min-h-0 overflow-auto px-2 py-3">
-      <input
-        className="mb-2 w-full rounded-md border border-(--theme-border-subtle) bg-(--theme-surface-input) px-2 py-1.5 text-xs outline-none focus:border-(--theme-accent-soft-border)"
-        value={toolSearch}
-        onChange={event => setToolSearch(event.target.value)}
-        placeholder="搜索能力、动作 ID 或分组"
-        aria-label="搜索机器人能力"
-      />
-      <div className="mb-2.5 flex flex-wrap gap-x-3 gap-y-1.5 text-[11px] text-(--theme-text-muted)">
-        <label className="flex items-center gap-1.5">
-          <input
-            type="checkbox"
-            checked={props.showUnavailable}
-            onChange={event => props.setShowUnavailable(event.target.checked)}
-          />
-          显示不支持的工具
-        </label>
-        <label className="flex items-center gap-1.5">
-          <input
-            type="checkbox"
-            checked={showHighRisk}
-            onChange={event => setShowHighRisk(event.target.checked)}
-          />
-          仅高风险操作
-        </label>
-      </div>
-      <div className="order-2">
-        {props.groups.map(group => (
-          <details
-            className="border-t border-(--theme-border-default) py-2"
-            key={group}
-            open={
-              group === '机器人状态' ||
-              props.activeDefinition?.group === group
-            }
-          >
-            <summary className="cursor-pointer list-none text-[10px] text-(--theme-text-muted) marker:content-none">
-              {group}
-            </summary>
-            <div className="mt-1.5 flex flex-wrap gap-1">
-              {qqActionCatalog
-                .filter(
-                  action =>
-                    action.group === group &&
-                    matchesTool(action) &&
-                    (props.showUnavailable ||
-                      isActionAvailable(action, props.currentScopeForActions))
-                )
-                .map(action => (
-                  <button
-                    key={action.id}
-                    disabled={
-                      !isActionAvailable(action, props.currentScopeForActions)
-                    }
-                    className={`rounded border border-(--theme-border-default) bg-(--theme-surface-raised) px-1.5 py-1 text-[10px] text-(--theme-text-secondary) ${props.activeAction === action.id ? 'border-(--theme-accent-soft-border) text-(--theme-accent-text)' : ''} disabled:cursor-not-allowed disabled:opacity-40`}
-                    onClick={() => props.chooseAction(action)}
-                    title={action.description || action.id}
-                  >
-                    {action.title}
-                  </button>
-                ))}
-            </div>
-          </details>
-        ))}
-        {!visibleActionCount && (
-          <p className="rounded-md border border-dashed border-(--theme-border-default) px-2 py-4 text-center text-[11px] text-(--theme-text-muted)">
-            没有匹配的能力。可清除筛选或先选择适用的 QQ 会话。
-          </p>
-        )}
-      </div>
-      {props.activeDefinition && (
-        <div className="order-1 sticky top-0 z-10 mt-1.5 border-y border-(--theme-border-default) bg-(--theme-surface-panel) py-3 shadow-[0_8px_14px_rgb(28_26_23/0.06)]">
-          <header className="flex items-start justify-between">
-            <div>
-              <strong className="block text-xs">
-                {props.activeDefinition.title}
-              </strong>
-              <small className="mt-0.5 block text-[10px] text-(--theme-text-muted)">
-                {props.activeDefinition.id}
-              </small>
-            </div>
-            {props.activeDefinition.risk === 'high' && (
-              <span className="rounded bg-(--theme-warning-soft) px-1 py-0.5 text-[9px] text-(--theme-warning-text)">
-                每次确认
-              </span>
-            )}
-          </header>
-          {props.activeDefinition.description && (
-            <p className="text-[11px] leading-relaxed text-(--theme-text-muted)">
-              {props.activeDefinition.description}
-            </p>
-          )}
-          {props.activeDefinition.fields.map(field => (
-            <ActionField
-              key={field.key}
-              field={field}
-              value={getFormValue(props.formValues, field)}
-              onChange={value =>
-                props.setFormValues(current => ({
-                  ...current,
-                  [field.key]: value
-                }))
-              }
-            />
-          ))}
-          <button
-            className="mt-3 inline-flex w-full items-center justify-center gap-1 rounded-md border-0 bg-(--theme-accent) px-2.5 py-1.5 text-xs text-(--theme-accent-contrast) disabled:cursor-not-allowed disabled:opacity-45"
-            disabled={props.busy || props.state !== 'connected'}
-            onClick={() => void props.executeTool()}
-          >
-            {props.busy ? (
-              <Loader2 className="animate-spin" />
-            ) : props.activeDefinition.risk === 'high' ? (
-              <CircleAlert />
-            ) : (
-              <CheckCircle2 />
-            )}
-            {props.busy ? '等待 QQ 响应…' : '执行操作'}
-          </button>
-        </div>
-      )}
-    </div>
   )
 }
 
@@ -3222,6 +3801,64 @@ function QQ9Audit({
           操作结果会在这里以脱敏摘要保留。
         </p>
       )}
+    </div>
+  )
+}
+
+function QQ9Notifications({
+  notifications,
+  clearNotifications,
+  reconnect
+}: {
+  notifications: SystemNotification[]
+  clearNotifications: () => void
+  reconnect: () => void
+}) {
+  return (
+    <div className="h-full min-h-0 overflow-auto px-1 py-3">
+      <header className="mb-2 flex items-center justify-between px-1 text-[11px] text-(--theme-text-muted)">
+        <span>{notifications.length ? `${notifications.length} 条系统通知` : '暂无系统通知'}</span>
+        {notifications.length ? (
+          <button
+            className="rounded-md border-0 bg-transparent px-1.5 py-1 text-[11px] text-(--theme-text-muted) hover:bg-(--theme-surface-hover) hover:text-(--theme-text-primary)"
+            onClick={clearNotifications}
+          >
+            全部清除
+          </button>
+        ) : null}
+      </header>
+      {notifications.map(notification => (
+        <article
+          className="mb-1.5 rounded-lg border border-(--theme-border-subtle) bg-(--theme-surface-raised) px-2.5 py-2"
+          key={notification.id}
+        >
+          <header className="flex items-center gap-2">
+            <Bell className="size-3.5 shrink-0 text-(--theme-text-muted)" />
+            <b className="min-w-0 flex-1 truncate text-xs" title={notification.title}>
+              {notification.title}
+            </b>
+            <time className="shrink-0 text-[10px] text-(--theme-text-muted)">
+              {formatTime(notification.createdAt)}
+            </time>
+          </header>
+          <p className="mt-1 mb-0 text-[11px] leading-relaxed text-(--theme-text-muted)">
+            {notification.message}
+          </p>
+          {notification.title === 'QQ Bot 当前未连接' ? (
+            <button
+              className="mt-2 rounded-md border border-(--theme-border-default) bg-transparent px-1.5 py-1 text-[10px] text-(--theme-accent-text) hover:bg-(--theme-surface-hover)"
+              onClick={reconnect}
+            >
+              重新连接
+            </button>
+          ) : null}
+        </article>
+      ))}
+      {!notifications.length ? (
+        <p className="px-2 py-3 text-center text-[11px] leading-relaxed text-(--theme-text-muted)">
+          连接状态和发送失败等系统提醒会显示在这里。
+        </p>
+      ) : null}
     </div>
   )
 }
@@ -3313,7 +3950,11 @@ function QQ9Spaces({
             }
           >
             <span className="inline-flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-(--theme-border-default) bg-(--theme-surface-active) text-[13px] font-bold text-(--theme-text-secondary) [&_img]:size-full [&_img]:object-cover">
-              {item.avatar ? <img src={item.avatar} alt="" /> : item.label.slice(0, 1)}
+              {item.avatar ? (
+                <img src={item.avatar} alt="" />
+              ) : (
+                item.label.slice(0, 1)
+              )}
             </span>
             <div className="min-w-0 flex-1">
               <b className="block truncate text-xs" title={item.label}>
@@ -3332,7 +3973,8 @@ function QQ9Spaces({
       })}
       {!rows.length && (
         <p className="px-2 py-3 text-center text-[11px] leading-relaxed text-(--theme-text-muted)">
-          正在自动读取群与频道；若 QQ Bot 未返回目录，收到消息后也会自动建立会话。
+          正在自动读取群与频道；若 QQ Bot
+          未返回目录，收到消息后也会自动建立会话。
         </p>
       )}
     </div>
@@ -3519,75 +4161,4 @@ function formatTime(value?: number) {
         minute: '2-digit'
       })
     : ''
-}
-
-function ActionField({
-  field,
-  value,
-  onChange
-}: {
-  field: QQActionField
-  value: unknown
-  onChange: (value: unknown) => void
-}) {
-  const base =
-    'w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs text-slate-800 outline-none focus:border-brand-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100'
-  return (
-    <label className="grid gap-1 text-xs text-slate-600 dark:text-slate-300">
-      <span>
-        {field.label}
-        {field.required ? <b className="ml-0.5 text-rose-500">*</b> : null}
-      </span>
-      {field.kind === 'boolean' ? (
-        <span className="flex items-center gap-2">
-          <input
-            type="checkbox"
-            checked={Boolean(value)}
-            onChange={event => onChange(event.target.checked)}
-          />
-          <span>{field.help || '启用'}</span>
-        </span>
-      ) : field.kind === 'file' ? (
-        <input
-          className={base}
-          type="file"
-          onChange={event => onChange(event.target.files?.[0])}
-        />
-      ) : field.kind === 'select' ? (
-        <select
-          className={base}
-          value={String(value ?? '')}
-          onChange={event => onChange(event.target.value)}
-        >
-          <option value="">请选择</option>
-          {field.options?.map(([id, title]) => (
-            <option key={id} value={id}>
-              {title}
-            </option>
-          ))}
-        </select>
-      ) : field.kind === 'textarea' ? (
-        <textarea
-          className={base}
-          value={String(value ?? '')}
-          placeholder={field.placeholder}
-          onChange={event => onChange(event.target.value)}
-        />
-      ) : (
-        <input
-          className={base}
-          type={
-            field.kind === 'number'
-              ? 'number'
-              : field.kind === 'url'
-                ? 'url'
-                : 'text'
-          }
-          value={String(value ?? '')}
-          placeholder={field.placeholder}
-          onChange={event => onChange(event.target.value)}
-        />
-      )}
-    </label>
-  )
 }

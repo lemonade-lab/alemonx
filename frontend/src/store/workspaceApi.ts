@@ -553,7 +553,7 @@ export const workspaceApi = createApi({
         body
       })
     }),
-    catalog: build.query<CatalogGroup[], 'apps' | 'environment'>({
+    catalog: build.query<CatalogGroup[], 'apps' | 'environment' | 'modules'>({
       query: kind => `catalog?kind=${kind}`,
       providesTags: (_result, _error, kind) => [{ type: 'Catalog', id: kind }]
     }),

@@ -36,6 +36,7 @@ import {
   ArrowRight,
   ArrowRightLeft,
   Bot,
+  Blocks,
   Cable,
   Check,
   CheckCircle2,
@@ -284,6 +285,7 @@ const directoryActions: Array<{
   { id: 'backpack', label: '背包', icon: <Archive />, kind: 'section' },
   { id: 'plugins', label: '插件', icon: <Package />, kind: 'page' },
   { id: 'connections', label: '连接', icon: <Link />, kind: 'page' },
+  { id: 'modules', label: '模块', icon: <Blocks />, kind: 'page' },
   { id: 'build', label: '发布', icon: <Send />, kind: 'page' }
 ]
 const emptyGitCommits: Array<{
@@ -1365,13 +1367,18 @@ export function Dashboard({
   const hasRobotConfig = useSelector(
     (state: RootState) => Boolean(root) && root in state.workspace.robotConfigs
   )
-  const catalogKind = page === 'plugins' ? 'apps' : 'environment'
+  const catalogKind =
+    page === 'plugins'
+      ? 'apps'
+      : page === 'connections'
+        ? 'environment'
+        : 'modules'
   const {
     data: catalogData,
     isFetching: catalogLoading,
     error: catalogQueryError
   } = useCatalogQuery(catalogKind, {
-    skip: page !== 'plugins' && page !== 'connections',
+    skip: !['plugins', 'connections', 'modules'].includes(page),
     refetchOnMountOrArgChange: true
   })
   // RTK Query leaves data undefined until the first fetch, and a backend may
@@ -2208,7 +2215,11 @@ export function Dashboard({
     onCheck()
   }, [checking, onCheck, page, report])
   useEffect(() => {
-    if (!catalogTitle && catalog.length) setCatalogTitle(catalog[0].title)
+    if (
+      catalog.length &&
+      !catalog.some(group => group.title === catalogTitle)
+    )
+      setCatalogTitle(catalog[0].title)
   }, [catalog, catalogTitle, setCatalogTitle])
   useEffect(() => {
     if (root) void validateRobot(root)
@@ -2303,6 +2314,10 @@ export function Dashboard({
         [
           'install-package',
           'uninstall-package',
+          'install-connection',
+          'uninstall-connection',
+          'install-module',
+          'uninstall-module',
           'remove-local-package',
           'replace-local-package',
           'switch-local-package-version'
@@ -2768,7 +2783,13 @@ export function Dashboard({
       <CatalogDetail
         item={catalogItem}
         group={currentCatalog.title}
-        kind={page === 'connections' ? 'connection' : 'plugin'}
+        kind={
+          page === 'connections'
+            ? 'connection'
+            : page === 'modules'
+              ? 'module'
+              : 'plugin'
+        }
         busy={busy}
         onBack={() => setCatalogItem(null)}
         onRun={(action, packageName) =>
@@ -2781,7 +2802,11 @@ export function Dashboard({
         className="catalog-workspace max-w-190"
         icon={<Globe className="size-4" />}
         title={currentCatalog?.title || '目录'}
-        description="浏览并管理可安装的机器人包"
+        description={
+          page === 'modules'
+            ? '浏览并管理机器人项目的 JS 模块依赖'
+            : '浏览并管理可安装的机器人包'
+        }
       >
         {catalogLoading && <p className="catalog-state">正在读取目录…</p>}
         {catalogError && <p className="catalog-state">{catalogError}</p>}
@@ -2920,7 +2945,7 @@ export function Dashboard({
             )}
           </section>
         )}
-        {(page === 'plugins' || page === 'connections') && catalogContent}
+        {['plugins', 'connections', 'modules'].includes(page) && catalogContent}
         {page !== 'build' && output && (
           <OperationLog
             output={output}
@@ -6738,7 +6763,7 @@ function CatalogDetail({
 }: {
   item: CatalogItem
   group: string
-  kind: 'connection' | 'plugin'
+  kind: 'connection' | 'module' | 'plugin'
   busy: boolean
   onBack: () => void
   onRun: (action: string, packageName: string) => void
@@ -6777,15 +6802,27 @@ function CatalogDetail({
       : `${packageName.split('#')[0]}#${version.trim()}`
     : packageName
   const installAction =
-    kind === 'connection' ? 'install-connection' : 'install-package'
+    kind === 'connection'
+      ? 'install-connection'
+      : kind === 'module'
+        ? 'install-module'
+        : 'install-package'
   const uninstallAction =
-    kind === 'connection' ? 'uninstall-connection' : 'uninstall-package'
+    kind === 'connection'
+      ? 'uninstall-connection'
+      : kind === 'module'
+        ? 'uninstall-module'
+        : 'uninstall-package'
   return (
     <RobotPanel
       className="catalog-detail max-w-190"
       icon={<Globe className="size-4" />}
       title={group}
-      description="查看版本、安装与配置"
+      description={
+        kind === 'module'
+          ? '作为当前机器人项目依赖安装'
+          : '查看版本、安装与配置'
+      }
       actions={
         <>
           <button className="text-button" onClick={onBack}>
@@ -8481,7 +8518,9 @@ function ControlCard({
             { id: 'git', label: 'GIT 发布' },
             { id: 'npm', label: 'NPM 发布' }
           ]
-        : activePrimary === 'plugins' || activePrimary === 'connections'
+        : activePrimary === 'plugins' ||
+            activePrimary === 'connections' ||
+            activePrimary === 'modules'
           ? catalog.map(item => ({ id: item.title, label: item.title }))
           : []
   const activeSecondary =

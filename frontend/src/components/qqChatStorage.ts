@@ -36,7 +36,7 @@ export type QQChatPreferences = {
   historyDays: 7 | 30
   favoriteRetention: FavoriteRetention
   rightPanelOpen: boolean
-  activeNav: 'messages' | 'contacts' | 'spaces' | 'favorites' | 'profile' | 'tools' | 'audit' | 'settings'
+  activeNav: 'messages' | 'notifications' | 'contacts' | 'spaces' | 'favorites' | 'profile' | 'tools' | 'audit' | 'settings'
 }
 
 export type QQChatStore<Event, Tool> = {
