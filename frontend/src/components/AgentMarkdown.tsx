@@ -3,7 +3,6 @@ import { type ReactNode } from 'react'
 import Markdown from 'markdown-to-jsx'
 import { Check, Copy } from 'lucide-react'
 import { highlightCode } from './highlight'
-import './AgentMarkdown.scss'
 
 // 从代码块内容提取语言标签（```tsx 等第一行）。
 function detectLanguage(content: string): string {
@@ -58,19 +57,25 @@ function CodeBlock({
   )
 
   return (
-    <div className="agent-codeblock">
-      <div className="agent-codeblock-head">
+    <div className="my-3 overflow-hidden rounded-[10px] border border-(--theme-border-subtle) bg-(--theme-surface-code) [&_.tok-comment]:italic [&_.tok-comment]:text-[#7f848e] [&_.tok-function]:text-[#61afef] [&_.tok-keyword]:text-[#c678dd] [&_.tok-number]:text-[#d19a66] [&_.tok-string]:text-[#98c379]">
+      <div className="flex items-center justify-between border-b border-(--theme-border-subtle) bg-[color-mix(in_srgb,var(--theme-surface-code)_90%,var(--theme-surface-hover)_10%)] px-3 py-[5px]">
         {language ? (
-          <span className="agent-codeblock-lang">{language}</span>
+          <span className="font-mono text-[0.68rem] font-semibold tracking-[0.02em] text-(--theme-text-muted) uppercase">
+            {language}
+          </span>
         ) : (
-          <span className="agent-codeblock-lang">代码</span>
+          <span className="font-mono text-[0.68rem] font-semibold tracking-[0.02em] text-(--theme-text-muted) uppercase">
+            代码
+          </span>
         )}
-        <div className="agent-codeblock-actions">
+        <div className="flex items-center gap-2.5">
           {streaming && (
-            <span className="agent-codeblock-streaming">生成中…</span>
+            <span className="inline-flex items-center gap-[5px] text-[0.66rem] text-(--theme-accent-text) before:size-1.5 before:animate-agent-pulse before:rounded-full before:bg-(--theme-accent) before:content-['']">
+              生成中…
+            </span>
           )}
           <button
-            className="agent-codeblock-copy"
+            className="inline-flex cursor-pointer items-center gap-1 rounded-md border border-transparent bg-transparent px-[7px] py-0.5 text-[0.66rem] text-(--theme-text-muted) transition-[background,color] duration-150 hover:bg-(--theme-surface-hover) hover:text-(--theme-text-strong)"
             onClick={() => void copy()}
             title="复制代码"
             aria-label="复制代码"
@@ -84,8 +89,9 @@ function CodeBlock({
           </button>
         </div>
       </div>
-      <pre>
+      <pre className="m-0 max-h-120 overflow-auto rounded-none border-0 bg-transparent px-[15px] py-3">
         <code
+          className="bg-transparent p-0 text-inherit"
           dangerouslySetInnerHTML={{
             __html: highlighted || '&#8203;'
           }}

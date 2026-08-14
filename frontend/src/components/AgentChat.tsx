@@ -401,15 +401,18 @@ function AgentQuestionRail({
   const previewQuestion = preview === null ? null : questions[preview]
   return (
     <aside
-      className="agent-question-rail"
+      className="agent-question-rail box-border block h-[min(360px,calc(100dvh-80px))] min-h-0 -translate-y-1/2 self-start border-0 bg-transparent px-0.5 fixed top-1/2 z-2 [grid-column:1] [grid-row:1/span_2]"
       aria-label="问题记录导航"
       ref={railRef}
       style={railStyle}
     >
-      <div className="agent-question-list" role="list">
+      <div className="agent-question-list relative flex h-full min-h-0 flex-col items-center justify-center gap-[var(--agent-question-gap,8px)]" role="list">
         {questions.map(({ message, index }, questionIndex) => (
           <button
-            className={questionIndex === active ? 'active' : ''}
+            className={cn(
+              'group relative z-1 flex w-4 min-h-[2px] flex-[0_0_var(--agent-question-slot,10px)] cursor-pointer items-center justify-center rounded-full border border-transparent bg-transparent p-0 hover:bg-(--theme-surface-hover)',
+              questionIndex === active && 'active'
+            )}
             key={index}
             title={message.content}
             aria-label={`问题 ${questionIndex + 1}：${message.content.trim() || '空问题'}`}
@@ -425,14 +428,24 @@ function AgentQuestionRail({
               setActive(questionIndex)
             }}
           >
-            <span className="agent-question-marker" aria-hidden="true" />
+            <span
+              className={cn(
+                'block h-px w-2 bg-(--theme-text-faint) transition-[background,width] duration-150 group-hover:w-3 group-hover:bg-(--theme-text-strong)',
+                questionIndex === active && 'w-3 bg-(--theme-text-strong)'
+              )}
+              aria-hidden="true"
+            />
           </button>
         ))}
       </div>
       {previewQuestion && (
-        <div className="agent-question-preview" role="status">
-          <strong>{previewQuestion.message.content.trim() || '空问题'}</strong>
-          <span>跳转到这次提问及其回答</span>
+        <div className="agent-question-preview absolute top-[calc(50%+var(--agent-question-preview-offset,0px))] left-[calc(100%+10px)] z-20 grid w-[270px] min-w-[210px] max-w-[calc(100vw-96px)] -translate-y-1/2 gap-[5px] rounded-xl border border-(--theme-border-default) bg-(--theme-surface-panel) px-[14px] py-3 text-(--theme-text-primary) shadow-[var(--theme-shadow-pop)]" role="status">
+          <strong className="overflow-hidden text-[0.78rem] leading-[1.45] font-[650] text-(--theme-text-strong) text-ellipsis whitespace-nowrap">
+            {previewQuestion.message.content.trim() || '空问题'}
+          </strong>
+          <span className="text-[0.7rem] leading-[1.5] text-(--theme-text-muted)">
+            跳转到这次提问及其回答
+          </span>
         </div>
       )}
     </aside>
@@ -1521,8 +1534,8 @@ export function AgentChatPage({
         </div>
       </header>
 
-      <div className="agent-body">
-        <div className="agent-main">
+      <div className="agent-body block min-h-0 min-w-0 w-full has-[.agent-sessions]:grid has-[.agent-sessions]:grid-cols-[240px_minmax(0,1fr)] has-[.agent-sessions]:items-start max-[760px]:has-[.agent-sessions]:block @max-[720px]:has-[.agent-sessions]:block">
+        <div className="agent-main relative flex min-h-0 min-w-0 w-full flex-[1_1_auto] flex-col has-[.agent-question-rail]:grid has-[.agent-question-rail]:items-start has-[.agent-question-rail]:pl-0">
           <AgentQuestionRail messages={messages} threadRef={threadRef} />
           <section
             className="grid min-h-0 w-full justify-items-stretch gap-5 overflow-visible px-8 pb-3 pt-3.5"

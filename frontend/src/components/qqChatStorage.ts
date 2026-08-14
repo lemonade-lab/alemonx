@@ -22,6 +22,8 @@ export type QQContact = {
 export type QQSpace = {
   id: string
   label: string
+  /** Platform-provided group, guild or channel portrait when available. */
+  avatar?: string
   scope: 'group' | 'channel' | 'direct'
   source: 'conversation' | 'directory'
   updatedAt: number
@@ -45,6 +47,8 @@ export type QQChatStore<Event, Tool> = {
   favorites: QQFavorite[]
   contacts: QQContact[]
   spaces: QQSpace[]
+  /** Private threads the user explicitly chose to open. */
+  openedConversationIds: string[]
   preferences: QQChatPreferences
 }
 
@@ -71,7 +75,7 @@ export function qqChatWindowStorageKey(root: string) {
 }
 
 export function readQQChatStore<Event, Tool>(root: string): QQChatStore<Event, Tool> {
-  const empty: QQChatStore<Event, Tool> = { savedAt: Date.now(), events: [], tools: [], drafts: {}, favorites: [], contacts: [], spaces: [], preferences: defaultPreferences }
+  const empty: QQChatStore<Event, Tool> = { savedAt: Date.now(), events: [], tools: [], drafts: {}, favorites: [], contacts: [], spaces: [], openedConversationIds: [], preferences: defaultPreferences }
   try {
     const saved = JSON.parse(localStorage.getItem(qqChatStorageKey(root)) || 'null') as Partial<QQChatStore<Event, Tool>> | null
     if (!saved) {
@@ -91,6 +95,7 @@ export function readQQChatStore<Event, Tool>(root: string): QQChatStore<Event, T
       favorites: (saved.favorites || []).filter(item => !item.expiresAt || item.expiresAt > Date.now()),
       contacts: Array.isArray(saved.contacts) ? saved.contacts : [],
       spaces: Array.isArray(saved.spaces) ? saved.spaces : [],
+      openedConversationIds: Array.isArray(saved.openedConversationIds) ? saved.openedConversationIds : [],
       preferences: { ...defaultPreferences, ...saved.preferences }
     }
   } catch {

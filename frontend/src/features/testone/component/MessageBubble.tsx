@@ -4,7 +4,6 @@ import { memo, useMemo, useState } from 'react';
 import { Image as Zoom } from 'antd';
 import { Button } from '@testone/ui/Button';
 import { type DataEnums } from '@testone/typing';
-import '@testone/component/MessageBubble.scss';
 import { getImageObjectUrl } from '@testone/core/imageStore';
 import type { Reaction } from '@testone/typing';
 
@@ -113,7 +112,7 @@ const MARKDOWN_RENDERERS: Record<string, (mdItem: any) => React.ReactNode> = {
     </>
   ),
   'MD.blockquote': md => (
-    <blockquote className="message-bubble__blockquote">
+    <blockquote className="my-[0.35rem] rounded-r-[0.4rem] border-l-[3px] border-[var(--button-background)] bg-[color-mix(in_srgb,var(--activityBar-background)_70%,transparent)] py-[0.4rem] pr-0 pl-3 text-[var(--descriptionForeground)] whitespace-pre-wrap break-words">
       {safeString(md.value).slice(0, 500)}
     </blockquote>
   ),

@@ -13,6 +13,17 @@
   --color-ink-500: var(--theme-ink-500);
   --radius-panel: 0.75rem;
   --radius-control: 0.375rem;
+  --animate-agent-pulse: agent-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes agent-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
 }
 
 @utility primary-button {
@@ -1901,6 +1912,7 @@ button {
  * container rather than the page viewport. The conversation list becomes an
  * overlay and keeps the message surface usable at narrow widths. */
 .qq-live-backdrop { display: none; }
+.qq-live-sidebar-closed .qq-live-sidebar { display: none; }
 .qq9-mention-chip { background: var(--theme-accent-soft); border-radius: 4px; color: var(--theme-accent-soft-text); font: inherit; padding: 0 3px; }.qq9-message-badge,.qq9-reaction-chip { display: inline-flex; align-items: center; border: 1px solid var(--theme-accent-soft-border); border-radius: 999px; color: var(--theme-accent-soft-text); font-size: 10px; margin-top: 4px; padding: 2px 6px; }.qq9-reaction-chip { background: var(--theme-accent-soft); cursor: pointer; }
 .qq9-popover-menu,.qq9-mention-menu { background: var(--theme-surface-panel); border: 1px solid var(--theme-border-strong); border-radius: 8px; box-shadow: var(--theme-shadow-pop); display: grid; gap: 2px; min-width: 136px; padding: 4px; position: absolute; z-index: 20; }
 .qq9-popover-menu button,.qq9-mention-menu button { background: transparent; border: 0; border-radius: 5px; color: var(--theme-text-secondary); cursor: pointer; font-size: 11px; padding: 7px 8px; text-align: left; white-space: nowrap; }
@@ -1909,15 +1921,30 @@ button {
 @container desktop-window (max-width: 759px) {
   .qq-live-shell,
   .qq-live-shell.qq-live-sidebar-open,
-  .qq-live-shell.qq-live-sidebar-closed { grid-template-columns: 46px minmax(0, 1fr); }
+  .qq-live-shell.qq-live-sidebar-closed { grid-template-columns: 46px minmax(0, 1fr) !important; }
   .qq-live-nav { padding-left: 4px; padding-right: 4px; }
   .qq-live-nav button span { display: none; }
   .qq-live-nav button { height: 38px; }
-  .qq-live-sidebar { bottom: 0; box-shadow: 12px 0 28px rgb(15 23 42 / .16); left: 46px; position: absolute; top: 0; width: min(272px, calc(100% - 46px)); z-index: 4; }
+  .qq-live-sidebar { bottom: 0; box-shadow: 12px 0 28px rgb(15 23 42 / .16); left: 46px; position: absolute; top: 0; width: min(272px, calc(100% - 46px)); z-index: 30; }
   .qq-live-sidebar-closed .qq-live-sidebar { display: none; }
-  .qq-live-backdrop { background: rgb(15 23 42 / .28); border: 0; bottom: 0; display: block; left: 46px; position: absolute; right: 0; top: 0; z-index: 3; }
+  .qq-live-backdrop { background: rgb(15 23 42 / .28); border: 0; bottom: 0; display: block; left: 46px; position: absolute; right: 0; top: 0; z-index: 29; }
   .qq-live-shell main { min-width: 0; }
+  .qq-live-profile-drawer {
+    bottom: 0;
+    box-shadow: -12px 0 28px rgb(15 23 42 / .16);
+    display: block !important;
+    position: absolute;
+    right: 0;
+    top: 0;
+    width: min(320px, calc(100% - 46px));
+    z-index: 31;
+  }
 }
+
+/* The main navigation is deliberately an icon rail: labels move to native
+ * tooltips/accessible names so the action targets never become vertically
+ * cramped in a small floating chat window. */
+.qq-live-nav button span { display: none; }
 
 /* A custom header still lives in the shared window chrome. Terminal tabs are
  * flush with that chrome instead of looking like a second, nested toolbar. */
@@ -6797,127 +6824,6 @@ button > svg,
 }
 
 /* Agent 会话侧栏 */
-.agent-body {
-  display: block;
-  min-height: 0;
-  min-width: 0;
-  width: 100%;
-}
-.agent-body:has(.agent-sessions) {
-  display: grid;
-  grid-template-columns: 240px minmax(0, 1fr);
-  align-items: start;
-}
-.agent-main {
-  display: flex;
-  flex-direction: column;
-  flex: 1 1 auto;
-  min-height: 0;
-  min-width: 0;
-  width: 100%;
-  position: relative;
-}
-.agent-main:has(.agent-question-rail) {
-  display: grid;
-  align-items: start;
-  padding-left: 0;
-}
-.agent-question-rail {
-  align-self: start;
-  background: transparent;
-  border: 0;
-  box-sizing: border-box;
-  display: block;
-  left: 0;
-  grid-column: 1;
-  grid-row: 1 / span 2;
-  height: min(360px, calc(100dvh - 80px));
-  min-height: 0;
-  padding: 0 2px;
-  position: fixed;
-  top: 50dvh;
-  transform: translateY(-50%);
-  z-index: 2;
-}
-.agent-question-list {
-  align-items: center;
-  display: flex;
-  flex-direction: column;
-  gap: var(--agent-question-gap, 8px);
-  height: 100%;
-  justify-content: center;
-  min-height: 0;
-  position: relative;
-}
-.agent-question-list button {
-  align-items: center;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 999px;
-  cursor: pointer;
-  display: flex;
-  flex: 0 0 var(--agent-question-slot, 10px);
-  justify-content: center;
-  min-height: 2px;
-  padding: 0;
-  position: relative;
-  width: 16px;
-  z-index: 1;
-}
-.agent-question-list button:hover {
-  background: var(--theme-surface-hover);
-}
-.agent-question-list button.active {
-  background: transparent;
-  border-color: transparent;
-  box-shadow: none;
-}
-.agent-question-marker {
-  background: var(--theme-text-faint);
-  display: block;
-  height: 1px;
-  transition:
-    background 0.15s ease,
-    width 0.15s ease;
-  width: 8px;
-}
-.agent-question-list button:hover .agent-question-marker,
-.agent-question-list button.active .agent-question-marker {
-  background: var(--theme-text-strong);
-  width: 12px;
-}
-.agent-question-preview {
-  background: var(--theme-surface-panel);
-  border: 1px solid var(--theme-border-default);
-  border-radius: 12px;
-  box-shadow: var(--theme-shadow-pop);
-  color: var(--theme-text-primary);
-  display: grid;
-  gap: 5px;
-  left: calc(100% + 10px);
-  max-width: calc(100vw - 96px);
-  min-width: 210px;
-  padding: 12px 14px;
-  position: absolute;
-  top: calc(50% + var(--agent-question-preview-offset, 0px));
-  transform: translateY(-50%);
-  width: 270px;
-  z-index: 20;
-}
-.agent-question-preview strong {
-  color: var(--theme-text-strong);
-  font-size: 0.78rem;
-  font-weight: 650;
-  line-height: 1.45;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.agent-question-preview span {
-  color: var(--theme-text-muted);
-  font-size: 0.7rem;
-  line-height: 1.5;
-}
 .agent-main:has(.agent-question-rail) > .agent-thread,
 .agent-main:has(.agent-question-rail) > .agent-composer {
   grid-column: 2;
@@ -6963,9 +6869,6 @@ button > svg,
   .agent-composer-hint {
     display: none;
   }
-  .agent-body:has(.agent-sessions) {
-    display: block;
-  }
   .agent-sessions {
     border-bottom: 1px solid var(--theme-border-default);
     border-right: 0;
@@ -6986,9 +6889,6 @@ button > svg,
    viewport itself is wide. Use the component's actual width so the session
    rail never squeezes the conversation down to a character-wide column. */
 @container (max-width: 720px) {
-  .agent-body:has(.agent-sessions) {
-    display: block;
-  }
   .agent-sessions {
     border-bottom: 1px solid var(--theme-border-default);
     border-right: 0;
@@ -7331,277 +7231,6 @@ button > svg,
   display: none !important;
 }
 
-/* Agent 文件选择器 */
-.agent-file-dialog {
-  max-width: min(800px, calc(100vw - 32px));
-  width: 800px;
-}
-.agent-finder-mode {
-  background: var(--theme-surface-raised);
-  border: 1px solid var(--theme-border-subtle);
-  border-radius: 7px;
-  display: inline-flex;
-  gap: 2px;
-  padding: 2px;
-}
-.agent-finder-mode button {
-  background: transparent;
-  border: 0;
-  border-radius: 5px;
-  color: var(--theme-text-muted);
-  cursor: pointer;
-  font:
-    600 0.74rem/1 Inter,
-    sans-serif;
-  padding: 6px 8px;
-}
-.agent-finder-mode button:hover {
-  background: var(--theme-surface-hover);
-  color: var(--theme-text-primary);
-}
-.agent-finder-mode button.active {
-  background: var(--theme-surface-panel);
-  box-shadow: 0 1px 3px rgb(28 26 23 / 0.14);
-  color: var(--theme-accent-text);
-}
-.agent-finder {
-  border: 1px solid var(--theme-border-default);
-  border-radius: 10px;
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
-  height: 360px;
-  overflow: hidden;
-}
-.agent-finder-toolbar {
-  align-items: center;
-  background: var(--theme-surface-raised);
-  border-bottom: 1px solid var(--theme-border-default);
-  display: flex;
-  gap: 12px;
-  justify-content: space-between;
-  padding: 8px 10px;
-}
-.agent-finder-tools {
-  align-items: center;
-  display: flex;
-  flex: 0 0 auto;
-  gap: 7px;
-}
-.agent-finder-navigation,
-.agent-finder-crumbs,
-.agent-finder-crumbs span,
-.agent-finder-search {
-  align-items: center;
-  display: flex;
-}
-.agent-finder-extensions {
-  align-items: center;
-  background: var(--theme-surface-input);
-  border: 1px solid var(--theme-border-subtle);
-  border-radius: 6px;
-  color: var(--theme-text-muted);
-  display: flex;
-  font-size: 0.68rem;
-  gap: 5px;
-  padding: 0 7px;
-}
-.agent-finder-extensions span {
-  color: var(--theme-text-faint);
-  font-weight: 600;
-}
-.agent-finder-extensions input {
-  background: transparent;
-  border: 0;
-  color: var(--theme-text-primary);
-  font-size: 0.72rem;
-  height: 28px;
-  outline: 0;
-  width: 64px;
-}
-.agent-finder-navigation {
-  gap: 7px;
-  min-width: 0;
-}
-.agent-finder-crumbs {
-  min-width: 0;
-  overflow: hidden;
-}
-.agent-finder-crumbs span {
-  flex: 0 0 auto;
-}
-.agent-finder-crumbs button {
-  background: transparent;
-  border: 0;
-  border-radius: 5px;
-  color: var(--theme-text-secondary);
-  cursor: pointer;
-  font-size: 0.74rem;
-  max-width: 110px;
-  overflow: hidden;
-  padding: 3px 6px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.agent-finder-crumbs button:hover {
-  background: var(--theme-surface-hover);
-  color: var(--theme-text-strong);
-}
-.agent-finder-crumbs svg {
-  color: var(--theme-text-faint);
-  flex: 0 0 auto;
-}
-.agent-finder-search {
-  background: var(--theme-surface-input);
-  border: 1px solid var(--theme-border-subtle);
-  border-radius: 6px;
-  color: var(--theme-text-muted);
-  flex: 0 1 190px;
-  gap: 6px;
-  padding: 0 8px;
-}
-.agent-finder-search:focus-within {
-  border-color: var(--theme-accent);
-  box-shadow: 0 0 0 2px var(--theme-accent-soft);
-}
-.agent-finder-search input {
-  background: transparent;
-  border: 0;
-  color: var(--theme-text-primary);
-  font-size: 0.74rem;
-  height: 28px;
-  min-width: 0;
-  outline: 0;
-  width: 100%;
-}
-.agent-finder-body {
-  display: grid;
-  grid-template-columns: 154px minmax(0, 1fr);
-  min-height: 0;
-}
-.agent-finder-body aside {
-  background: var(--theme-surface-raised);
-  border-right: 1px solid var(--theme-border-default);
-  display: grid;
-  align-content: start;
-  gap: 2px;
-  overflow: auto;
-  padding: 10px 7px;
-}
-.agent-finder-body aside small {
-  color: var(--theme-text-faint);
-  font-size: 0.66rem;
-  font-weight: 650;
-  padding: 0 7px 5px;
-}
-.agent-finder-body aside button {
-  align-items: center;
-  background: transparent;
-  border: 0;
-  border-radius: 6px;
-  color: var(--theme-text-secondary);
-  cursor: pointer;
-  display: flex;
-  font-size: 0.74rem;
-  gap: 7px;
-  min-height: 28px;
-  padding: 0 7px;
-  text-align: left;
-}
-.agent-finder-body aside button:hover {
-  background: var(--theme-surface-hover);
-}
-.agent-finder-body aside button.active {
-  background: var(--theme-accent-soft);
-  color: var(--theme-accent-text);
-  font-weight: 600;
-}
-.agent-finder-body main {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  min-width: 0;
-}
-.agent-finder-columns,
-.agent-finder-list > button {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 72px;
-}
-.agent-finder-columns {
-  border-bottom: 1px solid var(--theme-border-subtle);
-  color: var(--theme-text-faint);
-  font-size: 0.66rem;
-  font-weight: 650;
-  padding: 7px 10px;
-}
-.agent-finder-list {
-  display: grid;
-  align-content: start;
-  gap: 1px;
-  overflow: auto;
-  padding: 5px;
-}
-.agent-finder-list > button {
-  align-items: center;
-  background: transparent;
-  border: 0;
-  border-radius: 6px;
-  color: var(--theme-text-primary);
-  cursor: pointer;
-  font-size: 0.76rem;
-  min-height: 31px;
-  padding: 0 7px;
-  text-align: left;
-}
-.agent-finder-list > button:hover {
-  background: var(--theme-surface-hover);
-}
-.agent-finder-list > button.selected {
-  background: var(--theme-accent-soft);
-  color: var(--theme-accent-text);
-}
-.agent-finder-list > button > span {
-  align-items: center;
-  display: flex;
-  gap: 8px;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.agent-finder-list > button small {
-  color: var(--theme-text-faint);
-  font-size: 0.66rem;
-}
-.agent-finder footer {
-  align-items: center;
-  background: var(--theme-surface-raised);
-  border-top: 1px solid var(--theme-border-default);
-  color: var(--theme-text-muted);
-  display: flex;
-  font-size: 0.7rem;
-  gap: 10px;
-  justify-content: space-between;
-  min-width: 0;
-  padding: 8px 10px;
-}
-.agent-finder footer > span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.agent-finder footer .secondary-button {
-  flex: 0 0 auto;
-}
-.file-picker-error {
-  color: var(--theme-danger);
-  font-size: 0.72rem;
-  margin: 8px;
-}
-.file-picker-empty {
-  color: var(--theme-text-faint);
-  font-size: 0.72rem;
-  margin: 8px;
-  text-align: center;
-}
 .workspace-context-menu {
   background: var(--theme-surface-panel);
   border: 1px solid var(--theme-border-default);
@@ -7765,35 +7394,6 @@ button > svg,
   }
 }
 @media (max-width: 640px) {
-  .agent-file-dialog {
-    width: calc(100vw - 24px);
-  }
-  .agent-finder-body {
-    grid-template-columns: 1fr;
-  }
-  .agent-finder-body aside {
-    display: none;
-  }
-  .agent-finder {
-    height: 320px;
-  }
-  .agent-finder-crumbs {
-    display: none;
-  }
-  .agent-finder-toolbar {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-  .agent-finder-tools {
-    justify-content: space-between;
-    width: 100%;
-  }
-  .agent-finder-search {
-    flex: 0 1 130px;
-  }
-  .agent-finder-extensions {
-    display: none;
-  }
 }
 
 /* Floating application windows stay above the workbench without replacing it. */

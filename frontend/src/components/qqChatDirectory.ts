@@ -12,6 +12,14 @@ export function resultItems(data: unknown): Record<string, unknown>[] {
 
 export function recordText(record: Record<string, unknown>, keys: string[]) {
   for (const key of keys) if (typeof record[key] === 'string' && record[key]) return record[key] as string
+  const normalize = (key: string) => key.toLowerCase().replace(/[_-]/g, '')
+  const lowercase = new Map(
+    Object.entries(record).map(([key, value]) => [normalize(key), value])
+  )
+  for (const key of keys) {
+    const value = lowercase.get(normalize(key))
+    if (typeof value === 'string' && value) return value
+  }
   return ''
 }
 
@@ -28,7 +36,14 @@ export function collectActionDirectory(action: string, data: unknown, now = Date
     if (action === 'me.guilds' || action === 'guild.list' || action === 'channel.list') {
       const id = recordText(item, ['id', 'guild_id', 'channel_id', 'guildId', 'channelId'])
       if (!id) continue
-      spaces.push({ id: `channel:channel:${id}`, label: recordText(item, ['name', 'guild_name', 'channel_name']) || id, scope: 'channel', source: 'directory', updatedAt: now })
+      spaces.push({
+        id: `channel:channel:${id}`,
+        label: recordText(item, ['name', 'guild_name', 'channel_name']) || id,
+        avatar: recordText(item, ['avatar', 'avatar_url', 'icon', 'icon_url', 'guild_icon', 'channel_avatar']),
+        scope: 'channel',
+        source: 'directory',
+        updatedAt: now
+      })
     }
   }
   return { contacts, spaces }
