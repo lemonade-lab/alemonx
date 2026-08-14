@@ -229,9 +229,9 @@ func (m *Manager) startLocked() error {
 	m.server = server
 	if err := m.restoreSnapshotLocked(); err != nil {
 		log.Printf("恢复内置 Redis 数据失败：%v", err)
-		m.message = fmt.Sprintf("内置 Redis 已启动，地址 %s；历史数据恢复失败。", server.Addr())
+		m.message = fmt.Sprintf("内置 Redis 已启动；历史数据恢复失败。", server.Addr())
 	} else {
-		m.message = fmt.Sprintf("内置 Redis 已启动，地址 %s，已启用本地持久化。", server.Addr())
+		m.message = fmt.Sprintf("内置 Redis 已启动，已启用本地持久化。", server.Addr())
 	}
 	m.startSnapshotterLocked()
 	m.external = false

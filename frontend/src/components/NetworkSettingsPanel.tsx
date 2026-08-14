@@ -7,7 +7,6 @@ import {
   Package,
   RotateCcw,
   Save,
-  ShieldCheck,
   Wifi
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
@@ -236,11 +235,6 @@ export function NetworkSettingsPanel() {
           )
         })}
       </fieldset>
-
-      <div className="settings-network-scope">
-        <ShieldCheck className="size-4" />
-        <span>作用于 AlemonX 的更新、目录、插件与官方 Android 下载；始终绕过 localhost、127.0.0.1 与 ::1。项目 Git/NPM、机器人、WebView 与 AI 请求不受影响。</span>
-      </div>
 
       {message && (
         <p className={success ? 'settings-network-message is-success' : 'settings-network-message'}>

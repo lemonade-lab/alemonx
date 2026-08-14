@@ -123,6 +123,12 @@ await window.ALXHost.notification.send('my-status', '已完成', robot?.name || 
 
 `ALXHost.network.fetch` 仅提供 GET/HEAD 和最多 2 MiB 的响应，用于状态或元数据；大文件必须由插件 runner 通过下载 Broker 获取，以获得流式进度、取消、重试和缓存。
 
+需要接收浏览器文件的插件应在清单中声明上传动作，再由 Web UI 以 `multipart/form-data` 向 `POST /api/v1/setup/plugins/<pluginId>/upload` 发送 `action`、`destination` 与一个或多个 `files` 字段。宿主按清单 `maxBytes` 限制总大小、临时流式暂存文件，并只把暂存目录与目标目录传给对应 runner 动作；暂存内容会在动作结束后清理。示例：
+
+```json
+"uploads": [{ "action": "upload", "maxBytes": 2147483648 }]
+```
+
 ## 静态 Web 界面（必选）
 
 插件详情页会直接嵌入 `web.root/index.html`（同源 iframe）。界面用 `fetch` 调用本插件的**动作转发接口**：

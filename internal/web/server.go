@@ -1651,6 +1651,10 @@ func (s *server) startPluginEventBridge() {
 
 func (s *server) setupPluginActionHandler(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/v1/setup/plugins/"), "/")
+	if len(parts) == 2 && parts[1] == "upload" && r.Method == http.MethodPost {
+		s.setupPluginUploadHandler(w, r, parts[0])
+		return
+	}
 	if len(parts) == 2 && parts[1] == "status" && r.Method == http.MethodGet {
 		action := strings.TrimSpace(r.URL.Query().Get("action"))
 		plugin, findErr := s.plugins.Find(parts[0])
@@ -1881,6 +1885,114 @@ func (s *server) setupPluginActionHandler(w http.ResponseWriter, r *http.Request
 		}
 		if err != nil {
 			s.updateOperationData(created.ID, 100, result.Output, err.Error(), result.Data, true)
+			return
+		}
+		s.updateOperationData(created.ID, 100, result.Output, "", result.Data, true)
+	}()
+	writeJSON(w, http.StatusAccepted, created)
+}
+
+// setupPluginUploadHandler streams browser-selected files to a host-owned
+// temporary directory, then invokes only an upload action declared in the
+// installed plugin's manifest. Browser bytes never become arbitrary runner
+// parameters and temporary files are removed after the runner completes.
+func (s *server) setupPluginUploadHandler(w http.ResponseWriter, r *http.Request, pluginID string) {
+	plugin, err := s.plugins.Find(pluginID)
+	if err != nil || plugin.Online || !plugin.Enabled {
+		writeError(w, http.StatusBadRequest, "系统插件未安装或已停用。")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 2<<30+1<<20)
+	if err := r.ParseMultipartForm(16 << 20); err != nil {
+		writeError(w, http.StatusBadRequest, "上传格式无效。")
+		return
+	}
+	defer r.MultipartForm.RemoveAll()
+	action := strings.TrimSpace(r.FormValue("action"))
+	if action == "" && len(plugin.Uploads) == 1 {
+		action = plugin.Uploads[0].Action
+	}
+	upload, allowed := plugin.UploadAction(action)
+	if !allowed {
+		writeError(w, http.StatusBadRequest, "该插件未声明此上传操作。")
+		return
+	}
+	destination := strings.TrimSpace(r.FormValue("destination"))
+	if !filepath.IsAbs(destination) {
+		writeError(w, http.StatusBadRequest, "上传目标必须是绝对目录路径。")
+		return
+	}
+	files := r.MultipartForm.File["files"]
+	if len(files) == 0 {
+		files = r.MultipartForm.File["file"]
+	}
+	if len(files) == 0 {
+		writeError(w, http.StatusBadRequest, "请拖入至少一个文件。")
+		return
+	}
+	s.mu.Lock()
+	if active := activeSetupPluginOperation(s.operations, pluginID); active != nil {
+		s.mu.Unlock()
+		writeError(w, http.StatusConflict, "该插件正在执行“"+strings.TrimPrefix(active.Action, "setup:"+pluginID+":")+"”，请等待当前操作完成。")
+		return
+	}
+	created := operationTask{ID: "setup-" + time.Now().Format("20060102150405.000000000"), Action: "setup:" + pluginID + ":" + action, Status: "running", CreatedAt: time.Now()}
+	s.operations = append([]operationTask{created}, s.operations...)
+	if len(s.operations) > 40 {
+		s.operations = s.operations[:40]
+	}
+	s.mu.Unlock()
+
+	staging, err := os.MkdirTemp("", "alx-plugin-upload-")
+	if err != nil {
+		s.updateOperationData(created.ID, 100, "", "无法创建上传临时目录："+err.Error(), nil, true)
+		writeError(w, http.StatusInternalServerError, "无法创建上传临时目录。")
+		return
+	}
+	seen := map[string]bool{}
+	var total int64
+	for _, header := range files {
+		name := filepath.Base(strings.TrimSpace(header.Filename))
+		if name == "" || name == "." || len([]rune(name)) > 180 || seen[name] {
+			_ = os.RemoveAll(staging)
+			s.updateOperationData(created.ID, 100, "", "上传文件名无效或重复", nil, true)
+			writeError(w, http.StatusBadRequest, "上传文件名无效或重复。")
+			return
+		}
+		seen[name] = true
+		input, openErr := header.Open()
+		if openErr != nil {
+			_ = os.RemoveAll(staging)
+			s.updateOperationData(created.ID, 100, "", openErr.Error(), nil, true)
+			writeError(w, http.StatusBadRequest, "无法读取上传文件。")
+			return
+		}
+		output, createErr := os.OpenFile(filepath.Join(staging, name), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+		if createErr != nil {
+			_ = input.Close()
+			_ = os.RemoveAll(staging)
+			s.updateOperationData(created.ID, 100, "", createErr.Error(), nil, true)
+			writeError(w, http.StatusInternalServerError, "无法暂存上传文件。")
+			return
+		}
+		n, copyErr := io.Copy(output, io.LimitReader(input, upload.MaxBytes-total+1))
+		closeErr := output.Close()
+		_ = input.Close()
+		total += n
+		if copyErr != nil || closeErr != nil || total > upload.MaxBytes {
+			_ = os.RemoveAll(staging)
+			s.updateOperationData(created.ID, 100, "", "文件超过上传限制或暂存失败", nil, true)
+			writeError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("上传总大小不能超过 %d MiB。", upload.MaxBytes/(1024*1024)))
+			return
+		}
+	}
+	go func() {
+		defer os.RemoveAll(staging)
+		result, runErr := s.plugins.RunResultWithProgress(pluginID, action, map[string]string{"stagingDir": staging, "destination": destination}, false, func(event setupplugin.Progress) {
+			s.updateOperation(created.ID, event.Percent, event.Message, "", false)
+		})
+		if runErr != nil {
+			s.updateOperationData(created.ID, 100, result.Output, runErr.Error(), result.Data, true)
 			return
 		}
 		s.updateOperationData(created.ID, 100, result.Output, "", result.Data, true)

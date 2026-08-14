@@ -86,7 +86,7 @@ export function RedisSettingsPanel() {
       setPort(String(next.port))
       setDisabled(next.disabled)
       setChanged(false)
-      setMessage(next.disabled ? '内置 Redis 已禁用。' : 'Redis 配置已保存。')
+      setMessage(next.disabled ? '' : '')
     } catch (error) {
       setMessage(messageFrom(error, 'Redis 配置未保存。'))
     }
@@ -111,7 +111,6 @@ export function RedisSettingsPanel() {
           </i>
           <span>
             <strong>Redis 内置服务</strong>
-            <small>为没有独立 Redis 条件的应用提供本机持久化 Redis</small>
           </span>
           <button
             className="text-button settings-service-refresh"
@@ -181,7 +180,6 @@ export function RedisSettingsPanel() {
           </i>
           <span>
             <strong>服务配置</strong>
-            <small>仅本机 loopback 生效，重启工作台后按此配置恢复</small>
           </span>
         </header>
         <div className="settings-redis-form">
@@ -238,10 +236,6 @@ export function RedisSettingsPanel() {
             <Save className="size-3.5" /> 保存配置
           </Button>
         </div>
-        <small className="settings-redis-note">
-          内置 Redis 会每秒保存本地快照，并在重启后自动恢复；适合本地调试与无独立
-          Redis 的场景。使用外部 Redis 时不会读取或写入内置快照。
-        </small>
       </section>
 
       {message && (

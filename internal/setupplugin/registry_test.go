@@ -99,6 +99,20 @@ func TestDecodeManifestAcceptsOnlyTypedSystemPickers(t *testing.T) {
 	}
 }
 
+func TestDecodeManifestAcceptsOnlyDeclaredUploadActions(t *testing.T) {
+	plugin, err := decodeManifest([]byte(`{"id":"demo","name":"Demo","version":"1.0.0","web":{"root":"web"},"uploads":[{"action":"upload","maxBytes":1048576}]}`), "/plugins/demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	upload, ok := plugin.UploadAction("upload")
+	if !ok || upload.MaxBytes != 1048576 {
+		t.Fatalf("upload declaration = %#v, %t", upload, ok)
+	}
+	if _, err := decodeManifest([]byte(`{"id":"demo","name":"Demo","version":"1.0.0","web":{"root":"web"},"uploads":[{"action":"upload","maxBytes":0}]}`), "/plugins/demo"); err == nil {
+		t.Fatal("upload declaration without a size limit must be rejected")
+	}
+}
+
 func TestDecodeManifestAcceptsFixedPrivilegedOperation(t *testing.T) {
 	plugin, err := decodeManifest([]byte(`{"id":"demo","name":"Demo","version":"1.0.0","web":{"root":"web"},"privilegedOperations":[{"action":"prepare-runtime","runnerAction":"prepare-runtime","title":"准备运行环境","authorization":"password","platforms":["linux"],"commands":[{"program":"apt-get","args":["install","-y","xvfb"]}]}]}`), "/plugins/demo")
 	if err != nil {

@@ -76,6 +76,7 @@ type Plugin struct {
 	Web           *WebSpec           `json:"web,omitempty"`
 	Services      []ServiceSpec      `json:"services,omitempty"`
 	SystemPickers []SystemPickerSpec `json:"systemPickers,omitempty"`
+	Uploads       []UploadSpec       `json:"uploads,omitempty"`
 	// StatusActions are runner actions that are explicitly read-only. The host
 	// coalesces them without allocating a task, which makes rapid UI polling a
 	// normal system-plugin capability rather than a per-plugin special case.
@@ -215,6 +216,14 @@ type SystemPickerSpec struct {
 	Multiple bool              `json:"multiple,omitempty"`
 }
 
+// UploadSpec declares a runner action permitted to receive browser-uploaded
+// bytes staged by the host. It prevents a plugin from treating arbitrary action
+// parameters as local files while keeping large file transfer out of JSON.
+type UploadSpec struct {
+	Action   string `json:"action"`
+	MaxBytes int64  `json:"maxBytes"`
+}
+
 func (p Plugin) SystemPicker(id string) (SystemPickerSpec, bool) {
 	for _, picker := range p.SystemPickers {
 		if picker.ID == id {
@@ -222,6 +231,15 @@ func (p Plugin) SystemPicker(id string) (SystemPickerSpec, bool) {
 		}
 	}
 	return SystemPickerSpec{}, false
+}
+
+func (p Plugin) UploadAction(action string) (UploadSpec, bool) {
+	for _, upload := range p.Uploads {
+		if upload.Action == action {
+			return upload, true
+		}
+	}
+	return UploadSpec{}, false
 }
 
 func (p Plugin) AllowsStatusAction(action string) bool {
@@ -566,12 +584,14 @@ func pluginsEqual(a, b Plugin) bool {
 func pluginDeclaredCapabilitiesEqual(a, b Plugin) bool {
 	left, leftErr := json.Marshal(struct {
 		Media                []MediaSpec               `json:"media"`
+		Uploads              []UploadSpec              `json:"uploads"`
 		PrivilegedOperations []PrivilegedOperationSpec `json:"privilegedOperations"`
-	}{a.Media, a.PrivilegedOperations})
+	}{a.Media, a.Uploads, a.PrivilegedOperations})
 	right, rightErr := json.Marshal(struct {
 		Media                []MediaSpec               `json:"media"`
+		Uploads              []UploadSpec              `json:"uploads"`
 		PrivilegedOperations []PrivilegedOperationSpec `json:"privilegedOperations"`
-	}{b.Media, b.PrivilegedOperations})
+	}{b.Media, b.Uploads, b.PrivilegedOperations})
 	return leftErr == nil && rightErr == nil && bytes.Equal(left, right)
 }
 
@@ -1212,6 +1232,15 @@ func decodeManifest(data []byte, source string) (Plugin, error) {
 			return Plugin{}, errors.New("setup plugin system picker title is invalid")
 		}
 		seenPickers[picker.ID] = true
+	}
+	seenUploads := map[string]bool{}
+	for index := range plugin.Uploads {
+		upload := &plugin.Uploads[index]
+		upload.Action = strings.TrimSpace(upload.Action)
+		if upload.Action == "" || len(upload.Action) > 96 || upload.MaxBytes < 1 || upload.MaxBytes > 2<<30 || seenUploads[upload.Action] {
+			return Plugin{}, errors.New("setup plugin uploads require unique actions and a maximum size between 1 byte and 2 GiB")
+		}
+		seenUploads[upload.Action] = true
 	}
 	seenStatusActions := map[string]bool{}
 	for index, action := range plugin.StatusActions {
