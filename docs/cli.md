@@ -2,6 +2,20 @@
 
 工作台提供同名的 `alx` 命令，用于在浏览器不可用或需要远程排障时完成常见操作。后台安装后命令会位于用户目录的本地命令目录；若终端尚未找到它，请按安装结果将该目录加入 `PATH`。
 
+尚未安装时，不必前往 GitHub Releases。macOS、Linux、FreeBSD 可执行：
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/lemonade-lab/alemonjs-setup/main/scripts/install.sh | sh
+```
+
+Windows PowerShell 可执行：
+
+```powershell
+irm https://raw.githubusercontent.com/lemonade-lab/alemonjs-setup/main/scripts/install.ps1 | iex
+```
+
+脚本会下载当前系统对应的最新正式包并校验 SHA-256；完成后重新打开终端即可运行 `alx`。
+
 ```bash
 # 打开与状态
 alx open
