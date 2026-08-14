@@ -35,7 +35,7 @@ func newTestManager(t *testing.T) *Manager {
 func TestManagerStartsAndStopsTemporaryRedis(t *testing.T) {
 	manager := newTestManager(t)
 	status := manager.Status()
-	if status.Running || status.Managed || status.Port != DefaultPort {
+	if status.Running || status.Managed || status.Port != DefaultPort || !status.AutoStart {
 		t.Fatalf("default status = %+v", status)
 	}
 	if err := manager.Configure(freePort(t), false, false); err != nil {
@@ -64,6 +64,67 @@ func TestManagerStartsAndStopsTemporaryRedis(t *testing.T) {
 	status = manager.Status()
 	if status.Running || status.Managed {
 		t.Fatalf("stopped status = %+v", status)
+	}
+}
+
+func TestManagerRestoresPersistedDataAfterRestart(t *testing.T) {
+	manager := newTestManager(t)
+	port := freePort(t)
+	if err := manager.Configure(port, true, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Start(); err != nil {
+		t.Fatal(err)
+	}
+	database := manager.server.DB(0)
+	if err := database.Set("string", "value"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Push("list", "first", "second"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.SetAdd("set", "one", "two"); err != nil {
+		t.Fatal(err)
+	}
+	database.HSet("hash", "field", "value")
+	if _, err := database.ZAdd("zset", 2.5, "member"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.XAdd("stream", "1-0", []string{"field", "value"}); err != nil {
+		t.Fatal(err)
+	}
+	database.SetTTL("string", time.Minute)
+	manager.Close()
+
+	restarted := NewManager(manager.path)
+	if err := restarted.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer restarted.Close()
+	restored := restarted.server.DB(0)
+	if value, err := restored.Get("string"); err != nil || value != "value" {
+		t.Fatalf("restored string = %q, %v", value, err)
+	}
+	if values, err := restored.List("list"); err != nil || strings.Join(values, ",") != "first,second" {
+		t.Fatalf("restored list = %#v, %v", values, err)
+	}
+	if values, err := restored.Members("set"); err != nil || strings.Join(values, ",") != "one,two" {
+		t.Fatalf("restored set = %#v, %v", values, err)
+	}
+	if value := restored.HGet("hash", "field"); value != "value" {
+		t.Fatalf("restored hash = %q", value)
+	}
+	if score, err := restored.ZScore("zset", "member"); err != nil || score != 2.5 {
+		t.Fatalf("restored zset = %v, %v", score, err)
+	}
+	if entries, err := restored.Stream("stream"); err != nil || len(entries) != 1 || entries[0].ID != "1-0" || strings.Join(entries[0].Values, ",") != "field,value" {
+		t.Fatalf("restored stream = %#v, %v", entries, err)
+	}
+	if ttl := restored.TTL("string"); ttl <= 0 {
+		t.Fatalf("restored string TTL = %s", ttl)
+	}
+	if status := restarted.Status(); !status.Persistent || status.LastSaved == "" {
+		t.Fatalf("persistent status = %+v", status)
 	}
 }
 

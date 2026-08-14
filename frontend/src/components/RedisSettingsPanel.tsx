@@ -55,7 +55,7 @@ export function RedisSettingsPanel() {
     ? '已禁用'
     : data.running
       ? data.managed
-        ? '运行中 · 临时内存 Redis'
+        ? '运行中 · 内置持久化 Redis'
         : '使用中 · 外部 Redis'
       : '未运行'
 
@@ -86,7 +86,7 @@ export function RedisSettingsPanel() {
       setPort(String(next.port))
       setDisabled(next.disabled)
       setChanged(false)
-      setMessage(next.disabled ? '临时 Redis 已禁用。' : 'Redis 配置已保存。')
+      setMessage(next.disabled ? '内置 Redis 已禁用。' : 'Redis 配置已保存。')
     } catch (error) {
       setMessage(messageFrom(error, 'Redis 配置未保存。'))
     }
@@ -110,8 +110,8 @@ export function RedisSettingsPanel() {
             <Database className="size-4" />
           </i>
           <span>
-            <strong>Redis 临时服务</strong>
-            <small>为没有独立 Redis 条件的应用提供内存版临时 Redis</small>
+            <strong>Redis 内置服务</strong>
+            <small>为没有独立 Redis 条件的应用提供本机持久化 Redis</small>
           </span>
           <button
             className="text-button settings-service-refresh"
@@ -210,7 +210,7 @@ export function RedisSettingsPanel() {
               }}
             />
             <span>
-              <strong>启用临时 Redis 服务</strong>
+              <strong>启用内置 Redis 服务</strong>
               <small>关闭后不会启动；可用 alx --redis-off 快速禁用</small>
             </span>
           </label>
@@ -226,7 +226,7 @@ export function RedisSettingsPanel() {
             />
             <span>
               <strong>工作台启动时自动开启</strong>
-              <small>端口被占用时自动跳过，改用现有 Redis</small>
+              <small>默认开启；端口已有 Redis 时自动复用该服务</small>
             </span>
           </label>
           <Button
@@ -239,8 +239,8 @@ export function RedisSettingsPanel() {
           </Button>
         </div>
         <small className="settings-redis-note">
-          临时 Redis 只保存在内存中，数据会随工作台退出清空；适合本地调试与无独立
-          Redis 的场景，不建议存放重要数据。
+          内置 Redis 会每秒保存本地快照，并在重启后自动恢复；适合本地调试与无独立
+          Redis 的场景。使用外部 Redis 时不会读取或写入内置快照。
         </small>
       </section>
 

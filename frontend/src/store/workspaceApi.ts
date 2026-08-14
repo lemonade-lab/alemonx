@@ -153,6 +153,8 @@ export type SystemRedisStatus = {
   message: string
   autoStart: boolean
   disabled: boolean
+  persistent: boolean
+  lastSaved?: string
 }
 export type SystemCurrentRobot = {
   root: string

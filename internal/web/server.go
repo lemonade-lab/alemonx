@@ -964,7 +964,7 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 		if redisStatus := s.redisManager.Status(); redisStatus.AutoStart && !redisStatus.Disabled {
 			go func() {
 				if err := s.redisManager.Start(); err != nil {
-					log.Printf("临时 Redis 自动启动失败：%v", err)
+					log.Printf("内置 Redis 自动启动失败：%v", err)
 				}
 			}()
 		}

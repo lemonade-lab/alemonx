@@ -1401,7 +1401,14 @@ func (m Manager) Run(root, action, message, packageName, version, tag, token str
 		})
 	case "switch-local-package-version":
 		return m.syncLocalPackageOperation(root, func() (Result, error) {
-			return switchLocalPackageVersion(root, packageName, version)
+			return switchLocalPackageVersion(root, packageName, version, false)
+		})
+	case "force-switch-local-package-version":
+		if !confirmed {
+			return Result{}, errors.New("强制切换会丢弃该插件工作区的本地修改，请确认后继续")
+		}
+		return m.syncLocalPackageOperation(root, func() (Result, error) {
+			return switchLocalPackageVersion(root, packageName, version, true)
 		})
 	case "install-connection":
 		if !allowedInstallPackage(packageName) {

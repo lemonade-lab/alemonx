@@ -2320,7 +2320,8 @@ export function Dashboard({
           'uninstall-module',
           'remove-local-package',
           'replace-local-package',
-          'switch-local-package-version'
+          'switch-local-package-version',
+          'force-switch-local-package-version'
         ].includes(data.action)
       ) {
         // The task mutation invalidates when it starts, which is still too
@@ -2631,12 +2632,15 @@ export function Dashboard({
           onSaveConfig={savePackageConfig}
           onConfigChanged={refreshConfigDraft}
           onRemove={async packageName => setPendingBackpackRemoval(packageName)}
-          onReplace={async (packageName, version) =>
+          onReplace={async (packageName, version, force = false) =>
             api('POST', {
               root,
-              action: 'switch-local-package-version',
+              action: force
+                ? 'force-switch-local-package-version'
+                : 'switch-local-package-version',
               package: packageName,
-              version
+              version,
+              ...(force ? { confirm: 'true' } : {})
             })
           }
         />
@@ -6360,7 +6364,11 @@ function BackpackPanel({
   ) => Promise<boolean>
   onConfigChanged: () => Promise<void>
   onRemove: (packageName: string) => Promise<void>
-  onReplace: (packageName: string, version: string) => Promise<boolean>
+  onReplace: (
+    packageName: string,
+    version: string,
+    force?: boolean
+  ) => Promise<boolean>
 }) {
   const [selectedName, setSelectedName] = useStoreState('')
   const [appToggleBusy, setAppToggleBusy] = useStoreState('')
@@ -6537,12 +6545,17 @@ function BackpackPackageManager({
     values: Record<string, unknown>
   ) => Promise<boolean>
   onRemove: (packageName: string) => Promise<void>
-  onReplace: (packageName: string, version: string) => Promise<boolean>
+  onReplace: (
+    packageName: string,
+    version: string,
+    force?: boolean
+  ) => Promise<boolean>
   onBack: () => void
   onRefresh: () => void
 }) {
   const [tab, setTab] = useStoreState<'readme' | 'config' | 'version'>('readme')
   const [version, setVersion] = useStoreState('')
+  const [forceSwitchOpen, setForceSwitchOpen] = useStoreState(false)
   const {
     data,
     isLoading: isConfigLoading,
@@ -6717,7 +6730,7 @@ function BackpackPackageManager({
               <span className="text-xs leading-5 text-slate-500">
                 当前使用 {versions.current || item.version || '未知'}；
                 {versions.source === 'git'
-                  ? '此插件是 Git 工作区，版本以标签为准。'
+                  ? '此插件是 Git 工作区，版本以标签为准；强制切换会丢弃该插件的本地 Git 修改。'
                   : '未检测到 Git，使用 npm 已发布版本。'}
               </span>
             </div>
@@ -6745,10 +6758,39 @@ function BackpackPackageManager({
               >
                 切换版本
               </button>
+              {versions.source === 'git' && (
+                <button
+                  className="inline-flex min-h-9 items-center justify-center rounded-md border border-orange-200 px-3 text-xs font-semibold text-orange-700 transition hover:bg-orange-50 disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={
+                    busy ||
+                    !version ||
+                    version === versions.current ||
+                    version.replace(/^v/, '') === item.version
+                  }
+                  onClick={() => setForceSwitchOpen(true)}
+                >
+                  强制切换
+                </button>
+              )}
             </div>
           </section>
         )}
       </div>
+      <ConfirmDialog
+        open={forceSwitchOpen}
+        title="强制切换插件版本"
+        subtitle="此操作只影响当前背包插件的 Git 工作区"
+        message={`将切换“${item.name}”到 ${version}，并永久丢弃该插件目录中所有未提交及未跟踪的 Git 文件。\n\n机器人主项目和其他插件不会受到影响。`}
+        confirmLabel="丢弃修改并切换"
+        destructive
+        busy={busy}
+        onCancel={() => setForceSwitchOpen(false)}
+        onConfirm={() => {
+          void onReplace(item.name, version, true).then(success => {
+            if (success) setForceSwitchOpen(false)
+          })
+        }}
+      />
     </RobotPanel>
   )
 }

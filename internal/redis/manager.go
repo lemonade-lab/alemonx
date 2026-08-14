@@ -1,7 +1,7 @@
-// Package redis manages a temporary in-process Redis for applications that do
-// not have access to a dedicated Redis service. The server is a pure-Go,
-// in-memory Redis implementation (miniredis): it starts on demand, binds only
-// to loopback, and clears all data when the workbench stops.
+// Package redis manages a local in-process Redis for applications that do not
+// have access to a dedicated Redis service. The server is a pure-Go Redis
+// implementation (miniredis), binds only to loopback, and persists supported
+// data types to a local snapshot.
 package redis
 
 import (
@@ -26,6 +26,9 @@ const (
 	// bindHost keeps the temporary Redis on loopback only; it is never exposed
 	// to the network.
 	bindHost = "127.0.0.1"
+	// snapshotInterval bounds the amount of data lost after an ungraceful exit.
+	// Graceful stop and restart always write a snapshot before closing Redis.
+	snapshotInterval = time.Second
 )
 
 // Config is the persisted manager configuration.
@@ -39,36 +42,45 @@ type Config struct {
 
 // Status is the manager state returned to the workbench.
 type Status struct {
-	Running   bool   `json:"running"`
-	Managed   bool   `json:"managed"`
-	External  bool   `json:"external"`
-	Skipped   bool   `json:"skipped"`
-	Port      int    `json:"port"`
-	Address   string `json:"address"`
-	Message   string `json:"message"`
-	AutoStart bool   `json:"autoStart"`
-	Disabled  bool   `json:"disabled"`
+	Running    bool   `json:"running"`
+	Managed    bool   `json:"managed"`
+	External   bool   `json:"external"`
+	Skipped    bool   `json:"skipped"`
+	Port       int    `json:"port"`
+	Address    string `json:"address"`
+	Message    string `json:"message"`
+	AutoStart  bool   `json:"autoStart"`
+	Disabled   bool   `json:"disabled"`
+	Persistent bool   `json:"persistent"`
+	LastSaved  string `json:"lastSaved,omitempty"`
 }
 
-// Manager owns the temporary Redis lifecycle and its persisted settings.
+// Manager owns the built-in Redis lifecycle and its persisted settings.
 type Manager struct {
-	path string
-	mu   sync.Mutex
+	path         string
+	snapshotPath string
+	mu           sync.Mutex
 
-	config   Config
-	server   *miniredis.Miniredis
-	external bool
-	skipped  bool
-	message  string
+	config       Config
+	server       *miniredis.Miniredis
+	external     bool
+	skipped      bool
+	message      string
+	lastSaved    time.Time
+	snapshotStop chan struct{}
 }
 
 // NewManager returns a manager backed by the given configuration file. A
 // missing or unreadable file falls back to the defaults; the failure is logged
 // so the manager remains usable even when the user config is corrupt.
 func NewManager(path string) *Manager {
-	manager := &Manager{path: path, config: Config{Port: DefaultPort}}
+	manager := &Manager{
+		path:         path,
+		snapshotPath: filepath.Join(filepath.Dir(path), "alx-redis-data.json"),
+		config:       Config{Port: DefaultPort, AutoStart: true},
+	}
 	if err := manager.loadLocked(); err != nil {
-		log.Printf("临时 Redis 配置不可用，已使用默认配置：%v", err)
+		log.Printf("内置 Redis 配置不可用，已使用默认配置：%v", err)
 	}
 	return manager
 }
@@ -80,7 +92,7 @@ func (m *Manager) Status() Status {
 	return m.statusLocked()
 }
 
-// Start launches the temporary Redis. When the configured port is already
+// Start launches the built-in Redis. When the configured port is already
 // occupied by an existing Redis server, startup is skipped and that server is
 // reported as the active Redis. When the port is occupied by another program,
 // an error is returned and nothing is started.
@@ -90,7 +102,7 @@ func (m *Manager) Start() error {
 	return m.startLocked()
 }
 
-// Stop shuts down the managed temporary Redis. Stopping is a no-op when the
+// Stop shuts down the managed built-in Redis. Stopping is a no-op when the
 // active Redis is external or nothing is running.
 func (m *Manager) Stop() (string, error) {
 	m.mu.Lock()
@@ -100,13 +112,17 @@ func (m *Manager) Stop() (string, error) {
 		return m.message, nil
 	}
 	if m.server == nil {
-		m.message = "临时 Redis 未在运行。"
+		m.message = "内置 Redis 未在运行。"
 		return m.message, nil
 	}
+	if err := m.saveSnapshotLocked(); err != nil {
+		log.Printf("保存内置 Redis 数据失败：%v", err)
+	}
+	m.stopSnapshotterLocked()
 	m.server.Close()
 	m.server = nil
 	m.skipped = false
-	m.message = "临时 Redis 已停止，内存数据已清空。"
+	m.message = "内置 Redis 已停止，数据已持久化。"
 	return m.message, nil
 }
 
@@ -117,6 +133,10 @@ func (m *Manager) Restart() (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.server != nil {
+		if err := m.saveSnapshotLocked(); err != nil {
+			log.Printf("保存内置 Redis 数据失败：%v", err)
+		}
+		m.stopSnapshotterLocked()
 		m.server.Close()
 		m.server = nil
 		m.skipped = false
@@ -142,6 +162,10 @@ func (m *Manager) Configure(port int, autoStart, disabled bool) error {
 	}
 	if disabled || portChanged {
 		if m.server != nil {
+			if err := m.saveSnapshotLocked(); err != nil {
+				log.Printf("保存内置 Redis 数据失败：%v", err)
+			}
+			m.stopSnapshotterLocked()
 			m.server.Close()
 			m.server = nil
 		}
@@ -154,7 +178,7 @@ func (m *Manager) Configure(port int, autoStart, disabled bool) error {
 	}
 	if disabled {
 		m.external = false
-		m.message = "临时 Redis 已禁用。"
+		m.message = "内置 Redis 已禁用。"
 	}
 	return nil
 }
@@ -165,6 +189,10 @@ func (m *Manager) Close() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.server != nil {
+		if err := m.saveSnapshotLocked(); err != nil {
+			log.Printf("保存内置 Redis 数据失败：%v", err)
+		}
+		m.stopSnapshotterLocked()
 		m.server.Close()
 		m.server = nil
 	}
@@ -173,10 +201,10 @@ func (m *Manager) Close() {
 
 func (m *Manager) startLocked() error {
 	if m.config.Disabled {
-		return errors.New("临时 Redis 已被禁用，无法启动；请在设置中重新启用后再试。")
+		return errors.New("内置 Redis 已被禁用，无法启动；请在设置中重新启用后再试。")
 	}
 	if m.server != nil {
-		m.message = fmt.Sprintf("临时 Redis 已在运行，地址 %s。", m.server.Addr())
+		m.message = fmt.Sprintf("内置 Redis 已在运行，地址 %s。", m.server.Addr())
 		return nil
 	}
 	port := m.config.Port
@@ -196,12 +224,18 @@ func (m *Manager) startLocked() error {
 	if err := server.StartAddr(address); err != nil {
 		m.external = false
 		m.skipped = false
-		return fmt.Errorf("启动临时 Redis 失败：%w", err)
+		return fmt.Errorf("启动内置 Redis 失败：%w", err)
 	}
 	m.server = server
+	if err := m.restoreSnapshotLocked(); err != nil {
+		log.Printf("恢复内置 Redis 数据失败：%v", err)
+		m.message = fmt.Sprintf("内置 Redis 已启动，地址 %s；历史数据恢复失败。", server.Addr())
+	} else {
+		m.message = fmt.Sprintf("内置 Redis 已启动，地址 %s，已启用本地持久化。", server.Addr())
+	}
+	m.startSnapshotterLocked()
 	m.external = false
 	m.skipped = false
-	m.message = fmt.Sprintf("临时 Redis 已启动，地址 %s。", server.Addr())
 	return nil
 }
 
@@ -216,27 +250,33 @@ func (m *Manager) statusLocked() Status {
 	external := m.external
 	message := m.message
 	if m.config.Disabled {
-		message = "临时 Redis 已禁用；可在设置中重新启用。"
+		message = "内置 Redis 已禁用；可在设置中重新启用。"
 	} else if message == "" {
 		switch {
 		case managed:
-			message = "临时 Redis 正在运行，数据仅保存在内存中。"
+			message = "内置 Redis 正在运行，数据会自动持久化到本机。"
 		case external:
 			message = "正在使用外部 Redis；工作台退出不会影响该服务。"
 		default:
-			message = "临时 Redis 未运行。"
+			message = "内置 Redis 未运行。"
 		}
 	}
+	lastSaved := ""
+	if !m.lastSaved.IsZero() {
+		lastSaved = m.lastSaved.Format(time.RFC3339)
+	}
 	return Status{
-		Running:   managed || external,
-		Managed:   managed,
-		External:  external,
-		Skipped:   m.skipped,
-		Port:      port,
-		Address:   net.JoinHostPort(bindHost, strconv.Itoa(port)),
-		Message:   message,
-		AutoStart: m.config.AutoStart,
-		Disabled:  m.config.Disabled,
+		Running:    managed || external,
+		Managed:    managed,
+		External:   external,
+		Skipped:    m.skipped,
+		Port:       port,
+		Address:    net.JoinHostPort(bindHost, strconv.Itoa(port)),
+		Message:    message,
+		AutoStart:  m.config.AutoStart,
+		Disabled:   m.config.Disabled,
+		Persistent: managed,
+		LastSaved:  lastSaved,
 	}
 }
 

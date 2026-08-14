@@ -278,7 +278,7 @@ func replaceLocalPackage(root, packageName, version string) (Result, error) {
 	return result, fmt.Errorf("切换版本失败，已恢复原插件：%w", installErr)
 }
 
-func switchLocalPackageVersion(root, packageName, version string) (Result, error) {
+func switchLocalPackageVersion(root, packageName, version string, force bool) (Result, error) {
 	items, err := (Manager{}).LocalPackages(root)
 	if err != nil {
 		return Result{}, err
@@ -296,7 +296,9 @@ func switchLocalPackageVersion(root, packageName, version string) (Result, error
 				return Result{}, errors.New("无法确认 Git 工作区状态")
 			}
 			if strings.TrimSpace(status) != "" {
-				return Result{}, errors.New("插件 Git 工作区有未提交修改，请先提交或还原后再切换版本")
+				if !force {
+					return Result{}, errors.New("插件 Git 工作区有未提交修改，请先提交或还原后再切换版本；确认不需要这些修改时可选择“强制切换”")
+				}
 			}
 			if _, tagErr := gitRun(item.Path, "rev-parse", "-q", "--verify", "refs/tags/"+version); tagErr != nil {
 				if _, fetchErr := gitRun(item.Path, "fetch", "origin", "tag", version); fetchErr != nil {
@@ -306,7 +308,21 @@ func switchLocalPackageVersion(root, packageName, version string) (Result, error
 					return Result{}, errors.New("Git 仓库中没有该版本标签")
 				}
 			}
-			output, checkoutErr := gitRun(item.Path, "checkout", "--detach", "tags/"+version)
+			var logs []string
+			if force {
+				resetOutput, resetErr := gitRun(item.Path, "reset", "--hard")
+				if resetErr != nil {
+					return Result{Path: item.Path, Output: resetOutput}, fmt.Errorf("无法丢弃插件的已跟踪修改：%w", resetErr)
+				}
+				cleanOutput, cleanErr := gitRun(item.Path, "clean", "-fd")
+				if cleanErr != nil {
+					return Result{Path: item.Path, Output: strings.TrimSpace(resetOutput + "\n" + cleanOutput)}, fmt.Errorf("无法清理插件的未跟踪文件：%w", cleanErr)
+				}
+				logs = append(logs, "已丢弃该插件工作区的本地 Git 修改。", resetOutput, cleanOutput)
+			}
+			output, checkoutErr := gitRun(item.Path, "checkout", "--force", "--detach", "tags/"+version)
+			logs = append(logs, output)
+			output = strings.TrimSpace(strings.Join(logs, "\n"))
 			return Result{Path: item.Path, Output: output}, checkoutErr
 		}
 		return replaceLocalPackage(root, packageName, version)

@@ -10,7 +10,7 @@ import (
 // action (POST), or persists manager settings (PUT).
 func (s *server) systemRedisHandler(w http.ResponseWriter, r *http.Request) {
 	if s.redisManager == nil {
-		writeError(w, http.StatusServiceUnavailable, "临时 Redis 管理不可用。")
+		writeError(w, http.StatusServiceUnavailable, "内置 Redis 管理不可用。")
 		return
 	}
 	switch r.Method {

@@ -12,8 +12,8 @@ alx doctor
 # 启动（前台）与监听设置
 alx --port 17390                        # 默认监听 0.0.0.0，局域网/公网可直接访问
 alx --host 127.0.0.1                    # 仅本机可访问
-alx --redis-port 6380                   # 调整临时 Redis 端口
-alx --redis-off                         # 禁止启动临时 Redis
+alx --redis-port 6380                   # 调整内置 Redis 端口
+alx --redis-off                         # 禁止启动内置 Redis
 
 # 后台服务（Windows、macOS、Linux）
 alx install --port 17390 [--host 0.0.0.0]

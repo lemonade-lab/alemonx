@@ -398,7 +398,7 @@ func startupMessage(version, host, port string) string {
 	address := "http://" + addressHost + ":" + port
 	return fmt.Sprintf(`
 
-  ALemonX v%s  工作台
+  ALemonX %s  工作台
   ───────────────────────────────────────
 
   现在开始
@@ -585,8 +585,8 @@ func usage() {
   alx [serve] --port 17390           启动浏览器引导（默认监听 0.0.0.0，请先 alx auth enable）
       --host 127.0.0.1               仅本机可访问
       --host 0.0.0.0                 监听所有网卡（默认，局域网/公网可直接访问）
-      --redis-port <端口>             调整临时 Redis 端口（默认 6379，会持久化到配置）
-      --redis-off                     禁止启动临时 Redis
+      --redis-port <端口>             调整内置 Redis 端口（默认 6379，会持久化到配置）
+      --redis-off                     禁止启动内置 Redis
 
   alx mcp                            启动本机 stdio MCP 服务
   MCP_TOKEN=... alx mcp-http         启动受保护的本机 HTTP MCP 服务
