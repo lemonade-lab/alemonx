@@ -582,6 +582,7 @@ Web UI ── POST /setup/plugins/<id>/actions
 - `planAction`/`useLatestAudit` 的操作不接受浏览器额外参数，只接受宿主签发的 `planID` 或最近审计；执行时宿主向 runner 传入 `{ operation, ...planParams, __alxFingerprint? }`。
 - 特权模式由 `ALX_PRIVILEGED_MODE` 控制（`enabled` / `local`）；`local` 仅限本机回环且无转发头。
 - 审计表带哈希链（`previous_hash`/`chain_hash`）防篡改，`GET /api/v1/system/privileged/audit?plugin=<id>` 可读取，`privileged/status` 返回链完整性与签名版本。
+- 特权弹窗中的**密码输入**与**结构化变更计划展示**（风险/影响/参数/验证）由插件页面自绘，宿主 `ui.modal` 只提供标题+正文，不包含输入框与富文本——这是有意保留的边界。
 
 ## 源码开发会话
 
@@ -730,6 +731,7 @@ go vet ./internal/setupplugin/...
 ## 参考实现
 
 - [alemonx-network](../plugins/alemonx-network/)：网络检查、端口转发、防火墙；演示 `privilegedOperations`（计划/撤销）、`statusActions` 与开发会话。
-- [alemonx-docker](../plugins/alemonx-docker/)：Docker Compose 管理；演示 `uploads`、`systemPickers` 与 `services`。
-- [alemonx-qq](../plugins/alemonx-qq/) 与 [alemonx-finder](../plugins/alemonx-finder/)：更多宿主能力与执行器协议示例。
+- [alemonx-docker](../plugins/alemonx-docker/)：Docker Compose 管理；演示 `uploads`、`systemPickers`、`services`，以及宿主 `webview.open`（容器页面）与 `ui.modal`/`ui.alert`（确认/提示）。
+- [alemonx-qq](../plugins/alemonx-qq/)：QQ 核心管理；演示 `finder.pick`、`media` 二维码，以及宿主 `webview.open`（管理面板）与 `ui.modal`（操作确认）。
+- [alemonx-finder](../plugins/alemonx-finder/)：工作台文件浏览示例，演示表单类对话框与深层目录浏览。
 - 插件前端工程参考 `alemonx-network/frontend`：React + Vite + Tailwind，构建产物输出到 `web/`；`yarn dev` 时可用 Vite 代理指向本地 alx。
