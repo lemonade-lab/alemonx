@@ -20,6 +20,7 @@ import {
   PAD_BREAKPOINT,
   useIsPadViewport
 } from './hooks/useIsPadViewport'
+import { clampWindowRectToViewport } from './lib/windowRect'
 import {
   workspaceApi,
   useGoalsQuery,
@@ -99,16 +100,13 @@ function initialWorkbenchRect(): WorkbenchRect {
 
 function clampWorkbenchRect(rect: WorkbenchRect): WorkbenchRect {
   if (isPadViewport()) return padWorkbenchRect()
-  const maxWidth = Math.max(640, window.innerWidth - 32)
-  const maxHeight = Math.max(420, window.innerHeight - 32)
-  const width = Math.min(maxWidth, Math.max(640, rect.width))
-  const height = Math.min(maxHeight, Math.max(420, rect.height))
-  return {
-    width,
-    height,
-    left: Math.max(16, Math.min(window.innerWidth - width - 16, rect.left)),
-    top: Math.max(16, Math.min(window.innerHeight - height - 16, rect.top))
-  }
+  return clampWindowRectToViewport(rect, {
+    minWidth: 640,
+    minHeight: 420,
+    gutter: 32,
+    minViewportWidth: 640,
+    minViewportHeight: 420
+  })
 }
 
 const closedDockWindow: DockWindowState = { open: false, minimized: false }
@@ -153,9 +151,14 @@ export default function App() {
     initialWorkbenchRect
   )
   const workbenchRectRef = useRef(workbenchRect)
+  // The workbench's preferred (user-chosen) size. `workbenchRect` stays the
+  // viewport-clamped display rect, so shrinking the browser only shrinks the
+  // window temporarily and growing it back restores the remembered size.
+  const workbenchPreferredRef = useRef(workbenchRect)
   const previewRect = useRef<WorkbenchRect | null>(null)
   const previewFrame = useRef<number | null>(null)
   const [workbenchMaximized, setWorkbenchMaximized] = useState(false)
+  const workbenchMaximizedRef = useRef(workbenchMaximized)
   const isPadView = useIsPadViewport()
   const padRestoreRef = useRef<WorkbenchRect | null>(null)
   const [workbenchLayer, setWorkbenchLayer] = useState(100)
@@ -165,9 +168,6 @@ export default function App() {
   const [dockWindows, setDockWindows] = useState<DockWindows>(emptyDockWindows)
   const [mainWindowHidden, setMainWindowHidden] = useState(false)
   const nextWindowLayer = useRef(106)
-  const workbenchRestore = useRef<{
-    rect: WorkbenchRect
-  } | null>(null)
   const dragState = useRef<{
     pointerId: number
     startX: number
@@ -235,7 +235,10 @@ export default function App() {
     })
   }
 
-  function commitWorkbenchPreview() {
+  function commitWorkbenchPreview(
+    kind: 'drag' | 'resize',
+    changed: boolean
+  ) {
     const rect = previewRect.current ?? workbenchRectRef.current
     if (previewFrame.current !== null) {
       window.cancelAnimationFrame(previewFrame.current)
@@ -243,6 +246,12 @@ export default function App() {
     }
     previewRect.current = null
     workbenchRectRef.current = rect
+    if (changed) {
+      workbenchPreferredRef.current =
+        kind === 'drag'
+          ? { ...workbenchPreferredRef.current, left: rect.left, top: rect.top }
+          : rect
+    }
     setWorkbenchRect(rect)
   }
 
@@ -311,15 +320,25 @@ export default function App() {
 
   function endWorkbenchDrag(event: React.PointerEvent<HTMLDivElement>) {
     if (resizeState.current?.pointerId === event.pointerId) {
+      const start = resizeState.current
+      const rect = previewRect.current ?? workbenchRectRef.current
+      const changed =
+        rect.width !== start.width ||
+        rect.height !== start.height ||
+        rect.left !== start.left ||
+        rect.top !== start.top
       resizeState.current = null
-      commitWorkbenchPreview()
+      commitWorkbenchPreview('resize', changed)
       event.currentTarget.releasePointerCapture(event.pointerId)
       event.currentTarget.classList.remove('workbench-dragging')
       return
     }
     if (dragState.current?.pointerId !== event.pointerId) return
+    const start = dragState.current
+    const rect = previewRect.current ?? workbenchRectRef.current
+    const changed = rect.left !== start.originLeft || rect.top !== start.originTop
     dragState.current = null
-    commitWorkbenchPreview()
+    commitWorkbenchPreview('drag', changed)
     event.currentTarget.releasePointerCapture(event.pointerId)
     event.currentTarget.classList.remove('workbench-dragging')
   }
@@ -368,18 +387,9 @@ export default function App() {
     if (hasOpenDesktopWindow) return
     activateWorkbench()
     if (workbenchMaximized) {
-      const restore = workbenchRestore.current
-      if (restore) {
-        setWorkbenchRect(restore.rect)
-      }
       setWorkbenchMaximized(false)
+      setWorkbenchRect(clampWorkbenchRect(workbenchPreferredRef.current))
       return
-    }
-    const windowElement = document.querySelector<HTMLElement>('.guide-window')
-    if (!windowElement) return
-    const rect = windowElement.getBoundingClientRect()
-    workbenchRestore.current = {
-      rect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height }
     }
     setWorkbenchRect({
       left: 16,
@@ -405,32 +415,43 @@ export default function App() {
   }, [])
   useLayoutEffect(() => {
     const media = window.matchMedia(PAD_BREAKPOINT)
-    const clampWorkbench = () => setWorkbenchRect(clampWorkbenchRect)
-    const syncPadMode = () => {
+    const applyWorkbenchLayout = () => {
       if (media.matches) {
         if (!padRestoreRef.current)
-          padRestoreRef.current = workbenchRectRef.current
+          padRestoreRef.current = workbenchPreferredRef.current
         setWorkbenchRect(padWorkbenchRect())
         setWorkbenchMaximized(false)
-      } else if (padRestoreRef.current) {
-        const restore = clampWorkbenchRect(padRestoreRef.current)
-        padRestoreRef.current = null
-        setWorkbenchRect(restore)
-      } else {
-        setWorkbenchRect(initialWorkbenchRect())
+        return
       }
+      if (padRestoreRef.current) {
+        workbenchPreferredRef.current = padRestoreRef.current
+        padRestoreRef.current = null
+      }
+      if (workbenchMaximizedRef.current) {
+        setWorkbenchRect({
+          left: 16,
+          top: 16,
+          width: Math.max(640, window.innerWidth - 48),
+          height: Math.max(420, window.innerHeight - 56)
+        })
+        return
+      }
+      setWorkbenchRect(clampWorkbenchRect(workbenchPreferredRef.current))
     }
-    clampWorkbench()
-    window.addEventListener('resize', clampWorkbench)
-    media.addEventListener('change', syncPadMode)
+    applyWorkbenchLayout()
+    window.addEventListener('resize', applyWorkbenchLayout)
+    media.addEventListener('change', applyWorkbenchLayout)
     return () => {
-      window.removeEventListener('resize', clampWorkbench)
-      media.removeEventListener('change', syncPadMode)
+      window.removeEventListener('resize', applyWorkbenchLayout)
+      media.removeEventListener('change', applyWorkbenchLayout)
     }
   }, [])
   useLayoutEffect(() => {
     workbenchRectRef.current = workbenchRect
   }, [workbenchRect])
+  useEffect(() => {
+    workbenchMaximizedRef.current = workbenchMaximized
+  }, [workbenchMaximized])
   useEffect(
     () => () => {
       if (previewFrame.current !== null)

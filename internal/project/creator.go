@@ -50,13 +50,11 @@ func (c *Creator) Create(config Config) (Result, error) {
 	if err := validate(config); err != nil {
 		return Result{}, err
 	}
-	if config.DestinationMode == "current" {
-		current, err := os.Getwd()
-		if err != nil {
-			return Result{}, errors.New("无法读取当前运行目录")
-		}
-		config.Destination = current
+	destination, fallbackNote, err := resolveDestination(config)
+	if err != nil {
+		return Result{}, err
 	}
+	config.Destination = destination
 	path := filepath.Join(config.Destination, config.Name)
 	if _, err := os.Stat(path); err == nil {
 		return Result{}, errors.New("目标文件夹已经存在；请换一个项目名称或保存位置，工具不会覆盖已有文件")
@@ -80,6 +78,9 @@ func (c *Creator) Create(config Config) (Result, error) {
 
 	result := Result{Path: path, Status: "failed"}
 	log := func(message string) { result.Logs = append(result.Logs, message) }
+	if fallbackNote != "" {
+		log(fallbackNote)
+	}
 	template := config.Template
 	if template == "" {
 		template = "dev"
@@ -573,11 +574,53 @@ func projectCommandAvailable(name string) bool {
 	return err == nil
 }
 
+// resolveDestination returns the effective save destination. In "current" mode
+// the process working directory is used; when it is not writable (for example
+// the read-only /app directory inside container images) the first writable
+// ALEMONJS_SETUP_ROOTS entry becomes the fallback so deployments like Docker
+// can still create projects in their mounted workspace.
+func resolveDestination(config Config) (string, string, error) {
+	if config.DestinationMode != "current" {
+		return config.Destination, "", nil
+	}
+	current, err := os.Getwd()
+	if err != nil {
+		return "", "", errors.New("无法读取当前运行目录")
+	}
+	if err := ensureWritableDirectory(current); err == nil {
+		return current, "", nil
+	}
+	if fallback, fallbackErr := firstWritableSetupRoot(); fallbackErr == nil {
+		return fallback, "当前运行目录不可写，已切换到可写保存位置：" + fallback, nil
+	}
+	return current, "", nil
+}
+
+func firstWritableSetupRoot() (string, error) {
+	value := strings.TrimSpace(os.Getenv("ALEMONJS_SETUP_ROOTS"))
+	if value == "" {
+		return "", errors.New("未配置可写的保存根目录")
+	}
+	for _, root := range filepath.SplitList(value) {
+		root = strings.TrimSpace(root)
+		if root == "" {
+			continue
+		}
+		if err := ensureWritableDirectory(root); err == nil {
+			return root, nil
+		}
+	}
+	return "", errors.New("没有可写的保存根目录")
+}
+
 func ensureWritableDirectory(directory string) error {
 	file, err := os.CreateTemp(directory, ".alemonx-write-check-")
 	if err != nil {
 		if os.IsPermission(err) {
 			return errors.New("保存位置当前不可写，需要申请系统权限")
+		}
+		if isReadonlyFilesystem(err) {
+			return errors.New("保存位置是只读文件系统，请选择可写目录（Docker 部署请使用 /workspace）")
 		}
 		return fmt.Errorf("无法写入保存位置：%w", err)
 	}
@@ -590,6 +633,14 @@ func ensureWritableDirectory(directory string) error {
 		return fmt.Errorf("无法清理保存位置检查文件：%w", err)
 	}
 	return nil
+}
+
+func isReadonlyFilesystem(err error) bool {
+	if err == nil {
+		return false
+	}
+	text := strings.ToLower(err.Error())
+	return strings.Contains(text, "read-only file system") || strings.Contains(text, "readonly filesystem")
 }
 
 func isPermissionError(err error) bool {

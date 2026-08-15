@@ -585,6 +585,58 @@ func TestRegistryInstallRejectsUnknownPlugin(t *testing.T) {
 	}
 }
 
+func TestRegistryInstallUploadActivatesValidArchive(t *testing.T) {
+	root := t.TempDir()
+	registry := Registry{roots: []string{root}}
+	archivePath := filepath.Join(t.TempDir(), "network.zip")
+	if err := os.WriteFile(archivePath, makePluginArchive(t), 0600); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := registry.InstallUpload(archivePath)
+	if err != nil {
+		t.Fatalf("upload install failed: %v", err)
+	}
+	if installed.ID != "alemonx-network" || installed.Online {
+		t.Fatalf("uploaded plugin = %#v", installed)
+	}
+	if _, err := os.Stat(filepath.Join(root, "alemonx-network", manifestName)); err != nil {
+		t.Fatalf("uploaded plugin directory missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "alemonx-network", installMetadataName)); err != nil {
+		t.Fatalf("upload install metadata missing: %v", err)
+	}
+	// Uploading the same plugin again replaces it atomically.
+	if _, err := registry.InstallUpload(archivePath); err != nil {
+		t.Fatalf("replacing uploaded plugin failed: %v", err)
+	}
+	if found, err := registry.Find("alemonx-network"); err != nil || found.Online || found.Source != filepath.Join(root, "alemonx-network") {
+		t.Fatalf("Find after upload = %#v, %v", found, err)
+	}
+}
+
+func TestRegistryInstallUploadRejectsInvalidArchive(t *testing.T) {
+	registry := Registry{roots: []string{t.TempDir()}}
+	archivePath := filepath.Join(t.TempDir(), "bad.zip")
+	var buffer bytes.Buffer
+	archive := zip.NewWriter(&buffer)
+	file, err := archive.Create("readme.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.Write([]byte("not a plugin")); err != nil {
+		t.Fatal(err)
+	}
+	if err := archive.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(archivePath, buffer.Bytes(), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registry.InstallUpload(archivePath); err == nil {
+		t.Fatal("archive without alx.json must be rejected")
+	}
+}
+
 func TestDownloadAssetRejectsDeclaredOversizeArchive(t *testing.T) {
 	registry := Registry{httpClient: newTestHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Length", strconv.FormatInt(maxPluginArchiveSize+1, 10))

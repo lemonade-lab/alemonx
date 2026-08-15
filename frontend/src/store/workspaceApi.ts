@@ -509,6 +509,17 @@ export const workspaceApi = createApi({
       query: pluginID =>
         `setup/plugins/development/${encodeURIComponent(pluginID)}/logs`
     }),
+    uploadSetupPluginArchive: build.mutation<
+      { id: string; name: string; version: string; enabled: boolean },
+      File
+    >({
+      query: file => {
+        const form = new FormData()
+        form.append('file', file)
+        return { url: 'setup/plugins/upload', method: 'POST', body: form }
+      },
+      invalidatesTags: ['SetupPlugins']
+    }),
     systemMcp: build.query<{ running: boolean }, void>({
       query: () => 'system/mcp'
     }),
@@ -600,6 +611,20 @@ export const workspaceApi = createApi({
       query: root => `robot/packages?${new URLSearchParams({ root })}`,
       providesTags: (_result, _error, root) => [
         { type: 'LocalPackages', id: root }
+      ]
+    }),
+    uploadRobotPackage: build.mutation<
+      LocalPackages['items'][number],
+      { root: string; file: File }
+    >({
+      query: ({ root, file }) => {
+        const form = new FormData()
+        form.append('root', root)
+        form.append('file', file)
+        return { url: 'robot/packages/upload', method: 'POST', body: form }
+      },
+      invalidatesTags: (_result, _error, arg) => [
+        { type: 'LocalPackages', id: arg.root }
       ]
     }),
     localPackageVersions: build.query<
@@ -914,6 +939,7 @@ export const {
   useRunSetupPluginDevelopmentMutation,
   useRemoveSetupPluginDevelopmentMutation,
   useLazySetupPluginDevelopmentLogsQuery,
+  useUploadSetupPluginArchiveMutation,
   useSystemMcpQuery,
   useSystemNetworkQuery,
   useSystemRedisQuery,
@@ -930,6 +956,7 @@ export const {
   usePackageConfigQuery,
   useLazyPackageConfigQuery,
   useLocalPackagesQuery,
+  useUploadRobotPackageMutation,
   useLocalPackageVersionsQuery,
   useLocalPackageReadmeQuery,
   usePackageManifestQuery,

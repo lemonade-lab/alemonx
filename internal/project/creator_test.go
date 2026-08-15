@@ -71,6 +71,37 @@ func TestDevelopmentTemplatePackagesFollowSelections(t *testing.T) {
 	}
 }
 
+func TestCurrentDestinationFallsBackToWritableSetupRoot(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory permission checks")
+	}
+	original, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	readonly := t.TempDir()
+	if err := os.Chmod(readonly, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(readonly, 0o700)
+	if err := os.Chdir(readonly); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(original)
+	writable := t.TempDir()
+	t.Setenv("ALEMONJS_SETUP_ROOTS", writable)
+	destination, note, err := resolveDestination(Config{DestinationMode: "current"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if destination != writable {
+		t.Fatalf("destination = %q, want fallback %q", destination, writable)
+	}
+	if !strings.Contains(note, writable) {
+		t.Errorf("fallback note should mention the writable path: %q", note)
+	}
+}
+
 func TestPM2TemplateGetsAnIsolatedProjectIdentity(t *testing.T) {
 	configs := make([]string, 0, 2)
 	for _, template := range []string{"dev", "bot"} {

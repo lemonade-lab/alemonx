@@ -1564,6 +1564,53 @@ func (r *Registry) Install(id, version, assetName string) (Plugin, error) {
 	return installed, nil
 }
 
+// InstallUpload validates a browser-uploaded plugin archive and activates it
+// as a local system plugin. The archive must contain a valid alx.json plugin
+// with a Web root or executable entry; an existing plugin with the same ID is
+// replaced atomically. The upload filename is never used as a destination.
+func (r *Registry) InstallUpload(archivePath string) (Plugin, error) {
+	staging, err := os.MkdirTemp("", "alx-plugin-upload-extract-")
+	if err != nil {
+		return Plugin{}, errors.New("无法创建插件解压目录：" + err.Error())
+	}
+	defer os.RemoveAll(staging)
+	if err := extractArchive(archivePath, staging); err != nil {
+		return Plugin{}, err
+	}
+	source, err := locatePluginRoot(staging)
+	if err != nil {
+		return Plugin{}, err
+	}
+	plugin, err := load(source)
+	if err != nil {
+		return Plugin{}, errors.New("插件安装包无法解析：alx.json 无效")
+	}
+	if !validID.MatchString(plugin.ID) {
+		return Plugin{}, errors.New("上传的插件标识无效")
+	}
+	if _, err := plugin.WebRoot(); err != nil {
+		return Plugin{}, errors.New("上传的插件缺少有效的 Web 目录")
+	}
+	if _, err := plugin.entryPath(); err != nil {
+		return Plugin{}, errors.New("上传的插件缺少可执行入口")
+	}
+	root, err := r.installRoot()
+	if err != nil {
+		return Plugin{}, err
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	metadata := installMetadata{ID: plugin.ID, InstalledAt: now, LastUsedAt: now}
+	if err := r.activateTree(root, plugin.ID, source, metadata); err != nil {
+		return Plugin{}, err
+	}
+	r.Rescan()
+	installed, err := r.Find(plugin.ID)
+	if err != nil {
+		return Plugin{}, errors.New("插件已上传，但加载失败；请检查插件目录 " + filepath.Join(root, plugin.ID))
+	}
+	return installed, nil
+}
+
 func (r *Registry) selectedAsset(id, version, assetName string) (ReleaseAsset, error) {
 	releases, err := r.Releases(id)
 	if err != nil {
@@ -1676,6 +1723,15 @@ func validExtractedPlugin(directory, id string) bool {
 }
 
 func (r *Registry) activateCached(root, name string, cached cacheVersion) error {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	metadata := installMetadata{ID: cached.ID, Tag: cached.Tag, Asset: cached.Asset, ArchiveSHA256: cached.ArchiveSHA256, Fingerprint: cached.Fingerprint, CachePath: filepath.Dir(cached.Package), InstalledAt: now, LastUsedAt: now}
+	return r.activateTree(root, name, cached.Extracted, metadata)
+}
+
+// activateTree stages a validated plugin source directory into the install
+// root under name, atomically replacing an existing directory of the same
+// name while keeping a rollback backup until the rename succeeds.
+func (r *Registry) activateTree(root, name string, source string, metadata installMetadata) error {
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return errors.New("无法创建插件安装目录：" + err.Error())
 	}
@@ -1684,11 +1740,9 @@ func (r *Registry) activateCached(root, name string, cached cacheVersion) error 
 		return errors.New("无法创建插件切换目录：" + err.Error())
 	}
 	defer os.RemoveAll(staging)
-	if err := copyTree(cached.Extracted, staging); err != nil {
+	if err := copyTree(source, staging); err != nil {
 		return errors.New("准备插件版本失败：" + err.Error())
 	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-	metadata := installMetadata{ID: cached.ID, Tag: cached.Tag, Asset: cached.Asset, ArchiveSHA256: cached.ArchiveSHA256, Fingerprint: cached.Fingerprint, CachePath: filepath.Dir(cached.Package), InstalledAt: now, LastUsedAt: now}
 	data, err := json.MarshalIndent(metadata, "", "  ")
 	if err != nil {
 		return err
@@ -1918,11 +1972,42 @@ func (r *Registry) checksumAsset(assets []ReleaseAsset, name string) string {
 const maxExtractedPluginSize int64 = 500 << 20
 
 func extractArchive(source, destination string) error {
-	lower := strings.ToLower(source)
-	if strings.HasSuffix(lower, ".zip") {
+	switch archiveFormat(source) {
+	case "zip":
 		return extractZip(source, destination)
+	case "tar":
+		return extractTarGz(source, destination)
 	}
-	return extractTarGz(source, destination)
+	return errors.New("插件安装包格式不受支持")
+}
+
+// archiveFormat identifies the archive kind from the filename first, then
+// falls back to magic bytes so browser uploads that reach a temporary path
+// without an extension are still validated.
+func archiveFormat(path string) string {
+	lower := strings.ToLower(path)
+	if strings.HasSuffix(lower, ".zip") {
+		return "zip"
+	}
+	if strings.HasSuffix(lower, ".tar.gz") || strings.HasSuffix(lower, ".tgz") {
+		return "tar"
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer file.Close()
+	var magic [2]byte
+	if _, err := io.ReadFull(file, magic[:]); err != nil {
+		return ""
+	}
+	switch {
+	case magic[0] == 'P' && magic[1] == 'K':
+		return "zip"
+	case magic[0] == 0x1f && magic[1] == 0x8b:
+		return "tar"
+	}
+	return ""
 }
 
 func safeArchivePath(root, name string) (string, error) {

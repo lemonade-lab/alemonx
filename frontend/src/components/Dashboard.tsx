@@ -48,6 +48,7 @@ import {
   Loader2,
   ClipboardList,
   Code2,
+  Download,
   Eye,
   EyeOff,
   FileText,
@@ -70,6 +71,7 @@ import {
   PanelLeftOpen,
   PanelRightClose,
   PanelRightOpen,
+  Pause,
   Pencil,
   Pin,
   Play,
@@ -85,6 +87,7 @@ import {
   ShieldCheck,
   Terminal,
   Trash2,
+  Upload,
   Waypoints,
   Wifi,
   X,
@@ -173,6 +176,8 @@ import {
   useRunSetupPluginDevelopmentMutation,
   useRemoveSetupPluginDevelopmentMutation,
   useLazySetupPluginDevelopmentLogsQuery,
+  useUploadSetupPluginArchiveMutation,
+  useUploadRobotPackageMutation,
   useSetSystemCurrentRobotMutation,
   useSystemMcpQuery,
   useSetupPluginMarketQuery,
@@ -5632,6 +5637,7 @@ function SystemPluginCenter({
   plugins,
   marketPlugins,
   onOpen,
+  onRefresh,
   sidebarLayout = false
 }: {
   plugins: SetupPlugin[]
@@ -5666,6 +5672,9 @@ function SystemPluginCenter({
   const [removeDevelopment, { isLoading: removingDevelopment }] =
     useRemoveSetupPluginDevelopmentMutation()
   const [loadDevelopmentLogs] = useLazySetupPluginDevelopmentLogsQuery()
+  const [uploadPluginArchiveAction, { isLoading: uploadingPluginArchive }] =
+    useUploadSetupPluginArchiveMutation()
+  const [pluginUploadError, setPluginUploadError] = useState('')
   const [installTarget, setInstallTarget] = useStoreState<SetupPlugin | null>(
     null
   )
@@ -5782,6 +5791,16 @@ function SystemPluginCenter({
       setMessage('已清理系统插件下载缓存。')
     } catch (reason) {
       setMessage(operationErrorMessage(reason, '下载缓存清理失败。'))
+    }
+  }
+  const uploadPluginArchive = async (file: File) => {
+    setPluginUploadError('')
+    try {
+      const installed = await uploadPluginArchiveAction(file).unwrap()
+      setMessage(`已上传并安装“${installed.name}”。现在可以点击「启动」加载它。`)
+      onRefresh()
+    } catch (reason) {
+      setPluginUploadError(operationErrorMessage(reason, '插件上传未完成。'))
     }
   }
   const toggle = async (plugin: SetupPlugin) => {
@@ -6156,6 +6175,21 @@ function SystemPluginCenter({
           </section>
         )}
       {/* 插件列表 */}
+      {!isDevelopmentView && (!sidebarLayout || pluginView === 'mine') && (
+        <section className="grid gap-1.5">
+          <PluginUploadDropzone
+            label="拖入或点击上传"
+            hint="支持 .zip / .tar.gz / .tgz，上传内含 alx.json 的 Setup 插件安装包。"
+            busy={uploadingPluginArchive}
+            onFile={file => void uploadPluginArchive(file)}
+          />
+          {pluginUploadError && (
+            <small className="rounded-md border border-amber-200 bg-amber-50 p-2 text-[11px] leading-4 text-amber-800">
+              {pluginUploadError}
+            </small>
+          )}
+        </section>
+      )}
       {!isDevelopmentView &&
         (visiblePlugins.length ? (
           <div className="grid gap-2">
@@ -6803,6 +6837,81 @@ function SetupPluginCenter({ plugin }: { plugin: SetupPlugin }) {
     </section>
   )
 }
+// PluginUploadDropzone is a fixed-size drag-and-drop / click upload control
+// shared by the system plugin center and the robot backpack. It only forwards
+// one selected file; the caller owns validation, upload and error reporting.
+function PluginUploadDropzone({
+  label,
+  hint,
+  busy,
+  onFile
+}: {
+  label: string
+  hint: string
+  busy: boolean
+  onFile: (file: File) => void
+}) {
+  const inputID = useId()
+  const [dragOver, setDragOver] = useState(false)
+  return (
+    <div
+      className="grid"
+      onDragOver={event => {
+        event.preventDefault()
+        if (!busy) setDragOver(true)
+      }}
+      onDragLeave={() => setDragOver(false)}
+      onDrop={event => {
+        event.preventDefault()
+        setDragOver(false)
+        if (busy) return
+        const file = event.dataTransfer.files?.[0] ?? null
+        if (file) onFile(file)
+      }}
+    >
+      <input
+        className="sr-only"
+        id={inputID}
+        type="file"
+        accept=".zip,.tar.gz,.tgz,application/zip,application/gzip"
+        disabled={busy}
+        onChange={event => {
+          const file = event.target.files?.[0] ?? null
+          event.currentTarget.value = ''
+          if (file) onFile(file)
+        }}
+      />
+      <label
+        htmlFor={inputID}
+        className={cn(
+          'flex cursor-pointer items-center gap-2.5 rounded-lg border border-dashed p-3 transition',
+          busy
+            ? 'cursor-default border-brand-300 bg-brand-50/60'
+            : dragOver
+              ? 'border-brand-600 bg-brand-50'
+              : 'border-brand-200 bg-brand-50/40 hover:border-brand-600 hover:bg-brand-50'
+        )}
+      >
+        <i className="inline-flex size-8 shrink-0 items-center justify-center rounded-md bg-brand-50 text-brand-600">
+          {busy ? (
+            <Loader2 className="size-4 animate-spin" />
+          ) : (
+            <Upload className="size-4" />
+          )}
+        </i>
+        <span className="grid min-w-0 flex-1 gap-0.5">
+          <strong className="truncate text-xs font-medium text-slate-700 dark:text-slate-200">
+            {busy ? '正在上传…' : label}
+          </strong>
+          <small className="text-[11px] leading-4 text-slate-500 dark:text-slate-400">
+            {hint}
+          </small>
+        </span>
+      </label>
+    </div>
+  )
+}
+
 function BackpackPanel({
   root,
   items,
@@ -6848,6 +6957,10 @@ function BackpackPanel({
   const [selectedName, setSelectedName] = useStoreState('')
   const [appToggleBusy, setAppToggleBusy] = useStoreState('')
   const [privacyToggleBusy, setPrivacyToggleBusy] = useStoreState(false)
+  const [uploadRobotPackage, { isLoading: uploadingPackage }] =
+    useUploadRobotPackageMutation()
+  const [uploadPackageError, setUploadPackageError] = useState('')
+  const [uploadPackageDone, setUploadPackageDone] = useState('')
   const { data: appsData, refetch: refetchApps } = useRobotAppsQuery(root, {
     skip: !root
   })
@@ -6885,6 +6998,17 @@ function BackpackPanel({
       if (await onSetPrivate(!isPrivateBackpack)) await refetchManifest()
     } finally {
       setPrivacyToggleBusy(false)
+    }
+  }
+  const uploadPackageArchive = async (file: File) => {
+    setUploadPackageError('')
+    setUploadPackageDone('')
+    try {
+      const installed = await uploadRobotPackage({ root, file }).unwrap()
+      setUploadPackageDone(`已上传“${installed.name}”。`)
+      await onRefresh()
+    } catch (reason) {
+      setUploadPackageError(operationErrorMessage(reason, '插件包上传未完成。'))
     }
   }
   if (selected)
@@ -6972,6 +7096,24 @@ function BackpackPanel({
         </>
       }
     >
+      <section className="grid gap-1.5">
+        <PluginUploadDropzone
+          label="拖入或点击上传"
+          hint="支持 .zip / .tar.gz / .tgz，上传内含 package.json 的 AlemonJS 插件包。"
+          busy={uploadingPackage}
+          onFile={file => void uploadPackageArchive(file)}
+        />
+        {uploadPackageError && (
+          <small className="rounded-md border border-amber-200 bg-amber-50 p-2 text-[11px] leading-4 text-amber-800">
+            {uploadPackageError}
+          </small>
+        )}
+        {uploadPackageDone && (
+          <small className="rounded-md border border-emerald-200 bg-emerald-50 p-2 text-[11px] leading-4 text-emerald-700">
+            {uploadPackageDone}
+          </small>
+        )}
+      </section>
       <div className="grid gap-2">
         {loading ? (
           <p className="grid min-h-32 place-items-center text-sm text-slate-500">
@@ -9434,6 +9576,14 @@ function ReadonlyConsole({
   zIndex: number
   onActivate: () => void
 }) {
+  // 终端输出按字符数封顶，避免机器人持续输出时 DOM 无限增长卡死浏览器。
+  const MAX_TERMINAL_OUTPUT_CHARS = 100_000
+  const appendTerminalOutput = (current: string, chunk: string): string => {
+    const next = `${current}${chunk}`
+    if (next.length <= MAX_TERMINAL_OUTPUT_CHARS) return next
+    return `…早期输出已省略…\n${next.slice(-MAX_TERMINAL_OUTPUT_CHARS)}`
+  }
+
   type TerminalTab = { id: string; label: string; kind: 'readonly' | 'shell' }
   const [load, { data, error, isFetching }] = useLazyRobotConsoleQuery()
   const outputRef = useRef<HTMLPreElement>(null)
@@ -9480,7 +9630,7 @@ function ReadonlyConsole({
     resetTerminals()
     void load({ root }).then(result => {
       if (result.data) {
-        setLiveOutput(result.data.output ?? '')
+        setLiveOutput(appendTerminalOutput('', result.data.output ?? ''))
       }
     })
     // No polling: output streams in via the SSE robot-output event; the manual
@@ -9493,9 +9643,11 @@ function ReadonlyConsole({
         event as CustomEvent<{ text?: string; truncated?: boolean }>
       ).detail
       if (detail?.text)
-        setLiveOutput(
-          prev =>
-            prev + (detail.truncated ? '…早期输出已省略…\n' : '') + detail.text
+        setLiveOutput(current =>
+          appendTerminalOutput(
+            current,
+            `${detail.truncated ? '…早期输出已省略…\n' : ''}${detail.text}`
+          )
         )
     }
     window.addEventListener('alx:robot-output', handler)
@@ -9562,16 +9714,21 @@ function ReadonlyConsole({
         error?: string
         directory?: string
       }
-      setShellOutput(
-        current =>
-          `${current}${current ? '\n' : ''}${response.ok ? (result.output ?? '') : `错误：${result.error ?? '命令执行失败。'}`}`
+      setShellOutput(current =>
+        appendTerminalOutput(
+          current,
+          `${current ? '\n' : ''}${response.ok ? (result.output ?? '') : `错误：${result.error ?? '命令执行失败。'}`}`
+        )
       )
       if (response.ok && typeof result.directory === 'string')
         setShellDirectory(result.directory)
       setShellHistory(current => [...current, command].slice(-50))
     } catch {
-      setShellOutput(
-        current => `${current}${current ? '\n' : ''}错误：无法连接终端服务。`
+      setShellOutput(current =>
+        appendTerminalOutput(
+          current,
+          `${current ? '\n' : ''}错误：无法连接终端服务。`
+        )
       )
     } finally {
       setShellCommand('')
@@ -9639,9 +9796,11 @@ function ReadonlyConsole({
         parts[tokenIndex] = base + commonPrefix
         setShellCommand(parts.join(''))
       } else if (names.length > 1) {
-        setShellOutput(
-          current =>
-            `${current}${current ? '\n' : ''}补全候选：${names.join('  ')}`
+        setShellOutput(current =>
+          appendTerminalOutput(
+            current,
+            `${current ? '\n' : ''}补全候选：${names.join('  ')}`
+          )
         )
       }
     } catch {
@@ -9889,6 +10048,8 @@ function OpsWindow({
   )
 }
 
+const PM2_LIVE_MAX_LINES = 2000
+
 function PM2LogsPanel({
   open,
   root,
@@ -9906,33 +10067,61 @@ function PM2LogsPanel({
   zIndex: number
   onActivate: () => void
 }) {
-  const [page, setPage] = useStoreState(1)
-  const [data, setData] = useStoreState<{
-    output: string
+  type PM2AuditLine = { source: string; text: string }
+  type PM2AuditPage = {
+    lines: PM2AuditLine[]
     page: number
+    perPage: number
     hasOlder: boolean
-  } | null>(null)
+    hasNewer: boolean
+    total: number
+    truncated: boolean
+    sources: string[]
+    date?: string
+    query?: string
+  }
+  type PM2LogDay = {
+    date: string
+    count: number
+    out: number
+    err: number
+    first?: string
+    last?: string
+  }
+  const [page, setPage] = useStoreState(1)
+  const [perPage, setPerPage] = useStoreState(120)
+  const [date, setDate] = useStoreState('')
+  const [source, setSource] = useStoreState('all')
+  const [query, setQuery] = useStoreState('')
+  const [committedQuery, setCommittedQuery] = useStoreState('')
+  const [data, setData] = useStoreState<PM2AuditPage | null>(null)
   const [error, setError] = useStoreState('')
   const [loading, setLoading] = useStoreState(false)
-  const load = useCallback(
+  const [days, setDays] = useStoreState<PM2LogDay[]>([])
+  const [live, setLive] = useStoreState(false)
+  const [liveConnected, setLiveConnected] = useStoreState(false)
+  const [liveLines, setLiveLines] = useStoreState<PM2AuditLine[]>([])
+  const outputRef = useRef<HTMLDivElement>(null)
+  const followLatest = useRef(true)
+
+  const loadPage = useCallback(
     async (targetPage: number) => {
       setLoading(true)
       try {
-        const response = await fetch(
-          `/api/v1/robot/pm2-logs?${new URLSearchParams({ root, page: String(targetPage) })}`
-        )
-        const result = (await response.json()) as {
-          output?: string
-          page?: number
-          hasOlder?: boolean
+        const params = new URLSearchParams({
+          root,
+          page: String(targetPage),
+          perPage: String(perPage)
+        })
+        if (date) params.set('date', date)
+        if (source !== 'all') params.set('source', source)
+        if (committedQuery.trim()) params.set('query', committedQuery.trim())
+        const response = await fetch(`/api/v1/robot/pm2-logs?${params}`)
+        const result = (await response.json()) as PM2AuditPage & {
           error?: string
         }
         if (!response.ok) throw new Error(result.error || '无法读取 PM2 日志。')
-        setData({
-          output: result.output ?? 'PM2 暂无可读取的日志。',
-          page: result.page ?? targetPage,
-          hasOlder: Boolean(result.hasOlder)
-        })
+        setData(result)
         setError('')
       } catch (reason) {
         setError(operationErrorMessage(reason, '无法读取 PM2 日志。'))
@@ -9940,14 +10129,159 @@ function PM2LogsPanel({
         setLoading(false)
       }
     },
-    [root, setData, setError, setLoading]
+    [committedQuery, date, perPage, root, setData, setError, setLoading, source]
   )
+
+  const loadDays = useCallback(async () => {
+    try {
+      const response = await fetch(
+        `/api/v1/robot/pm2-logs/days?${new URLSearchParams({ root })}`
+      )
+      const result = (await response.json()) as {
+        days?: PM2LogDay[]
+        error?: string
+      }
+      if (!response.ok) throw new Error(result.error || '无法读取 PM2 日志日期。')
+      setDays(result.days ?? [])
+    } catch {
+      setDays([])
+    }
+  }, [root, setDays])
+
+  // Reset the view every time the window opens.
   useEffect(() => {
-    if (open) setPage(1)
-  }, [open, setPage])
+    if (open) {
+      setPage(1)
+      setDate('')
+      setSource('all')
+      setQuery('')
+      setCommittedQuery('')
+      void loadDays()
+    }
+  }, [loadDays, open, setCommittedQuery, setDate, setPage, setQuery, setSource])
+
+  // Debounce the search box so audit filters do not hit the API per keystroke.
   useEffect(() => {
-    if (open && root) void load(page)
-  }, [load, open, page, root])
+    const timer = window.setTimeout(() => setCommittedQuery(query), 300)
+    return () => window.clearTimeout(timer)
+  }, [query, setCommittedQuery])
+
+  // Load the current page whenever filters or paging change.
+  useEffect(() => {
+    if (open && root) void loadPage(page)
+  }, [loadPage, open, page, root])
+
+  // Real-time follow: tail the PM2 log files over SSE.
+  useEffect(() => {
+    if (!open || !live) return
+    setLiveConnected(false)
+    const stream = new EventSource(
+      `/api/v1/robot/pm2-logs/stream?${new URLSearchParams({ root })}`
+    )
+    stream.onopen = () => setLiveConnected(true)
+    stream.onmessage = event => {
+      try {
+        const payload = JSON.parse(event.data) as {
+          source?: string
+          text?: string
+          error?: string
+        }
+        if (payload.error) {
+          setError(payload.error)
+          return
+        }
+        if (!payload.text) return
+        setLiveLines(current => {
+          const next = [
+            ...current,
+            { source: payload.source ?? 'out', text: payload.text ?? '' }
+          ]
+          return next.length > PM2_LIVE_MAX_LINES
+            ? next.slice(next.length - PM2_LIVE_MAX_LINES)
+            : next
+        })
+      } catch {
+        // Ignore malformed frames; EventSource reconnects on its own.
+      }
+    }
+    return () => stream.close()
+  }, [live, open, root, setError, setLiveConnected, setLiveLines])
+
+  const toggleLive = () => {
+    if (!live) {
+      setDate('')
+      setPage(1)
+    }
+    setLive(current => !current)
+  }
+
+  useEffect(() => {
+    followLatest.current = true
+  }, [committedQuery, date, live, page])
+
+  const visibleLines = useMemo<PM2AuditLine[]>(() => {
+    const snapshot = data?.lines ?? []
+    if (!live) return snapshot
+    const q = committedQuery.trim().toLowerCase()
+    const streamed = liveLines.filter(line => {
+      if (source !== 'all' && line.source !== source) return false
+      return !q || line.text.toLowerCase().includes(q)
+    })
+    return [...snapshot, ...streamed]
+  }, [committedQuery, data, live, liveLines, source])
+
+  useEffect(() => {
+    if (!open) return
+    const el = outputRef.current
+    if (!el || !followLatest.current) return
+    const frame = window.requestAnimationFrame(() => {
+      if (outputRef.current) outputRef.current.scrollTop = outputRef.current.scrollHeight
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [open, visibleLines])
+
+  const dayIndex = days.findIndex(day => day.date === date)
+  const olderDay = dayIndex >= 0 && dayIndex + 1 < days.length ? days[dayIndex + 1].date : ''
+  const newerDay = dayIndex > 0 ? days[dayIndex - 1].date : ''
+  const selectDay = (target: string) => {
+    setDate(target)
+    setPage(1)
+    followLatest.current = true
+  }
+  const jumpLatest = () => {
+    setDate('')
+    setPage(1)
+    followLatest.current = true
+  }
+  const refresh = () => {
+    void loadPage(live ? 1 : page)
+    void loadDays()
+  }
+  const exportLogs = async () => {
+    try {
+      const params = new URLSearchParams({ root })
+      if (date) params.set('date', date)
+      if (source !== 'all') params.set('source', source)
+      if (committedQuery.trim()) params.set('query', committedQuery.trim())
+      const response = await fetch(`/api/v1/robot/pm2-logs/export?${params}`)
+      if (!response.ok) {
+        const result = (await response.json().catch(() => null)) as {
+          error?: string
+        } | null
+        throw new Error(result?.error || '导出失败。')
+      }
+      const blob = await response.blob()
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = date ? `pm2-${date}.log` : 'pm2-logs.log'
+      link.click()
+      URL.revokeObjectURL(url)
+    } catch (reason) {
+      setError(operationErrorMessage(reason, '导出 PM2 日志失败。'))
+    }
+  }
+
   if (!open) return null
   return (
     <DesktopWindow
@@ -9955,7 +10289,13 @@ function PM2LogsPanel({
       open
       minimized={minimized}
       title="PM2 运行日志"
-      subtitle="默认显示最新一页；每页 120 行，只能查看。"
+      subtitle={
+        live
+          ? '实时跟随最新记录'
+          : date
+            ? `按日期审计 · ${date}`
+            : '最新日志 · 只读'
+      }
       icon={
         <Terminal className="size-4 shrink-0 text-brand-600 dark:text-brand-200" />
       }
@@ -9968,7 +10308,7 @@ function PM2LogsPanel({
         <button
           className="icon-button size-8 p-0"
           disabled={loading}
-          onClick={() => void load(page)}
+          onClick={refresh}
           aria-label="刷新 PM2 日志"
           title="刷新"
         >
@@ -9976,31 +10316,181 @@ function PM2LogsPanel({
         </button>
       }
     >
-      <div className="grid min-h-0 grid-rows-[minmax(0,1fr)_auto]">
-        <pre className="m-0 min-h-0 overflow-auto bg-slate-950 p-4 font-mono text-xs leading-5 text-emerald-200">
-          {loading && !data
-            ? '正在读取最新 PM2 日志…'
-            : error || data?.output || '暂无日志。'}
-        </pre>
-        <footer className="flex items-center justify-between gap-2 border-t border-slate-200 px-4 py-3 dark:border-slate-700">
+      <div className="pm2-audit">
+        <div className="pm2-audit-toolbar">
           <button
-            className="inline-flex min-h-8 items-center justify-center rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-600 disabled:opacity-40 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-300"
-            disabled={loading || page <= 1}
-            onClick={() => setPage(current => current - 1)}
+            className={cn('pm2-audit-live', live && 'active')}
+            onClick={toggleLive}
+            title={live ? '暂停实时跟随' : '实时跟随最新记录'}
           >
+            {live ? (
+              <Pause className="size-3" />
+            ) : (
+              <Radio className="size-3" />
+            )}
+            {live ? '跟随中' : '实时'}
+          </button>
+          <select
+            className="pm2-audit-field"
+            value={date}
+            onChange={event => selectDay(event.target.value)}
+            aria-label="按日期查看 PM2 日志"
+            title="按日期查看日志"
+          >
+            <option value="">最新（全部日期）</option>
+            {days.map(day => (
+              <option key={day.date} value={day.date}>
+                {day.date}（{day.count} 条 · err {day.err}）
+              </option>
+            ))}
+          </select>
+          <button
+            className="pm2-audit-tool-btn"
+            disabled={!olderDay}
+            onClick={() => selectDay(olderDay)}
+            title="查看更早一天的日志"
+          >
+            <ArrowLeft className="size-3" />
+            前一天
+          </button>
+          <button
+            className="pm2-audit-tool-btn"
+            disabled={!newerDay}
+            onClick={() => selectDay(newerDay)}
+            title="查看更新一天的日志"
+          >
+            后一天
+            <ArrowRight className="size-3" />
+          </button>
+          <button
+            className="pm2-audit-tool-btn"
+            disabled={!date}
+            onClick={jumpLatest}
+            title="回到最新日志"
+          >
+            最新
+          </button>
+        </div>
+        <div className="pm2-audit-toolbar">
+          <div className="pm2-audit-source" role="group" aria-label="日志来源">
+            {[
+              ['all', '全部'],
+              ['out', '输出'],
+              ['err', '错误']
+            ].map(([value, label]) => (
+              <button
+                key={value}
+                className={cn('pm2-audit-source-btn', source === value && 'active')}
+                onClick={() => {
+                  setSource(value)
+                  setPage(1)
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <input
+            className="pm2-audit-field pm2-audit-search"
+            value={query}
+            onChange={event => setQuery(event.target.value)}
+            placeholder="搜索日志内容…"
+            aria-label="搜索 PM2 日志"
+          />
+          <select
+            className="pm2-audit-field"
+            value={perPage}
+            onChange={event => {
+              setPerPage(Number(event.target.value))
+              setPage(1)
+            }}
+            aria-label="每页行数"
+            title="每页行数"
+          >
+            {[120, 300, 1000].map(size => (
+              <option key={size} value={size}>
+                {size} 行/页
+              </option>
+            ))}
+          </select>
+          <button
+            className="pm2-audit-tool-btn"
+            disabled={loading || live || !data?.hasNewer}
+            onClick={() => setPage(current => Math.max(1, current - 1))}
+            title="查看更新的一页"
+          >
+            <ArrowLeft className="size-3" />
             更新
           </button>
-          <span className="text-xs text-slate-500">
-            第 {data?.page ?? page} 页 · 每页 120 行
+          <span className="pm2-audit-page">
+            {live
+              ? '实时'
+              : `第 ${data?.page ?? page} 页`}
+            {data ? ` · 共 ${data.total} 条匹配` : ''}
+            {data?.truncated ? ' · 已截断' : ''}
           </span>
           <button
-            className="inline-flex min-h-8 items-center justify-center rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-600 disabled:opacity-40 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-300"
-            disabled={loading || !data?.hasOlder}
+            className="pm2-audit-tool-btn"
+            disabled={loading || live || !data?.hasOlder}
             onClick={() => setPage(current => current + 1)}
+            title="查看更早的一页"
           >
             更早
+            <ArrowRight className="size-3" />
           </button>
-        </footer>
+          <button
+            className="pm2-audit-tool-btn"
+            onClick={refresh}
+            title="刷新当前视图"
+          >
+            <RefreshCw className="size-3" />
+            刷新
+          </button>
+          <button
+            className="pm2-audit-tool-btn"
+            onClick={() => void exportLogs()}
+            title="导出当前筛选的完整日志（含 out/err 标记）"
+          >
+            <Download className="size-3" />
+            导出
+          </button>
+        </div>
+        <div
+          className="pm2-audit-body"
+          ref={outputRef}
+          onScroll={event => {
+            const el = event.currentTarget
+            followLatest.current =
+              el.scrollHeight - el.scrollTop - el.clientHeight < 48
+          }}
+        >
+          {loading && !data && !live ? (
+            <div className="pm2-audit-hint">正在读取最新 PM2 日志…</div>
+          ) : error ? (
+            <div className="pm2-audit-line pm2-audit-line-err">{error}</div>
+          ) : visibleLines.length === 0 ? (
+            <div className="pm2-audit-hint">PM2 暂无可读取的日志。</div>
+          ) : (
+            visibleLines.map((line, index) => (
+              <div
+                key={`${line.source}-${index}`}
+                className={cn(
+                  'pm2-audit-line',
+                  line.source === 'err' && 'pm2-audit-line-err'
+                )}
+              >
+                {line.text}
+              </div>
+            ))
+          )}
+          {live && (
+            <div className="pm2-audit-hint">
+              {liveConnected
+                ? '已连接，正在跟随最新记录…'
+                : '正在连接实时日志…'}
+            </div>
+          )}
+        </div>
       </div>
     </DesktopWindow>
   )

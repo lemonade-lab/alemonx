@@ -76,7 +76,7 @@ MCP_ALLOWED_ROOTS='/Users/me/robots:/Users/me/workspaces' alx mcp
 | 包发布信息 | `alemonjs_get_package_manifest`、`alemonjs_save_package_manifest` |
 | NPM 打包与发布 | `alemonjs_get_npm_publish_status`、`alemonjs_get_npm_pack_preview`、`alemonjs_start_project_action`（`npm-version`、`npm-publish`） |
 | Git 初始化与打包 | `alemonjs_initialize_git`、`alemonjs_get_git_release_status`、`alemonjs_start_project_action`（`commit`、`git-release`） |
-| Setup 系统扩展 | `alemonjs_list_setup_plugins`、`alemonjs_run_setup_plugin` |
+| Setup 系统扩展 | `alemonjs_list_setup_plugins`（列出插件及其 Web 入口，不执行插件代码） |
 | Setup 系统检查 | `alemonjs_check_environment`、`alemonjs_check_setup_update`、`alemonjs_list_releases`、`alemonjs_list_catalog` |
 
 `npm-publish` 与 `git-release` 会产生外部副作用，必须在发布前检查之后得到用户本次明确确认；MCP 不读取或传递 npm token。

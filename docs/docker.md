@@ -22,6 +22,8 @@ mkdir workspace
 docker compose up -d
 ```
 
+容器内程序运行目录 `/app` 是只读的；创建机器人项目时如果选择了“当前目录”，程序会自动回退到可写的 `ALEMONJS_SETUP_ROOTS`（Docker 默认为挂载的 `/workspace`），因此项目默认会保存到 `/workspace`。
+
 ## 配置与数据
 
 `.env` 中最常用的项目如下：

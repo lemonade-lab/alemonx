@@ -198,8 +198,6 @@ try {
 }
 ```
 
-## 安全与发布清单
-
 ## Release 安装与实际版本
 
 系统插件必须通过 GitHub Release 发布平台安装包，不使用源码仓库作为安装包。推荐每个支持的平台发布一个压缩包，例如：
@@ -221,6 +219,8 @@ ALemonX 安装时会把 Release tag、Asset 名称、压缩包 SHA-256 和安装
 ALemonX 会在用户配置目录的 `alx/plugin-cache/<plugin-id>/` 中保留已验证的 Release 压缩包和解压版本。默认每个插件最多保留 3 个版本，全局缓存上限为 1 GiB；清理按最近使用时间执行，但不会删除当前活动版本。工作台可通过版本管理界面切换、删除非活动版本或立即执行缓存清理。
 
 版本管理接口为 `GET /api/v1/setup/plugins/<id>/versions`、`POST /api/v1/setup/plugins/<id>/switch`、`DELETE /api/v1/setup/plugins/<id>/versions/<tag>`，全局缓存接口为 `GET/POST /api/v1/setup/plugins/cache`。
+
+## 安全与发布清单
 
 - 将每个操作实现为固定的动作分支；绝不把字段值拼接为 shell 字符串或执行用户提供的命令。
 - 危险操作在执行器内校验输入与运行环境；Web 界面提供二次确认。

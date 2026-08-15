@@ -12,6 +12,7 @@ import { Modal } from './Modal'
 import { registerDesktopWindowShortcut } from './desktopWindowShortcuts'
 import { isWindowHeaderInteractiveTarget } from './desktopWindowInteraction'
 import { useIsPadViewport } from '../hooks/useIsPadViewport'
+import { clampWindowRectToViewport } from '../lib/windowRect'
 
 export type ResizeCorner = 'nw' | 'ne' | 'sw' | 'se'
 
@@ -92,9 +93,13 @@ export function DesktopWindow({
     width,
     height
   }))
+  // The window's preferred (user-chosen) size. `windowRect` holds the
+  // viewport-clamped display rect; keeping the ideal rect separate means
+  // shrinking the browser only temporarily shrinks the window, and growing it
+  // back restores the remembered size instead of staying small forever.
+  const preferredRect = useRef<typeof windowRect>(windowRect)
   const [maximized, setMaximized] = useState(false)
   const [layoutReady, setLayoutReady] = useState(!storageKey)
-  const restoreRect = useRef<typeof windowRect | null>(null)
   const windowRef = useRef<HTMLElement>(null)
   const isPadView = useIsPadViewport()
   const dragStart = useRef<{
@@ -120,7 +125,13 @@ export function DesktopWindow({
     try {
       const saved = JSON.parse(localStorage.getItem(storageKey) || 'null') as { rect?: typeof windowRect; maximized?: boolean } | null
       if (saved?.rect && Number.isFinite(saved.rect.left) && Number.isFinite(saved.rect.top) && Number.isFinite(saved.rect.width) && Number.isFinite(saved.rect.height)) {
-        setWindowRect(saved.rect)
+        preferredRect.current = saved.rect
+        setWindowRect(
+          clampWindowRectToViewport(saved.rect, {
+            minWidth: 440,
+            minHeight: 320
+          })
+        )
       }
       if (saved?.maximized) setMaximized(true)
     } catch { /* An invalid local layout should never prevent opening chat. */ }
@@ -129,36 +140,35 @@ export function DesktopWindow({
 
   useEffect(() => {
     if (!storageKey || !open || !layoutReady) return
-    localStorage.setItem(storageKey, JSON.stringify({ rect: windowRect, maximized }))
+    localStorage.setItem(
+      storageKey,
+      JSON.stringify({ rect: preferredRect.current, maximized })
+    )
   }, [layoutReady, maximized, open, storageKey, windowRect])
 
   useLayoutEffect(() => {
     if (!open) return
-    const clamp = () => {
-      setWindowRect(current => ({
-        ...current,
-        width: Math.min(Math.max(320, window.innerWidth - 48), Math.max(440, current.width)),
-        height: Math.min(Math.max(280, window.innerHeight - 48), Math.max(320, current.height)),
-        left: Math.max(
-          16,
-          Math.min(
-            window.innerWidth - Math.min(Math.max(320, window.innerWidth - 48), Math.max(440, current.width)) - 16,
-            current.left
-          )
-        ),
-        top: Math.max(
-          16,
-          Math.min(
-            window.innerHeight - Math.min(Math.max(280, window.innerHeight - 48), Math.max(320, current.height)) - 16,
-            current.top
-          )
-        )
-      }))
+    const applyViewport = () => {
+      if (maximized) {
+        setWindowRect({
+          left: 16,
+          top: 16,
+          width: Math.max(440, window.innerWidth - 32),
+          height: Math.max(320, window.innerHeight - 32)
+        })
+        return
+      }
+      setWindowRect(
+        clampWindowRectToViewport(preferredRect.current, {
+          minWidth: 440,
+          minHeight: 320
+        })
+      )
     }
-    clamp()
-    window.addEventListener('resize', clamp)
-    return () => window.removeEventListener('resize', clamp)
-  }, [height, open, width])
+    applyViewport()
+    window.addEventListener('resize', applyViewport)
+    return () => window.removeEventListener('resize', applyViewport)
+  }, [maximized, open])
 
   const previewMove = useCallback((event: Pick<PointerEvent, 'clientX' | 'clientY' | 'pointerId'>) => {
     const start = dragStart.current
@@ -173,6 +183,12 @@ export function DesktopWindow({
     if (!start || start.pointerId !== event.pointerId) return
     const left = Math.max(16, Math.min(window.innerWidth - windowRect.width - 16, start.left + event.clientX - start.x))
     const top = Math.max(16, Math.min(window.innerHeight - windowRect.height - 16, start.top + event.clientY - start.y))
+    // A drag only moves the window; keep the preferred size intact so it can
+    // be restored when the viewport grows. A click without movement must not
+    // re-anchor the preferred position either.
+    if (left !== start.left || top !== start.top) {
+      preferredRect.current = { ...preferredRect.current, left, top }
+    }
     setWindowRect(current => ({ ...current, left, top }))
     dragStart.current = null
   }, [windowRect.height, windowRect.width])
@@ -237,7 +253,18 @@ export function DesktopWindow({
   }
   const commitResize = (event: ReactPointerEvent<HTMLElement>) => {
     const rect = getResizedRect(event)
-    if (!rect) return
+    const start = resizeStart.current
+    if (!rect || !start) return
+    // Only an actual resize is a user choice worth remembering; touching a
+    // handle on a viewport-constrained window must not forget the ideal size.
+    if (
+      rect.width !== start.width ||
+      rect.height !== start.height ||
+      rect.left !== start.left ||
+      rect.top !== start.top
+    ) {
+      preferredRect.current = rect
+    }
     setWindowRect(current => ({ ...current, ...rect }))
     resizeStart.current = null
   }
@@ -251,11 +278,15 @@ export function DesktopWindow({
   const toggleMaximize = useCallback(() => {
     if (isPadView) return
     if (maximized) {
-      if (restoreRect.current) setWindowRect(restoreRect.current)
+      setWindowRect(
+        clampWindowRectToViewport(preferredRect.current, {
+          minWidth: 440,
+          minHeight: 320
+        })
+      )
       setMaximized(false)
       return
     }
-    restoreRect.current = windowRect
     setWindowRect({
       left: 16,
       top: 16,
@@ -263,7 +294,7 @@ export function DesktopWindow({
       height: Math.max(320, window.innerHeight - 32)
     })
     setMaximized(true)
-  }, [isPadView, maximized, windowRect])
+  }, [isPadView, maximized])
 
   useEffect(() => {
     if (!open) return

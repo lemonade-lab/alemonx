@@ -1,6 +1,7 @@
 package web
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -814,6 +815,100 @@ func TestRobotLiveUploadRejectsEmptyFile(t *testing.T) {
 		if readErr != nil || len(entries) != 0 {
 			t.Fatalf("empty upload left a staged file: %v", entries)
 		}
+	}
+}
+
+func makeUploadArchiveZip(t *testing.T, entries map[string]string) []byte {
+	t.Helper()
+	var buffer bytes.Buffer
+	archive := zip.NewWriter(&buffer)
+	for name, content := range entries {
+		file, err := archive.Create(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := file.Write([]byte(content)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := archive.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buffer.Bytes()
+}
+
+func TestSetupPluginUploadArchiveInstallsPlugin(t *testing.T) {
+	root := t.TempDir()
+	s := &server{plugins: setupplugin.NewRegistry(root)}
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	part, err := writer.CreateFormFile("file", "network.zip")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := `{"id":"alemonx-network","name":"网络","version":"1.0.0","entry":{"` + runtime.GOOS + "-" + runtime.GOARCH + `":"runner"},"web":{"root":"web"}}`
+	if _, err := part.Write(makeUploadArchiveZip(t, map[string]string{
+		"alx.json":       manifest,
+		"web/index.html": "<h1>network</h1>",
+		"runner":         "#!/bin/sh\n",
+	})); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/setup/plugins/upload", body)
+	request.Header.Set("Content-Type", writer.FormDataContentType())
+	response := httptest.NewRecorder()
+	s.setupPluginUploadArchiveHandler(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("upload = %d %s", response.Code, response.Body.String())
+	}
+	var installed struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &installed); err != nil {
+		t.Fatal(err)
+	}
+	if installed.ID != "alemonx-network" {
+		t.Fatalf("installed id = %q", installed.ID)
+	}
+	if _, err := os.Stat(filepath.Join(root, "alemonx-network", "alx.json")); err != nil {
+		t.Fatalf("installed plugin missing: %v", err)
+	}
+}
+
+func TestRobotPackageUploadUnpacksIntoBackpack(t *testing.T) {
+	root := t.TempDir()
+	writeFixture(t, root, "package.json", `{"name":"demo","version":"1.0.0"}`)
+	s := newStatefulTestServer()
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	if err := writer.WriteField("root", root); err != nil {
+		t.Fatal(err)
+	}
+	part, err := writer.CreateFormFile("file", "hello-plugin.zip")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write(makeUploadArchiveZip(t, map[string]string{
+		"hello-plugin/package.json": `{"name":"hello-plugin","version":"1.0.0"}`,
+		"hello-plugin/index.js":     "module.exports = {}",
+	})); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/robot/packages/upload", body)
+	request.Header.Set("Content-Type", writer.FormDataContentType())
+	response := httptest.NewRecorder()
+	s.robotPackageUploadHandler(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("upload = %d %s", response.Code, response.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(root, "packages", "hello-plugin", "package.json")); err != nil {
+		t.Fatalf("package missing: %v", err)
 	}
 }
 

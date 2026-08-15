@@ -1049,6 +1049,7 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	mux.HandleFunc("/api/v1/setup/plugins/releases/", s.setupPluginReleasesHandler)
 	mux.HandleFunc("/api/v1/setup/plugins/development", s.setupPluginDevelopmentHandler)
 	mux.HandleFunc("/api/v1/setup/plugins/development/", s.setupPluginDevelopmentHandler)
+	mux.HandleFunc("/api/v1/setup/plugins/upload", s.setupPluginUploadArchiveHandler)
 	mux.HandleFunc("/api/v1/setup/plugins/", s.setupPluginActionHandler)
 	mux.HandleFunc("/api/v1/setup/plugins/web/", s.setupPluginWebHandler)
 	mux.HandleFunc("/api/v1/services", s.localServicesHandler)
@@ -1060,6 +1061,9 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	mux.HandleFunc("/api/v1/robot/console", s.robotConsoleHandler)
 	mux.HandleFunc("/api/v1/robot/terminal", s.robotTerminalHandler)
 	mux.HandleFunc("/api/v1/robot/pm2-logs", s.robotPM2LogsHandler)
+	mux.HandleFunc("/api/v1/robot/pm2-logs/days", s.robotPM2LogDaysHandler)
+	mux.HandleFunc("/api/v1/robot/pm2-logs/stream", s.robotPM2LogStreamHandler)
+	mux.HandleFunc("/api/v1/robot/pm2-logs/export", s.robotPM2LogExportHandler)
 	mux.HandleFunc("/api/v1/robot/pm2-status", s.robotPM2StatusHandler)
 	mux.HandleFunc("/api/v1/robot/pm2-processes", s.robotPM2ProcessesHandler)
 	mux.HandleFunc("/api/v1/robot/app-port", s.robotAppPortHandler)
@@ -1075,6 +1079,7 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	mux.HandleFunc("/api/v1/robot/tasks", s.robotTasksHandler)
 	mux.HandleFunc("/api/v1/robot/events", s.robotEventsHandler)
 	mux.HandleFunc("/api/v1/robot/packages", s.robotPackagesHandler)
+	mux.HandleFunc("/api/v1/robot/packages/upload", s.robotPackageUploadHandler)
 	mux.HandleFunc("/api/v1/robot/packages/git-clone", s.robotPackageGitCloneHandler)
 	mux.HandleFunc("/api/v1/robot/packages/git-clone/check", s.robotPackageGitCloneCheckHandler)
 	mux.HandleFunc("/api/v1/robot/package-versions", s.robotPackageVersionsHandler)
@@ -2011,6 +2016,64 @@ func (s *server) setupPluginUploadHandler(w http.ResponseWriter, r *http.Request
 		s.updateOperationData(created.ID, 100, result.Output, "", result.Data, true)
 	}()
 	writeJSON(w, http.StatusAccepted, created)
+}
+
+// setupPluginUploadArchiveHandler installs a browser-uploaded system plugin
+// archive into the host plugin root. The archive is validated and unpacked by
+// the registry; the upload filename never becomes part of the install.
+func (s *server) setupPluginUploadArchiveHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 2<<30+1<<20)
+	if err := r.ParseMultipartForm(16 << 20); err != nil {
+		writeError(w, http.StatusBadRequest, "上传格式无效。")
+		return
+	}
+	defer r.MultipartForm.RemoveAll()
+	files := r.MultipartForm.File["files"]
+	if len(files) == 0 {
+		files = r.MultipartForm.File["file"]
+	}
+	if len(files) != 1 {
+		writeError(w, http.StatusBadRequest, "请上传一个插件安装包。")
+		return
+	}
+	header := files[0]
+	if !isUploadArchiveName(header.Filename) {
+		writeError(w, http.StatusBadRequest, "仅支持 .zip、.tar.gz 或 .tgz 插件安装包。")
+		return
+	}
+	temporary, err := os.CreateTemp("", "alx-plugin-upload-*.archive")
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "无法创建上传临时文件。")
+		return
+	}
+	defer func() { _ = os.Remove(temporary.Name()) }()
+	input, err := header.Open()
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "无法读取上传文件。")
+		return
+	}
+	_, copyErr := io.Copy(temporary, io.LimitReader(input, 2<<30+1))
+	closeErr := temporary.Close()
+	_ = input.Close()
+	if copyErr != nil || closeErr != nil {
+		writeError(w, http.StatusRequestEntityTooLarge, "插件安装包过大。")
+		return
+	}
+	installed, err := s.plugins.InstallUpload(temporary.Name())
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"id": installed.ID, "name": installed.Name, "version": installed.Version, "enabled": installed.Enabled})
+}
+
+func isUploadArchiveName(name string) bool {
+	lower := strings.ToLower(strings.TrimSpace(name))
+	return strings.HasSuffix(lower, ".zip") || strings.HasSuffix(lower, ".tar.gz") || strings.HasSuffix(lower, ".tgz")
 }
 
 // activeSetupPluginOperation returns the one in-flight task for a plugin.
@@ -3980,24 +4043,174 @@ func (s *server) cachedRobotConsole(root string) (robot.Result, error) {
 	return result, nil
 }
 
+func parsePM2AuditQuery(r *http.Request) (robot.PM2AuditQuery, error) {
+	q := robot.PM2AuditQuery{
+		Date:   strings.TrimSpace(r.URL.Query().Get("date")),
+		Since:  strings.TrimSpace(r.URL.Query().Get("since")),
+		Until:  strings.TrimSpace(r.URL.Query().Get("until")),
+		Source: strings.TrimSpace(r.URL.Query().Get("source")),
+		Query:  strings.TrimSpace(r.URL.Query().Get("query")),
+		Page:   1,
+	}
+	if raw := r.URL.Query().Get("page"); raw != "" {
+		page, err := strconv.Atoi(raw)
+		if err != nil || page < 1 {
+			return q, errors.New("日志页码无效。")
+		}
+		q.Page = page
+	}
+	if raw := r.URL.Query().Get("perPage"); raw != "" {
+		perPage, err := strconv.Atoi(raw)
+		if err != nil || perPage < 1 {
+			return q, errors.New("每页行数无效。")
+		}
+		q.PerPage = perPage
+	}
+	return q, nil
+}
+
 func (s *server) robotPM2LogsHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
 		return
 	}
-	page := 1
-	if raw := r.URL.Query().Get("page"); raw != "" {
-		if _, err := fmt.Sscanf(raw, "%d", &page); err != nil || page < 1 {
-			writeError(w, http.StatusBadRequest, "日志页码无效。")
-			return
-		}
+	root := r.URL.Query().Get("root")
+	if root == "" {
+		writeError(w, http.StatusBadRequest, "请选择机器人目录。")
+		return
 	}
-	result, err := s.robots.PM2Logs(r.URL.Query().Get("root"), page)
+	query, err := parsePM2AuditQuery(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	result, err := s.robots.PM2AuditLogs(root, query)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *server) robotPM2LogDaysHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
+		return
+	}
+	root := r.URL.Query().Get("root")
+	if root == "" {
+		writeError(w, http.StatusBadRequest, "请选择机器人目录。")
+		return
+	}
+	days, err := s.robots.PM2LogDays(root)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"days": days})
+}
+
+func (s *server) robotPM2LogExportHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
+		return
+	}
+	root := r.URL.Query().Get("root")
+	if root == "" {
+		writeError(w, http.StatusBadRequest, "请选择机器人目录。")
+		return
+	}
+	query, err := parsePM2AuditQuery(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	content, err := s.robots.PM2LogExport(root, query)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	name := "pm2-logs"
+	if query.Date != "" {
+		name = "pm2-" + query.Date
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.log"`, name))
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	_, _ = w.Write([]byte(content))
+}
+
+// robotPM2LogStreamHandler tails the robot's PM2 log files over SSE so the
+// audit viewer can stay on the latest page in real time without polling.
+func (s *server) robotPM2LogStreamHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
+		return
+	}
+	root := r.URL.Query().Get("root")
+	if root == "" {
+		writeError(w, http.StatusBadRequest, "请选择机器人目录。")
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "SSE 不受支持。")
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+	var writeMu sync.Mutex
+	writeFrame := func(payload []byte) bool {
+		writeMu.Lock()
+		defer writeMu.Unlock()
+		if _, err := w.Write(append(append([]byte("data: "), payload...), '\n', '\n')); err != nil {
+			cancel()
+			return false
+		}
+		flusher.Flush()
+		return true
+	}
+	emit := func(source, text string) {
+		if ctx.Err() != nil {
+			return
+		}
+		payload, err := json.Marshal(map[string]string{"source": source, "text": text})
+		if err != nil {
+			return
+		}
+		writeFrame(payload)
+	}
+	heartbeat := time.NewTicker(25 * time.Second)
+	defer heartbeat.Stop()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if err := s.robots.StreamPM2LogFiles(ctx, root, emit); err != nil && ctx.Err() == nil {
+			if payload, marshalErr := json.Marshal(map[string]string{"error": err.Error()}); marshalErr == nil {
+				writeFrame(payload)
+			}
+		}
+	}()
+	for {
+		select {
+		case <-done:
+			return
+		case <-heartbeat.C:
+			writeMu.Lock()
+			_, writeErr := w.Write([]byte(": ping\n\n"))
+			flusher.Flush()
+			writeMu.Unlock()
+			if writeErr != nil {
+				return
+			}
+		case <-r.Context().Done():
+			return
+		}
+	}
 }
 
 func (s *server) robotPM2StatusHandler(w http.ResponseWriter, r *http.Request) {
@@ -5429,6 +5642,64 @@ func (s *server) robotPackagesHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+// robotPackageUploadHandler unpacks a browser-uploaded plugin archive into the
+// selected robot's packages directory. The destination name comes from the
+// package manifest and an existing package with the same name is refused.
+func (s *server) robotPackageUploadHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 2<<30+1<<20)
+	if err := r.ParseMultipartForm(16 << 20); err != nil {
+		writeError(w, http.StatusBadRequest, "上传格式无效。")
+		return
+	}
+	defer r.MultipartForm.RemoveAll()
+	root := strings.TrimSpace(r.FormValue("root"))
+	if _, err := s.robots.Validate(root); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	files := r.MultipartForm.File["files"]
+	if len(files) == 0 {
+		files = r.MultipartForm.File["file"]
+	}
+	if len(files) != 1 {
+		writeError(w, http.StatusBadRequest, "请上传一个插件包。")
+		return
+	}
+	header := files[0]
+	if !isUploadArchiveName(header.Filename) {
+		writeError(w, http.StatusBadRequest, "仅支持 .zip、.tar.gz 或 .tgz 插件包。")
+		return
+	}
+	temporary, err := os.CreateTemp("", "alx-package-upload-*.archive")
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "无法创建上传临时文件。")
+		return
+	}
+	defer func() { _ = os.Remove(temporary.Name()) }()
+	input, err := header.Open()
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "无法读取上传文件。")
+		return
+	}
+	_, copyErr := io.Copy(temporary, io.LimitReader(input, 2<<30+1))
+	closeErr := temporary.Close()
+	_ = input.Close()
+	if copyErr != nil || closeErr != nil {
+		writeError(w, http.StatusRequestEntityTooLarge, "插件包过大。")
+		return
+	}
+	item, err := s.robots.InstallLocalPackageUpload(root, temporary.Name())
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, item)
 }
 
 func (s *server) robotPackageVersionsHandler(w http.ResponseWriter, r *http.Request) {
