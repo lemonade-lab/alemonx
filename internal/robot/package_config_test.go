@@ -9,7 +9,7 @@ import (
 
 func TestCurrentPackageConfigWithoutDeclarationIsEmpty(t *testing.T) {
 	root := t.TempDir()
-	writeWebViewFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
 
 	config, err := (Manager{}).CurrentPackageConfig(root)
 	if err != nil {
@@ -29,15 +29,15 @@ func TestCurrentPackageConfigWithoutDeclarationIsEmpty(t *testing.T) {
 // name, matching how the framework reads the connection section.
 func TestScopedConnectionPackageUsesShortNamespace(t *testing.T) {
 	root := t.TempDir()
-	writeWebViewFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
-	writeWebViewFixture(t, filepath.Join(root, "node_modules", "@alemonjs", "onebot", "package.json"), `{
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
+	writeAppPageFixture(t, filepath.Join(root, "node_modules", "@alemonjs", "onebot", "package.json"), `{
   "name":"@alemonjs/onebot",
   "alemonjs":{
     "config":[{"name":"token","type":"string","required":true,"description":"token"}],
     "desktop":{"platform":[{"name":"onebot"}]}
   }
 }`)
-	writeWebViewFixture(t, filepath.Join(root, "alemon.config.yaml"), "onebot:\n  token: \"abc\"\n")
+	writeAppPageFixture(t, filepath.Join(root, "alemon.config.yaml"), "onebot:\n  token: \"abc\"\n")
 
 	config, err := (Manager{}).PackageConfig(root, "@alemonjs/onebot")
 	if err != nil {
@@ -55,15 +55,15 @@ func TestScopedConnectionPackageUsesShortNamespace(t *testing.T) {
 // versions that keyed the section by the scoped package name.
 func TestScopedConnectionPackageReadsLegacyKey(t *testing.T) {
 	root := t.TempDir()
-	writeWebViewFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
-	writeWebViewFixture(t, filepath.Join(root, "node_modules", "@alemonjs", "onebot", "package.json"), `{
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
+	writeAppPageFixture(t, filepath.Join(root, "node_modules", "@alemonjs", "onebot", "package.json"), `{
   "name":"@alemonjs/onebot",
 	"alemonjs":{
 		"config":[{"name":"token","type":"string","required":true,"description":"token"}],
 		"desktop":{"platform":[{"name":"onebot"}]}
 	}
 }`)
-	writeWebViewFixture(t, filepath.Join(root, "alemon.config.yaml"), `'@alemonjs/onebot':
+	writeAppPageFixture(t, filepath.Join(root, "alemon.config.yaml"), `'@alemonjs/onebot':
   token: "legacy"
 `)
 
@@ -80,8 +80,8 @@ func TestScopedConnectionPackageReadsLegacyKey(t *testing.T) {
 // the stale scoped-package block in one pass.
 func TestSaveScopedConnectionMigratesLegacyKey(t *testing.T) {
 	root := t.TempDir()
-	writeWebViewFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
-	writeWebViewFixture(t, filepath.Join(root, "node_modules", "@alemonjs", "onebot", "package.json"), `{
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
+	writeAppPageFixture(t, filepath.Join(root, "node_modules", "@alemonjs", "onebot", "package.json"), `{
   "name":"@alemonjs/onebot",
   "alemonjs":{
     "config":[
@@ -91,7 +91,7 @@ func TestSaveScopedConnectionMigratesLegacyKey(t *testing.T) {
     "desktop":{"platform":[{"name":"onebot"}]}
   }
 }`)
-	writeWebViewFixture(t, filepath.Join(root, "alemon.config.yaml"), `'@alemonjs/onebot':
+	writeAppPageFixture(t, filepath.Join(root, "alemon.config.yaml"), `'@alemonjs/onebot':
   token: "old"
   url: "ws://old"
 `)
@@ -120,12 +120,12 @@ func TestSaveScopedConnectionMigratesLegacyKey(t *testing.T) {
 
 func TestOfficialModuleConfigurationUsesUnscopedNamespace(t *testing.T) {
 	root := t.TempDir()
-	writeWebViewFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
-	writeWebViewFixture(t, filepath.Join(root, "node_modules", "@alemonjs", "db", "package.json"), `{
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
+	writeAppPageFixture(t, filepath.Join(root, "node_modules", "@alemonjs", "db", "package.json"), `{
   "name":"@alemonjs/db",
   "alemonjs":{"config":[{"name":"db","type":"object","config":[{"name":"redis","type":"object","config":[{"name":"host","type":"string"}]}]}]}
 }`)
-	writeWebViewFixture(t, filepath.Join(root, "alemon.config.yaml"), "db:\n  redis:\n    host: localhost\n")
+	writeAppPageFixture(t, filepath.Join(root, "alemon.config.yaml"), "db:\n  redis:\n    host: localhost\n")
 
 	config, err := (Manager{}).PackageConfig(root, "@alemonjs/db")
 	if err != nil {
@@ -153,8 +153,8 @@ func TestOfficialModuleConfigurationUsesUnscopedNamespace(t *testing.T) {
 // unmatchable value, otherwise required fields always look empty.
 func TestConfigValuesSurviveWindowsBOM(t *testing.T) {
 	root := t.TempDir()
-	writeWebViewFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
-	writeWebViewFixture(t, filepath.Join(root, "node_modules", "@alemonjs", "qq-bot", "package.json"), `{
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
+	writeAppPageFixture(t, filepath.Join(root, "node_modules", "@alemonjs", "qq-bot", "package.json"), `{
   "name":"@alemonjs/qq-bot",
   "alemonjs":{
     "config":[
@@ -164,7 +164,7 @@ func TestConfigValuesSurviveWindowsBOM(t *testing.T) {
     "desktop":{"platform":[{"name":"qq-bot","value":"@alemonjs/qq-bot"}]}
   }
 }`)
-	writeWebViewFixture(t, filepath.Join(root, "alemon.config.yaml"), "\uFEFFqq-bot:\n  appid: \"123\"\n  token: \"abc\"\n")
+	writeAppPageFixture(t, filepath.Join(root, "alemon.config.yaml"), "\uFEFFqq-bot:\n  appid: \"123\"\n  token: \"abc\"\n")
 
 	config, err := (Manager{}).PackageConfig(root, "@alemonjs/qq-bot")
 	if err != nil {
@@ -192,8 +192,8 @@ func TestConfigValuesSurviveWindowsBOM(t *testing.T) {
 // canonical section carrying the newest values.
 func TestSaveRemovesDuplicateSections(t *testing.T) {
 	root := t.TempDir()
-	writeWebViewFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
-	writeWebViewFixture(t, filepath.Join(root, "node_modules", "@alemonjs", "qq-bot", "package.json"), `{
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
+	writeAppPageFixture(t, filepath.Join(root, "node_modules", "@alemonjs", "qq-bot", "package.json"), `{
   "name":"@alemonjs/qq-bot",
   "alemonjs":{
     "config":[
@@ -205,7 +205,7 @@ func TestSaveRemovesDuplicateSections(t *testing.T) {
 }`)
 	// The old BOM-prefixed section plus the clean replacement an older save
 	// appended afterwards. After stripping the BOM, both keys are "qq-bot:".
-	writeWebViewFixture(t, filepath.Join(root, "alemon.config.yaml"), "\uFEFFqq-bot:\n  appid: \"old\"\n  token: \"old-token\"\n\nqq-bot:\n  appid: \"new\"\n  token: \"new-token\"\n")
+	writeAppPageFixture(t, filepath.Join(root, "alemon.config.yaml"), "\uFEFFqq-bot:\n  appid: \"old\"\n  token: \"old-token\"\n\nqq-bot:\n  appid: \"new\"\n  token: \"new-token\"\n")
 
 	if _, err := (Manager{}).SavePackageConfig(root, "@alemonjs/qq-bot", map[string]any{
 		"appid": "saved",
@@ -235,8 +235,8 @@ func TestSaveRemovesDuplicateSections(t *testing.T) {
 
 func TestPackageConfigReadsNestedObjectAndArrayValues(t *testing.T) {
 	root := t.TempDir()
-	writeWebViewFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
-	writeWebViewFixture(t, filepath.Join(root, "node_modules", "example", "package.json"), `{
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
+	writeAppPageFixture(t, filepath.Join(root, "node_modules", "example", "package.json"), `{
   "name":"example",
   "alemonjs":{
     "config":[
@@ -248,7 +248,7 @@ func TestPackageConfigReadsNestedObjectAndArrayValues(t *testing.T) {
     ]
   }
 }`)
-	writeWebViewFixture(t, filepath.Join(root, "alemon.config.yaml"), "example:\n  request_config:\n    timeout: 20000\n  master_key:\n    - \"a\"\n    - \"b\"\n")
+	writeAppPageFixture(t, filepath.Join(root, "alemon.config.yaml"), "example:\n  request_config:\n    timeout: 20000\n  master_key:\n    - \"a\"\n    - \"b\"\n")
 
 	config, err := (Manager{}).PackageConfig(root, "example")
 	if err != nil {
@@ -281,8 +281,8 @@ func TestPackageConfigReadsNestedObjectAndArrayValues(t *testing.T) {
 
 func TestSavePackageConfigEnforcesRules(t *testing.T) {
 	root := t.TempDir()
-	writeWebViewFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
-	writeWebViewFixture(t, filepath.Join(root, "node_modules", "example", "package.json"), `{
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
+	writeAppPageFixture(t, filepath.Join(root, "node_modules", "example", "package.json"), `{
   "name":"example",
   "alemonjs":{
     "config":[
@@ -300,8 +300,8 @@ func TestSavePackageConfigEnforcesRules(t *testing.T) {
 
 func TestPackageConfigRejectsInvalidRulePattern(t *testing.T) {
 	root := t.TempDir()
-	writeWebViewFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
-	writeWebViewFixture(t, filepath.Join(root, "node_modules", "example", "package.json"), `{
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
+	writeAppPageFixture(t, filepath.Join(root, "node_modules", "example", "package.json"), `{
   "name":"example",
   "alemonjs":{
     "config":[{"name":"port","type":"number","rules":[{"pattern":"(","message":"坏表达式"}],"description":"服务端口"}]
@@ -314,8 +314,8 @@ func TestPackageConfigRejectsInvalidRulePattern(t *testing.T) {
 
 func TestSaveLoginThirdPartyWritesPlatform(t *testing.T) {
 	root := t.TempDir()
-	writeWebViewFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
-	writeWebViewFixture(t, filepath.Join(root, "node_modules", "@myorg", "example", "package.json"), `{
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
+	writeAppPageFixture(t, filepath.Join(root, "node_modules", "@myorg", "example", "package.json"), `{
   "name":"@myorg/example",
   "description":"Example",
   "alemonjs":{
@@ -341,8 +341,8 @@ func TestSaveLoginThirdPartyWritesPlatform(t *testing.T) {
 
 func TestSaveLoginDefaultCountsAsConfigured(t *testing.T) {
 	root := t.TempDir()
-	writeWebViewFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
-	writeWebViewFixture(t, filepath.Join(root, "node_modules", "example", "package.json"), `{
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
+	writeAppPageFixture(t, filepath.Join(root, "node_modules", "example", "package.json"), `{
   "name":"example",
   "alemonjs":{
     "config":[{"name":"url","type":"string","required":true,"default":"ws://127.0.0.1:3001","description":"连接地址"}],
@@ -356,8 +356,8 @@ func TestSaveLoginDefaultCountsAsConfigured(t *testing.T) {
 
 func TestSaveLoginWithoutPlatformValueSkipsPlatformKey(t *testing.T) {
 	root := t.TempDir()
-	writeWebViewFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
-	writeWebViewFixture(t, filepath.Join(root, "node_modules", "@alemonjs", "onebot", "package.json"), `{
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
+	writeAppPageFixture(t, filepath.Join(root, "node_modules", "@alemonjs", "onebot", "package.json"), `{
   "name":"@alemonjs/onebot",
   "alemonjs":{
     "desktop":{"platform":[{"name":"onebot"}]}
@@ -377,14 +377,14 @@ func TestSaveLoginWithoutPlatformValueSkipsPlatformKey(t *testing.T) {
 
 func TestResolveRuntimePlatformsMergesDeclaredOverBuiltin(t *testing.T) {
 	root := t.TempDir()
-	writeWebViewFixture(t, filepath.Join(root, "package.json"), `{"name":"robot","dependencies":{"@myorg/custom":"1.0.0"}}`)
-	writeWebViewFixture(t, filepath.Join(root, "node_modules", "@myorg", "custom", "package.json"), `{
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"robot","dependencies":{"@myorg/custom":"1.0.0"}}`)
+	writeAppPageFixture(t, filepath.Join(root, "node_modules", "@myorg", "custom", "package.json"), `{
   "name":"@myorg/custom",
   "description":"自定义 OneBot",
   "version":"1.0.0",
   "alemonjs":{"desktop":{"platform":[{"name":"onebot","value":"@myorg/custom"}]}}
 }`)
-	writeWebViewFixture(t, filepath.Join(root, "packages", "third", "package.json"), `{
+	writeAppPageFixture(t, filepath.Join(root, "packages", "third", "package.json"), `{
   "name":"third",
   "description":"第三方平台",
   "version":"2.0.0",

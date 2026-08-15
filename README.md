@@ -58,4 +58,4 @@ chmod +x alx
 - [Docker 部署](docs/docker.md)
 - [命令行](docs/cli.md)
 - [系统插件开发](docs/plugin-development.md)
-- [插件 WebView 规范](docs/webview.md)
+- [机器人应用页规范](docs/bot-app-page.md)

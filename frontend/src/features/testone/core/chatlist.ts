@@ -1,4 +1,12 @@
 import { LOCAL_STORAGE_KEY } from './config';
+import {
+  deleteChatRecord,
+  getTestoneRoot,
+  loadChatRecord,
+  saveChatRecord,
+  testoneChatKey,
+  TESTONE_RETENTION_MS
+} from './testoneServer';
 
 // ---------------- 配置 & 动态调整 ----------------
 let CFG = {
@@ -102,6 +110,144 @@ let _indexDirty = false;
 let _pendingIndexFlush = false;
 const _lastWrittenMap = new Map<string, string>(); // 内容去重
 const _savingKeys = new Set<string>(); // 防止并发重入
+
+// ---------------- 服务端同步 ----------------
+// 服务端（SQLite）是权威存储，localStorage 仅作离线缓存。saveChatList /
+// delChatList 会在本地写入后防抖同步服务端；打开会话时先取本地，再异步
+// 加载服务端（较新则覆盖本地，服务端为空则导入本地存量）。
+let _serverSyncTimer: any = null;
+const _serverSyncQueue = new Map<
+  string,
+  { opts: ChatListKeyOptions; payload: any; kind: 'save' | 'delete' }
+>();
+
+function getChatListMetaKey(opts: ChatListKeyOptions): string {
+  return `${LOCAL_STORAGE_KEY}:__meta__:${opts.host}:${opts.port}:${opts.type}:${opts.chatId}`;
+}
+
+function writeLocalMeta(opts: ChatListKeyOptions) {
+  try {
+    localStorage.setItem(
+      getChatListMetaKey(opts),
+      JSON.stringify({ updatedAt: Date.now() })
+    );
+  } catch {}
+}
+
+function readLocalMeta(opts: ChatListKeyOptions): number {
+  try {
+    const raw = localStorage.getItem(getChatListMetaKey(opts));
+    if (!raw) return 0;
+    const parsed = JSON.parse(raw);
+    return typeof parsed?.updatedAt === 'number' ? parsed.updatedAt : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function writeLocalOnly(opts: ChatListKeyOptions, data: any) {
+  const key = getChatListKeyFromOptions(opts);
+  try {
+    localStorage.setItem(key, JSON.stringify(data));
+    writeLocalMeta(opts);
+    _lastWrittenMap.set(key, JSON.stringify(data));
+  } catch (e) {
+    console.warn('[chatlist] 服务端记录写入本地缓存失败', e);
+  }
+}
+
+function scheduleServerSync(opts: ChatListKeyOptions, payload: any | null) {
+  if (!getTestoneRoot()) return;
+  _serverSyncQueue.set(testoneChatKey(opts), {
+    opts,
+    payload,
+    kind: payload === null ? 'delete' : 'save'
+  });
+  if (_serverSyncTimer) return;
+  _serverSyncTimer = setTimeout(() => {
+    _serverSyncTimer = null;
+    void flushChatListServerSync();
+  }, 2000);
+}
+
+/** 立即刷新待同步队列（切换机器人/关闭面板/清理时调用）。 */
+export async function flushChatListServerSync() {
+  if (_serverSyncTimer) {
+    clearTimeout(_serverSyncTimer);
+    _serverSyncTimer = null;
+  }
+  const pending = Array.from(_serverSyncQueue.values());
+  _serverSyncQueue.clear();
+  if (!getTestoneRoot() || pending.length === 0) return;
+  await Promise.allSettled(
+    pending.map(item =>
+      item.kind === 'delete'
+        ? deleteChatRecord(item.opts)
+        : saveChatRecord(item.opts, item.payload)
+    )
+  );
+}
+
+/**
+ * 从服务端加载单个会话：服务端存在且较新则覆盖本地并返回服务端数据；
+ * 服务端为空且本地有存量则上传导入。失败时静默回退到本地缓存。
+ */
+export async function loadChatListFromServer(
+  opts: ChatListKeyOptions
+): Promise<any> {
+  const local = getChatList(opts);
+  const localUpdatedAt = readLocalMeta(opts);
+  if (
+    local &&
+    localUpdatedAt > 0 &&
+    Date.now() - localUpdatedAt > TESTONE_RETENTION_MS
+  ) {
+    // 已超过保留期：与服务的过期清理保持一致，不再重新导入本机存量。
+    try {
+      localStorage.removeItem(getChatListKeyFromOptions(opts));
+      localStorage.removeItem(getChatListMetaKey(opts));
+    } catch {}
+    return null;
+  }
+  if (!getTestoneRoot()) return local;
+  try {
+    const server = await loadChatRecord(opts);
+    if (server) {
+      if (!local || localUpdatedAt === 0 || server.updatedAt >= localUpdatedAt) {
+        writeLocalOnly(opts, server.payload);
+        return server.payload;
+      }
+      void saveChatRecord(opts, local).catch(() => {});
+      return local;
+    }
+    if (local) {
+      // 首次接入服务端：把浏览器里的存量记录导入一次。
+      void saveChatRecord(opts, local).catch(() => {});
+    }
+    return local;
+  } catch {
+    return local;
+  }
+}
+
+/** 清空当前机器人在本机的全部聊天列表缓存（管理清理用）。 */
+export function clearAllLocalChatLists() {
+  _serverSyncQueue.clear();
+  if (_serverSyncTimer) {
+    clearTimeout(_serverSyncTimer);
+    _serverSyncTimer = null;
+  }
+  try {
+    const keys: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && (k.startsWith(LOCAL_STORAGE_KEY) || k.startsWith('img:'))) {
+        keys.push(k);
+      }
+    }
+    keys.forEach(k => localStorage.removeItem(k));
+  } catch {}
+}
 
 function scheduleIndexFlush() {
   if (_pendingIndexFlush) {
@@ -557,6 +703,8 @@ export function saveChatList(
   try {
     const persistPayload = JSON.stringify(currentData);
     localStorage.setItem(key, persistPayload);
+    writeLocalMeta(opts);
+    scheduleServerSync(opts, currentData);
   } catch (e) {
     console.warn('[chatlist] 最终写入失败', e);
   }
@@ -610,8 +758,12 @@ export function runtimeTrimArray(arr: any[]): any[] {
 export function delChatList(opts: ChatListKeyOptions): void {
   const key = getChatListKeyFromOptions(opts);
   localStorage.removeItem(key);
+  try {
+    localStorage.removeItem(getChatListMetaKey(opts));
+  } catch {}
   removeIndex(key);
   _lastWrittenMap.delete(key);
+  scheduleServerSync(opts, null);
 }
 
 // -------- 额外导出，便于调试/监控（不影响原用法） --------

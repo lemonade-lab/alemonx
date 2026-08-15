@@ -57,8 +57,8 @@ import { setCommands } from '@testone/store/slices/commandSlice';
 import * as flattedJSON from 'flatted';
 import {
   saveChatList,
-  getChatList,
-  runtimeTrimArray
+  runtimeTrimArray,
+  loadChatListFromServer
 } from '@testone/core/chatlist';
 import { Message } from '@testone/core/message';
 import { payloadToMentions } from '@testone/core/alemon';
@@ -140,30 +140,28 @@ function safeSend(obj: any) {
   }
 }
 
-function loadHistory(
+async function loadHistory(
   host: string,
   port: number,
   dispatch: any,
   channelId?: string
 ) {
   try {
-    const priv =
-      getChatList({
+    const priv = await loadChatListFromServer({
         host,
         port,
         type: 'private',
         chatId: 'bot'
-      }) || [];
-    dispatch(setPrivateMessages(priv));
+      });
+    dispatch(setPrivateMessages(Array.isArray(priv) ? priv : []));
     if (channelId) {
-      const group =
-        getChatList({
+      const group = await loadChatListFromServer({
           host,
           port,
           type: 'public',
           chatId: channelId
-        }) || [];
-      dispatch(setGroupMessages(group));
+        });
+      dispatch(setGroupMessages(Array.isArray(group) ? group : []));
     }
   } catch (e) {
     console.warn('加载历史失败', e);
@@ -211,14 +209,13 @@ listenerMiddleware.startListening({
 
     const channelId = state.channels.current?.ChannelId;
     if (channelId) {
-      const list =
-        getChatList({
+      const list = await loadChatListFromServer({
           host: cfg.host,
           port: cfg.port,
           type: 'public',
           chatId: channelId
-        }) || [];
-      api.dispatch(setGroupMessages(list));
+        });
+      api.dispatch(setGroupMessages(Array.isArray(list) ? list : []));
     } else {
       // 没有当前群，则清空群消息
       api.dispatch(setGroupMessages([]));

@@ -31,7 +31,7 @@ PM2 日志 → fingerprint 去重 → Incident triaged → AI 决策
 
 ## 线上启用与紧急停止
 
-1. 生产建议设置 `ALX_DEPLOYMENT=production`、`ALX_OPS_STORAGE=sqlite` 并启用本地身份认证；两者未配置时服务都不会拒绝启动，只会打印提示（canary 准入报告会将其标记为未就绪）。
+1. 生产建议设置 `ALX_DEPLOYMENT=production` 并启用本地身份认证；运维数据默认使用 SQLite（`ALX_OPS_STORAGE` 未设置或为 `sqlite` 时），未配置时服务不会拒绝启动，只会打印提示（canary 准入报告会将其标记为未就绪）。
 2. 先将项目保持 `observe`，确认 PM2 日志、事件聚合和待办链路正常。
 3. 管理员在“机器人目录 → 运行 → AI 运维”填写理由，切换到 `canary`。初始只允许 restart/reload，禁止代码修改。
 4. 稳定观察 24 小时的 MTTR、回滚率、误修率、告警送达率与租约异常后，管理员再次确认才可开启小范围代码修复；不会自动升级为 `auto`。
@@ -105,7 +105,7 @@ git diff --check
 - 新增 JSON/SQLite `MetricsRepository` 和 `ops_metrics` 表，事件指标通过原子累计并由 JSON/Prometheus 共用 Snapshot。
 - 新增 `/api/v1/ops/metrics/query` 查询入口；GuardedPM2Executor 统一保护 restart/reload，并写入审计记录和 PM2 失败结果。
 
-SQLite 启用方式：设置 `ALX_OPS_STORAGE=sqlite`，并可用 `ALX_OPS_SQLITE_PATH` 指定数据库文件。服务启动时会使用纯 Go 迁移器将 JSON 记录导入 SQLite；迁移失败保持 JSON 模式且不启动自动写任务。
+运维数据默认使用 SQLite（`ops.db`），可用 `ALX_OPS_SQLITE_PATH` 指定数据库文件；设置 `ALX_OPS_STORAGE=json`（或 `file`）可强制使用 JSON 文件存储。服务启动时会使用纯 Go 迁移器将已有 JSON 记录导入 SQLite（原文件备份到 `incidents/backups/`）；迁移或打开失败时回退 JSON 模式且不启动自动写任务。
 
 Canary 准入报告：管理员可查询 `GET /api/v1/ops/canary-readiness?root=<机器人目录>`，页面位于“机器人目录 → 运行 → AI 运维”。报告要求生产认证、SQLite、白名单、受围栏 PM2 权限、验证契约、告警 Worker/接收端和未触发紧急停止全部就绪；它不会自动启用 canary。
 

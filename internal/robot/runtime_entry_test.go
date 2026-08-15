@@ -13,7 +13,7 @@ import (
 func TestRepairRuntimeUsesIndexJSEntry(t *testing.T) {
 	root := t.TempDir()
 	// main points at the build output; repair must still target index.js.
-	writeWebViewFixture(t, filepath.Join(root, "package.json"), `{"name":"bot","main":"lib/index.js","scripts":{}}`)
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"bot","main":"lib/index.js","scripts":{}}`)
 	if _, err := (Manager{}).RepairRuntime(root, "dev"); err != nil {
 		t.Fatalf("RepairRuntime(dev): %v", err)
 	}
@@ -32,7 +32,7 @@ func TestRepairRuntimeUsesIndexJSEntry(t *testing.T) {
 // index.js and never rewrites the build artifact under lib/.
 func TestRepairRuntimePM2UsesIndexJSEntry(t *testing.T) {
 	root := t.TempDir()
-	writeWebViewFixture(t, filepath.Join(root, "package.json"), `{"name":"bot","main":"lib/index.js","scripts":{}}`)
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"bot","main":"lib/index.js","scripts":{}}`)
 	if _, err := (Manager{}).RepairRuntime(root, "pm2"); err != nil {
 		t.Fatalf("RepairRuntime(pm2): %v", err)
 	}
@@ -57,7 +57,7 @@ func TestRepairRuntimePM2UsesIndexJSEntry(t *testing.T) {
 
 func TestRuntimeRepairUpgradesLegacyPM2ConfigWithoutTreatingItAsCustom(t *testing.T) {
 	root := t.TempDir()
-	writeWebViewFixture(t, filepath.Join(root, "package.json"), `{"name":"bot","dependencies":{"alemonjs":"^2"},"scripts":{}}`)
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"bot","dependencies":{"alemonjs":"^2"},"scripts":{}}`)
 	if err := os.WriteFile(filepath.Join(root, "app.js"), []byte("export default {}\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestRuntimeRepairUpgradesLegacyPM2ConfigWithoutTreatingItAsCustom(t *testin
 
 func TestRuntimeRepairPreservesCustomPM2ConfigUntilConfirmed(t *testing.T) {
 	root := t.TempDir()
-	writeWebViewFixture(t, filepath.Join(root, "package.json"), `{"name":"bot","dependencies":{"alemonjs":"^2"},"scripts":{}}`)
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"bot","dependencies":{"alemonjs":"^2"},"scripts":{}}`)
 	if err := os.WriteFile(filepath.Join(root, "app.js"), []byte("export default {}\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +132,7 @@ func TestParsePM2ProcessesMapsJListFields(t *testing.T) {
 // new port (replacing an existing serverPort or appending one).
 func TestAppPortReadsAndSavesServerPort(t *testing.T) {
 	root := t.TempDir()
-	writeWebViewFixture(t, filepath.Join(root, "package.json"), `{"name":"bot"}`)
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"bot"}`)
 	// No config file yet: default port, not configured.
 	info, err := (Manager{}).AppPort(root)
 	if err != nil || info.Port != defaultAppPort || info.Configured {
@@ -164,7 +164,7 @@ func TestAppPortReadsAndSavesServerPort(t *testing.T) {
 // flow: adding and removing a local package's npm name in alemon.config.yaml.
 func TestSetAppEnabledTogglesLocalPackageInApps(t *testing.T) {
 	root := t.TempDir()
-	writeWebViewFixture(t, filepath.Join(root, "package.json"), `{"name":"bot"}`)
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"bot"}`)
 	// Initially no apps.
 	apps, err := (Manager{}).EnabledApps(root)
 	if err != nil || len(apps) != 0 {
@@ -208,7 +208,7 @@ func TestSetAppEnabledTogglesLocalPackageInApps(t *testing.T) {
 // binding sockets is not permitted).
 func TestAppPortReachableReportsUnreachableWhenPortClosed(t *testing.T) {
 	root := t.TempDir()
-	writeWebViewFixture(t, filepath.Join(root, "package.json"), `{"name":"bot"}`)
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"bot"}`)
 	// Pick a port that is almost certainly not listening (ephemeral range).
 	if _, err := (Manager{}).SaveAppPort(root, 65530); err != nil {
 		t.Fatal(err)

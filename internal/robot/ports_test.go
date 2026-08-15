@@ -8,8 +8,8 @@ import (
 
 func TestPortsReturnsAppAndTestPorts(t *testing.T) {
 	root := t.TempDir()
-	writeWebViewFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
-	writeWebViewFixture(t, filepath.Join(root, "alemon.config.yaml"), "serverPort: 19191\nport: 17222\n")
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
+	writeAppPageFixture(t, filepath.Join(root, "alemon.config.yaml"), "serverPort: 19191\nport: 17222\n")
 	ports, err := (Manager{}).Ports(root)
 	if err != nil {
 		t.Fatalf("Ports: %v", err)
@@ -25,7 +25,7 @@ func TestPortsReturnsAppAndTestPorts(t *testing.T) {
 
 func TestPortsReturnsNothingWithoutConfig(t *testing.T) {
 	root := t.TempDir()
-	writeWebViewFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
 	ports, err := (Manager{}).Ports(root)
 	if err != nil {
 		t.Fatalf("Ports: %v", err)
@@ -37,8 +37,8 @@ func TestPortsReturnsNothingWithoutConfig(t *testing.T) {
 
 func TestPortsReturnsOnlyConfiguredPorts(t *testing.T) {
 	root := t.TempDir()
-	writeWebViewFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
-	writeWebViewFixture(t, filepath.Join(root, "alemon.config.yaml"), "serverPort: 19191\n")
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
+	writeAppPageFixture(t, filepath.Join(root, "alemon.config.yaml"), "serverPort: 19191\n")
 	ports, err := (Manager{}).Ports(root)
 	if err != nil {
 		t.Fatalf("Ports: %v", err)

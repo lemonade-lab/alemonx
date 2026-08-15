@@ -44,9 +44,9 @@ const setFullClient = (originId, ws) => {
 
 func TestEnsureCBPIPCActionBridgePatchesOnce(t *testing.T) {
 	root := t.TempDir()
-	writeWebViewFixture(t, filepath.Join(root, "package.json"), `{"name":"bot"}`)
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"bot"}`)
 	path := filepath.Join(root, "node_modules", "alemonjs", "lib", "core", "cbp", "server", "main.js")
-	writeWebViewFixture(t, path, cbpServerFixture)
+	writeAppPageFixture(t, path, cbpServerFixture)
 	changed, err := EnsureCBPIPCActionBridge(root)
 	if err != nil || !changed {
 		t.Fatalf("first patch = changed %v err %v", changed, err)
@@ -71,8 +71,8 @@ func TestEnsureCBPIPCActionBridgePatchesOnce(t *testing.T) {
 
 func TestEnsureCBPIPCActionBridgeRefusesUnknownSource(t *testing.T) {
 	root := t.TempDir()
-	writeWebViewFixture(t, filepath.Join(root, "package.json"), `{"name":"bot"}`)
-	writeWebViewFixture(t, filepath.Join(root, "node_modules", "alemonjs", "lib", "core", "cbp", "server", "main.js"), "export {};\n")
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"bot"}`)
+	writeAppPageFixture(t, filepath.Join(root, "node_modules", "alemonjs", "lib", "core", "cbp", "server", "main.js"), "export {};\n")
 	if _, err := EnsureCBPIPCActionBridge(root); err == nil {
 		t.Fatal("unknown source should be rejected")
 	}

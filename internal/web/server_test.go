@@ -683,7 +683,7 @@ func TestSystemCapabilityCatalogAndPluginIdentity(t *testing.T) {
 	s := &server{plugins: setupplugin.NewRegistry(root)}
 	response := httptest.NewRecorder()
 	s.systemCapabilitiesHandler(response, httptest.NewRequest(http.MethodGet, "/api/v1/system/capabilities", nil))
-	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "network.fetch") || !strings.Contains(response.Body.String(), "finder.pick") {
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "network.fetch") || !strings.Contains(response.Body.String(), "finder.pick") || !strings.Contains(response.Body.String(), "webview.open") || !strings.Contains(response.Body.String(), "ui.modal") {
 		t.Fatalf("catalog = %d %s", response.Code, response.Body.String())
 	}
 	response = httptest.NewRecorder()
@@ -703,11 +703,75 @@ func TestPluginWebInjectsHostCapabilityBridge(t *testing.T) {
 	if !strings.Contains(content, `host-bridge.js`) || strings.Contains(content, `finder-bridge.js`) {
 		t.Fatalf("plugin bridge injection = %q", content)
 	}
+	if !strings.Contains(content, `--alemonjs-primary-bg`) {
+		t.Fatalf("plugin webview must inject alemonjs theme variables: %q", content)
+	}
 	bridge := setupPluginHostBridge()
-	for _, want := range []string{"window.ALXHost", "desktop:{open", "clipboard:{read", "network:{fetch", "finder-request"} {
+	for _, want := range []string{"window.ALXHost", "desktop:{open", "clipboard:{read", "network:{fetch", "finder-request", "webview-request", "ui-request"} {
 		if !strings.Contains(bridge, want) {
 			t.Fatalf("host bridge missing %q", want)
 		}
+	}
+}
+
+func TestSystemCapabilityWebviewOpen(t *testing.T) {
+	root := t.TempDir()
+	pluginRoot := filepath.Join(root, "capability-plugin")
+	if err := os.MkdirAll(filepath.Join(pluginRoot, "web"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(pluginRoot, "web", "pages"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pluginRoot, "web", "pages", "status.html"), []byte("<h1>status</h1>"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pluginRoot, "alx.json"), []byte(`{"id":"capability-plugin","name":"Capability","version":"1.0.0","web":{"root":"web"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := &server{plugins: setupplugin.NewRegistry(root)}
+	post := func(body string) *httptest.ResponseRecorder {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/api/v1/system/capabilities/webview/open", strings.NewReader(body))
+		s.systemCapabilityWebviewOpenHandler(recorder, request)
+		return recorder
+	}
+	if recorder := post(`{"pluginId":"missing","url":"https://example.com"}`); recorder.Code != http.StatusNotFound {
+		t.Fatalf("unknown plugin webview = %d %s", recorder.Code, recorder.Body.String())
+	}
+	if recorder := post(`{"pluginId":"capability-plugin","url":"https://example.com","resource":"index.html"}`); recorder.Code != http.StatusBadRequest {
+		t.Fatalf("url+resource must be rejected = %d %s", recorder.Code, recorder.Body.String())
+	}
+	if recorder := post(`{"pluginId":"capability-plugin","url":"file:///etc/passwd"}`); recorder.Code != http.StatusBadRequest {
+		t.Fatalf("non-http(s) url must be rejected = %d %s", recorder.Code, recorder.Body.String())
+	}
+	if recorder := post(`{"pluginId":"capability-plugin","url":"https://user:pass@example.com/"}`); recorder.Code != http.StatusBadRequest {
+		t.Fatalf("url with credentials must be rejected = %d %s", recorder.Code, recorder.Body.String())
+	}
+	recorder := post(`{"pluginId":"capability-plugin","url":"https://example.com/status?x=1","title":"状态页","width":700}`)
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"kind":"url"`) || !strings.Contains(recorder.Body.String(), `https://example.com/status?x=1`) || !strings.Contains(recorder.Body.String(), `"width":700`) {
+		t.Fatalf("valid url webview = %d %s", recorder.Code, recorder.Body.String())
+	}
+	recorder = post(`{"pluginId":"capability-plugin","resource":"pages/status.html"}`)
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"kind":"static"`) || !strings.Contains(recorder.Body.String(), `/api/v1/setup/plugins/web/capability-plugin/pages/status.html`) {
+		t.Fatalf("valid static webview = %d %s", recorder.Code, recorder.Body.String())
+	}
+	recorder = post(`{"pluginId":"capability-plugin","resource":"pages/status.html?tab=1"}`)
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `pages/status.html?tab=1`) {
+		t.Fatalf("static webview with query = %d %s", recorder.Code, recorder.Body.String())
+	}
+	if recorder := post(`{"pluginId":"capability-plugin","resource":"missing.html"}`); recorder.Code != http.StatusNotFound {
+		t.Fatalf("missing static resource = %d %s", recorder.Code, recorder.Body.String())
+	}
+	if recorder := post(`{"pluginId":"capability-plugin","resource":"../alx.json"}`); recorder.Code != http.StatusBadRequest {
+		t.Fatalf("traversal resource must be rejected = %d %s", recorder.Code, recorder.Body.String())
+	}
+	if recorder := post(`{"pluginId":"capability-plugin","resource":"pages/../alx.json"}`); recorder.Code != http.StatusBadRequest {
+		t.Fatalf("dot-dot segment resource must be rejected = %d %s", recorder.Code, recorder.Body.String())
+	}
+	recorder = post(`{"pluginId":"capability-plugin","url":"https://example.com","width":100}`)
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"width":960`) {
+		t.Fatalf("width clamp = %d %s", recorder.Code, recorder.Body.String())
 	}
 }
 
@@ -1174,14 +1238,17 @@ func TestSettleUnmanagedLocalOperationsClearsForegroundAndDevelopmentState(t *te
 	}
 }
 
-func TestWebViewHTMLRewriteAndRestrictedBridge(t *testing.T) {
-	html := rewriteWebViewHTML(`<!doctype html><head><link href="/favicon.ico"><link href="/assets/app.css"></head><body><script src="/assets/app.js"></script></body>`)
+func TestBotAppPageHTMLRewriteAndRestrictedBridge(t *testing.T) {
+	html := rewriteBotAppPageHTML(`<!doctype html><head><link href="/favicon.ico"><link href="/assets/app.css"></head><body><script src="/assets/app.js"></script></body>`)
 	for _, expected := range []string{`href="favicon.ico"`, `href="assets/app.css"`, `src="assets/app.js"`, `<script src="bridge.js"></script></head>`} {
 		if !strings.Contains(html, expected) {
 			t.Fatalf("rewritten HTML misses %q: %s", expected, html)
 		}
 	}
-	bridge := webViewBridge(robot.WebViewEntry{Package: `plugin"name`, Name: "页面"})
+	if !strings.Contains(html, `--alemonjs-primary-bg`) {
+		t.Fatalf("bot app page must inject alemonjs theme variables: %s", html)
+	}
+	bridge := botAppPageBridge(robot.BotAppPage{Package: `plugin"name`, Name: "页面"})
 	for _, expected := range []string{`window.__alxWebview`, `./api/`, `plugin\"name`, `window.appDesktopAPI`, `'message'`, `'events'`, `'api-error'`, `response.clone().json()`} {
 		if !strings.Contains(bridge, expected) {
 			t.Fatalf("bridge misses %q", expected)
@@ -1191,9 +1258,26 @@ func TestWebViewHTMLRewriteAndRestrictedBridge(t *testing.T) {
 		t.Fatalf("bridge must not expose desktop privileges: %s", bridge)
 	}
 	for _, expected := range []string{"@alemonjs/process", "events[data.type]", "process.stdin.on"} {
-		if !strings.Contains(defaultWebViewDesktopScript, expected) {
+		if !strings.Contains(defaultBotAppPageDesktopScript, expected) {
 			t.Fatalf("desktop script misses %q", expected)
 		}
+	}
+}
+
+func TestWebviewThemeInjection(t *testing.T) {
+	for _, want := range []string{
+		`--alemonjs-primary-bg: #fff7e8;`,
+		`--alemonjs-dark-primary-bg: #2c2010;`,
+		`[data-theme='dark']`,
+		`--alemonjs-primary-bg: #2c2010;`,
+	} {
+		if !strings.Contains(alemonjsThemeStyleTag, want) {
+			t.Fatalf("alemonjs theme style misses %q:\n%s", want, alemonjsThemeStyleTag)
+		}
+	}
+	rewritten := rewriteRobotAppHTML([]byte("<html><head></head><body>app</body></html>"), "/api/v1/robot/app/token/", "x")
+	if !strings.Contains(string(rewritten), `--alemonjs-primary-bg`) {
+		t.Fatalf("robot app proxy must inject alemonjs theme variables: %s", string(rewritten))
 	}
 }
 
@@ -1367,7 +1451,7 @@ func TestAccountRolesControlManagementAndWorkbenchAccess(t *testing.T) {
 	}
 }
 
-func TestRobotWebViewUsesItsOwnFramePolicyAndBypassesManagementLogin(t *testing.T) {
+func TestBotAppPageUsesItsOwnFramePolicyAndBypassesManagementLogin(t *testing.T) {
 	identity, err := access.NewAt(filepath.Join(t.TempDir(), "auth.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -1380,10 +1464,10 @@ func TestRobotWebViewUsesItsOwnFramePolicyAndBypassesManagementLogin(t *testing.
 	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/robot/webview/not-a-root/plugin/", nil))
 
 	if response.Code == http.StatusUnauthorized {
-		t.Fatalf("WebView route must not require the management cookie")
+		t.Fatalf("应用页 route must not require the management cookie")
 	}
 	if got := response.Header().Get("X-Frame-Options"); got != "" {
-		t.Fatalf("WebView X-Frame-Options = %q, want empty for cross-loopback frame", got)
+		t.Fatalf("应用页 X-Frame-Options = %q, want empty for cross-loopback frame", got)
 	}
 }
 

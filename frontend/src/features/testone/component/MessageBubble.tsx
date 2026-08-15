@@ -1,10 +1,13 @@
 import dayjs from 'dayjs';
 import { Buffer } from 'buffer';
-import { memo, useMemo, useState } from 'react';
+import { memo, useEffect, useMemo, useState } from 'react';
 import { Image as Zoom } from 'antd';
 import { Button } from '@testone/ui/Button';
 import { type DataEnums } from '@testone/typing';
-import { getImageObjectUrl } from '@testone/core/imageStore';
+import {
+  fetchImageObjectUrl,
+  getImageObjectUrl
+} from '@testone/core/imageStore';
 import type { Reaction } from '@testone/typing';
 
 // 常用表情快速选择
@@ -353,6 +356,24 @@ const renderImageURL = (item: any): React.ReactNode => {
   }
 };
 
+const ImageRefView = ({ hash }: { hash: string }) => {
+  const [url, setUrl] = useState<string | undefined>(() =>
+    getImageObjectUrl(hash)
+  );
+  useEffect(() => {
+    if (url) return;
+    let cancelled = false;
+    void fetchImageObjectUrl(hash).then(found => {
+      if (!cancelled && found) setUrl(found);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [hash, url]);
+  if (!url) return <span>图片已释放</span>;
+  return <Zoom className="testone-media rounded-md" src={url} alt="ImageRef" />;
+};
+
 const renderText = (item: any): React.ReactNode => {
   try {
     let value = safeString(item?.value).slice(0, 5000);
@@ -599,15 +620,7 @@ const COMPONENT_RENDERERS: Record<string, RendererFunction> = {
     try {
       const hash = item?.value?.hash;
       if (!hash) return <span>图片引用缺失</span>;
-      const url = getImageObjectUrl(hash);
-      if (!url) return <span>图片已释放</span>;
-      return (
-        <Zoom
-        className="testone-media rounded-md"
-          src={url}
-          alt="ImageRef"
-        />
-      );
+      return <ImageRefView key={hash} hash={hash} />;
     } catch (e) {
       console.warn('render ImageRef error', e);
       return <span>图片引用错误</span>;

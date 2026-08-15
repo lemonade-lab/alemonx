@@ -9,8 +9,8 @@ import (
 
 func TestSandboxConfigNeutralizesLoginAndPlatform(t *testing.T) {
 	root := t.TempDir()
-	writeWebViewFixture(t, filepath.Join(root, "package.json"), `{"name":"bot"}`)
-	writeWebViewFixture(t, filepath.Join(root, "alemon.config.yaml"), "port: 17117\nserverPort: 18110\nlogin: discord\nplatform: '@alemonjs/discord'\nmaster_id:\n  '123': true\n")
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"bot"}`)
+	writeAppPageFixture(t, filepath.Join(root, "alemon.config.yaml"), "port: 17117\nserverPort: 18110\nlogin: discord\nplatform: '@alemonjs/discord'\nmaster_id:\n  '123': true\n")
 
 	path, cleanup, err := (Manager{}).SandboxConfig(root)
 	if err != nil {
@@ -47,8 +47,8 @@ func TestSandboxConfigNeutralizesLoginAndPlatform(t *testing.T) {
 
 func TestSandboxConfigNoopWithoutLogin(t *testing.T) {
 	root := t.TempDir()
-	writeWebViewFixture(t, filepath.Join(root, "package.json"), `{"name":"bot"}`)
-	writeWebViewFixture(t, filepath.Join(root, "alemon.config.yaml"), "port: 17117\n")
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"bot"}`)
+	writeAppPageFixture(t, filepath.Join(root, "alemon.config.yaml"), "port: 17117\n")
 	path, cleanup, err := (Manager{}).SandboxConfig(root)
 	if err != nil {
 		t.Fatal(err)
@@ -60,7 +60,7 @@ func TestSandboxConfigNoopWithoutLogin(t *testing.T) {
 
 	// A missing config is also sandbox by default.
 	empty := t.TempDir()
-	writeWebViewFixture(t, filepath.Join(empty, "package.json"), `{"name":"bot"}`)
+	writeAppPageFixture(t, filepath.Join(empty, "package.json"), `{"name":"bot"}`)
 	path, cleanup, err = (Manager{}).SandboxConfig(empty)
 	if err != nil {
 		t.Fatal(err)

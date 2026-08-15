@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -17,11 +18,25 @@ import (
 	"alemonx/internal/system"
 )
 
+// safeWebviewResourcePattern allows only ordinary relative paths inside a
+// plugin's web root. Webviews must never accept absolute paths, traversal or
+// backslashes: the host serves the resolved resource itself.
+var safeWebviewResourcePattern = regexp.MustCompile(`^[A-Za-z0-9._/-]+$`)
+
 type systemCapabilityItem struct {
 	Name      string `json:"name"`
 	Version   string `json:"version"`
 	Available bool   `json:"available"`
 	Reason    string `json:"reason,omitempty"`
+}
+
+type webviewOpenRequest struct {
+	PluginID string `json:"pluginId"`
+	Title    string `json:"title"`
+	URL      string `json:"url"`
+	Resource string `json:"resource"`
+	Width    int    `json:"width"`
+	Height   int    `json:"height"`
 }
 
 // systemCapabilitiesHandler publishes the versioned, host-owned API catalog.
@@ -34,6 +49,11 @@ func (s *server) systemCapabilitiesHandler(w http.ResponseWriter, r *http.Reques
 	}
 	items := []systemCapabilityItem{
 		{Name: "finder.pick", Version: "v1", Available: true},
+		{Name: "webview.open", Version: "v1", Available: true},
+		{Name: "ui.alert", Version: "v1", Available: true},
+		{Name: "ui.message", Version: "v1", Available: true},
+		{Name: "ui.modal", Version: "v1", Available: true},
+		{Name: "ui.notification", Version: "v1", Available: true},
 		{Name: "context.current-robot", Version: "v1", Available: true},
 		{Name: "context.network-settings", Version: "v1", Available: s.network != nil, Reason: unavailableReason(s.network != nil, "当前网络配置不可用")},
 		{Name: "desktop.open", Version: "v1", Available: true},
@@ -44,6 +64,118 @@ func (s *server) systemCapabilitiesHandler(w http.ResponseWriter, r *http.Reques
 		{Name: "network.fetch", Version: "v1", Available: s.network != nil, Reason: unavailableReason(s.network != nil, "当前网络配置不可用")},
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+// systemCapabilityWebviewOpenHandler lets an installed plugin open a
+// host-managed WebView window. The plugin chooses either a same-origin static
+// resource inside its own web root or an external http(s) URL; the host
+// validates identity and target, and the workbench frontend renders the
+// window. Opening a URL never grants the target page any host privilege.
+func (s *server) systemCapabilityWebviewOpenHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
+		return
+	}
+	var input webviewOpenRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, "打开 WebView 请求无效。")
+		return
+	}
+	plugin, ok := s.hostCapabilityPlugin(w, r, input.PluginID)
+	if !ok {
+		return
+	}
+	rawURL := strings.TrimSpace(input.URL)
+	resource := strings.TrimSpace(input.Resource)
+	hasURL := rawURL != ""
+	hasResource := resource != ""
+	if hasURL == hasResource {
+		writeError(w, http.StatusBadRequest, "请指定 url 或 resource 其中之一。")
+		return
+	}
+	src := ""
+	kind := "url"
+	if hasURL {
+		parsed, err := url.Parse(rawURL)
+		if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.User != nil {
+			writeError(w, http.StatusBadRequest, "WebView 地址必须是有效的 HTTP 或 HTTPS 地址。")
+			return
+		}
+		src = parsed.String()
+	} else {
+		resourcePath := resource
+		query := ""
+		if idx := strings.IndexByte(resource, '?'); idx >= 0 {
+			resourcePath, query = resource[:idx], resource[idx:]
+		}
+		resourcePath = strings.TrimPrefix(filepath.ToSlash(resourcePath), "/")
+		if resourcePath == "" || resourcePath == "." || strings.Contains(resourcePath, "\\") || !safeWebviewResourcePattern.MatchString(resourcePath) {
+			writeError(w, http.StatusBadRequest, "WebView 静态资源路径无效。")
+			return
+		}
+		for _, segment := range strings.Split(resourcePath, "/") {
+			if segment == ".." {
+				writeError(w, http.StatusBadRequest, "WebView 静态资源路径无效。")
+				return
+			}
+		}
+		base := "/api/v1/setup/plugins/web/" + plugin.ID + "/"
+		if plugin.DevelopmentWebProxy {
+			base = "/api/v1/setup/plugins/development/" + plugin.ID + "/web/"
+		} else {
+			root, rootErr := plugin.WebRoot()
+			if rootErr != nil {
+				writeError(w, http.StatusNotFound, "插件 Web 界面不可用。")
+				return
+			}
+			candidate := filepath.Join(root, resourcePath)
+			resolved, resolveErr := filepath.EvalSymlinks(candidate)
+			if resolveErr != nil && filepath.Ext(resourcePath) == "" {
+				// Mirror the static web handler's SPA fallback: an
+				// extensionless route is served by index.html.
+				resolved = filepath.Join(root, "index.html")
+			} else if resolveErr != nil {
+				writeError(w, http.StatusNotFound, "WebView 静态资源不存在。")
+				return
+			}
+			rel, relErr := filepath.Rel(root, resolved)
+			if relErr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				writeError(w, http.StatusBadRequest, "WebView 静态资源路径无效。")
+				return
+			}
+			info, statErr := os.Stat(resolved)
+			if statErr != nil || !info.Mode().IsRegular() {
+				writeError(w, http.StatusNotFound, "WebView 静态资源不存在。")
+				return
+			}
+		}
+		src = base + resourcePath + query
+		kind = "static"
+	}
+	width := input.Width
+	if width < 480 || width > 1600 {
+		width = 960
+	}
+	height := input.Height
+	if height < 420 || height > 1200 {
+		height = 680
+	}
+	title := strings.TrimSpace(input.Title)
+	if runes := []rune(title); len(runes) > 80 {
+		title = string(runes[:80])
+	}
+	if title == "" {
+		title = plugin.Name
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":       true,
+		"pluginId": plugin.ID,
+		"title":    title,
+		"src":      src,
+		"kind":     kind,
+		"width":    width,
+		"height":   height,
+	})
 }
 
 func unavailableReason(available bool, reason string) string {

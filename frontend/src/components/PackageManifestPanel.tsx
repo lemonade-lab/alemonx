@@ -331,7 +331,7 @@ export function PackageManifestPanel({
         </section>
 
         <section className={sectionClass}>
-          <SectionTitle title="AlemonJS 声明" description="机器人工作台据此识别配置来源、桌面入口与 WebView。未填写的字段不会写入 package.json。" />
+          <SectionTitle title="AlemonJS 声明" description="机器人工作台据此识别配置来源、桌面入口与机器人应用页。未填写的字段不会写入 package.json。" />
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <label className={labelClass}>
               配置说明地址
@@ -386,7 +386,7 @@ export function PackageManifestPanel({
                   checked={values.alemonjsWebServerPort}
                   onChange={event => set('alemonjsWebServerPort', event.target.checked)}
                 />
-                WebView 使用服务端端口
+                应用页使用服务端端口
               </span>
             </label>
             <div className="col-span-full grid gap-2">

@@ -109,6 +109,15 @@ import { ErrorNotice } from './ErrorNotice'
 import { EmptyState } from './EmptyState'
 import { ConfirmDialog } from './ConfirmDialog'
 import { DownloadProgress } from './DownloadProgress'
+import {
+  HostPluginAlert,
+  HostPluginModal,
+  HostUiToasts,
+  PluginWebviewWindow,
+  type HostToast,
+  type HostUiRequest,
+  type HostWebview
+} from './PluginHostUi'
 import { GLOBAL_MODAL_Z_INDEX, Modal } from './Modal'
 import { AccountManagementPage } from './AccountManagement'
 import { RobotGitControl } from './RobotGitControl'
@@ -155,7 +164,7 @@ import {
   useSaveAppPortMutation,
   useSaveTestPortMutation,
   useRobotAppsQuery,
-  useRobotWebViewsQuery,
+  useBotAppPagesQuery,
   useSetAppEnabledMutation,
   useRobotTasksQuery,
   useLazyRobotTaskQuery,
@@ -1051,8 +1060,8 @@ export function Dashboard({
   const [testMinimized, setTestMinimized] = useStoreState(false)
   const [liveContentOpen, setLiveContentOpen] = useStoreState(false)
   const [liveMinimized, setLiveMinimized] = useStoreState(false)
-  const [selectedWebViewID, setSelectedWebViewID] = useStoreState('')
-  const [pendingWebViewID, setPendingWebViewID] = useStoreState('')
+  const [selectedAppPageID, setSelectedAppPageID] = useStoreState('')
+  const [pendingAppPageID, setPendingAppPageID] = useStoreState('')
   const [gitMinimized, setGitMinimized] = useStoreState(false)
   const [pm2LogsOpen, setPM2LogsOpen] = useStoreState(false)
   const [pm2LogsMinimized, setPM2LogsMinimized] = useStoreState(false)
@@ -1472,7 +1481,7 @@ export function Dashboard({
   const [saveAppPort] = useSaveAppPortMutation()
   const [loadTestPort] = useLazyTestPortQuery()
   const [saveTestPort] = useSaveTestPortMutation()
-  const { data: robotWebViews = [] } = useRobotWebViewsQuery(root, {
+  const { data: botAppPages = [] } = useBotAppPagesQuery(root, {
     skip: !root
   })
   const [writeRobotFile] = useWriteRobotFileMutation()
@@ -1669,9 +1678,9 @@ export function Dashboard({
       // Launch happens after the dialog closes; reflect it on the toolbar icon.
       setAppLaunching(true)
       await launchApp()
-      if (pendingWebViewID) {
-        setSelectedWebViewID(pendingWebViewID)
-        setPendingWebViewID('')
+      if (pendingAppPageID) {
+        setSelectedAppPageID(pendingAppPageID)
+        setPendingAppPageID('')
         setAppContentOpen(true)
         setAppMinimized(false)
         activateFloatingWindow('app')
@@ -3523,8 +3532,8 @@ export function Dashboard({
           root={root}
           minimized={appMinimized}
           zIndex={windowLayers.app}
-          webviews={robotWebViews}
-          selectedWebViewID={selectedWebViewID}
+          appPages={botAppPages}
+          selectedAppPageID={selectedAppPageID}
           onActivate={() => activateFloatingWindow('app')}
           onMinimize={() => setAppMinimized(true)}
           onClose={() => {
@@ -6198,8 +6207,8 @@ function SystemPluginCenter({
               const isEnabled = Boolean(plugin.enabled)
               const isManagedRelease = Boolean(plugin.installedTag)
               const isDevelopment = Boolean(plugin.developmentSource)
-              const hasWeb = Boolean(plugin.web)
-              const canOpen = isEnabled && hasWeb
+              const hasPanel = Boolean(plugin.web)
+              const canOpen = isEnabled && hasPanel
               return (
                 <article
                   key={plugin.id}
@@ -6277,7 +6286,7 @@ function SystemPluginCenter({
                           已停用
                         </span>
                       )}
-                      {!hasWeb && !isOnline && (
+                      {!hasPanel && !isOnline && (
                         <>
                           <span className="size-0.5 rounded-full bg-slate-300 dark:bg-slate-600" />
                           <span className="text-slate-400 dark:text-slate-500">
@@ -6684,11 +6693,19 @@ function SystemPluginCenter({
     </section>
   )
 }
+function stableHash(value: string) {
+  let hash = 0
+  for (let index = 0; index < value.length; index++) {
+    hash = (hash * 31 + value.charCodeAt(index)) | 0
+  }
+  return (hash >>> 0).toString(36)
+}
+
 function SetupPluginCenter({ plugin }: { plugin: SetupPlugin }) {
-  // A setup plugin's interface is its web UI, served same-origin by alx. The
-  // declarative action-list model was removed; the web view calls the plugin's
+  // A setup plugin's interface is its panel page, served same-origin by alx.
+  // The declarative action-list model was removed; the panel calls the plugin's
   // action forward API itself.
-  const hasWeb = Boolean(plugin.web && plugin.runnable && !plugin.online)
+  const hasPanel = Boolean(plugin.web && plugin.runnable && !plugin.online)
   const theme = document.documentElement.dataset.theme ?? 'light'
   const iframeRef = useRef<HTMLIFrameElement>(null)
   const [finderRequest, setFinderRequest] = useState<{
@@ -6696,17 +6713,24 @@ function SetupPluginCenter({ plugin }: { plugin: SetupPlugin }) {
     kind: 'directory' | 'file'
     title: string
     multiple: boolean
+    source?: Window
   } | null>(null)
-  const webSrc =
+  const panelSrc =
     plugin.developmentSource && plugin.developmentWebProxy
       ? `/api/v1/setup/plugins/development/${plugin.id}/web/?theme=${theme}`
       : `/api/v1/setup/plugins/web/${plugin.id}/index.html?theme=${theme}`
-  const postFinderResult = useCallback(
-    (requestId: string, result: { paths?: string[]; error?: string }) => {
-      iframeRef.current?.contentWindow?.postMessage(
+  const postHostResult = useCallback(
+    (
+      type: string,
+      requestId: string,
+      result: Record<string, unknown>,
+      target?: Window | null
+    ) => {
+      const win = target ?? iframeRef.current?.contentWindow
+      win?.postMessage(
         {
           source: 'alx-parent',
-          type: 'finder-result',
+          type,
           requestId,
           ...result
         },
@@ -6715,68 +6739,313 @@ function SetupPluginCenter({ plugin }: { plugin: SetupPlugin }) {
     },
     []
   )
+  const [hostWebviews, setHostWebviews] = useState<HostWebview[]>([])
+  const hostWebviewsRef = useRef<HostWebview[]>([])
+  const webviewFrames = useRef(new Map<string, Window>())
+  const hostWebviewLayer = useRef(1080)
+  const [uiDialogQueue, setUiDialogQueue] = useState<HostUiRequest[]>([])
+  const uiDialogQueueRef = useRef<HostUiRequest[]>([])
+  const [activeModalBusy, setActiveModalBusy] = useState(false)
+  const [uiToasts, setUiToasts] = useState<HostToast[]>([])
   useEffect(() => {
-    const receiveFinderRequest = (event: MessageEvent) => {
-      if (
-        event.origin !== window.location.origin ||
-        event.source !== iframeRef.current?.contentWindow
-      )
-        return
+    hostWebviewsRef.current = hostWebviews
+  }, [hostWebviews])
+  useEffect(() => {
+    uiDialogQueueRef.current = uiDialogQueue
+  }, [uiDialogQueue])
+  useEffect(() => {
+    setActiveModalBusy(false)
+  }, [uiDialogQueue[0]?.requestId])
+  const registerWebviewFrame = useCallback(
+    (id: string, win: Window | null) => {
+      const frames = webviewFrames.current
+      if (win) frames.set(id, win)
+      else frames.delete(id)
+    },
+    []
+  )
+  useEffect(() => {
+    const receivePluginBridgeMessage = (event: MessageEvent) => {
+      if (event.origin !== window.location.origin) return
+      const sourceWindow = event.source as Window | null
+      const isMainFrame = sourceWindow === iframeRef.current?.contentWindow
+      let sourceWebviewId: string | null = null
+      if (!isMainFrame && sourceWindow) {
+        for (const [id, win] of webviewFrames.current) {
+          if (win === sourceWindow) {
+            sourceWebviewId = id
+            break
+          }
+        }
+      }
+      if (!isMainFrame && !sourceWebviewId) return
       const value = event.data as {
         source?: string
         type?: string
         requestId?: string
         pluginId?: string
         pickerId?: string
+        webviewId?: string
+        webview?: {
+          title?: string
+          src?: string
+          kind?: string
+          width?: number
+          height?: number
+        }
+        ui?: {
+          kind?:
+            | 'alert'
+            | 'message'
+            | 'modal'
+            | 'notification'
+            | 'set-busy'
+          busy?: boolean
+          title?: string
+          message?: string
+          confirmText?: string
+          cancelText?: string
+          type?: 'info' | 'success' | 'warning' | 'error'
+          duration?: number
+        }
       }
       if (
         value?.source !== 'alx-setup-plugin' ||
-        value.type !== 'finder-request' ||
         !value.requestId ||
-        value.pluginId !== plugin.id ||
-        !value.pickerId
+        value.pluginId !== plugin.id
       )
         return
-      if (finderRequest) {
-        postFinderResult(value.requestId, {
-          error: '已有一个 Finder 选择正在进行。'
+      const requestId = value.requestId
+      if (value.type === 'finder-request') {
+        if (!value.pickerId) return
+        if (finderRequest) {
+          postHostResult(
+            'finder-result',
+            requestId,
+            { error: '已有一个 Finder 选择正在进行。' },
+            sourceWindow
+          )
+          return
+        }
+        void fetch('/api/v1/system/capabilities/finder', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pluginId: plugin.id, pickerId: value.pickerId })
         })
+          .then(async response => {
+            const body = (await response.json()) as {
+              error?: string
+              kind?: 'directory' | 'file'
+              title?: string
+              multiple?: boolean
+            }
+            if (
+              !response.ok ||
+              (body.kind !== 'directory' && body.kind !== 'file')
+            )
+              throw new Error(body.error || 'Finder 请求无效。')
+            setFinderRequest({
+              requestId,
+              kind: body.kind,
+              title: body.title || '选择位置',
+              multiple: body.multiple === true,
+              source: event.source as Window
+            })
+          })
+          .catch(reason =>
+            postHostResult(
+              'finder-result',
+              requestId,
+              {
+                error:
+                  reason instanceof Error
+                    ? reason.message
+                    : 'Finder 请求未完成。'
+              },
+              sourceWindow
+            )
+          )
         return
       }
-      void fetch('/api/v1/system/capabilities/finder', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pluginId: plugin.id, pickerId: value.pickerId })
-      })
-        .then(async response => {
-          const body = (await response.json()) as {
-            error?: string
-            kind?: 'directory' | 'file'
-            title?: string
-            multiple?: boolean
-          }
-          if (
-            !response.ok ||
-            (body.kind !== 'directory' && body.kind !== 'file')
+      if (value.type === 'webview-request') {
+        if (!isMainFrame) {
+          postHostResult(
+            'webview-result',
+            requestId,
+            { ok: false, error: '仅插件主页可管理 WebView。' },
+            sourceWindow
           )
-            throw new Error(body.error || 'Finder 请求无效。')
-          setFinderRequest({
-            requestId: value.requestId!,
-            kind: body.kind,
-            title: body.title || '选择位置',
-            multiple: body.multiple === true
-          })
-        })
-        .catch(reason =>
-          postFinderResult(value.requestId!, {
-            error:
-              reason instanceof Error ? reason.message : 'Finder 请求未完成。'
-          })
+          return
+        }
+        const webview = value.webview
+        if (
+          !webview ||
+          typeof webview.src !== 'string' ||
+          typeof webview.title !== 'string'
+        ) {
+          postHostResult(
+            'webview-result',
+            requestId,
+            { ok: false, error: 'WebView 参数无效。' },
+            sourceWindow
+          )
+          return
+        }
+        if (hostWebviewsRef.current.length >= 8) {
+          postHostResult(
+            'webview-result',
+            requestId,
+            { ok: false, error: '该插件打开的 WebView 数量已达上限（8 个）。' },
+            sourceWindow
+          )
+          return
+        }
+        const offset = (hostWebviewsRef.current.length % 6) * 32
+        const isStatic = webview.kind === 'static'
+        const keySrc = webview.src.replace(/[?&]theme=[^&#]*/g, '')
+        const item: HostWebview = {
+          id: requestId,
+          title: webview.title,
+          src: isStatic
+            ? webview.src +
+              (webview.src.includes('?') ? '&' : '?') +
+              `theme=${encodeURIComponent(theme)}`
+            : webview.src,
+          kind: isStatic ? 'static' : 'url',
+          width: Math.max(480, Math.min(1600, Number(webview.width) || 960)),
+          height: Math.max(420, Math.min(1200, Number(webview.height) || 680)),
+          left: 120 + offset,
+          top: 96 + Math.round(offset * 0.875),
+          storageKey: `alx:plugin-webview:${plugin.id}:${stableHash(keySrc)}`,
+          minimized: false,
+          zIndex: ++hostWebviewLayer.current
+        }
+        setHostWebviews(list => [...list, item])
+        window.requestAnimationFrame(() =>
+          postHostResult(
+            'webview-result',
+            requestId,
+            { ok: true, id: requestId },
+            sourceWindow
+          )
         )
+        return
+      }
+      if (value.type === 'webview-close-request') {
+        if (!isMainFrame) {
+          postHostResult(
+            'webview-close-result',
+            requestId,
+            { ok: false, error: '仅插件主页可管理 WebView。' },
+            sourceWindow
+          )
+          return
+        }
+        const webviewId =
+          typeof value.webviewId === 'string' && value.webviewId
+            ? value.webviewId
+            : ''
+        const current = hostWebviewsRef.current
+        const next = webviewId
+          ? current.filter(item => item.id !== webviewId)
+          : []
+        setHostWebviews(next)
+        postHostResult(
+          'webview-close-result',
+          requestId,
+          { ok: true, closed: current.length - next.length },
+          sourceWindow
+        )
+        return
+      }
+      if (value.type === 'ui-request') {
+        const ui = value.ui
+        if (!ui || typeof ui.kind !== 'string') return
+        const kind = ui.kind
+        if (kind === 'set-busy') {
+          const active = uiDialogQueueRef.current[0]
+          if (active?.kind !== 'modal') {
+            postHostResult(
+              'ui-result',
+              requestId,
+              { ok: false, error: '当前没有可更新的确认弹窗。' },
+              sourceWindow
+            )
+          } else {
+            setActiveModalBusy(ui.busy === true)
+            postHostResult('ui-result', requestId, { ok: true }, sourceWindow)
+          }
+          return
+        }
+        if (kind === 'alert' || kind === 'modal') {
+          if (uiDialogQueueRef.current.length >= 8) {
+            postHostResult(
+              'ui-result',
+              requestId,
+              { ok: false, error: '宿主弹窗队列已达上限（8 个）。' },
+              sourceWindow
+            )
+            return
+          }
+          setUiDialogQueue(list => [
+            ...list,
+            {
+              requestId,
+              kind,
+              source: sourceWindow ?? undefined,
+              title: ui.title,
+              message: ui.message,
+              confirmText: ui.confirmText,
+              cancelText: ui.cancelText
+            }
+          ])
+          return
+        }
+        if (kind === 'message' || kind === 'notification') {
+          const toastKind: HostToast['kind'] = kind
+          const fallback = toastKind === 'message' ? 4000 : 6000
+          const duration = Math.max(
+            1500,
+            Math.min(15000, Number(ui.duration) || fallback)
+          )
+          const toastType: HostToast['type'] =
+            ui.type === 'success' ||
+            ui.type === 'warning' ||
+            ui.type === 'error'
+              ? ui.type
+              : 'info'
+          setUiToasts(list => {
+            const next = [
+              ...list,
+              {
+                id: requestId,
+                kind: toastKind,
+                type: toastType,
+                title: ui.title,
+                message: ui.message,
+                duration
+              }
+            ]
+            const sameKind = next.filter(toast => toast.kind === kind)
+            return sameKind.length > 5
+              ? next.filter(toast => toast.id !== sameKind[0].id)
+              : next
+          })
+          postHostResult('ui-result', requestId, { ok: true }, sourceWindow)
+          return
+        }
+        postHostResult(
+          'ui-result',
+          requestId,
+          { ok: false, error: '不支持的宿主 UI 组件。' },
+          sourceWindow
+        )
+      }
     }
-    window.addEventListener('message', receiveFinderRequest)
-    return () => window.removeEventListener('message', receiveFinderRequest)
-  }, [finderRequest, plugin.id, postFinderResult])
+    window.addEventListener('message', receivePluginBridgeMessage)
+    return () =>
+      window.removeEventListener('message', receivePluginBridgeMessage)
+  }, [finderRequest, plugin.id, postHostResult, theme])
   const applyScrollbarTheme = (event: SyntheticEvent<HTMLIFrameElement>) => {
     const document = event.currentTarget.contentDocument
     if (!document || document.head.querySelector('[data-alx-scrollbar-theme]'))
@@ -6794,47 +7063,117 @@ function SetupPluginCenter({ plugin }: { plugin: SetupPlugin }) {
     document.head.append(style)
   }
 
+  const activeUiDialog = uiDialogQueue[0] ?? null
+  const activeUiDialogKind = activeUiDialog?.kind
+  const dismissUiDialog = (result: Record<string, unknown>) => {
+    const active = uiDialogQueue[0]
+    if (active)
+      postHostResult('ui-result', active.requestId, result, active.source)
+    setUiDialogQueue(list => list.slice(1))
+  }
+
   return (
-    <section className="setup-plugin-webview">
-      {hasWeb ? (
-        <iframe
-          ref={iframeRef}
-          className="setup-plugin-webview-frame"
-          src={webSrc}
-          title={`${plugin.name} 界面`}
-          onLoad={applyScrollbarTheme}
+    <>
+      <section className="setup-plugin-panel">
+        {hasPanel ? (
+          <iframe
+            ref={iframeRef}
+            className="setup-plugin-panel-frame"
+            src={panelSrc}
+            title={`${plugin.name} 界面`}
+            onLoad={applyScrollbarTheme}
+          />
+        ) : (
+          <div className="setup-plugin-panel-missing grid gap-2">
+            <strong className="text-sm text-slate-700 dark:text-slate-200">
+              此插件需要面板页
+            </strong>
+            <p className="m-0 text-xs leading-5 text-slate-500">
+              {plugin.online
+                ? '该插件由在线目录识别，安装到本机后才能打开其界面。'
+                : '插件清单未声明 web 目录，或缺少可用的执行器，因此无法展示界面。'}
+            </p>
+          </div>
+        )}
+        <DirectoryPicker
+          open={finderRequest !== null}
+          title={finderRequest?.title ?? '选择位置'}
+          multiple={finderRequest?.multiple ?? false}
+          priority
+          includeFiles={finderRequest?.kind === 'file'}
+          selectionMode={finderRequest?.kind === 'file' ? 'file' : 'directory'}
+          onClose={() => {
+            if (finderRequest)
+              postHostResult(
+                'finder-result',
+                finderRequest.requestId,
+                { error: '已取消选择。' },
+                finderRequest.source
+              )
+            setFinderRequest(null)
+          }}
+          onSelect={paths => {
+            if (finderRequest)
+              postHostResult(
+                'finder-result',
+                finderRequest.requestId,
+                { paths },
+                finderRequest.source
+              )
+            setFinderRequest(null)
+          }}
         />
-      ) : (
-        <div className="setup-plugin-web-missing grid gap-2">
-          <strong className="text-sm text-slate-700 dark:text-slate-200">
-            此插件需要 Web 界面
-          </strong>
-          <p className="m-0 text-xs leading-5 text-slate-500">
-            {plugin.online
-              ? '该插件由在线目录识别，安装到本机后才能打开其界面。'
-              : '插件清单未声明 web 目录，或缺少可用的执行器，因此无法展示界面。'}
-          </p>
-        </div>
-      )}
-      <DirectoryPicker
-        open={finderRequest !== null}
-        title={finderRequest?.title ?? '选择位置'}
-        multiple={finderRequest?.multiple ?? false}
-        priority
-        includeFiles={finderRequest?.kind === 'file'}
-        selectionMode={finderRequest?.kind === 'file' ? 'file' : 'directory'}
-        onClose={() => {
-          if (finderRequest)
-            postFinderResult(finderRequest.requestId, { error: '已取消选择。' })
-          setFinderRequest(null)
-        }}
-        onSelect={paths => {
-          if (finderRequest)
-            postFinderResult(finderRequest.requestId, { paths })
-          setFinderRequest(null)
-        }}
+      </section>
+      {hostWebviews.map(webview => (
+        <PluginWebviewWindow
+          key={webview.id}
+          webview={webview}
+          onFrame={registerWebviewFrame}
+          onClose={() =>
+            setHostWebviews(list =>
+              list.filter(item => item.id !== webview.id)
+            )
+          }
+          onMinimize={() =>
+            setHostWebviews(list =>
+              list.map(item =>
+                item.id === webview.id
+                  ? { ...item, minimized: !item.minimized }
+                  : item
+              )
+            )
+          }
+          onActivate={() =>
+            setHostWebviews(list =>
+              list.map(item =>
+                item.id === webview.id
+                  ? { ...item, zIndex: ++hostWebviewLayer.current }
+                  : item
+              )
+            )
+          }
+        />
+      ))}
+      <HostPluginAlert
+        open={activeUiDialogKind === 'alert'}
+        title={activeUiDialog?.title ?? ''}
+        message={activeUiDialog?.message ?? ''}
+        confirmText={activeUiDialog?.confirmText}
+        onClose={() => dismissUiDialog({ ok: true })}
       />
-    </section>
+      <HostPluginModal
+        request={activeUiDialogKind === 'modal' ? activeUiDialog : null}
+        busy={activeModalBusy}
+        onConfirm={() => dismissUiDialog({ ok: true, confirmed: true })}
+        onCancel={() => dismissUiDialog({ ok: true, confirmed: false })}
+      />
+      <HostUiToasts
+        toasts={uiToasts}
+        onDismiss={id =>
+          setUiToasts(list => list.filter(toast => toast.id !== id))
+        }
+      />
+    </>
   )
 }
 // PluginUploadDropzone is a fixed-size drag-and-drop / click upload control
@@ -9092,8 +9431,8 @@ function AppEmbed({
   zIndex,
   onActivate,
   minimized,
-  webviews,
-  selectedWebViewID
+  appPages,
+  selectedAppPageID
 }: {
   root: string
   onClose: () => void
@@ -9101,19 +9440,19 @@ function AppEmbed({
   zIndex: number
   onActivate: () => void
   minimized: boolean
-  webviews: Array<{
+  appPages: Array<{
     id: string
     name: string
     package: string
     logo?: string
   }>
-  selectedWebViewID: string
+  selectedAppPageID: string
 }) {
   const token = robotAppToken(root)
   const appSrc = `/api/v1/robot/app/${token}/`
-  const selectedWebView = webviews.find(item => item.id === selectedWebViewID)
-  const frameSrc = selectedWebView
-    ? `/api/v1/robot/webview/${token}/${selectedWebView.id}/`
+  const selectedAppPage = appPages.find(item => item.id === selectedAppPageID)
+  const appPageSrc = selectedAppPage
+    ? `/api/v1/robot/webview/${token}/${selectedAppPage.id}/`
     : appSrc
   return (
     <DesktopWindow
@@ -9136,8 +9475,8 @@ function AppEmbed({
       <div className="flex min-h-0 flex-1 flex-col">
         <iframe
           className="min-h-0 flex-1 border-0"
-          src={frameSrc}
-          title={selectedWebView ? selectedWebView.name : '机器人应用'}
+          src={appPageSrc}
+          title={selectedAppPage ? selectedAppPage.name : '机器人应用'}
         />
       </div>
     </DesktopWindow>

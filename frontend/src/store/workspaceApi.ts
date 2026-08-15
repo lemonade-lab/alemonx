@@ -54,7 +54,7 @@ export type PackageConfig = {
   commands?: Array<{ name: string; command: string }>
   webServerPort?: boolean
 }
-type WebViewEntry = {
+type BotAppPage = {
   id: string
   package: string
   name: string
@@ -76,6 +76,24 @@ type LocalPackageVersions = {
   current: string
   latest?: string
   versions: string[]
+}
+export type RobotChatRecordSummary = {
+  root: string
+  messages: number
+  tools: number
+  lastActivity: number
+  bytes: number
+}
+export type RobotChatSnapshot = {
+  savedAt: number
+  events: unknown[]
+  tools: unknown[]
+  drafts: Record<string, string>
+  favorites: unknown[]
+  contacts: unknown[]
+  spaces: unknown[]
+  openedConversationIds: string[]
+  preferences: unknown
 }
 export type RuntimeOverview = {
   name: string
@@ -627,6 +645,34 @@ export const workspaceApi = createApi({
         { type: 'LocalPackages', id: arg.root }
       ]
     }),
+    robotChatHistory: build.query<
+      { snapshot: RobotChatSnapshot | null },
+      string
+    >({
+      query: root => `robot/chat/history?${new URLSearchParams({ root })}`
+    }),
+    saveRobotChatHistory: build.mutation<
+      { ok: boolean },
+      { root: string; snapshot: RobotChatSnapshot }
+    >({
+      query: ({ root, snapshot }) => ({
+        url: 'robot/chat/history',
+        method: 'POST',
+        body: { root, snapshot }
+      })
+    }),
+    robotChatSummary: build.query<
+      { items: RobotChatRecordSummary[] },
+      void
+    >({
+      query: () => 'robot/chat/summary'
+    }),
+    clearRobotChatHistory: build.mutation<{ ok: boolean }, string>({
+      query: root => ({
+        url: `robot/chat/history?${new URLSearchParams({ root })}`,
+        method: 'DELETE'
+      })
+    }),
     localPackageVersions: build.query<
       LocalPackageVersions,
       { root: string; package: string }
@@ -682,7 +728,7 @@ export const workspaceApi = createApi({
         { type: 'RobotFile', id: `${root}:alemon.config.yaml` }
       ]
     }),
-    robotWebViews: build.query<WebViewEntry[], string>({
+    botAppPages: build.query<BotAppPage[], string>({
       query: root => `robot/webviews?${new URLSearchParams({ root })}`
     }),
     robotAppPortProbe: build.query<
@@ -957,6 +1003,11 @@ export const {
   useLazyPackageConfigQuery,
   useLocalPackagesQuery,
   useUploadRobotPackageMutation,
+  useRobotChatHistoryQuery,
+  useLazyRobotChatHistoryQuery,
+  useSaveRobotChatHistoryMutation,
+  useRobotChatSummaryQuery,
+  useClearRobotChatHistoryMutation,
   useLocalPackageVersionsQuery,
   useLocalPackageReadmeQuery,
   usePackageManifestQuery,
@@ -970,7 +1021,7 @@ export const {
   useLazyAppPortQuery,
   useSaveAppPortMutation,
   useRobotAppsQuery,
-  useRobotWebViewsQuery,
+  useBotAppPagesQuery,
   useRobotAppPortProbeQuery,
   useLazyRobotPortsQuery,
   useTestPortQuery,

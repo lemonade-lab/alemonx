@@ -2,6 +2,7 @@
 // 目的：将大体积 base64 图片内容转为引用以减少聊天主数组内存和裁剪频率
 
 import { LOCAL_STORAGE_IMAGE_COMPRESSION } from './config';
+import { fetchImageBlob, getTestoneRoot, uploadImage } from './testoneServer';
 
 export interface ImageRefValue {
   hash: string; // 内容哈希
@@ -18,6 +19,16 @@ interface BlobEntry {
   ts: number;
 }
 const _blobMap = new Map<string, BlobEntry>();
+const _uploadedHashes = new Set<string>();
+
+function uploadImageIfNeeded(hash: string, blob: Blob) {
+  if (!getTestoneRoot() || _uploadedHashes.has(hash)) return;
+  _uploadedHashes.add(hash);
+  void uploadImage(hash, blob).catch(() => {
+    // 离线或服务端暂不可用时允许下次重传。
+    _uploadedHashes.delete(hash);
+  });
+}
 
 function ensureBlobBudget() {
   if (_blobMap.size <= MAX_BLOB_COUNT) {
@@ -93,6 +104,7 @@ export function storeBase64(b64: string): ImageRefValue | null {
       const blob = base64ToBlob(b64, 'image/jpeg');
       const url = URL.createObjectURL(blob);
       _blobMap.set(hash, { url, size: b64.length, ts: Date.now() });
+      uploadImageIfNeeded(hash, blob);
       ensureBlobBudget();
     } catch {
       return null;
@@ -103,6 +115,28 @@ export function storeBase64(b64: string): ImageRefValue | null {
     ent.ts = Date.now();
   }
   return { hash, size: b64.length };
+}
+
+/**
+ * 优先返回内存/本地缓存，缺失时从服务端拉取并缓存为 Blob URL。
+ * 服务端也没有时返回 undefined（与旧行为一致，不抛错）。
+ */
+export async function fetchImageObjectUrl(
+  hash: string
+): Promise<string | undefined> {
+  const existing = getImageObjectUrl(hash);
+  if (existing) return existing;
+  if (!getTestoneRoot()) return undefined;
+  try {
+    const blob = await fetchImageBlob(hash);
+    if (!blob || blob.size === 0) return undefined;
+    const url = URL.createObjectURL(blob);
+    _blobMap.set(hash, { url, size: blob.size, ts: Date.now() });
+    ensureBlobBudget();
+    return url;
+  } catch {
+    return undefined;
+  }
 }
 
 async function compressBase64IfNeeded(rawB64: string): Promise<string> {

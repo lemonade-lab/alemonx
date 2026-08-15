@@ -19,10 +19,10 @@ import (
 	"github.com/goccy/go-yaml"
 )
 
-// WebViewEntry is a web UI contributed by an AlemonJS plugin belonging to the
+// BotAppPage is a web UI contributed by an AlemonJS plugin belonging to the
 // selected robot. A desktop.sidebar is used only as its registration point;
 // setup never runs its desktop command.
-type WebViewEntry struct {
+type BotAppPage struct {
 	ID                 string `json:"id"`
 	Package            string `json:"package"`
 	Name               string `json:"name"`
@@ -31,7 +31,7 @@ type WebViewEntry struct {
 	RequiresServerPort bool   `json:"requiresServerPort,omitempty"`
 }
 
-type webViewManifest struct {
+type appPageManifest struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	Alemonjs    struct {
@@ -48,31 +48,31 @@ type webViewManifest struct {
 	} `json:"alemonjs"`
 }
 
-type resolvedWebView struct {
-	WebViewEntry
+type resolvedAppPage struct {
+	BotAppPage
 	root string
 }
 
-func (m Manager) WebViews(root string) ([]WebViewEntry, error) {
-	items, err := resolveWebViews(root)
+func (m Manager) AppPages(root string) ([]BotAppPage, error) {
+	items, err := resolveAppPages(root)
 	if err != nil {
 		return nil, err
 	}
-	result := make([]WebViewEntry, len(items))
+	result := make([]BotAppPage, len(items))
 	for i, item := range items {
-		result[i] = item.WebViewEntry
+		result[i] = item.BotAppPage
 	}
 	return result, nil
 }
 
-// WebViewFile resolves only files inside the registered web.root directory.
+// AppPageFile resolves only files inside the registered web.root directory.
 // It rejects traversal and symlink escapes before the web handler serves data.
-func (m Manager) WebViewFile(root, id, requestPath string) (string, error) {
-	items, err := resolveWebViews(root)
+func (m Manager) AppPageFile(root, id, requestPath string) (string, error) {
+	items, err := resolveAppPages(root)
 	if err != nil {
 		return "", err
 	}
-	var entry *resolvedWebView
+	var entry *resolvedAppPage
 	for i := range items {
 		if items[i].ID == id {
 			entry = &items[i]
@@ -115,20 +115,20 @@ func (m Manager) WebViewFile(root, id, requestPath string) (string, error) {
 	return resolved, nil
 }
 
-func resolveWebViews(root string) ([]resolvedWebView, error) {
+func resolveAppPages(root string) ([]resolvedAppPage, error) {
 	project, err := projectPath(root)
 	if err != nil {
 		return nil, err
 	}
 	candidates := pluginManifestPaths(project)
-	items := []resolvedWebView{}
+	items := []resolvedAppPage{}
 	seen := map[string]bool{}
 	for _, manifestPath := range candidates {
 		data, err := os.ReadFile(manifestPath)
 		if err != nil {
 			continue
 		}
-		var manifest webViewManifest
+		var manifest appPageManifest
 		if json.Unmarshal(data, &manifest) != nil || manifest.Name == "" {
 			continue
 		}
@@ -161,12 +161,12 @@ func resolveWebViews(root string) ([]resolvedWebView, error) {
 			if label == "" {
 				continue
 			}
-			id := webViewID(manifest.Name, label, packageResolved)
+			id := appPageID(manifest.Name, label, packageResolved)
 			if seen[id] {
 				continue
 			}
 			seen[id] = true
-			items = append(items, resolvedWebView{WebViewEntry: WebViewEntry{ID: id, Package: manifest.Name, Name: label, Description: manifest.Description, Logo: manifest.Alemonjs.Desktop.Logo, RequiresServerPort: manifest.Alemonjs.Web.ServerPort}, root: resolvedRoot})
+			items = append(items, resolvedAppPage{BotAppPage: BotAppPage{ID: id, Package: manifest.Name, Name: label, Description: manifest.Description, Logo: manifest.Alemonjs.Desktop.Logo, RequiresServerPort: manifest.Alemonjs.Web.ServerPort}, root: resolvedRoot})
 		}
 	}
 	sort.Slice(items, func(i, j int) bool { return strings.ToLower(items[i].Name) < strings.ToLower(items[j].Name) })
@@ -181,7 +181,7 @@ func pluginManifestPaths(project string) []string {
 				paths = append(paths, filepath.Join(project, "packages", entry.Name(), "package.json"))
 				// Local packages may use the standard npm scope layout:
 				// packages/@scope/package. Keep the scan deliberately shallow so
-				// arbitrary nested directories never become WebView candidates.
+				// arbitrary nested directories never become 应用页 candidates.
 				if strings.HasPrefix(entry.Name(), "@") {
 					if scoped, readErr := os.ReadDir(filepath.Join(project, "packages", entry.Name())); readErr == nil {
 						for _, child := range scoped {
@@ -218,22 +218,22 @@ func pluginManifestPaths(project string) []string {
 	return paths
 }
 
-func webViewID(pkg, name, directory string) string {
+func appPageID(pkg, name, directory string) string {
 	sum := sha256.Sum256([]byte(pkg + "\x00" + name + "\x00" + directory))
 	return hex.EncodeToString(sum[:8])
 }
 
-func (m Manager) WebViewEntry(root, id string) (WebViewEntry, error) {
-	items, err := resolveWebViews(root)
+func (m Manager) BotAppPage(root, id string) (BotAppPage, error) {
+	items, err := resolveAppPages(root)
 	if err != nil {
-		return WebViewEntry{}, err
+		return BotAppPage{}, err
 	}
 	for _, item := range items {
 		if item.ID == id {
-			return item.WebViewEntry, nil
+			return item.BotAppPage, nil
 		}
 	}
-	return WebViewEntry{}, fmt.Errorf("未找到该机器人插件 Web 页面")
+	return BotAppPage{}, fmt.Errorf("未找到该机器人应用页")
 }
 
 // defaultAppPort is the AlemonJS application port used when alemon.config.yaml
@@ -423,11 +423,11 @@ func (m Manager) AppPortReachable(root string) (bool, int, error) {
 	return true, info.Port, nil
 }
 
-// WebViewAPIURL resolves a plugin's relative ./api contract to the selected
-// robot application. AlemonJS WebViews are often not static-only: their UI
+// AppPageAPIURL resolves a plugin's relative ./api contract to the selected
+// robot application. AlemonJS 应用页 are often not static-only: their UI
 // expects the robot's Koa API on the configured application port.
-func (m Manager) WebViewAPIURL(root, id, requestPath string) (string, error) {
-	if _, err := m.WebViewEntry(root, id); err != nil {
+func (m Manager) AppPageAPIURL(root, id, requestPath string) (string, error) {
+	if _, err := m.BotAppPage(root, id); err != nil {
 		return "", err
 	}
 	project, err := projectPath(root)

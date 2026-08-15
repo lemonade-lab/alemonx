@@ -10,7 +10,7 @@ import (
 
 func TestBackpackWorkspaceSwitchAddsAndRemovesOnlyBackpackPattern(t *testing.T) {
 	root := t.TempDir()
-	writeWebViewFixture(t, filepath.Join(root, "package.json"), `{
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{
   "name": "robot",
   "workspaces": {"packages": ["modules/*"], "nohoist": ["legacy"]}
 }`)
@@ -41,7 +41,7 @@ func TestBackpackWorkspaceSwitchAddsAndRemovesOnlyBackpackPattern(t *testing.T) 
 
 func TestBackpackWorkspaceSwitchRemovesEmptyWorkspace(t *testing.T) {
 	root := t.TempDir()
-	writeWebViewFixture(t, filepath.Join(root, "package.json"), `{"name":"robot","private":true,"workspaces":["packages/*"]}`)
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"robot","private":true,"workspaces":["packages/*"]}`)
 	if _, err := (Manager{}).Run(root, "disable-backpack-workspace", "", "", "", "", "", false); err != nil {
 		t.Fatalf("disable backpack workspace: %v", err)
 	}
@@ -66,9 +66,9 @@ func readWorkspaceManifest(t *testing.T, root string) map[string]any {
 
 func TestBackpackPackageCanBeConfiguredAndRemovedByManifestName(t *testing.T) {
 	root := t.TempDir()
-	writeWebViewFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
 	packagePath := filepath.Join(root, "packages", "checkout-folder", "package.json")
-	writeWebViewFixture(t, packagePath, `{
+	writeAppPageFixture(t, packagePath, `{
   "name":"local-plugin",
   "alemonjs":{"config":[{"name":"token","type":"text","required":true,"description":"令牌"}]}
 }`)
@@ -94,9 +94,9 @@ func TestBackpackPackageCanBeConfiguredAndRemovedByManifestName(t *testing.T) {
 
 func TestSwitchLocalPackageVersionRequiresConfirmationBeforeDiscardingGitChanges(t *testing.T) {
 	root := t.TempDir()
-	writeWebViewFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
 	plugin := filepath.Join(root, "packages", "local-plugin")
-	writeWebViewFixture(t, filepath.Join(plugin, "package.json"), `{"name":"local-plugin","version":"1.0.0"}`)
+	writeAppPageFixture(t, filepath.Join(plugin, "package.json"), `{"name":"local-plugin","version":"1.0.0"}`)
 	for _, command := range [][]string{
 		{"init", "-b", "main"},
 		{"config", "user.name", "Test User"},
@@ -109,8 +109,8 @@ func TestSwitchLocalPackageVersionRequiresConfirmationBeforeDiscardingGitChanges
 			t.Skipf("git is unavailable for local package switch test: %v", err)
 		}
 	}
-	writeWebViewFixture(t, filepath.Join(plugin, "package.json"), `{"name":"local-plugin","version":"1.0.0","local":true}`)
-	writeWebViewFixture(t, filepath.Join(plugin, "scratch.txt"), "local change")
+	writeAppPageFixture(t, filepath.Join(plugin, "package.json"), `{"name":"local-plugin","version":"1.0.0","local":true}`)
+	writeAppPageFixture(t, filepath.Join(plugin, "scratch.txt"), "local change")
 
 	if _, err := switchLocalPackageVersion(root, "local-plugin", "v1.0.0", false); err == nil || !strings.Contains(err.Error(), "强制切换") {
 		t.Fatalf("ordinary switch should preserve local changes, err=%v", err)

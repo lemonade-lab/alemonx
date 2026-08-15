@@ -293,9 +293,9 @@ func savePersistedProcesses(items []persistedProcess) {
 	_ = os.WriteFile(path, data, 0600)
 }
 
-// webViewRuntime is separate from a robot's app/dev process. It hosts
+// botAppPageRuntime is separate from a robot's app/dev process. It hosts
 // alemonjs/desktop.js and exchanges plugin messages through stdin/stdout.
-type webViewRuntime struct {
+type botAppPageRuntime struct {
 	command *exec.Cmd
 	stdin   io.WriteCloser
 	events  map[string][]json.RawMessage
@@ -317,43 +317,45 @@ type liveUpload struct {
 }
 
 type server struct {
-	version           string
-	assets            fs.FS
-	static            http.Handler
-	checker           *system.Checker
-	network           *systemnetwork.Manager
-	creator           *project.Creator
-	robots            robot.Manager
-	plugins           *setupplugin.Registry
-	pluginWatcher     *setupplugin.Watcher
-	pluginDevelopment *pluginDevelopmentManager
-	auth              *access.Manager
-	ai                *ai.Manager
-	agentSessions     *agent.SessionStore
-	agentTasks        *agent.TaskManager
-	taskService       *agent.TaskService
-	agentTaskStore    *agent.TaskStore
-	goalStore         *agent.GoalStore
-	goalSchedulerStop chan struct{}
-	goalSchedulerMu   sync.Mutex
-	goalRunning       map[string]bool
-	opsStore          agent.OpsRepository
-	opsProjects       *agent.OpsProjectStore
-	opsBackground     bool
-	pm2Guard          *GuardedPM2Executor
-	opsOrchestrator   *agent.OpsOrchestrator
-	alerts            agent.AlertManager
-	alertWorker       *agent.AlertDeliveryWorker
-	opsPaused         bool
-	opsMonitor        *agent.OpsMonitor
-	agentConfirms     *agentConfirmManager
-	mu                sync.RWMutex
-	operations        []operationTask
-	development       map[string]developmentProcess
-	webviewRuntimes   map[string]*webViewRuntime
-	stopping          map[string]bool
-	consoleCache      map[string]consoleSnapshot
-	outputBuffers     map[string]*operationOutputBuffer
+	version            string
+	assets             fs.FS
+	static             http.Handler
+	checker            *system.Checker
+	network            *systemnetwork.Manager
+	creator            *project.Creator
+	robots             robot.Manager
+	plugins            *setupplugin.Registry
+	pluginWatcher      *setupplugin.Watcher
+	pluginDevelopment  *pluginDevelopmentManager
+	auth               *access.Manager
+	ai                 *ai.Manager
+	agentSessions      *agent.SessionStore
+	agentTasks         *agent.TaskManager
+	taskService        *agent.TaskService
+	agentTaskStore     *agent.TaskStore
+	goalStore          *agent.GoalStore
+	goalSchedulerStop  chan struct{}
+	goalSchedulerMu    sync.Mutex
+	goalRunning        map[string]bool
+	opsStore           agent.OpsRepository
+	chatHistory        *chatHistoryStore
+	testoneRecords     *testoneRecordStore
+	opsProjects        *agent.OpsProjectStore
+	opsBackground      bool
+	pm2Guard           *GuardedPM2Executor
+	opsOrchestrator    *agent.OpsOrchestrator
+	alerts             agent.AlertManager
+	alertWorker        *agent.AlertDeliveryWorker
+	opsPaused          bool
+	opsMonitor         *agent.OpsMonitor
+	agentConfirms      *agentConfirmManager
+	mu                 sync.RWMutex
+	operations         []operationTask
+	development        map[string]developmentProcess
+	botAppPageRuntimes map[string]*botAppPageRuntime
+	stopping           map[string]bool
+	consoleCache       map[string]consoleSnapshot
+	outputBuffers      map[string]*operationOutputBuffer
 	// pm2Status lets tests substitute a fake PM2 state. The default read runs a
 	// real `npx pm2 jlist` behind a short timeout so a missing pm2 never blocks
 	// a local start request for the full package-manager timeout.
@@ -562,6 +564,16 @@ func (r *ServerRuntime) Shutdown(ctx context.Context) error {
 				shutdownErr = err
 			}
 		}
+		if s.chatHistory != nil {
+			if err := s.chatHistory.Close(); err != nil && shutdownErr == nil {
+				shutdownErr = err
+			}
+		}
+		if s.testoneRecords != nil {
+			if err := s.testoneRecords.Close(); err != nil && shutdownErr == nil {
+				shutdownErr = err
+			}
+		}
 		if s.operationEvents != nil {
 			if err := s.operationEvents.Close(); err != nil && shutdownErr == nil {
 				shutdownErr = err
@@ -707,27 +719,26 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	opsDir := filepath.Join(filepath.Dir(taskStore.TasksDir()), "incidents")
 	var opsStore agent.OpsRepository = agent.NewOpsStoreAt(opsDir)
 	var opsStartupErr error
-	if strings.EqualFold(strings.TrimSpace(os.Getenv("ALX_OPS_STORAGE")), "sqlite") {
-		databasePath := strings.TrimSpace(os.Getenv("ALX_OPS_SQLITE_PATH"))
-		if databasePath == "" {
-			databasePath = filepath.Join(filepath.Dir(taskStore.TasksDir()), "ops.db")
-		}
-		if _, statErr := os.Stat(databasePath); os.IsNotExist(statErr) {
-			opsStartupErr = agent.MigrateOpsJSONToSQLite(opsDir, databasePath, "")
-		}
-		if opsStartupErr == nil {
-			if sqliteStore, sqliteErr := agent.NewSQLiteOpsRepository(databasePath); sqliteErr == nil {
-				opsStore = sqliteStore
-			} else {
-				opsStartupErr = sqliteErr
-			}
-		}
+	// SQLite is the default ops backend. ALX_OPS_STORAGE=json (or file) forces
+	// the portable JSON store; existing JSON records are migrated automatically.
+	if sqliteStore, sqliteErr := agent.OpenOpsRepository(opsDir, strings.TrimSpace(os.Getenv("ALX_OPS_SQLITE_PATH")), strings.TrimSpace(os.Getenv("ALX_OPS_STORAGE"))); sqliteErr == nil {
+		opsStore = sqliteStore
+	} else {
+		opsStartupErr = sqliteErr
 	}
 	opsProjects := agent.NewOpsProjectStore(filepath.Join(filepath.Dir(taskStore.TasksDir()), "ops-projects.json"))
 	// Existing policy files represent an explicit choice in older versions.
 	// Listing a missing incident directory is read-only and does not create it.
 	if policies, listErr := opsStore.ListPolicies(); listErr == nil {
 		_ = opsProjects.MigratePolicies(policies)
+	}
+	chatHistory, chatHistoryErr := openChatHistoryStore(filepath.Join(filepath.Dir(taskStore.TasksDir()), "chat.db"))
+	if chatHistoryErr != nil {
+		log.Printf("聊天记录存储不可用：%v", chatHistoryErr)
+	}
+	testoneRecords, testoneRecordsErr := openTestoneRecordStore(filepath.Join(filepath.Dir(taskStore.TasksDir()), "testone.db"), filepath.Join(filepath.Dir(taskStore.TasksDir()), "testone-images"))
+	if testoneRecordsErr != nil {
+		log.Printf("测试中心记录存储不可用：%v", testoneRecordsErr)
 	}
 	operationEvents := newOperationEventStore(filepath.Join(filepath.Dir(taskStore.TasksDir()), "operations", "events.db"))
 	privileges, privilegeErr := newPrivilegeStoreAt(filepath.Join(filepath.Dir(taskStore.TasksDir()), "privileges"))
@@ -738,7 +749,7 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	downloadBroker := newPluginDownloadBroker(networkManager)
 	downloadBroker.setRegistry(plugins)
 	plugins.SetRunnerEnvironmentProvider(downloadBroker.environment)
-	s := &server{version: version, assets: assets, static: http.FileServer(http.FS(assets)), checker: system.NewChecker(), network: networkManager, plugins: plugins, auth: identity, ai: aiManager, agentSessions: sessionStore, agentTaskStore: taskStore, agentTasks: tasks, taskService: &agent.TaskService{Manager: tasks}, goalStore: goalStore, opsStore: opsStore, opsProjects: opsProjects, opsBackground: startBackground, opsPaused: opsStartupErr != nil, goalSchedulerStop: make(chan struct{}), goalRunning: map[string]bool{}, agentConfirms: newAgentConfirmManager(), development: map[string]developmentProcess{}, webviewRuntimes: map[string]*webViewRuntime{}, stopping: map[string]bool{}, consoleCache: map[string]consoleSnapshot{}, outputBuffers: map[string]*operationOutputBuffer{}, directoryRoots: managedDirectoryRoots(), events: newRobotEventHub(), eventGateway: newEventGateway(), operationEvents: operationEvents, operations: operationEvents.snapshot(), opsEvents: newOpsEventHub(), mcpEvents: newMCPEventHub(), mcpMonitorStop: make(chan struct{}), pluginEventsStop: make(chan struct{}), updateMonitorStop: make(chan struct{}), updateState: updateStatusState{Update: releases.Update{Current: version}}, nodeID: fmt.Sprintf("%s-%d", hostname(), os.Getpid()), pluginStatusCache: map[string]*pluginStatusSnapshot{}, hostContexts: map[string]pluginHostContext{}, privilegeStore: privileges, pluginDownloadBroker: downloadBroker, sudoAttempts: map[string]sudoAttempt{}, runPrivilegedCommand: system.RunSudoCommand, installEnvironment: system.InstallEnvironment, liveUploads: map[string]liveUpload{}}
+	s := &server{version: version, assets: assets, static: http.FileServer(http.FS(assets)), checker: system.NewChecker(), network: networkManager, plugins: plugins, auth: identity, ai: aiManager, agentSessions: sessionStore, agentTaskStore: taskStore, agentTasks: tasks, taskService: &agent.TaskService{Manager: tasks}, goalStore: goalStore, opsStore: opsStore, chatHistory: chatHistory, testoneRecords: testoneRecords, opsProjects: opsProjects, opsBackground: startBackground, opsPaused: opsStartupErr != nil, goalSchedulerStop: make(chan struct{}), goalRunning: map[string]bool{}, agentConfirms: newAgentConfirmManager(), development: map[string]developmentProcess{}, botAppPageRuntimes: map[string]*botAppPageRuntime{}, stopping: map[string]bool{}, consoleCache: map[string]consoleSnapshot{}, outputBuffers: map[string]*operationOutputBuffer{}, directoryRoots: managedDirectoryRoots(), events: newRobotEventHub(), eventGateway: newEventGateway(), operationEvents: operationEvents, operations: operationEvents.snapshot(), opsEvents: newOpsEventHub(), mcpEvents: newMCPEventHub(), mcpMonitorStop: make(chan struct{}), pluginEventsStop: make(chan struct{}), updateMonitorStop: make(chan struct{}), updateState: updateStatusState{Update: releases.Update{Current: version}}, nodeID: fmt.Sprintf("%s-%d", hostname(), os.Getpid()), pluginStatusCache: map[string]*pluginStatusSnapshot{}, hostContexts: map[string]pluginHostContext{}, privilegeStore: privileges, pluginDownloadBroker: downloadBroker, sudoAttempts: map[string]sudoAttempt{}, runPrivilegedCommand: system.RunSudoCommand, installEnvironment: system.InstallEnvironment, liveUploads: map[string]liveUpload{}}
 	s.redisManager = redis.NewManager(filepath.Join(filepath.Dir(taskStore.TasksDir()), "alx-redis.json"))
 	if options.RedisPort > 0 || options.RedisDisabled {
 		status := s.redisManager.Status()
@@ -1024,6 +1035,7 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	mux.HandleFunc("/api/v1/system/events", s.systemEventsHandler)
 	mux.HandleFunc("/api/v1/system/picker", s.systemPickerHandler)
 	mux.HandleFunc("/api/v1/system/capabilities", s.systemCapabilitiesHandler)
+	mux.HandleFunc("/api/v1/system/capabilities/webview/open", s.systemCapabilityWebviewOpenHandler)
 	mux.HandleFunc("/api/v1/system/capabilities/finder", s.systemCapabilityFinderHandler)
 	mux.HandleFunc("/api/v1/system/capabilities/context", s.systemCapabilityContextHandler)
 	mux.HandleFunc("/api/v1/system/capabilities/desktop/open", s.systemCapabilityDesktopOpenHandler)
@@ -1082,10 +1094,16 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	mux.HandleFunc("/api/v1/robot/packages/upload", s.robotPackageUploadHandler)
 	mux.HandleFunc("/api/v1/robot/packages/git-clone", s.robotPackageGitCloneHandler)
 	mux.HandleFunc("/api/v1/robot/packages/git-clone/check", s.robotPackageGitCloneCheckHandler)
+	mux.HandleFunc("/api/v1/robot/chat/history", s.robotChatHistoryHandler)
+	mux.HandleFunc("/api/v1/robot/chat/summary", s.robotChatSummaryHandler)
+	mux.HandleFunc("/api/v1/robot/testone/chat", s.robotTestoneChatHandler)
+	mux.HandleFunc("/api/v1/robot/testone/chat/index", s.robotTestoneChatIndexHandler)
+	mux.HandleFunc("/api/v1/robot/testone/image", s.robotTestoneImageHandler)
+	mux.HandleFunc("/api/v1/robot/testone/summary", s.robotTestoneSummaryHandler)
 	mux.HandleFunc("/api/v1/robot/package-versions", s.robotPackageVersionsHandler)
 	mux.HandleFunc("/api/v1/robot/package-readme", s.robotPackageReadmeHandler)
-	mux.HandleFunc("/api/v1/robot/webviews", s.robotWebViewsHandler)
-	mux.HandleFunc("/api/v1/robot/webview/", s.robotWebViewHandler)
+	mux.HandleFunc("/api/v1/robot/webviews", s.botAppPagesHandler)
+	mux.HandleFunc("/api/v1/robot/webview/", s.botAppPageHandler)
 	mux.HandleFunc("/api/v1/robot/apps", s.robotAppsHandler)
 	mux.HandleFunc("/api/v1/robot/package-config", s.robotPackageConfigHandler)
 	mux.HandleFunc("/api/v1/robot/login", s.robotLoginHandler)
@@ -2078,7 +2096,7 @@ func isUploadArchiveName(name string) bool {
 
 // activeSetupPluginOperation returns the one in-flight task for a plugin.
 // Keeping this at the host boundary covers every browser tab and every plugin
-// WebView, rather than relying only on a disabled UI button.
+// 面板页, rather than relying only on a disabled UI button.
 func activeSetupPluginOperation(operations []operationTask, pluginID string) *operationTask {
 	prefix := "setup:" + pluginID + ":"
 	for index := range operations {
@@ -2276,17 +2294,17 @@ func (s *server) setupPluginWebHandler(w http.ResponseWriter, r *http.Request) {
 	const prefix = "/api/v1/setup/plugins/web/"
 	parts := strings.SplitN(strings.TrimPrefix(r.URL.Path, prefix), "/", 2)
 	if len(parts) == 0 || parts[0] == "" {
-		writeError(w, http.StatusNotFound, "未找到插件 Web 界面。")
+		writeError(w, http.StatusNotFound, "未找到系统面板页。")
 		return
 	}
 	plugin, err := s.plugins.Find(parts[0])
 	if err != nil || plugin.Online || !plugin.Runnable || !plugin.Enabled {
-		writeError(w, http.StatusNotFound, "未找到插件 Web 界面。")
+		writeError(w, http.StatusNotFound, "未找到系统面板页。")
 		return
 	}
 	root, err := plugin.WebRoot()
 	if err != nil {
-		writeError(w, http.StatusNotFound, "插件 Web 界面不可用。")
+		writeError(w, http.StatusNotFound, "系统面板页不可用。")
 		return
 	}
 	requestPath := ""
@@ -2351,10 +2369,11 @@ func (s *server) setupPluginWebHandler(w http.ResponseWriter, r *http.Request) {
 // the existing fetch contract while keeping desktop requests in the workbench.
 func rewriteSetupPluginWebHTML(content string) string {
 	const bridge = `<script src="host-bridge.js"></script>`
+	injection := alemonjsThemeStyleTag + bridge
 	if strings.Contains(content, "</head>") {
-		return strings.Replace(content, "</head>", bridge+"</head>", 1)
+		return strings.Replace(content, "</head>", injection+"</head>", 1)
 	}
-	return bridge + content
+	return injection + content
 }
 
 // injectSetupPluginFinderBridge applies the same bridge to an HTML document
@@ -2386,7 +2405,7 @@ func setupPluginFinderBridge() string {
 // Vite-served system plugin receives the same small browser SDK. The server
 // still performs plugin identity, authentication and availability checks.
 func setupPluginHostBridge() string {
-	return `(function(){var nativeFetch=window.fetch;var serial=0;var pending={};function finderRequest(input,init){var url;try{url=new URL(input instanceof Request?input.url:input,location.href)}catch(_){return null}if(url.origin!==location.origin||(url.pathname!=='/api/v1/system/capabilities/finder'&&url.pathname!=='/api/v1/system/picker'))return null;var body=init&&init.body;if(typeof body!=='string')return null;var payload;try{payload=JSON.parse(body)}catch(_){return null}if(!payload||typeof payload.pluginId!=='string'||typeof payload.pickerId!=='string')return null;return payload}function response(status,body){return new Response(JSON.stringify(body),{status:status,headers:{'Content-Type':'application/json'}})}function json(url,init){return nativeFetch(url,init).then(function(res){return res.json().then(function(data){if(!res.ok)throw new Error(data&&data.error||'宿主能力请求失败');return data})})}window.fetch=function(input,init){var payload=finderRequest(input,init);if(!payload)return nativeFetch.apply(this,arguments);var requestId='finder-'+Date.now().toString(36)+'-'+(++serial).toString(36);return new Promise(function(resolve){pending[requestId]=resolve;parent.postMessage({source:'alx-setup-plugin',type:'finder-request',requestId:requestId,pluginId:payload.pluginId,pickerId:payload.pickerId},location.origin);window.setTimeout(function(){if(!pending[requestId])return;delete pending[requestId];resolve(response(408,{error:'等待工作台 Finder 选择超时。'}))},10*60*1000)})};window.addEventListener('message',function(event){if(event.origin!==location.origin)return;var data=event.data;if(!data||data.source!=='alx-parent'||data.type!=='finder-result'||typeof data.requestId!=='string')return;var resolve=pending[data.requestId];if(!resolve)return;delete pending[data.requestId];resolve(response(data.error?400:200,data.error?{error:data.error}:{paths:Array.isArray(data.paths)?data.paths:[]}))})};window.ALXHost={capabilities:function(){return json('/api/v1/system/capabilities')},finder:{pick:function(pluginId,pickerId){return window.fetch('/api/v1/system/capabilities/finder',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pluginId:pluginId,pickerId:pickerId})}).then(function(res){return res.json().then(function(data){if(!res.ok)throw new Error(data&&data.error||'选择目录失败');return data.paths||[]})})}},context:function(pluginId,keys){return json('/api/v1/system/capabilities/context?pluginId='+encodeURIComponent(pluginId)+'&keys='+encodeURIComponent((keys||[]).join(',')))},desktop:{open:function(pluginId,target){return json('/api/v1/system/capabilities/desktop/open',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pluginId:pluginId,target:target})})}},clipboard:{read:function(pluginId){return json('/api/v1/system/capabilities/clipboard?pluginId='+encodeURIComponent(pluginId))},write:function(pluginId,text){return json('/api/v1/system/capabilities/clipboard',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pluginId:pluginId,text:text})})}},notification:{send:function(pluginId,title,message){return json('/api/v1/system/capabilities/notification',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pluginId:pluginId,title:title,message:message})})}},info:function(pluginId){return json('/api/v1/system/capabilities/info?pluginId='+encodeURIComponent(pluginId))},network:{fetch:function(pluginId,url,method){return json('/api/v1/system/capabilities/network/fetch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pluginId:pluginId,url:url,method:method||'GET'})})}}};})();`
+	return `(function(){var nativeFetch=window.fetch;var serial=0;var pending={};function finderRequest(input,init){var url;try{url=new URL(input instanceof Request?input.url:input,location.href)}catch(_){return null}if(url.origin!==location.origin||(url.pathname!=='/api/v1/system/capabilities/finder'&&url.pathname!=='/api/v1/system/picker'))return null;var body=init&&init.body;if(typeof body!=='string')return null;var payload;try{payload=JSON.parse(body)}catch(_){return null}if(!payload||typeof payload.pluginId!=='string'||typeof payload.pickerId!=='string')return null;return payload}function response(status,body){return new Response(JSON.stringify(body),{status:status,headers:{'Content-Type':'application/json'}})}function json(url,init){return nativeFetch(url,init).then(function(res){return res.json().then(function(data){if(!res.ok)throw new Error(data&&data.error||'宿主能力请求失败');return data})})}function bridge(type,payload,timeout){timeout=timeout||60000;var requestId=type+'-'+Date.now().toString(36)+'-'+(++serial).toString(36);return new Promise(function(resolve){pending[requestId]={type:type,resolve:resolve};parent.postMessage(Object.assign({source:'alx-setup-plugin',type:type,requestId:requestId},payload||{}),location.origin);window.setTimeout(function(){if(!pending[requestId])return;delete pending[requestId];resolve({ok:false,error:'等待宿主响应超时。'})},timeout)})}window.fetch=function(input,init){var payload=finderRequest(input,init);if(!payload)return nativeFetch.apply(this,arguments);var requestId='finder-'+Date.now().toString(36)+'-'+(++serial).toString(36);return new Promise(function(resolve){pending[requestId]={type:'finder-request',resolve:resolve};parent.postMessage({source:'alx-setup-plugin',type:'finder-request',requestId:requestId,pluginId:payload.pluginId,pickerId:payload.pickerId},location.origin);window.setTimeout(function(){if(!pending[requestId])return;delete pending[requestId];resolve(response(408,{error:'等待工作台 Finder 选择超时。'}))},10*60*1000)})};window.addEventListener('message',function(event){if(event.origin!==location.origin)return;var data=event.data;if(!data||data.source!=='alx-parent'||typeof data.requestId!=='string')return;var entry=pending[data.requestId];if(!entry)return;delete pending[data.requestId];if(data.type==='finder-result'){entry.resolve(response(data.error?400:200,data.error?{error:data.error}:{paths:Array.isArray(data.paths)?data.paths:[]}));return}if((entry.type==='webview-request'&&data.type==='webview-result')||(entry.type==='ui-request'&&data.type==='ui-result')||(entry.type==='webview-close-request'&&data.type==='webview-close-result')){entry.resolve(data)}});window.ALXHost={capabilities:function(){return json('/api/v1/system/capabilities')},finder:{pick:function(pluginId,pickerId){return window.fetch('/api/v1/system/capabilities/finder',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pluginId:pluginId,pickerId:pickerId})}).then(function(res){return res.json().then(function(data){if(!res.ok)throw new Error(data&&data.error||'选择目录失败');return data.paths||[]})})}},context:function(pluginId,keys){return json('/api/v1/system/capabilities/context?pluginId='+encodeURIComponent(pluginId)+'&keys='+encodeURIComponent((keys||[]).join(',')))},desktop:{open:function(pluginId,target){return json('/api/v1/system/capabilities/desktop/open',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pluginId:pluginId,target:target})})}},clipboard:{read:function(pluginId){return json('/api/v1/system/capabilities/clipboard?pluginId='+encodeURIComponent(pluginId))},write:function(pluginId,text){return json('/api/v1/system/capabilities/clipboard',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pluginId:pluginId,text:text})})}},notification:{send:function(pluginId,title,message){return json('/api/v1/system/capabilities/notification',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pluginId:pluginId,title:title,message:message})})}},info:function(pluginId){return json('/api/v1/system/capabilities/info?pluginId='+encodeURIComponent(pluginId))},network:{fetch:function(pluginId,url,method){return json('/api/v1/system/capabilities/network/fetch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pluginId:pluginId,url:url,method:method||'GET'})})}},webview:{open:function(pluginId,options){options=options||{};return json('/api/v1/system/capabilities/webview/open',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pluginId:pluginId,title:options.title,url:options.url,resource:options.resource,width:options.width,height:options.height})}).then(function(data){if(!data||!data.ok)throw new Error(data&&data.error||'打开 WebView 失败');return bridge('webview-request',{pluginId:pluginId,webview:{title:data.title,src:data.src,kind:data.kind,width:data.width,height:data.height}})})},close:function(pluginId,webviewId){return bridge('webview-close-request',{pluginId:pluginId,webviewId:webviewId||''})}},ui:{alert:function(pluginId,options){return uiRequest('alert',pluginId,options)},message:function(pluginId,options){return uiRequest('message',pluginId,options)},modal:function(pluginId,options){return uiRequest('modal',pluginId,options)},notification:function(pluginId,options){return uiRequest('notification',pluginId,options)},setBusy:function(pluginId,busy){return uiRequest('set-busy',pluginId,{busy:busy===true})}}};function uiRequest(kind,pluginId,options){options=options||{};return bridge('ui-request',{pluginId:pluginId,ui:{kind:kind,busy:options.busy===true,title:options.title,message:options.message,confirmText:options.confirmText,cancelText:options.cancelText,type:options.type,duration:options.duration}})}})();`
 }
 
 func (s *server) sshHandler(w http.ResponseWriter, r *http.Request) {
@@ -3270,7 +3289,7 @@ func (s *server) updateStatusHandler(w http.ResponseWriter, r *http.Request) {
 
 // systemNetworkHandler owns AlemonX-managed content networking. It
 // deliberately does not touch project git/npm settings, robot processes or
-// WebView traffic.
+// 机器人应用页 traffic.
 func (s *server) systemNetworkHandler(w http.ResponseWriter, r *http.Request) {
 	if s.network == nil {
 		writeError(w, http.StatusServiceUnavailable, "系统联网配置暂不可用。")
@@ -5728,12 +5747,12 @@ func (s *server) robotPackageReadmeHandler(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, result)
 }
 
-func (s *server) robotWebViewsHandler(w http.ResponseWriter, r *http.Request) {
+func (s *server) botAppPagesHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
 		return
 	}
-	items, err := s.robots.WebViews(r.URL.Query().Get("root"))
+	items, err := s.robots.AppPages(r.URL.Query().Get("root"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -5741,7 +5760,7 @@ func (s *server) robotWebViewsHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, items)
 }
 
-func (s *server) robotWebViewHandler(w http.ResponseWriter, r *http.Request) {
+func (s *server) botAppPageHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
 		return
@@ -5750,12 +5769,12 @@ func (s *server) robotWebViewHandler(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, prefix)
 	parts := strings.SplitN(rest, "/", 3)
 	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
-		writeError(w, http.StatusBadRequest, "缺少插件 Web 页面标识。")
+		writeError(w, http.StatusBadRequest, "缺少机器人应用页标识。")
 		return
 	}
 	// Treat the entry URL as a directory. Vite commonly emits ./assets/...;
 	// without this redirect a caller omitting the final slash resolves those
-	// files one level above the registered WebView id.
+	// files one level above the registered 应用页 id.
 	if len(parts) == 2 && !strings.HasSuffix(r.URL.Path, "/") {
 		http.Redirect(w, r, r.URL.Path+"/", http.StatusTemporaryRedirect)
 		return
@@ -5770,38 +5789,38 @@ func (s *server) robotWebViewHandler(w http.ResponseWriter, r *http.Request) {
 		requestPath = parts[2]
 	}
 	if strings.HasPrefix(requestPath, "api/") {
-		s.proxyRobotWebViewAPI(w, r, root, parts[1], strings.TrimPrefix(requestPath, "api/"))
+		s.proxyBotAppPageAPI(w, r, root, parts[1], strings.TrimPrefix(requestPath, "api/"))
 		return
 	}
 	if requestPath == "message" {
-		s.robotWebViewMessageHandler(w, r, root, parts[1])
+		s.botAppPageMessageHandler(w, r, root, parts[1])
 		return
 	}
 	if requestPath == "events" {
-		s.robotWebViewEventsHandler(w, r, root, parts[1])
+		s.botAppPageEventsHandler(w, r, root, parts[1])
 		return
 	}
 	if requestPath == "events/stream" {
-		s.robotWebViewEventsStreamHandler(w, r, root, parts[1])
+		s.botAppPageEventsStreamHandler(w, r, root, parts[1])
 		return
 	}
 	if requestPath == "bridge.js" {
-		entry, entryErr := s.robots.WebViewEntry(root, parts[1])
+		entry, entryErr := s.robots.BotAppPage(root, parts[1])
 		if entryErr != nil {
 			writeError(w, http.StatusNotFound, entryErr.Error())
 			return
 		}
 		w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
-		_, _ = io.WriteString(w, webViewBridge(entry))
+		_, _ = io.WriteString(w, botAppPageBridge(entry))
 		return
 	}
-	file, err := s.robots.WebViewFile(root, parts[1], requestPath)
+	file, err := s.robots.AppPageFile(root, parts[1], requestPath)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
 	if filepath.Ext(file) == ".html" {
-		entry, entryErr := s.robots.WebViewEntry(root, parts[1])
+		entry, entryErr := s.robots.BotAppPage(root, parts[1])
 		if entryErr != nil {
 			writeError(w, http.StatusNotFound, entryErr.Error())
 			return
@@ -5827,10 +5846,10 @@ func (s *server) robotWebViewHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	// Each WebView is opened through a robot-specific *.localhost hostname.
+	// Each 应用页 is opened through a robot-specific *.localhost hostname.
 	// It remains loopback-only while keeping plugin storage and cookies separate
 	// from both the management UI and other robots. Plugin actions can only use
-	// the narrowly scoped WebView API proxy below.
+	// the narrowly scoped 应用页 API proxy below.
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	// A robot plugin UI may talk only to its registered local bot API proxy.
 	// Do not permit the parent management origin in connect-src.
@@ -5845,7 +5864,7 @@ func (s *server) robotWebViewHandler(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "插件 Web 页面不存在。")
 			return
 		}
-		content := rewriteWebViewHTML(string(data))
+		content := rewriteBotAppPageHTML(string(data))
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, _ = io.WriteString(w, content)
 		return
@@ -5853,9 +5872,9 @@ func (s *server) robotWebViewHandler(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, file)
 }
 
-// rewriteWebViewHTML keeps a plugin's common Vite assets inside its mounted
-// WebView route and injects only the restricted setup bridge.
-func rewriteWebViewHTML(content string) string {
+// rewriteBotAppPageHTML keeps a plugin's common Vite assets inside its mounted
+// 应用页 route and injects only the restricted setup bridge.
+func rewriteBotAppPageHTML(content string) string {
 	content = strings.NewReplacer(
 		`src="/assets/`, `src="assets/`,
 		`href="/assets/`, `href="assets/`,
@@ -5867,26 +5886,27 @@ func rewriteWebViewHTML(content string) string {
 		`url('/assets/`, `url('assets/`,
 		`url("/assets/`, `url("assets/`,
 	).Replace(content)
+	theme := alemonjsThemeStyleTag + `<script src="bridge.js"></script>`
 	if strings.Contains(content, "</head>") {
-		return strings.Replace(content, "</head>", `<script src="bridge.js"></script></head>`, 1)
+		return strings.Replace(content, "</head>", theme+"</head>", 1)
 	}
-	return `<script src="bridge.js"></script>` + content
+	return theme + content
 }
 
-// webViewBridge intentionally exposes a compatibility subset, never Wails or
+// botAppPageBridge intentionally exposes a compatibility subset, never Wails or
 // setup process privileges. The package metadata is JSON-quoted to keep a
 // malformed manifest from becoming executable JavaScript.
-func webViewBridge(entry robot.WebViewEntry) string {
+func botAppPageBridge(entry robot.BotAppPage) string {
 	bridge := `(function(){var listeners=[],lastAPIError='';function emit(value){listeners.slice().forEach(function(listener){try{listener(value)}catch(_){}})}function send(type,value){parent.postMessage({source:'alx-webview',type:type,value:value},'*')}function reportAPIError(status,message){var key=String(status||0)+'/'+String(message||'');if(lastAPIError===key)return;lastAPIError=key;send('api-error',{status:status||0,message:message||''});window.setTimeout(function(){lastAPIError=''},5000)}function responseError(response){response.clone().json().then(function(payload){reportAPIError(response.status,payload&&typeof payload.error==='string'?payload.error:'')}).catch(function(){reportAPIError(response.status,'')})}function isPluginAPI(input){try{var url=new URL(typeof input==='string'?input:input.url,location.href);return /\/api\//.test(url.pathname)}catch(_){return false}}var nativeFetch=window.fetch;window.fetch=function(input,init){return nativeFetch.apply(this,arguments).then(function(response){if(isPluginAPI(input)&&!response.ok)responseError(response);return response})};var NativeXHR=window.XMLHttpRequest;function TrackedXHR(){var xhr=new NativeXHR(),url='';var open=xhr.open;xhr.open=function(method,nextURL){url=nextURL;return open.apply(xhr,arguments)};xhr.addEventListener('loadend',function(){if(isPluginAPI(url)&&xhr.status>=400){var message='';try{var body=JSON.parse(xhr.responseText);message=typeof body.error==='string'?body.error:''}catch(_){}reportAPIError(xhr.status,message)}});return xhr}TrackedXHR.prototype=NativeXHR.prototype;window.XMLHttpRequest=TrackedXHR;function post(value){send('message',value);return nativeFetch('message',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({value:value})}).then(function(response){if(!response.ok)throw new Error('插件 desk 通信不可用')})}function connect(){var source=new EventSource('events/stream');source.onmessage=function(event){try{emit(JSON.parse(event.data))}catch(_){}}}var api=Object.freeze({context:Object.freeze({package:` + strconv.Quote(entry.Package) + `,name:` + strconv.Quote(entry.Name) + `}),postMessage:post,onMessage:function(listener){if(typeof listener!=='function')return function(){};listeners.push(listener);return function(){listeners=listeners.filter(function(item){return item!==listener})}},request:function(path,options){if(typeof path!=='string'||!/^\.\/api\//.test(path))return Promise.reject(new Error('只允许请求插件 ./api/ 路径'));return window.fetch(path,options)}});window.__alxWebview=api;window.appDesktopAPI=Object.freeze({postMessage:api.postMessage,onMessage:api.onMessage,themeVariables:function(){return getComputedStyle(document.documentElement)},themeOn:function(listener){return api.onMessage(function(value){if(value&&value.type==='theme')listener(value.data)})}});window.addEventListener('message',function(event){var data=event.data;if(data&&data.source==='alx-parent'){emit(data.value)}});connect();send('ready',{package:api.context.package,name:api.context.name});})();`
 	return bridge + "/* 'events' */"
 }
 
-// proxyRobotWebViewAPI connects a WebView's relative ./api/* requests to the
+// proxyBotAppPageAPI connects an 应用页's relative ./api/* requests to the
 // selected robot application. The destination is never supplied by the
 // browser: it is derived from the selected root's configured local app port.
 // robotAppHandler reverse-proxies the robot's application service (the server
 // on serverPort) so its launchpad and plugin pages render inside the alx page
-// instead of relying on the old webview mechanism. All paths under /app/ map to
+// instead of relying on the old 应用页 mechanism. All paths under /app/ map to
 // http://127.0.0.1:<port>/..., preserving static assets and API routes.
 //
 // The robot root is carried in the path (a base64url token as the first path
@@ -6232,7 +6252,7 @@ func robotAppToken(root string) string {
 }
 
 // decodeRobotRootToken decodes and validates the root embedded in every robot
-// proxy route. Keeping this shared prevents app, test, live chat and WebView
+// proxy route. Keeping this shared prevents app, test, live chat and 应用页
 // routes from drifting into different platform-path behaviour.
 func decodeRobotRootToken(token string) (string, bool) {
 	decoded, err := base64.RawURLEncoding.DecodeString(token)
@@ -6351,7 +6371,7 @@ func rewriteRobotAppHTML(body []byte, prefix, requestPath string) []byte {
 	// first so the injected <base href> (itself a root-relative path) is not
 	// re-prefixed.
 	document = rewriteRootRelativeAttr(document, prefix)
-	injections := baseHrefFor(requestPath) + robotAppScrollbarStyle
+	injections := alemonjsThemeStyleTag + baseHrefFor(requestPath) + robotAppScrollbarStyle
 	if head := regexp.MustCompile(`(?i)<head[^>]*>`).FindString(document); head != "" {
 		document = strings.Replace(document, head, head+injections, 1)
 	} else if htmlTag := regexp.MustCompile(`(?i)<html[^>]*>`).FindString(document); htmlTag != "" {
@@ -6397,12 +6417,12 @@ func rewriteRootRelativeAttr(document, prefix string) string {
 	return document
 }
 
-func (s *server) proxyRobotWebViewAPI(w http.ResponseWriter, r *http.Request, root, id, requestPath string) {
+func (s *server) proxyBotAppPageAPI(w http.ResponseWriter, r *http.Request, root, id, requestPath string) {
 	if r.Method != http.MethodGet && r.Method != http.MethodPost && r.Method != http.MethodPut && r.Method != http.MethodPatch && r.Method != http.MethodDelete {
 		writeError(w, http.StatusMethodNotAllowed, "插件 API 不支持此请求方式。")
 		return
 	}
-	target, err := s.robots.WebViewAPIURL(root, id, requestPath)
+	target, err := s.robots.AppPageAPIURL(root, id, requestPath)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -6434,12 +6454,12 @@ func (s *server) proxyRobotWebViewAPI(w http.ResponseWriter, r *http.Request, ro
 	_, _ = io.Copy(w, response.Body)
 }
 
-func (s *server) robotWebViewMessageHandler(w http.ResponseWriter, r *http.Request, root, id string) {
+func (s *server) botAppPageMessageHandler(w http.ResponseWriter, r *http.Request, root, id string) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "插件消息仅支持发送。")
 		return
 	}
-	entry, err := s.robots.WebViewEntry(root, id)
+	entry, err := s.robots.BotAppPage(root, id)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
@@ -6451,7 +6471,7 @@ func (s *server) robotWebViewMessageHandler(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, "插件消息内容无效。")
 		return
 	}
-	runtime, err := s.ensureRobotWebViewRuntime(root)
+	runtime, err := s.ensureBotAppPageRuntime(root)
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, err.Error())
 		return
@@ -6465,20 +6485,20 @@ func (s *server) robotWebViewMessageHandler(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusAccepted, map[string]bool{"accepted": true})
 }
 
-// robotWebViewEventsHandler is deliberately a short polling endpoint. Unlike a
+// botAppPageEventsHandler is deliberately a short polling endpoint. Unlike a
 // permanent SSE stream, it keeps hidden tabs from holding resources while the
 // browser still receives every queued message from its directory's desk IPC.
-func (s *server) robotWebViewEventsHandler(w http.ResponseWriter, r *http.Request, root, id string) {
+func (s *server) botAppPageEventsHandler(w http.ResponseWriter, r *http.Request, root, id string) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "插件消息仅支持读取。")
 		return
 	}
-	if _, err := s.robots.WebViewEntry(root, id); err != nil {
+	if _, err := s.robots.BotAppPage(root, id); err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
 	s.mu.Lock()
-	runtime := s.webviewRuntimes[root]
+	runtime := s.botAppPageRuntimes[root]
 	events := []json.RawMessage(nil)
 	if runtime != nil {
 		events = append(events, runtime.events[id]...)
@@ -6488,12 +6508,12 @@ func (s *server) robotWebViewEventsHandler(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, map[string]any{"events": events})
 }
 
-func (s *server) robotWebViewEventsStreamHandler(w http.ResponseWriter, r *http.Request, root, id string) {
+func (s *server) botAppPageEventsStreamHandler(w http.ResponseWriter, r *http.Request, root, id string) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "插件消息仅支持读取。")
 		return
 	}
-	if _, err := s.robots.WebViewEntry(root, id); err != nil {
+	if _, err := s.robots.BotAppPage(root, id); err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
@@ -6502,7 +6522,7 @@ func (s *server) robotWebViewEventsStreamHandler(w http.ResponseWriter, r *http.
 		writeError(w, http.StatusInternalServerError, "SSE 不受支持。")
 		return
 	}
-	runtime, err := s.ensureRobotWebViewRuntime(root)
+	runtime, err := s.ensureBotAppPageRuntime(root)
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, err.Error())
 		return
@@ -6556,14 +6576,14 @@ func (s *server) robotWebViewEventsStreamHandler(w http.ResponseWriter, r *http.
 	}
 }
 
-func (s *server) ensureRobotWebViewRuntime(root string) (*webViewRuntime, error) {
+func (s *server) ensureBotAppPageRuntime(root string) (*botAppPageRuntime, error) {
 	s.mu.RLock()
-	runtime := s.webviewRuntimes[root]
+	runtime := s.botAppPageRuntimes[root]
 	s.mu.RUnlock()
 	if runtime != nil {
 		return runtime, nil
 	}
-	// The caller already resolved a registered WebView entry for this root.
+	// The caller already resolved a registered 应用页 entry for this root.
 	// Convert only that validated root to an absolute process working directory.
 	project, err := filepath.Abs(root)
 	if err != nil {
@@ -6574,7 +6594,7 @@ func (s *server) ensureRobotWebViewRuntime(root string) (*webViewRuntime, error)
 		if err := os.MkdirAll(filepath.Dir(scriptPath), 0755); err != nil {
 			return nil, err
 		}
-		if err := os.WriteFile(scriptPath, []byte(defaultWebViewDesktopScript), 0644); err != nil {
+		if err := os.WriteFile(scriptPath, []byte(defaultBotAppPageDesktopScript), 0644); err != nil {
 			return nil, err
 		}
 	} else if err != nil {
@@ -6582,7 +6602,7 @@ func (s *server) ensureRobotWebViewRuntime(root string) (*webViewRuntime, error)
 	}
 	node, lookupErr := system.ResolveCommand("node")
 	if lookupErr != nil {
-		return nil, fmt.Errorf("插件 WebView 通信需要 Node.js，请先在环境管理中安装")
+		return nil, fmt.Errorf("机器人应用页通信需要 Node.js，请先在环境管理中安装")
 	}
 	command := exec.Command(node, scriptPath)
 	command.Dir = project
@@ -6605,39 +6625,39 @@ func (s *server) ensureRobotWebViewRuntime(root string) (*webViewRuntime, error)
 	if err := command.Start(); err != nil {
 		return nil, fmt.Errorf("无法启动插件 desk 进程：%w", err)
 	}
-	runtime = &webViewRuntime{command: command, stdin: stdin, events: map[string][]json.RawMessage{}, streams: map[string]map[chan json.RawMessage]struct{}{}}
+	runtime = &botAppPageRuntime{command: command, stdin: stdin, events: map[string][]json.RawMessage{}, streams: map[string]map[chan json.RawMessage]struct{}{}}
 	s.mu.Lock()
-	if existing := s.webviewRuntimes[root]; existing != nil {
+	if existing := s.botAppPageRuntimes[root]; existing != nil {
 		s.mu.Unlock()
 		_ = command.Process.Kill()
 		go func() { _ = command.Wait() }()
 		return existing, nil
 	}
-	s.webviewRuntimes[root] = runtime
+	s.botAppPageRuntimes[root] = runtime
 	s.mu.Unlock()
-	go s.watchRobotWebViewRuntime(root, runtime, stdout, stderr)
+	go s.watchBotAppPageRuntime(root, runtime, stdout, stderr)
 	return runtime, nil
 }
 
-func (s *server) watchRobotWebViewRuntime(root string, runtime *webViewRuntime, stdout, stderr io.Reader) {
+func (s *server) watchBotAppPageRuntime(root string, runtime *botAppPageRuntime, stdout, stderr io.Reader) {
 	read := func(stream io.Reader) {
 		scanner := bufio.NewScanner(stream)
 		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 		for scanner.Scan() {
-			s.queueRobotWebViewEvent(root, scanner.Bytes())
+			s.queueBotAppPageEvent(root, scanner.Bytes())
 		}
 	}
 	go read(stderr)
 	read(stdout)
 	_ = runtime.command.Wait()
 	s.mu.Lock()
-	if s.webviewRuntimes[root] == runtime {
-		delete(s.webviewRuntimes, root)
+	if s.botAppPageRuntimes[root] == runtime {
+		delete(s.botAppPageRuntimes, root)
 	}
 	s.mu.Unlock()
 }
 
-func (s *server) queueRobotWebViewEvent(root string, line []byte) {
+func (s *server) queueBotAppPageEvent(root string, line []byte) {
 	var envelope struct {
 		Type string          `json:"type"`
 		Data json.RawMessage `json:"data"`
@@ -6652,14 +6672,14 @@ func (s *server) queueRobotWebViewEvent(root string, line []byte) {
 	if json.Unmarshal(envelope.Data, &target) != nil || target.Name == "" {
 		return
 	}
-	entries, err := s.robots.WebViews(root)
+	entries, err := s.robots.AppPages(root)
 	if err != nil {
 		return
 	}
 	event, _ := json.Marshal(map[string]json.RawMessage{"type": json.RawMessage(strconv.Quote(strings.TrimPrefix(envelope.Type, "webview-on-"))), "data": target.Value})
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	runtime := s.webviewRuntimes[root]
+	runtime := s.botAppPageRuntimes[root]
 	if runtime == nil {
 		return
 	}
@@ -6670,14 +6690,14 @@ func (s *server) queueRobotWebViewEvent(root string, line []byte) {
 				select {
 				case stream <- event:
 				default:
-					// A slow WebView will receive the queued snapshot after reconnecting.
+					// A slow 应用页 will receive the queued snapshot after reconnecting.
 				}
 			}
 		}
 	}
 }
 
-const defaultWebViewDesktopScript = `import { events } from '@alemonjs/process'
+const defaultBotAppPageDesktopScript = `import { events } from '@alemonjs/process'
 const send = data => process.stdout.write(JSON.stringify({ type: data.type, data: data.data, from: 'nodejs', __STDIN_JSON_DATA: true }) + '\n')
 global.wsprocess = global.wsprocess || {}; global.wsprocess.send = send
 process.stdin.on('data', raw => { try { const data = JSON.parse(raw.toString().trim()); if (data?.__STDIN_JSON_DATA && data.type) events[data.type]?.(JSON.parse(data.data)) } catch {} })
@@ -7417,7 +7437,7 @@ func (s *server) ginHeaders() gin.HandlerFunc {
 			}
 		}
 		c.Header("X-Content-Type-Options", "nosniff")
-		// Registered robot WebViews, the in-page application service and setup
+		// Registered robot 应用页, the in-page application service and setup
 		// plugin pages are embedded in frames, so X-Frame-Options cannot be
 		// SAMEORIGIN for them. Their responses carry their own CSP.
 		if !strings.HasPrefix(c.Request.URL.Path, "/api/v1/robot/webview/") &&

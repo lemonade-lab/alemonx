@@ -49,6 +49,12 @@ import {
   recordText,
   resultItems
 } from './qqChatDirectory'
+import {
+  useClearRobotChatHistoryMutation,
+  useLazyRobotChatHistoryQuery,
+  useRobotChatSummaryQuery,
+  useSaveRobotChatHistoryMutation
+} from '../store/workspaceApi'
 import { ConfirmDialog } from './ConfirmDialog'
 import { createRandomID } from '../lib/randomId'
 
@@ -147,6 +153,25 @@ type Confirmation = {
   confirmLabel: string
   destructive?: boolean
   onConfirm: () => void
+}
+
+function chatErrorMessage(reason: unknown, fallback: string) {
+  if (reason instanceof Error && reason.message) return reason.message
+  if (typeof reason === 'string' && reason) return reason
+  if (reason && typeof reason === 'object') {
+    const value = reason as {
+      data?: { error?: unknown } | string
+      error?: unknown
+      message?: unknown
+    }
+    const data = value.data
+    if (typeof data === 'string' && data) return data
+    if (data && typeof data === 'object' && typeof data.error === 'string' && data.error)
+      return data.error
+    if (typeof value.error === 'string' && value.error) return value.error
+    if (typeof value.message === 'string' && value.message) return value.message
+  }
+  return fallback
 }
 type CBPResponse = {
   protocol?: string
@@ -700,6 +725,13 @@ export function LiveChat({ root }: { root: string }) {
   const typingTimer = useRef<number | null>(null)
   const [connectionAttempt, setConnectionAttempt] = useState(0)
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null)
+  const [loadRobotChatHistory] = useLazyRobotChatHistoryQuery()
+  const [saveRobotChatHistory] = useSaveRobotChatHistoryMutation()
+  const [clearRobotChatHistory, { isLoading: clearingServerHistory }] =
+    useClearRobotChatHistoryMutation()
+  const { data: chatSummaryData, refetch: refetchChatSummary } =
+    useRobotChatSummaryQuery(undefined, { skip: !root })
+  const [serverHistoryReady, setServerHistoryReady] = useState('')
   const botIdentity = useMemo(
     () => profileIdentity(botProfile.data, { name: '机器人' }),
     [botProfile.data]
@@ -776,9 +808,38 @@ export function LiveChat({ root }: { root: string }) {
     []
   )
 
+  const applyStoredHistory = useCallback(
+    (parsed: StoredHistory) => {
+      if (!parsed || Date.now() - parsed.savedAt >= historyDays * 86_400_000)
+        return
+      setEvents(parsed.events.map(event => ({ ...event })))
+      setTools(
+        parsed.tools.filter(
+          item => Date.now() - item.at < historyDays * 86_400_000
+        )
+      )
+      setDrafts(parsed.drafts || {})
+      setFavorites(parsed.favorites || [])
+      setContacts(parsed.contacts || [])
+      setSpaces(parsed.spaces || [])
+      setOpenedConversationIDs(parsed.openedConversationIds || [])
+      setPreferences(parsed.preferences)
+      // “会话资料”和“机器人能力”曾是持久化的侧栏页。
+      // 聊天窗口现在只保留社交场景中的操作，旧状态回到消息页。
+      setActiveNav(
+        ['profile', 'tools'].includes(parsed.preferences.activeNav)
+          ? 'messages'
+          : parsed.preferences.activeNav
+      )
+      setRightOpen(parsed.preferences.rightPanelOpen)
+    },
+    []
+  )
+
   useEffect(() => {
     if (!root) return
     setHistoryReadyRoot('')
+    setServerHistoryReady('')
     setEvents([])
     setTools([])
     setDrafts({})
@@ -796,50 +857,65 @@ export function LiveChat({ root }: { root: string }) {
         Array<Omit<LiveEvent, 'context'>>,
         ToolRecord
       >(root) as StoredHistory
-      if (parsed && Date.now() - parsed.savedAt < historyDays * 86_400_000) {
-        setEvents(parsed.events.map(event => ({ ...event })))
-        setTools(
-          parsed.tools.filter(
-            item => Date.now() - item.at < historyDays * 86_400_000
-          )
-        )
-        setDrafts(parsed.drafts || {})
-        setFavorites(parsed.favorites || [])
-        setContacts(parsed.contacts || [])
-        setSpaces(parsed.spaces || [])
-        setOpenedConversationIDs(parsed.openedConversationIds || [])
-        setPreferences(parsed.preferences)
-        // “会话资料”和“机器人能力”曾是持久化的侧栏页。
-        // 聊天窗口现在只保留社交场景中的操作，旧状态回到消息页。
-        setActiveNav(
-          ['profile', 'tools'].includes(parsed.preferences.activeNav)
-            ? 'messages'
-            : parsed.preferences.activeNav
-        )
-        setRightOpen(parsed.preferences.rightPanelOpen)
-      }
+      applyStoredHistory(parsed)
     } catch {
       /* a corrupt local record is ignored */
     }
     setHistoryReadyRoot(root)
-  }, [root])
+  }, [applyStoredHistory, root])
 
+  // The server snapshot is authoritative when it is newer than the local
+  // cache, so the same SQL records follow the user across browsers.
   useEffect(() => {
-    if (!root || historyReadyRoot !== root) return
-    const retention = preferences.historyDays * 86_400_000
-    const retainedEvents = events
-      .filter(
-        event => !event.CreateAt || Date.now() - event.CreateAt < retention
-      )
-      .map(({ context, ...event }) => {
-        void context
-        return event
+    if (!root) return
+    let cancelled = false
+    void loadRobotChatHistory(root)
+      .unwrap()
+      .then(({ snapshot }) => {
+        if (cancelled || !snapshot) return
+        const local = readQQChatStore<
+          Array<Omit<LiveEvent, 'context'>>,
+          ToolRecord
+        >(root) as StoredHistory
+        const localHasRecords =
+          local.events.length > 0 ||
+          local.tools.length > 0 ||
+          Object.keys(local.drafts || {}).length > 0 ||
+          (local.favorites?.length ?? 0) > 0 ||
+          (local.contacts?.length ?? 0) > 0 ||
+          (local.spaces?.length ?? 0) > 0
+        if (!localHasRecords || snapshot.savedAt > local.savedAt) {
+          applyStoredHistory(snapshot as unknown as StoredHistory)
+          writeQQChatStore(root, snapshot as unknown as StoredHistory)
+        }
       })
-    const retainedTools = tools.filter(item => Date.now() - item.at < retention)
-    writeQQChatStore(root, {
+      .catch(() => {
+        /* server record is optional; local cache still works */
+      })
+      .finally(() => {
+        if (!cancelled) setServerHistoryReady(root)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [applyStoredHistory, loadRobotChatHistory, root])
+
+  const buildStoredSnapshot = useCallback((): StoredHistory => {
+    const retention = preferences.historyDays * 86_400_000
+    return {
       savedAt: Date.now(),
-      events: retainedEvents.slice(-500),
-      tools: retainedTools.slice(0, 100),
+      events: events
+        .filter(
+          event => !event.CreateAt || Date.now() - event.CreateAt < retention
+        )
+        .map(({ context, ...event }) => {
+          void context
+          return event
+        })
+        .slice(-500),
+      tools: tools
+        .filter(item => Date.now() - item.at < retention)
+        .slice(0, 100),
       drafts,
       favorites: favorites.filter(
         item => !item.expiresAt || item.expiresAt > Date.now()
@@ -848,21 +924,61 @@ export function LiveChat({ root }: { root: string }) {
       spaces,
       openedConversationIds: openedConversationIDs,
       preferences: { ...preferences, activeNav, rightPanelOpen: rightOpen }
-    })
+    }
   }, [
     activeNav,
     contacts,
     drafts,
     events,
     favorites,
-    historyReadyRoot,
     openedConversationIDs,
     preferences,
     rightOpen,
-    root,
     spaces,
     tools
   ])
+
+  const latestSnapshotRef = useRef<StoredHistory | null>(null)
+  useEffect(() => {
+    latestSnapshotRef.current = buildStoredSnapshot()
+  })
+
+  useEffect(() => {
+    if (!root || historyReadyRoot !== root) return
+    writeQQChatStore(root, buildStoredSnapshot())
+  }, [buildStoredSnapshot, historyReadyRoot, root])
+
+  // Debounced server mirror keeps the record in SQLite after browser storage
+  // is cleared, and lets the settings panel manage it.
+  useEffect(() => {
+    if (!root || historyReadyRoot !== root || serverHistoryReady !== root)
+      return
+    const snapshot = buildStoredSnapshot()
+    const timer = window.setTimeout(() => {
+      void saveRobotChatHistory({ root, snapshot })
+        .unwrap()
+        .catch(() => {})
+    }, 2000)
+    return () => window.clearTimeout(timer)
+  }, [
+    buildStoredSnapshot,
+    historyReadyRoot,
+    root,
+    saveRobotChatHistory,
+    serverHistoryReady
+  ])
+
+  // Flush the latest snapshot when the chat panel closes or switches robots,
+  // so the debounce window never loses the last few messages.
+  useEffect(() => {
+    return () => {
+      const snapshot = latestSnapshotRef.current
+      if (snapshot && root)
+        void saveRobotChatHistory({ root, snapshot })
+          .unwrap()
+          .catch(() => {})
+    }
+  }, [root, saveRobotChatHistory])
 
   const resolvePending = useCallback(
     (
@@ -2261,13 +2377,7 @@ export function LiveChat({ root }: { root: string }) {
     [drafts]
   )
   const clearAudit = useCallback(() => setTools([]), [])
-  const clearHistory = useCallback(() => {
-    if (
-      !window.confirm(
-        '确认清除当前机器人在本机保存的聊天记录、草稿、联系人、群频道目录和收藏吗？不会影响 QQ 平台消息。'
-      )
-    )
-      return
+  const wipeLocalHistory = useCallback(() => {
     clearQQChatStore(root)
     setEvents([])
     setDrafts({})
@@ -2280,6 +2390,36 @@ export function LiveChat({ root }: { root: string }) {
     setUnreadConversationIDs({})
     setSelected('')
   }, [root])
+  const clearHistory = useCallback(() => {
+    if (
+      !window.confirm(
+        '确认清除当前机器人在本机保存的聊天记录、草稿、联系人、群频道目录和收藏吗？不会影响 QQ 平台消息。'
+      )
+    )
+      return
+    wipeLocalHistory()
+  }, [wipeLocalHistory])
+  const clearServerHistory = useCallback(() => {
+    if (
+      !window.confirm(
+        '确认清除该机器人在服务端保存的聊天记录吗？本机缓存也会一并清除。不会影响 QQ 平台消息。'
+      )
+    )
+      return
+    void (async () => {
+      try {
+        await clearRobotChatHistory(root).unwrap()
+        wipeLocalHistory()
+        await refetchChatSummary()
+      } catch (reason) {
+        setError(chatErrorMessage(reason, '服务端聊天记录清理未完成。'))
+      }
+    })()
+  }, [clearRobotChatHistory, refetchChatSummary, root, wipeLocalHistory])
+  const chatRecordSummary = useMemo(
+    () => chatSummaryData?.items.find(item => item.root === root),
+    [chatSummaryData, root]
+  )
   const resetLayout = useCallback(() => {
     resetQQChatWindowLayout(root)
     setRightOpen(true)
@@ -2398,6 +2538,10 @@ export function LiveChat({ root }: { root: string }) {
         clearAudit={clearAudit}
         clearHistory={clearHistory}
         resetLayout={resetLayout}
+        recordMessages={chatRecordSummary?.messages ?? 0}
+        recordBytes={chatRecordSummary?.bytes ?? 0}
+        onClearServerHistory={clearServerHistory}
+        serverClearing={clearingServerHistory}
         runDirectoryRead={runDirectoryRead}
         openContactConversation={openContactConversation}
         openSpaceConversation={openSpaceConversation}
@@ -2532,6 +2676,10 @@ type QQ9ShellProps = {
   clearAudit: () => void
   clearHistory: () => void
   resetLayout: () => void
+  recordMessages: number
+  recordBytes: number
+  onClearServerHistory: () => void
+  serverClearing: boolean
   runDirectoryRead: (action: 'me.guilds' | 'guild.list') => void
   openContactConversation: (contact: QQContact) => void
   openSpaceConversation: (space: QQSpace) => void
@@ -2912,6 +3060,10 @@ function QQ9ChatShell(props: QQ9ShellProps) {
             setPreferences={props.setPreferences}
             clearHistory={props.clearHistory}
             resetLayout={props.resetLayout}
+            recordMessages={props.recordMessages}
+            recordBytes={props.recordBytes}
+            onClearServerHistory={props.onClearServerHistory}
+            serverClearing={props.serverClearing}
           />
         )}
       </aside>
@@ -4021,19 +4173,27 @@ function QQ9Settings({
   preferences,
   setPreferences,
   clearHistory,
-  resetLayout
+  resetLayout,
+  recordMessages,
+  recordBytes,
+  onClearServerHistory,
+  serverClearing
 }: {
   preferences: QQChatPreferences
   setPreferences: React.Dispatch<React.SetStateAction<QQChatPreferences>>
   clearHistory: () => void
   resetLayout: () => void
+  recordMessages: number
+  recordBytes: number
+  onClearServerHistory: () => void
+  serverClearing: boolean
 }) {
   return (
     <div className="grid h-full min-h-0 content-start gap-3 overflow-auto px-1 py-3">
       <header className="px-1">
         <strong className="block text-[13px]">聊天设置</strong>
         <small className="mt-0.5 block text-[10px] text-(--theme-text-muted)">
-          仅保存在当前机器人目录
+          记录保存在本机缓存与服务端数据库，可随时清理
         </small>
       </header>
       <SettingSelect
@@ -4109,6 +4269,22 @@ function QQ9Settings({
         自动读取会话资料
       </label>
       <div className="mt-1 grid gap-1.5">
+        <section className="grid gap-1 rounded-md border border-(--theme-border-default) bg-(--theme-surface-raised) p-2">
+          <strong className="text-[11px] text-(--theme-text-secondary)">
+            服务端记录
+          </strong>
+          <small className="text-[10px] leading-4 text-(--theme-text-muted)">
+            已保存 {recordMessages} 条消息
+            {recordBytes > 0 ? `（约 ${(recordBytes / 1024).toFixed(1)} KB）` : ''}
+          </small>
+          <button
+            className="rounded-md border border-(--theme-border-default) bg-(--theme-surface-raised) p-2 text-left text-[11px] text-(--theme-danger-text) hover:border-(--theme-accent-soft-border)"
+            disabled={serverClearing}
+            onClick={onClearServerHistory}
+          >
+            {serverClearing ? '正在清理…' : '清空服务端记录'}
+          </button>
+        </section>
         <button
           className="rounded-md border border-(--theme-border-default) bg-(--theme-surface-raised) p-2 text-left text-[11px] text-(--theme-text-secondary) hover:border-(--theme-accent-soft-border) hover:text-(--theme-accent-text)"
           onClick={resetLayout}

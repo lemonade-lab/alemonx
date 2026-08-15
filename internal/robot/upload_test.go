@@ -30,7 +30,7 @@ func writeUploadArchive(t *testing.T, entries map[string]string) []byte {
 
 func TestInstallLocalPackageUploadUnpacksIntoBackpack(t *testing.T) {
 	root := t.TempDir()
-	writeWebViewFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
 	archivePath := filepath.Join(t.TempDir(), "plugin.zip")
 	archive := writeUploadArchive(t, map[string]string{
 		"plugin/package.json": `{"name":"hello-plugin","version":"1.2.3","description":"hello"}`,
@@ -64,7 +64,7 @@ func TestInstallLocalPackageUploadUnpacksIntoBackpack(t *testing.T) {
 
 func TestInstallLocalPackageUploadRejectsInvalidPackage(t *testing.T) {
 	root := t.TempDir()
-	writeWebViewFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
 	archivePath := filepath.Join(t.TempDir(), "bad.zip")
 	if err := os.WriteFile(archivePath, writeUploadArchive(t, map[string]string{"readme.txt": "hi"}), 0600); err != nil {
 		t.Fatal(err)
@@ -76,7 +76,7 @@ func TestInstallLocalPackageUploadRejectsInvalidPackage(t *testing.T) {
 
 func TestInstallLocalPackageUploadRejectsPathTraversal(t *testing.T) {
 	root := t.TempDir()
-	writeWebViewFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
 	archivePath := filepath.Join(t.TempDir(), "evil.zip")
 	if err := os.WriteFile(archivePath, writeUploadArchive(t, map[string]string{
 		"package.json":  `{"name":"safe"}`,

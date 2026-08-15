@@ -6,25 +6,25 @@ import (
 	"testing"
 )
 
-func TestWebViewsDiscoverCurrentRobotPluginsAndContainFiles(t *testing.T) {
+func TestAppPagesDiscoverCurrentRobotPluginsAndContainFiles(t *testing.T) {
 	root := t.TempDir()
-	writeWebViewFixture(t, filepath.Join(root, "package.json"), `{"name":"robot","dependencies":{"web-dep":"1.0.0"}}`)
-	writeWebViewFixture(t, filepath.Join(root, "packages", "local-web", "package.json"), `{"name":"local-web","description":"local","alemonjs":{"web":{"root":"dist"},"desktop":{"sidebars":[{"name":"本地页面"}]}}}`)
-	writeWebViewFixture(t, filepath.Join(root, "packages", "local-web", "dist", "index.html"), `<script src="/assets/app.js"></script>`)
-	writeWebViewFixture(t, filepath.Join(root, "packages", "local-web", "dist", "assets", "app.js"), `console.log('ok')`)
-	writeWebViewFixture(t, filepath.Join(root, "packages", "@alemonjs", "scoped-web", "package.json"), `{"name":"@alemonjs/scoped-web","alemonjs":{"web":{"root":"dist"},"desktop":{"sidebars":[{"name":"作用域页面"}]}}}`)
-	writeWebViewFixture(t, filepath.Join(root, "packages", "@alemonjs", "scoped-web", "dist", "index.html"), `ok`)
-	writeWebViewFixture(t, filepath.Join(root, "node_modules", "web-dep", "package.json"), `{"name":"web-dep","alemonjs":{"web":{"root":"dist"},"desktop":{"sidebars":[{"name":"依赖页面"}]}}}`)
-	writeWebViewFixture(t, filepath.Join(root, "node_modules", "web-dep", "dist", "index.html"), `ok`)
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"robot","dependencies":{"web-dep":"1.0.0"}}`)
+	writeAppPageFixture(t, filepath.Join(root, "packages", "local-web", "package.json"), `{"name":"local-web","description":"local","alemonjs":{"web":{"root":"dist"},"desktop":{"sidebars":[{"name":"本地页面"}]}}}`)
+	writeAppPageFixture(t, filepath.Join(root, "packages", "local-web", "dist", "index.html"), `<script src="/assets/app.js"></script>`)
+	writeAppPageFixture(t, filepath.Join(root, "packages", "local-web", "dist", "assets", "app.js"), `console.log('ok')`)
+	writeAppPageFixture(t, filepath.Join(root, "packages", "@alemonjs", "scoped-web", "package.json"), `{"name":"@alemonjs/scoped-web","alemonjs":{"web":{"root":"dist"},"desktop":{"sidebars":[{"name":"作用域页面"}]}}}`)
+	writeAppPageFixture(t, filepath.Join(root, "packages", "@alemonjs", "scoped-web", "dist", "index.html"), `ok`)
+	writeAppPageFixture(t, filepath.Join(root, "node_modules", "web-dep", "package.json"), `{"name":"web-dep","alemonjs":{"web":{"root":"dist"},"desktop":{"sidebars":[{"name":"依赖页面"}]}}}`)
+	writeAppPageFixture(t, filepath.Join(root, "node_modules", "web-dep", "dist", "index.html"), `ok`)
 
-	entries, err := (Manager{}).WebViews(root)
+	entries, err := (Manager{}).AppPages(root)
 	if err != nil {
 		t.Fatalf("WebViews: %v", err)
 	}
 	if len(entries) != 3 {
 		t.Fatalf("entries = %d, want 3", len(entries))
 	}
-	var local, scoped WebViewEntry
+	var local, scoped BotAppPage
 	for _, entry := range entries {
 		if entry.Package == "local-web" {
 			local = entry
@@ -39,26 +39,26 @@ func TestWebViewsDiscoverCurrentRobotPluginsAndContainFiles(t *testing.T) {
 	if scoped.ID == "" || scoped.Name != "作用域页面" {
 		t.Fatalf("unexpected scoped entry: %#v", scoped)
 	}
-	file, err := (Manager{}).WebViewFile(root, local.ID, "assets/app.js")
+	file, err := (Manager{}).AppPageFile(root, local.ID, "assets/app.js")
 	if err != nil || filepath.Base(file) != "app.js" {
 		t.Fatalf("asset = %q, %v", file, err)
 	}
-	if _, err := (Manager{}).WebViewFile(root, local.ID, "../../package.json"); err == nil {
+	if _, err := (Manager{}).AppPageFile(root, local.ID, "../../package.json"); err == nil {
 		t.Fatal("path traversal must be rejected")
 	}
-	writeWebViewFixture(t, filepath.Join(root, "alemon.config.yaml"), "serverPort: 19191\n")
-	apiURL, err := (Manager{}).WebViewAPIURL(root, local.ID, "yunzai/status")
+	writeAppPageFixture(t, filepath.Join(root, "alemon.config.yaml"), "serverPort: 19191\n")
+	apiURL, err := (Manager{}).AppPageAPIURL(root, local.ID, "yunzai/status")
 	if err != nil || apiURL != "http://127.0.0.1:19191/api/yunzai/status" {
 		t.Fatalf("api URL = %q, %v", apiURL, err)
 	}
 }
 
-func TestWebViewServerPortRequirementIsExposed(t *testing.T) {
+func TestAppPageServerPortRequirementIsExposed(t *testing.T) {
 	root := t.TempDir()
-	writeWebViewFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
-	writeWebViewFixture(t, filepath.Join(root, "packages", "web", "package.json"), `{"name":"web","alemonjs":{"web":{"root":"dist","serverPort":true},"desktop":{"sidebars":[{"name":"需要端口的页面"}]}}}`)
-	writeWebViewFixture(t, filepath.Join(root, "packages", "web", "dist", "index.html"), `ok`)
-	entries, err := (Manager{}).WebViews(root)
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
+	writeAppPageFixture(t, filepath.Join(root, "packages", "web", "package.json"), `{"name":"web","alemonjs":{"web":{"root":"dist","serverPort":true},"desktop":{"sidebars":[{"name":"需要端口的页面"}]}}}`)
+	writeAppPageFixture(t, filepath.Join(root, "packages", "web", "dist", "index.html"), `ok`)
+	entries, err := (Manager{}).AppPages(root)
 	if err != nil {
 		t.Fatalf("WebViews: %v", err)
 	}
@@ -67,7 +67,7 @@ func TestWebViewServerPortRequirementIsExposed(t *testing.T) {
 	}
 }
 
-func writeWebViewFixture(t *testing.T, path, content string) {
+func writeAppPageFixture(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		t.Fatal(err)

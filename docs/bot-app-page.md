@@ -1,6 +1,8 @@
-# ALemonX WebView 规范
+# ALemonX 机器人应用页规范
 
-Setup 会把当前机器人的插件页面嵌入后台。WebView 是插件自己的前端，不是 Setup 的管理页面，也不会获得系统命令、文件系统或 Setup 登录态。
+Setup 会把当前机器人的插件页面嵌入后台。机器人应用页是插件自己的前端，不是 Setup 的管理页面，也不会获得系统命令、文件系统或 Setup 登录态。
+
+机器人应用页与系统插件的**系统面板页**是两套机制：应用页注入 `window.__alxWebview`，只能访问当前机器人的 `./api/*`；系统面板页注入 `ALXHost`，可调用宿主能力与动作转发。系统插件请见[系统插件开发与接入](plugin-development.md)。
 
 ## 注册入口
 
@@ -25,6 +27,10 @@ Setup 会把当前机器人的插件页面嵌入后台。WebView 是插件自己
 - Setup 已兼容 Vite 常见的 `/assets`、`favicon.ico` 与 CSS `url(/assets/...)`，但动态拼接的根绝对路径不保证可用。
 - 页面只能使用自己的同源资源；外部 CDN、外部接口可能被浏览器安全策略阻止。
 
+## 主题变量
+
+宿主会向应用页注入完整的 `--alemonjs-*` CSS 变量（契约见 `docs/theme.json`）：亮色值直接定义在 `:root`，暗色值通过 `[data-theme='dark']` 覆盖同名变量；`--alemonjs-dark-*` 始终保留暗色值。应用页无需自带主题色拷贝，直接使用 `var(--alemonjs-primary-bg)`、`var(--alemonjs-dark-primary-bg)` 等即可跟随宿主主题。
+
 ## 可用能力
 
 ```ts
@@ -41,5 +47,5 @@ window.__alxWebview.request('./api/example', options)
 - 每个机器人使用独立的 loopback `*.localhost` 源，不共享插件存储、Cookie 或 Setup 后台状态。
 - 同一机器人内切换页签会保留 iframe；切换到另一机器人时，为节省资源会卸载页面，返回时重新载入。
 - 插件需要自行使用 localStorage、服务端状态或其他持久化方案恢复页面数据。
-- 打开页面本身不会启动机器人。机器人 HTTP API 只是页面的可选数据源；未启动时，页面应自行展示连接不可用状态。WebView 与插件后端的进程通信由独立的 desk 运行时负责。
+- 打开页面本身不会启动机器人。机器人 HTTP API 只是页面的可选数据源；未启动时，页面应自行展示连接不可用状态。应用页与插件后端的进程通信由独立的 desk 运行时负责。
 - 插件不能访问 Setup 的文件、终端、PM2、系统命令或其他机器人目录。

@@ -2,12 +2,46 @@ package agent
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 )
+
+// OpenOpsRepository returns the ops backend for the given storage mode.
+// Modes "json" and "file" force the portable JSON store; anything else
+// (default or "sqlite") uses the SQLite repository and migrates existing JSON
+// records once. A nil store with a non-nil error means the caller should keep
+// its JSON fallback.
+func OpenOpsRepository(opsDir, databasePath, mode string) (OpsRepository, error) {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "json", "file":
+		return NewOpsStoreAt(opsDir), nil
+	}
+	if strings.TrimSpace(databasePath) == "" {
+		databasePath = filepath.Join(filepath.Dir(opsDir), "ops.db")
+	}
+	if _, statErr := os.Stat(databasePath); os.IsNotExist(statErr) {
+		// A missing JSON directory means a fresh install: skip migration and
+		// let the SQLite repository create its own empty database.
+		if _, dirErr := os.Stat(opsDir); dirErr == nil {
+			if migrateErr := MigrateOpsJSONToSQLite(opsDir, databasePath, ""); migrateErr != nil {
+				return nil, fmt.Errorf("迁移 JSON 记录到 SQLite 失败：%w", migrateErr)
+			}
+		} else if !os.IsNotExist(dirErr) {
+			return nil, fmt.Errorf("无法检查运维数据目录：%w", dirErr)
+		}
+	} else if statErr != nil {
+		return nil, fmt.Errorf("无法检查 SQLite 数据库：%w", statErr)
+	}
+	store, err := NewSQLiteOpsRepository(databasePath)
+	if err != nil {
+		return nil, fmt.Errorf("打开 SQLite 运维存储失败：%w", err)
+	}
+	return store, nil
+}
 
 // MigrateOpsJSONToSQLite migrates the portable JSON store into the pure-Go
 // SQLite repository. The source remains untouched and is backed up before any
