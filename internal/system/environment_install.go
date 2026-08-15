@@ -28,6 +28,10 @@ func EnvironmentInstallPlanForHost(checkID string) (EnvironmentInstallPlan, erro
 	if err != nil {
 		return EnvironmentInstallPlan{}, err
 	}
+	return environmentInstallPlan(checkID, manager)
+}
+
+func environmentInstallPlan(checkID, manager string) (EnvironmentInstallPlan, error) {
 	plan := EnvironmentInstallPlan{CheckID: checkID, PackageManager: manager}
 	switch checkID {
 	case "node":
@@ -65,10 +69,54 @@ func EnvironmentInstallPlanForHost(checkID string) (EnvironmentInstallPlan, erro
 		default:
 			plan.Packages = []string{"docker"}
 		}
+	case "browser":
+		plan.Name = "浏览器及依赖包"
+		switch manager {
+		case "winget":
+			plan.Packages = []string{"Google.Chrome"}
+		case "choco":
+			plan.Packages = []string{"googlechrome"}
+		case "brew":
+			plan.Packages = []string{"--cask", "google-chrome"}
+		case "dnf", "yum":
+			plan.Packages = append([]string{"chromium"}, browserDependencyPackages(manager)...)
+		case "apt-get", "apk", "pacman":
+			plan.Packages = []string{"chromium"}
+		default:
+			plan.Packages = []string{"chromium"}
+		}
 	default:
 		return EnvironmentInstallPlan{}, errors.New("该环境暂不支持工作台内安装")
 	}
 	return plan, nil
+}
+
+// browserDependencyPackagesForHost is deliberately limited to RPM hosts.
+// Puppeteer often downloads Chromium itself there, but it still needs these
+// host libraries and fonts to start. Keep this package list host-owned rather
+// than accepting arbitrary browser input from the UI.
+func browserDependencyPackagesForHost() []string {
+	if runtime.GOOS != "linux" {
+		return nil
+	}
+	for _, manager := range []string{"dnf", "yum"} {
+		if _, err := ResolveCommand(manager); err == nil {
+			return browserDependencyPackages(manager)
+		}
+	}
+	return nil
+}
+
+func browserDependencyPackages(manager string) []string {
+	if manager != "dnf" && manager != "yum" {
+		return nil
+	}
+	return []string{
+		"alsa-lib", "atk", "cups-libs", "gtk3", "libXcomposite", "libXcursor", "libXdamage",
+		"libXext", "libXi", "libXrandr", "libXScrnSaver", "libXtst", "pango", "mesa-libgbm",
+		"ipa-gothic-fonts", "xorg-x11-fonts-100dpi", "xorg-x11-fonts-75dpi", "xorg-x11-utils",
+		"xorg-x11-fonts-cyrillic", "xorg-x11-fonts-Type1", "xorg-x11-fonts-misc", "wqy-microhei-fonts",
+	}
 }
 
 func hostPackageManager() (string, error) {
@@ -160,6 +208,8 @@ func installArguments(manager string, packages []string) []string {
 		return append([]string{"add", "--no-cache"}, packages...)
 	case "dnf":
 		return append([]string{"install", "-y", "--allowerasing"}, packages...)
+	case "brew":
+		return append([]string{"install"}, packages...)
 	default:
 		return append([]string{"install", "-y"}, packages...)
 	}

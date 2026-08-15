@@ -212,6 +212,7 @@ type Check = {
   status: 'ready' | 'missing' | 'warning' | 'outdated'
   detail: string
   suggestion: string
+  optional?: boolean
 }
 type CatalogItem = {
   name: string
@@ -3084,7 +3085,7 @@ export function Dashboard({
     )
 
   const environmentWarning = Boolean(
-    report?.checks.some(item => item.status !== 'ready')
+    report?.checks.some(item => item.status !== 'ready' && !item.optional)
   )
 
   return (
@@ -5354,8 +5355,9 @@ function EnvironmentPage({
   sidebarLayout?: boolean
 }) {
   const checks = report?.checks ?? []
-  const readyCount = checks.filter(check => check.status === 'ready').length
-  const allReady = checks.length > 0 && readyCount === checks.length
+  const requiredChecks = checks.filter(check => !check.optional)
+  const readyCount = requiredChecks.filter(check => check.status === 'ready').length
+  const allReady = requiredChecks.length > 0 && readyCount === requiredChecks.length
   return (
     <section className="workspace-content system-feature-page mx-auto max-w-215">
       {!sidebarLayout && (
@@ -5430,6 +5432,11 @@ function EnvironmentPage({
                 <div className="grid min-w-0 flex-1 gap-0.5">
                   <strong className="text-xs font-semibold text-slate-800 dark:text-slate-100">
                     {check.name}
+                    {check.optional && (
+                      <span className="ml-1.5 rounded bg-slate-200/70 px-1 py-0.5 text-[10px] font-medium text-slate-500 dark:bg-slate-700 dark:text-slate-300">
+                        可选
+                      </span>
+                    )}
                   </strong>
                   <span className="text-xs leading-5 text-slate-500">
                     {check.detail}
@@ -5447,7 +5454,9 @@ function EnvironmentPage({
                   >
                     {check.id === 'node' && check.status === 'outdated'
                       ? '升级'
-                      : '修复'}
+                      : check.id === 'browser'
+                        ? '安装'
+                        : '修复'}
                   </button>
                 )}
               </article>

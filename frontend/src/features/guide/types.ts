@@ -15,6 +15,7 @@ export type Check = {
   status: 'ready' | 'missing' | 'warning' | 'outdated'
   detail: string
   suggestion: string
+  optional?: boolean
 }
 
 export type Report = {

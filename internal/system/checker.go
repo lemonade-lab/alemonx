@@ -20,6 +20,7 @@ type Check struct {
 	Status     string `json:"status"`
 	Detail     string `json:"detail"`
 	Suggestion string `json:"suggestion"`
+	Optional   bool   `json:"optional,omitempty"`
 }
 type Report struct {
 	GoalID    string  `json:"goalId"`
@@ -33,7 +34,7 @@ type Checker struct{ timeout time.Duration }
 func NewChecker() *Checker { return &Checker{timeout: 5 * time.Second} }
 
 func (c *Checker) CheckGoal(goalID, variant string) Report {
-	checks := []Check{c.platform()}
+	checks := []Check{c.platform(), c.browser()}
 	switch goalID {
 	case "install", "develop":
 		checks = append(checks, c.command("node", "Node.js", "--version", "请安装 Node.js LTS 版本后重新检查。"), c.command("git", "Git", "--version", "请安装 Git 后重新检查。"))
@@ -65,7 +66,7 @@ func (c *Checker) CheckGoal(goalID, variant string) Report {
 // a blocking prerequisite.
 func checksAreUsable(checks []Check) bool {
 	for _, check := range checks {
-		if check.Status != "ready" && check.Status != "outdated" {
+		if !check.Optional && check.Status != "ready" && check.Status != "outdated" {
 			return false
 		}
 	}
@@ -116,6 +117,120 @@ func (c *Checker) command(id, name, argument, suggestion string) Check {
 		}
 	}
 	return Check{ID: id, Name: name, Status: "ready", Detail: version}
+}
+
+// browser is optional because Puppeteer can download a compatible browser per
+// project. A system Chrome/Chromium/Edge still makes automation faster and
+// more predictable, especially on servers where the package must use shared
+// graphics libraries.
+func (c *Checker) browser() Check {
+	path, name := resolveBrowserCommand()
+	if path == "" {
+		return Check{
+			ID:         "browser",
+			Name:       "浏览器及依赖包",
+			Status:     "missing",
+			Detail:     "未检测到 Chrome、Chromium 或 Edge",
+			Suggestion: "可选：使用 Puppeteer 浏览器自动化时，建议安装浏览器及依赖包；Puppeteer 也可以自行下载浏览器。",
+			Optional:   true,
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, path, "--version").CombinedOutput()
+	if ctx.Err() != nil || err != nil {
+		return Check{
+			ID:         "browser",
+			Name:       "浏览器及依赖包",
+			Status:     "warning",
+			Detail:     "已找到 " + name + "，但无法正常启动",
+			Suggestion: "可选：请修复浏览器或重新安装浏览器及依赖包后重试。",
+			Optional:   true,
+		}
+	}
+	version := strings.TrimSpace(strings.Split(string(output), "\n")[0])
+	if missing := missingBrowserDependencies(); len(missing) > 0 {
+		return Check{
+			ID:         "browser",
+			Name:       "浏览器及依赖包",
+			Status:     "warning",
+			Detail:     version + " · 缺少依赖包：" + strings.Join(missing, "、"),
+			Suggestion: "可选：建议安装浏览器依赖包，避免 Puppeteer 无法启动无头浏览器。",
+			Optional:   true,
+		}
+	}
+	return Check{ID: "browser", Name: "浏览器及依赖包", Status: "ready", Detail: version, Optional: true}
+}
+
+func resolveBrowserCommand() (string, string) {
+	for _, candidate := range []struct {
+		command string
+		name    string
+	}{
+		{"google-chrome", "Google Chrome"},
+		{"google-chrome-stable", "Google Chrome"},
+		{"chromium", "Chromium"},
+		{"chromium-browser", "Chromium"},
+		{"msedge", "Microsoft Edge"},
+		{"microsoft-edge", "Microsoft Edge"},
+	} {
+		if path, err := ResolveCommand(candidate.command); err == nil {
+			return path, candidate.name
+		}
+	}
+	for _, path := range browserApplicationPaths() {
+		if info, err := os.Stat(path); err == nil && !info.IsDir() {
+			return path, filepath.Base(path)
+		}
+	}
+	return "", ""
+}
+
+func browserApplicationPaths() []string {
+	switch runtime.GOOS {
+	case "darwin":
+		return []string{
+			"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+			"/Applications/Chromium.app/Contents/MacOS/Chromium",
+			"/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+		}
+	case "windows":
+		directories := []string{os.Getenv("ProgramFiles"), os.Getenv("ProgramFiles(x86)"), os.Getenv("LOCALAPPDATA")}
+		paths := make([]string, 0, len(directories)*3)
+		for _, directory := range directories {
+			if directory == "" {
+				continue
+			}
+			paths = append(paths,
+				filepath.Join(directory, "Google", "Chrome", "Application", "chrome.exe"),
+				filepath.Join(directory, "Chromium", "Application", "chrome.exe"),
+				filepath.Join(directory, "Microsoft", "Edge", "Application", "msedge.exe"),
+			)
+		}
+		return paths
+	default:
+		return nil
+	}
+}
+
+func missingBrowserDependencies() []string {
+	packages := browserDependencyPackagesForHost()
+	if len(packages) == 0 {
+		return nil
+	}
+	rpm, err := ResolveCommand("rpm")
+	if err != nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	missing := make([]string, 0, len(packages))
+	for _, pkg := range packages {
+		if err := exec.CommandContext(ctx, rpm, "-q", pkg).Run(); err != nil {
+			missing = append(missing, pkg)
+		}
+	}
+	return missing
 }
 
 func nodeVersionAtLeast(version, minimum string) bool {

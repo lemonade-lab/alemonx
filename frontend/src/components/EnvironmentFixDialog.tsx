@@ -41,6 +41,18 @@ const links: Record<
       note: 'Docker 官方会按当前系统提供安装包。',
       href: 'https://www.docker.com/products/docker-desktop/'
     }
+  ],
+  browser: [
+    {
+      label: 'Google Chrome',
+      note: '适用于 Puppeteer 等浏览器自动化工具。',
+      href: 'https://www.google.com/chrome/'
+    },
+    {
+      label: 'Chromium',
+      note: 'Chrome 的开源版本，也可供 Puppeteer 使用。',
+      href: 'https://www.chromium.org/getting-involved/download-chromium/'
+    }
   ]
 }
 
@@ -58,7 +70,7 @@ export function EnvironmentFixDialog({
     (platform.startsWith('linux/') ||
       platform.startsWith('darwin/') ||
       platform.startsWith('windows/')) &&
-    ['node', 'git', 'docker'].includes(check.id)
+    ['node', 'git', 'docker', 'browser'].includes(check.id)
   const isMacOS = platform.startsWith('darwin/')
   const isWindows = platform.startsWith('windows/')
   const isManagedNode = check.id === 'node'

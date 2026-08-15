@@ -31,6 +31,13 @@ func TestOutdatedNodeDoesNotBlockEnvironment(t *testing.T) {
 	}
 }
 
+func TestOptionalBrowserDoesNotBlockEnvironment(t *testing.T) {
+	checks := []Check{{ID: "browser", Status: "missing", Optional: true}, {ID: "node", Status: "ready"}}
+	if !checksAreUsable(checks) {
+		t.Fatal("optional browser should not block the environment")
+	}
+}
+
 func TestGitBuildCheckDoesNotRequireGlobalPackageTools(t *testing.T) {
 	report := NewChecker().CheckGoal("build", "git")
 	ids := map[string]bool{}

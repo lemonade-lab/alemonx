@@ -56,6 +56,7 @@ export function GuideHome({
       check =>
         check.status !== 'ready' &&
         check.status !== 'outdated' &&
+        !check.optional &&
         ['node', 'git', 'docker'].includes(check.id)
     ) ?? []
   const isCheckStep =

@@ -15,7 +15,9 @@ export function EnvironmentCheckPanel({
   onCheck,
   onFix
 }: Props) {
-  const hasIssues = Boolean(report?.checks.some(check => check.status !== 'ready'))
+  const hasIssues = Boolean(
+    report?.checks.some(check => check.status !== 'ready' && !check.optional)
+  )
   const ready = Boolean(report?.ready) && !hasIssues
 
   return (
@@ -69,6 +71,11 @@ export function EnvironmentCheckPanel({
               <div className="min-w-0">
                 <strong className="block text-sm font-bold text-slate-700">
                   {check.name}
+                  {check.optional && (
+                    <small className="ml-1 text-xs font-medium text-slate-400">
+                      可选
+                    </small>
+                  )}
                 </strong>
                 <span className="mt-1 block wrap-break-word text-xs leading-5 text-slate-500">
                   {check.detail}
@@ -86,7 +93,9 @@ export function EnvironmentCheckPanel({
                 >
                   {check.id === 'node' && check.status === 'outdated'
                     ? '升级'
-                    : '修复'}
+                    : check.id === 'browser'
+                      ? '安装'
+                      : '修复'}
                 </button>
               )}
             </article>
