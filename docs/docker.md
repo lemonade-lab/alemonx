@@ -31,7 +31,7 @@ docker compose up -d
 | `ALX_IMAGE` | `ccr.ccs.tencentyun.com/ningmengchongshui/alemonx:latest` | 腾讯云默认镜像；本地构建使用 `alx:local`。 |
 | `ALX_PORT` | `17390` | 工作台暴露到宿主机的端口。 |
 | `ALX_WORKSPACE` | `./workspace` | 宿主机机器人项目目录；容器只允许管理该目录。 |
-| `ALX_DEPLOYMENT` | `production` | 保持生产门禁：SQLite 和本地认证必须启用。 |
+| `ALX_DEPLOYMENT` | `production` | 生产模式：SQLite 与本地认证未配置时仅提示，不拦截启动；可在引导页创建管理员。 |
 
 工作台状态、账户、Agent 任务、插件和缓存保存在 Docker 命名卷 `alx-data` 中；机器人源码在 `ALX_WORKSPACE` 指向的宿主机目录中。执行 `docker compose down` 不会删除它们；只有 `docker compose down -v` 才会删除工作台状态卷。
 

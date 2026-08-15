@@ -10,8 +10,10 @@ services:
       HOME: /data
       XDG_CONFIG_HOME: /data/config
       XDG_CACHE_HOME: /data/cache
-      # Container deployments use the durable SQLite backend and require the
-      # first administrator to enable authentication through the UI or CLI.
+      # Container deployments use the durable SQLite backend. First-run
+      # deployments start without authentication so the setup guide can create
+      # the initial administrator; production mode only prints reminders for
+      # SQLite and local auth instead of blocking startup.
       ALX_DEPLOYMENT: ${ALX_DEPLOYMENT:-production}
       ALX_OPS_STORAGE: sqlite
       ALEMONJS_SETUP_ROOTS: /workspace

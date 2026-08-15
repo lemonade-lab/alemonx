@@ -31,7 +31,7 @@ PM2 日志 → fingerprint 去重 → Incident triaged → AI 决策
 
 ## 线上启用与紧急停止
 
-1. 生产必须设置 `ALX_DEPLOYMENT=production`、`ALX_OPS_STORAGE=sqlite` 与有效的本地身份认证；缺少任一项服务拒绝启动。
+1. 生产建议设置 `ALX_DEPLOYMENT=production`、`ALX_OPS_STORAGE=sqlite` 并启用本地身份认证；两者未配置时服务都不会拒绝启动，只会打印提示（canary 准入报告会将其标记为未就绪）。
 2. 先将项目保持 `observe`，确认 PM2 日志、事件聚合和待办链路正常。
 3. 管理员在“机器人目录 → 运行 → AI 运维”填写理由，切换到 `canary`。初始只允许 restart/reload，禁止代码修改。
 4. 稳定观察 24 小时的 MTTR、回滚率、误修率、告警送达率与租约异常后，管理员再次确认才可开启小范围代码修复；不会自动升级为 `auto`。

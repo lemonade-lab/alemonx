@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"time"
 )
 
 // EnvironmentInstallPlan is a reviewed, fixed package-manager operation. It
@@ -17,6 +18,11 @@ type EnvironmentInstallPlan struct {
 	Name           string
 	PackageManager string
 	Packages       []string
+	// BrowserPackage is the system browser binary selected for RPM hosts when
+	// the configured repositories provide one. Empty means the plan installs
+	// only the fixed runtime libraries and fonts and Puppeteer uses the
+	// browser it downloads per project.
+	BrowserPackage string
 }
 
 // EnvironmentInstallPlanForHost returns the package-manager action supported
@@ -79,7 +85,17 @@ func environmentInstallPlan(checkID, manager string) (EnvironmentInstallPlan, er
 		case "brew":
 			plan.Packages = []string{"--cask", "google-chrome"}
 		case "dnf", "yum":
-			plan.Packages = append([]string{"chromium"}, browserDependencyPackages(manager)...)
+			// RHEL-family repositories do not always ship a browser binary
+			// (el9 needs EPEL or a vendor repository). Probe the configured
+			// repositories and include the first available browser package;
+			// the fixed runtime library and font list is always installed so
+			// Puppeteer can start the browser it downloads per project.
+			packages := browserDependencyPackages(manager)
+			if browser := rpmBrowserPackageAvailable(manager); browser != "" {
+				plan.BrowserPackage = browser
+				packages = append([]string{browser}, packages...)
+			}
+			plan.Packages = packages
 		case "apt-get", "apk", "pacman":
 			plan.Packages = []string{"chromium"}
 		default:
@@ -89,6 +105,40 @@ func environmentInstallPlan(checkID, manager string) (EnvironmentInstallPlan, er
 		return EnvironmentInstallPlan{}, errors.New("该环境暂不支持工作台内安装")
 	}
 	return plan, nil
+}
+
+// rpmBrowserPackages are the fixed browser binary candidates probed on RPM
+// hosts, in preference order. Only packages already present in the host's
+// configured repositories are offered; the workbench never edits repositories.
+var rpmBrowserPackages = []string{"chromium", "google-chrome-stable", "microsoft-edge-stable"}
+
+// rpmBrowserPackageAvailable returns the first browser binary the configured
+// repositories actually provide, or an empty string when none is available or
+// the probe itself fails. The result is host policy and never browser input:
+// it only decides whether the fixed package list may include the system
+// browser binary. It is replaceable in tests.
+var rpmBrowserPackageAvailable = func(manager string) string {
+	if manager != "dnf" && manager != "yum" {
+		return ""
+	}
+	if _, err := ResolveCommand(manager); err != nil {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	for _, candidate := range rpmBrowserPackages {
+		args := []string{"list", "available", candidate}
+		if manager == "dnf" {
+			args = []string{"list", "--available", "--quiet", candidate}
+		}
+		if exec.CommandContext(ctx, manager, args...).Run() == nil {
+			return candidate
+		}
+		if ctx.Err() != nil {
+			return ""
+		}
+	}
+	return ""
 }
 
 // browserDependencyPackagesForHost is deliberately limited to RPM hosts.
@@ -158,8 +208,53 @@ func InstallEnvironment(ctx context.Context, checkID string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	args := installArguments(plan.PackageManager, plan.Packages)
-	program := plan.PackageManager
+	if checkID == "browser" && (plan.PackageManager == "dnf" || plan.PackageManager == "yum") {
+		return installRPMBrowserEnvironment(ctx, plan)
+	}
+	text, runErr := runPackageCommand(ctx, plan.PackageManager, installArguments(plan.PackageManager, plan.Packages))
+	if runErr == nil {
+		RefreshCommandEnvironment(checkID)
+		return fmt.Sprintf("已在当前主机安装 %s。请重新检查环境确认版本。", plan.Name), nil
+	}
+	return "", packageInstallFailure(plan.Name, text, runErr, ctx)
+}
+
+// installRPMBrowserEnvironment installs the fixed runtime libraries and fonts
+// first, then optionally the system browser binary. The browser binary is a
+// convenience: Puppeteer downloads its own browser per project, so a failure
+// there falls back to a completed dependency installation instead of failing
+// the whole environment.
+func installRPMBrowserEnvironment(ctx context.Context, plan EnvironmentInstallPlan) (string, error) {
+	depsOutput, depsErr := runPackageCommand(ctx, plan.PackageManager, installArguments(plan.PackageManager, browserDependencyPackages(plan.PackageManager)))
+	if depsErr != nil {
+		return "", packageInstallFailure(plan.Name, depsOutput, depsErr, ctx)
+	}
+	if plan.BrowserPackage == "" {
+		RefreshCommandEnvironment(plan.CheckID)
+		return "已在当前主机安装浏览器运行库与字体；当前软件源未提供 Chromium、Chrome 或 Edge 软件包，Puppeteer 将使用项目自带的浏览器。请重新检查环境确认。", nil
+	}
+	browserOutput, browserErr := runPackageCommand(ctx, plan.PackageManager, installArguments(plan.PackageManager, []string{plan.BrowserPackage}))
+	RefreshCommandEnvironment(plan.CheckID)
+	if browserErr == nil {
+		return fmt.Sprintf("已在当前主机安装浏览器及依赖包（%s）。请重新检查环境确认版本。", plan.BrowserPackage), nil
+	}
+	if ctx.Err() != nil {
+		return "", errors.New("服务器安装超时，请检查网络与包管理器状态后重试")
+	}
+	note := strings.TrimSpace(browserOutput)
+	if note == "" {
+		note = browserErr.Error()
+	}
+	if len(note) > 200 {
+		note = note[:200] + "…"
+	}
+	return fmt.Sprintf("已在当前主机安装浏览器运行库与字体；系统 %s 安装未完成（%s），Puppeteer 将使用项目自带的浏览器。请重新检查环境确认。", plan.BrowserPackage, note), nil
+}
+
+// runPackageCommand executes one fixed package-manager command with the same
+// privilege rules as the rest of the workbench. It is replaceable in tests.
+var runPackageCommand = func(ctx context.Context, manager string, args []string) (string, error) {
+	program := manager
 	if runtime.GOOS == "darwin" {
 		if os.Geteuid() == 0 {
 			return "", errors.New("Homebrew 不能以 root 运行；请使用实际 macOS 用户账户启动 AlemonX 服务")
@@ -168,24 +263,25 @@ func InstallEnvironment(ctx context.Context, checkID string) (string, error) {
 		if _, err := exec.LookPath("sudo"); err != nil {
 			return "", errors.New("服务器当前不是 root，且未安装 sudo；请由服务器管理员完成安装")
 		}
-		args = append([]string{"-n", "--", program}, args...)
+		args = append([]string{"-n", "--", manager}, args...)
 		program = "sudo"
 	}
 	output, runErr := exec.CommandContext(ctx, program, args...).CombinedOutput()
-	text := strings.TrimSpace(string(output))
-	if runErr == nil {
-		RefreshCommandEnvironment(checkID)
-		return fmt.Sprintf("已在当前主机安装 %s。请重新检查环境确认版本。", plan.Name), nil
-	}
+	return strings.TrimSpace(string(output)), runErr
+}
+
+// packageInstallFailure converts a failed fixed package-manager run into the
+// user-facing error, keeping the output bounded for the setup UI.
+func packageInstallFailure(name, text string, runErr error, ctx context.Context) error {
 	lower := strings.ToLower(text)
 	if runtime.GOOS == "windows" && (strings.Contains(lower, "access is denied") || strings.Contains(lower, "administrator")) {
-		return "", errors.New("Windows 包管理器需要管理员权限。请以管理员账户运行 AlemonX 服务后重试；线上工作台不会尝试弹出桌面 UAC 窗口")
+		return errors.New("Windows 包管理器需要管理员权限。请以管理员账户运行 AlemonX 服务后重试；线上工作台不会尝试弹出桌面 UAC 窗口")
 	}
 	if strings.Contains(lower, "a password is required") || strings.Contains(lower, "no tty present") || strings.Contains(lower, "not in the sudoers") {
-		return "", errors.New("服务器需要管理员授权。为保持线上工作台安全，请由管理员以 root 运行服务，或仅为该固定包管理命令配置 sudo -n 后重试")
+		return errors.New("服务器需要管理员授权。为保持线上工作台安全，请由管理员以 root 运行服务，或仅为该固定包管理命令配置 sudo -n 后重试")
 	}
 	if ctx.Err() != nil {
-		return "", errors.New("服务器安装超时，请检查网络与包管理器状态后重试")
+		return errors.New("服务器安装超时，请检查网络与包管理器状态后重试")
 	}
 	if text == "" {
 		text = runErr.Error()
@@ -193,7 +289,7 @@ func InstallEnvironment(ctx context.Context, checkID string) (string, error) {
 	if len(text) > 600 {
 		text = text[:600] + "…"
 	}
-	return "", fmt.Errorf("服务器安装 %s 失败：%s", plan.Name, text)
+	return fmt.Errorf("服务器安装 %s 失败：%s", name, text)
 }
 
 func installArguments(manager string, packages []string) []string {

@@ -66,7 +66,7 @@ alx update
 alx --host 127.0.0.1 --port 17390
 ```
 
-由于默认就监听所有网卡，请务必先开启身份认证（`alx auth enable`），并用防火墙限制可访问的 IP；公网直接暴露且未认证的工作台等同于任意控制你的机器人。生产部署还建议设置 `ALX_DEPLOYMENT=production`，它会强制要求启用 SQLite 存储和身份认证。
+由于默认就监听所有网卡，请务必先开启身份认证（`alx auth enable`），并用防火墙限制可访问的 IP；公网直接暴露且未认证的工作台等同于任意控制你的机器人。生产部署还建议设置 `ALX_DEPLOYMENT=production`：SQLite 与本地认证未配置时都仅提示，不会阻止启动（可在引导页创建管理员账户）。
 
 `alx install` 也支持 `--host`，安装的后台服务会按同样的地址监听；`--redis-port` 与 `--redis-off` 会持久化到 Redis 配置（`alx-redis.json`），设置页可随时重新调整。
 

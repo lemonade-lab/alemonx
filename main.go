@@ -271,15 +271,15 @@ func main() {
 	}
 	if strings.EqualFold(strings.TrimSpace(os.Getenv("ALX_DEPLOYMENT")), "production") {
 		if !strings.EqualFold(strings.TrimSpace(os.Getenv("ALX_OPS_STORAGE")), "sqlite") {
-			log.Fatal("ALX_DEPLOYMENT=production 要求 ALX_OPS_STORAGE=sqlite")
+			fmt.Println("提示：生产模式未设置 ALX_OPS_STORAGE=sqlite，AI 运维将回退为 JSON 存储。")
 		}
-		manager, authErr := access.New()
-		if authErr != nil {
-			log.Fatalf("生产模式无法加载身份认证：%v", authErr)
-		}
-		status, statusErr := manager.Status("")
-		if statusErr != nil || !status.Enabled {
-			log.Fatal("ALX_DEPLOYMENT=production 要求先启用本地身份认证（alx auth enable）")
+		if manager, authErr := access.New(); authErr != nil {
+			log.Fatalf("生产模式无法加载身份认证配置：%v", authErr)
+		} else if status, statusErr := manager.Status(""); statusErr != nil {
+			log.Fatalf("生产模式无法读取身份认证状态：%v", statusErr)
+		} else if !status.Enabled {
+			fmt.Println("提示：生产模式尚未启用本地身份认证，工作台将无认证开放。")
+			fmt.Println("请执行 alx auth enable，或启动后在引导页创建管理员账户。")
 		}
 	}
 	if err := system.ConfigurePrivilegedMode(host, strings.EqualFold(strings.TrimSpace(os.Getenv("ALX_DEPLOYMENT")), "production")); err != nil {
