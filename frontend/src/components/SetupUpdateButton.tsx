@@ -119,7 +119,7 @@ export function SetupUpdateButton({ embedded = false }: { embedded?: boolean }) 
     error: releasesError,
     isFetching: releasesLoading
   } = useReleasesQuery(
-    { app: 'alemonx', refresh: true },
+    { app: 'alemonx', refresh: true, currentPlatform: true },
     { skip: !open || mode !== 'manual' }
   )
   const releases = releaseData as Release[]

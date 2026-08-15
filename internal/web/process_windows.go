@@ -4,6 +4,7 @@ package web
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"strconv"
@@ -111,3 +112,32 @@ func processWorkingDirectory(_ int) string { return "" }
 
 // processPGID is always 0 on Windows; process-group signalling is not used.
 func processPGID(_ int) int { return 0 }
+
+// processDescendsFrom recognises the node process spawned by an npm/yarn
+// wrapper as belonging to the supervised robot command. Windows has neither
+// Unix process groups nor a cheap CWD lookup, so without this check every
+// already-running robot is misreported as a foreign port owner. CIM is built
+// into supported PowerShell versions; failure deliberately falls back to the
+// conservative "unknown owner" result.
+func processDescendsFrom(pid, ancestor int) bool {
+	if pid <= 0 || ancestor <= 0 {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	for current, depth := pid, 0; current > 0 && depth < 16; depth++ {
+		if current == ancestor {
+			return true
+		}
+		output, err := exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", fmt.Sprintf("(Get-CimInstance -ClassName Win32_Process -Filter 'ProcessId = %d').ParentProcessId", current)).Output()
+		if err != nil {
+			return false
+		}
+		parent, err := strconv.Atoi(strings.TrimSpace(string(output)))
+		if err != nil || parent <= 0 || parent == current {
+			return false
+		}
+		current = parent
+	}
+	return false
+}

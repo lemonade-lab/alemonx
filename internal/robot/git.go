@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -343,6 +344,14 @@ func sameWorkspacePath(left, right string) bool {
 	}
 	if resolved, err := filepath.EvalSymlinks(right); err == nil {
 		right = resolved
+	}
+	return equivalentWorkspacePath(left, right, runtime.GOOS == "windows")
+}
+
+func equivalentWorkspacePath(left, right string, caseInsensitive bool) bool {
+	left, right = filepath.Clean(left), filepath.Clean(right)
+	if caseInsensitive {
+		return strings.EqualFold(left, right)
 	}
 	return left == right
 }

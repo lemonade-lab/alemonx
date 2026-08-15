@@ -1921,6 +1921,104 @@ func TestRobotAppTokenRoundTrip(t *testing.T) {
 	}
 }
 
+func TestResolveRobotTerminalDirectoryAllowsChildrenButRejectsParents(t *testing.T) {
+	root := t.TempDir()
+	child := filepath.Join(root, "packages", "demo")
+	if err := os.MkdirAll(child, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	resolved, relative, err := resolveRobotTerminalDirectory(root, "packages/demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected, err := filepath.EvalSymlinks(child)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved != expected || relative != "packages/demo" {
+		t.Fatalf("child directory = (%q, %q), want (%q, %q)", resolved, relative, expected, "packages/demo")
+	}
+	if _, _, err := resolveRobotTerminalDirectory(root, "../outside"); err == nil {
+		t.Fatal("parent directory traversal accepted")
+	}
+	if _, _, err := resolveRobotTerminalDirectory(root, filepath.Dir(root)); err == nil {
+		t.Fatal("absolute parent directory accepted")
+	}
+	outside := t.TempDir()
+	link := filepath.Join(root, "outside-link")
+	if err := os.Symlink(outside, link); err == nil {
+		if _, _, err := resolveRobotTerminalDirectory(root, "outside-link"); err == nil {
+			t.Fatal("symlink escaping the robot directory accepted")
+		}
+	}
+}
+
+func TestRobotTerminalChangeDirectoryReturnsRelativeChild(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFixture(t, root, "package.json", `{"name":"demo","version":"1.0.0"}`)
+	s := &server{}
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/robot/terminal", strings.NewReader(`{"root":`+strconv.Quote(root)+`,"command":"cd src"}`))
+	recorder := httptest.NewRecorder()
+	s.robotTerminalHandler(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("cd status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	var payload struct {
+		Directory string `json:"directory"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Directory != "src" {
+		t.Fatalf("cd directory = %q, want src", payload.Directory)
+	}
+}
+
+func TestValidateRobotTerminalCommandAllowsNormalShellSyntax(t *testing.T) {
+	for _, command := range []string{
+		"clear",
+		"npm run build && npm test",
+		"git status | head -20",
+		"echo ready > .terminal-check",
+	} {
+		if err := validateRobotTerminalCommand(command); err != nil {
+			t.Fatalf("command %q rejected: %v", command, err)
+		}
+	}
+	if err := validateRobotTerminalCommand("echo first\n echo second"); err == nil {
+		t.Fatal("multi-line command accepted")
+	}
+	if err := validateRobotTerminalCommand(strings.Repeat("x", (8<<10)+1)); err == nil {
+		t.Fatal("oversized command accepted")
+	}
+}
+
+// Windows paths are decoded by a Go server even when the test runs on a Unix
+// builder. This protects the proxy routes used by the application, test
+// center and live chat from rejecting a valid C: drive path as a non-token.
+func TestRobotAppTokenRoundTripWindowsPath(t *testing.T) {
+	const root = `C:\Users\tester\robots\demo`
+	token := robotAppToken(root)
+	decoded, raw := robotAppRootFromPath("/api/v1/robot/live/"+token+"/", "/api/v1/robot/live/")
+	if decoded != root || raw != token {
+		t.Fatalf("Windows round trip = (%q, %q), want (%q, %q)", decoded, raw, root, token)
+	}
+}
+
+func TestDecodeRobotRootTokenAcceptsWindowsUNCPath(t *testing.T) {
+	const root = `\\server\share\robots\demo`
+	decoded, ok := decodeRobotRootToken(robotAppToken(root))
+	if !ok || decoded != root {
+		t.Fatalf("UNC token = (%q, %t), want (%q, true)", decoded, ok, root)
+	}
+	if _, ok := decodeRobotRootToken(robotAppToken(`robots\demo`)); ok {
+		t.Fatal("relative Windows path accepted as a robot root token")
+	}
+}
+
 // flushWriter adapts httptest.ResponseRecorder to http.Flusher so the SSE
 // handler can be driven without binding a real port (the test sandbox forbids
 // listen).

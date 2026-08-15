@@ -51,6 +51,27 @@ func TestMatchingAssetForRequiresExactPlatformAndArchitecture(t *testing.T) {
 	}
 }
 
+func TestReleasesForPlatformHidesIncompatibleReleasesAndAssets(t *testing.T) {
+	items := []Item{
+		{
+			Tag: "v2.0.0",
+			Assets: []Asset{
+				{Name: "alemonx-darwin-arm64.zip", URL: "mac"},
+				{Name: "alemonx-windows-amd64.zip", URL: "windows"},
+			},
+		},
+		{
+			Tag:    "v1.0.0",
+			Assets: []Asset{{Name: "alemonx-linux-amd64.zip", URL: "linux"}},
+		},
+	}
+
+	got := releasesForPlatform(items, "windows", "amd64")
+	if len(got) != 1 || got[0].Tag != "v2.0.0" || len(got[0].Assets) != 1 || got[0].Assets[0].URL != "windows" {
+		t.Fatalf("releasesForPlatform() = %#v, want only the matching Windows release asset", got)
+	}
+}
+
 func TestMatchingAssetForSupportsExtendedArchitectures(t *testing.T) {
 	assets := []Asset{
 		{Name: "alx-linux-armv7.zip", URL: "linux-arm"},

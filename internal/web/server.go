@@ -3159,6 +3159,9 @@ func (s *server) releasesHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
+	if r.URL.Query().Get("platform") == "current" {
+		items = releases.CurrentPlatformReleases(items)
+	}
 	writeJSON(w, http.StatusOK, items)
 }
 
@@ -3821,13 +3824,15 @@ func (s *server) robotConsoleHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 type robotTerminalRequest struct {
-	Root    string `json:"root"`
-	Command string `json:"command"`
+	Root      string `json:"root"`
+	Command   string `json:"command"`
+	Directory string `json:"directory,omitempty"`
 }
 
-// robotTerminalHandler runs one approved command with the robot directory as
-// its working directory. It deliberately does not expose a persistent shell:
-// every request is validated and scoped independently before it starts.
+// robotTerminalHandler runs a command with the robot directory as its working
+// directory. It is intentionally a command runner rather than a persistent
+// PTY, but it accepts normal shell syntax so the terminal remains useful for
+// project work instead of maintaining a brittle command allowlist.
 func (s *server) robotTerminalHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
@@ -3849,6 +3854,24 @@ func (s *server) robotTerminalHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, err.Error())
 		return
 	}
+	workingDirectory, relativeDirectory, err := resolveRobotTerminalDirectory(root, input.Directory)
+	if err != nil {
+		writeError(w, http.StatusForbidden, err.Error())
+		return
+	}
+	if target, changeDirectory := robotTerminalChangeDirectory(command); changeDirectory {
+		_, relativeDirectory, err = resolveRobotTerminalDirectory(root, filepath.ToSlash(filepath.Join(relativeDirectory, target)))
+		if err != nil {
+			writeError(w, http.StatusForbidden, err.Error())
+			return
+		}
+		shownDirectory := "."
+		if relativeDirectory != "" {
+			shownDirectory = "./" + relativeDirectory
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"output": "$ " + command + "\n当前目录：" + shownDirectory, "directory": relativeDirectory})
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
 	defer cancel()
 	var cmd *exec.Cmd
@@ -3857,7 +3880,7 @@ func (s *server) robotTerminalHandler(w http.ResponseWriter, r *http.Request) {
 	} else {
 		cmd = exec.CommandContext(ctx, "/bin/sh", "-lc", command)
 	}
-	cmd.Dir = root
+	cmd.Dir = workingDirectory
 	output, runErr := cmd.CombinedOutput()
 	text := string(output)
 	if runErr != nil {
@@ -3867,39 +3890,65 @@ func (s *server) robotTerminalHandler(w http.ResponseWriter, r *http.Request) {
 			text += "\n" + runErr.Error()
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"output": "$ " + command + "\n" + text})
+	writeJSON(w, http.StatusOK, map[string]string{"output": "$ " + command + "\n" + text, "directory": relativeDirectory})
+}
+
+// resolveRobotTerminalDirectory turns the browser's relative terminal state
+// into a real directory. Symlinks are resolved before the containment check,
+// so a project child cannot escape into a parent or another workspace.
+func resolveRobotTerminalDirectory(root, relative string) (string, string, error) {
+	relative = strings.TrimSpace(relative)
+	if relative == "" || relative == "." {
+		relative = "."
+	}
+	for _, part := range strings.Split(strings.ReplaceAll(relative, "\\", "/"), "/") {
+		if part == ".." {
+			return "", "", fmt.Errorf("终端不能访问机器人目录的父目录。")
+		}
+	}
+	cleaned := filepath.Clean(filepath.FromSlash(relative))
+	if filepath.IsAbs(cleaned) || cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
+		return "", "", fmt.Errorf("终端只能访问当前机器人目录及其子目录。")
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", "", fmt.Errorf("无法确认机器人目录：%w", err)
+	}
+	resolvedDirectory, err := filepath.EvalSymlinks(filepath.Join(resolvedRoot, cleaned))
+	if err != nil {
+		return "", "", fmt.Errorf("终端目录不存在或无法访问。")
+	}
+	info, err := os.Stat(resolvedDirectory)
+	if err != nil || !info.IsDir() || !isWithinRoot(resolvedDirectory, resolvedRoot) {
+		return "", "", fmt.Errorf("终端只能访问当前机器人目录及其子目录。")
+	}
+	canonicalRelative, err := filepath.Rel(resolvedRoot, resolvedDirectory)
+	if err != nil || canonicalRelative == "." {
+		return resolvedDirectory, "", nil
+	}
+	return resolvedDirectory, filepath.ToSlash(canonicalRelative), nil
+}
+
+func robotTerminalChangeDirectory(command string) (string, bool) {
+	fields := strings.Fields(command)
+	if len(fields) == 0 || !strings.EqualFold(fields[0], "cd") || len(fields) > 2 {
+		return "", false
+	}
+	if len(fields) == 1 {
+		return ".", true
+	}
+	return fields[1], true
 }
 
 func validateRobotTerminalCommand(command string) error {
 	if command == "" {
 		return fmt.Errorf("请输入终端命令。")
 	}
-	if len(command) > 2000 {
-		return fmt.Errorf("终端命令不能超过 2000 个字符。")
+	if len(command) > 8<<10 {
+		return fmt.Errorf("终端命令不能超过 8 KB。")
 	}
-	for _, token := range []string{";", "&&", "||", "|", ">", "<", "`", "$(", "${", "\n", "\r"} {
-		if strings.Contains(command, token) {
-			return fmt.Errorf("终端不支持 shell 拼接或重定向；请一次执行一条命令。")
-		}
-	}
-	fields := strings.Fields(command)
-	allowed := map[string]bool{
-		"pwd": true, "ls": true, "dir": true, "cat": true, "head": true,
-		"tail": true, "find": true, "grep": true, "git": true, "node": true,
-		"npm": true, "yarn": true, "pnpm": true, "bun": true, "go": true,
-		"python": true, "python3": true,
-	}
-	if len(fields) == 0 || !allowed[strings.ToLower(filepath.Base(fields[0]))] {
-		return fmt.Errorf("该命令不在机器人目录终端的允许列表中。")
-	}
-	for _, field := range fields {
-		if filepath.IsAbs(field) || strings.Contains(field, "..") {
-			return fmt.Errorf("终端命令只能使用机器人目录内的相对路径。")
-		}
-		lower := strings.ToLower(field)
-		if lower == "--global" || lower == "-g" || lower == "--prefix" || lower == "-c" || lower == "-e" {
-			return fmt.Errorf("终端不允许全局修改或内联脚本参数。")
-		}
+	if strings.ContainsAny(command, "\x00\r\n") {
+		return fmt.Errorf("终端命令不能包含空字节或换行。")
 	}
 	return nil
 }
@@ -4880,7 +4929,7 @@ func (s *server) portOccupantOwnedByRoot(root string, occupant portOccupant) boo
 		dev := s.development[root]
 		s.mu.RUnlock()
 		if dev.Command != nil && dev.Command.Process != nil {
-			if dev.Command.Process.Pid == occupant.PID || (dev.PGID > 0 && pgid == dev.PGID) {
+			if processDescendsFrom(occupant.PID, dev.Command.Process.Pid) || (dev.PGID > 0 && pgid == dev.PGID) {
 				return true
 			}
 		}
@@ -5432,8 +5481,8 @@ func (s *server) robotWebViewHandler(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, r.URL.Path+"/", http.StatusTemporaryRedirect)
 		return
 	}
-	rootBytes, err := base64.RawURLEncoding.DecodeString(parts[0])
-	if err != nil {
+	root, ok := decodeRobotRootToken(parts[0])
+	if !ok {
 		writeError(w, http.StatusBadRequest, "机器人目录标识无效。")
 		return
 	}
@@ -5442,23 +5491,23 @@ func (s *server) robotWebViewHandler(w http.ResponseWriter, r *http.Request) {
 		requestPath = parts[2]
 	}
 	if strings.HasPrefix(requestPath, "api/") {
-		s.proxyRobotWebViewAPI(w, r, string(rootBytes), parts[1], strings.TrimPrefix(requestPath, "api/"))
+		s.proxyRobotWebViewAPI(w, r, root, parts[1], strings.TrimPrefix(requestPath, "api/"))
 		return
 	}
 	if requestPath == "message" {
-		s.robotWebViewMessageHandler(w, r, string(rootBytes), parts[1])
+		s.robotWebViewMessageHandler(w, r, root, parts[1])
 		return
 	}
 	if requestPath == "events" {
-		s.robotWebViewEventsHandler(w, r, string(rootBytes), parts[1])
+		s.robotWebViewEventsHandler(w, r, root, parts[1])
 		return
 	}
 	if requestPath == "events/stream" {
-		s.robotWebViewEventsStreamHandler(w, r, string(rootBytes), parts[1])
+		s.robotWebViewEventsStreamHandler(w, r, root, parts[1])
 		return
 	}
 	if requestPath == "bridge.js" {
-		entry, entryErr := s.robots.WebViewEntry(string(rootBytes), parts[1])
+		entry, entryErr := s.robots.WebViewEntry(root, parts[1])
 		if entryErr != nil {
 			writeError(w, http.StatusNotFound, entryErr.Error())
 			return
@@ -5467,19 +5516,19 @@ func (s *server) robotWebViewHandler(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, webViewBridge(entry))
 		return
 	}
-	file, err := s.robots.WebViewFile(string(rootBytes), parts[1], requestPath)
+	file, err := s.robots.WebViewFile(root, parts[1], requestPath)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
 	if filepath.Ext(file) == ".html" {
-		entry, entryErr := s.robots.WebViewEntry(string(rootBytes), parts[1])
+		entry, entryErr := s.robots.WebViewEntry(root, parts[1])
 		if entryErr != nil {
 			writeError(w, http.StatusNotFound, entryErr.Error())
 			return
 		}
 		if entry.RequiresServerPort {
-			info, infoErr := s.robots.AppPort(string(rootBytes))
+			info, infoErr := s.robots.AppPort(root)
 			if infoErr != nil {
 				writeError(w, http.StatusBadRequest, infoErr.Error())
 				return
@@ -5488,7 +5537,7 @@ func (s *server) robotWebViewHandler(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusBadRequest, "该插件页面要求先配置应用端口（serverPort）。")
 				return
 			}
-			reachable, _, probeErr := s.robots.AppPortReachable(string(rootBytes))
+			reachable, _, probeErr := s.robots.AppPortReachable(root)
 			if probeErr != nil {
 				writeError(w, http.StatusBadRequest, probeErr.Error())
 				return
@@ -5903,6 +5952,17 @@ func robotAppToken(root string) string {
 	return base64.RawURLEncoding.EncodeToString([]byte(root))
 }
 
+// decodeRobotRootToken decodes and validates the root embedded in every robot
+// proxy route. Keeping this shared prevents app, test, live chat and WebView
+// routes from drifting into different platform-path behaviour.
+func decodeRobotRootToken(token string) (string, bool) {
+	decoded, err := base64.RawURLEncoding.DecodeString(token)
+	if err != nil || !isAbsoluteRobotRoot(string(decoded)) {
+		return "", false
+	}
+	return string(decoded), true
+}
+
 // robotAppRootFromPath extracts the root token from a proxied path's first
 // segment, returning the decoded root and the raw token. The second return is
 // empty when the path carries no valid token (legacy query-form URLs). Only
@@ -5915,14 +5975,27 @@ func robotAppRootFromPath(path, mount string) (root, token string) {
 	if segment == "" {
 		return "", ""
 	}
-	decoded, err := base64.RawURLEncoding.DecodeString(segment)
-	if err != nil {
+	root, ok := decodeRobotRootToken(segment)
+	if !ok {
 		return "", ""
 	}
-	if len(decoded) == 0 || decoded[0] != '/' {
-		return "", ""
+	return root, segment
+}
+
+// isAbsoluteRobotRoot accepts native absolute paths from every desktop client.
+// filepath.IsAbs only recognises the current host's path syntax, while a
+// browser on Windows encodes paths such as C:\\bots\\demo into the proxy token.
+// Keeping the Windows forms explicit also lets the token parser be tested on
+// non-Windows builders; the robot manager still validates the path before any
+// project operation occurs.
+func isAbsoluteRobotRoot(root string) bool {
+	if filepath.IsAbs(root) {
+		return true
 	}
-	return string(decoded), segment
+	if len(root) >= 3 && ((root[0] >= 'A' && root[0] <= 'Z') || (root[0] >= 'a' && root[0] <= 'z')) && root[1] == ':' && (root[2] == '\\' || root[2] == '/') {
+		return true
+	}
+	return strings.HasPrefix(root, `\\`)
 }
 
 // modifyRobotAppResponse rewrites a proxied app response so absolute paths stay

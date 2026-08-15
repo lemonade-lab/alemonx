@@ -24,7 +24,8 @@ import {
   workspaceApi,
   useGoalsQuery,
   useLazyEnvironmentReportQuery,
-  useReleasesQuery
+  useReleasesQuery,
+  useLazySetupUpdateQuery
 } from './store/workspaceApi'
 import { GuideHome } from './features/guide/GuideHome'
 import { EnvironmentCheckPanel } from './features/guide/EnvironmentCheckPanel'
@@ -131,12 +132,15 @@ export default function App() {
   const [creation, setCreation] = useStoreState<Creation | null>(null)
   const [repairCheck, setRepairCheck] = useStoreState<Check | null>(null)
   const { data: goalData, isLoading: loading } = useGoalsQuery()
+  const [loadSetupUpdate, { data: setupUpdate }] = useLazySetupUpdateQuery()
   const [
     loadEnvironmentReport,
     { data: environmentData, isFetching: checking }
   ] = useLazyEnvironmentReportQuery()
   const report = (environmentData as Report | undefined) ?? null
   const goals = (goalData as Goal[] | null | undefined) ?? []
+  const currentAppVersion = setupUpdate?.current?.trim() || '0.1.0'
+  const settingsTitle = `设置 · ${currentAppVersion.startsWith('v') ? currentAppVersion : `v${currentAppVersion}`}`
   const routeGoal = location.pathname.match(
     /^\/guide\/([^/]+)\/step\/\d+$/
   )?.[1]
@@ -181,6 +185,10 @@ export default function App() {
     left: number
     top: number
   } | null>(null)
+
+  useEffect(() => {
+    void loadSetupUpdate().catch(() => undefined)
+  }, [loadSetupUpdate])
 
   useEffect(
     () =>
@@ -680,7 +688,7 @@ export default function App() {
         id="app-settings"
         open={settingsOpen}
         minimized={settingsMinimized}
-        title="设置"
+        title={settingsTitle}
         icon={<Settings className="size-4 text-brand-600 dark:text-brand-200" />}
         onClose={() => {
           setSettingsOpen(false)

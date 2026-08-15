@@ -158,6 +158,26 @@ func matchingAsset(assets []Asset) Asset {
 	return matchingAssetFor(assets, runtime.GOOS, runtime.GOARCH)
 }
 
+// CurrentPlatformReleases keeps only releases that have an install archive for
+// the running OS and architecture. Each returned release exposes that one
+// matching archive, so a manual installer never offers an incompatible file.
+func CurrentPlatformReleases(items []Item) []Item {
+	return releasesForPlatform(items, runtime.GOOS, runtime.GOARCH)
+}
+
+func releasesForPlatform(items []Item, platform, architecture string) []Item {
+	result := make([]Item, 0, len(items))
+	for _, item := range items {
+		asset := matchingAssetFor(item.Assets, platform, architecture)
+		if asset.Name == "" {
+			continue
+		}
+		item.Assets = []Asset{asset}
+		result = append(result, item)
+	}
+	return result
+}
+
 // matchingAssetFor compares filename segments instead of substrings. In
 // particular, "darwin" contains "win", so a strings.Contains(name, "win")
 // check can incorrectly offer a macOS archive to a Windows user.

@@ -1108,9 +1108,8 @@ func parsePM2Status(root, output string) (PM2Status, error) {
 	if err := json.Unmarshal([]byte(output), &processes); err != nil {
 		return PM2Status{}, fmt.Errorf("无法解析 PM2 状态：%w", err)
 	}
-	root = filepath.Clean(root)
 	for _, process := range processes {
-		if filepath.Clean(process.PM2Env.CWD) != root {
+		if !sameWorkspacePath(process.PM2Env.CWD, root) {
 			continue
 		}
 		status := strings.ToLower(process.PM2Env.Status)

@@ -335,13 +335,14 @@ export const workspaceApi = createApi({
     }),
     releases: build.query<
       unknown[],
-      string | { app: string; refresh?: boolean }
+      string | { app: string; refresh?: boolean; currentPlatform?: boolean }
     >({
       query: input => {
-        const { app, refresh } =
+        const { app, refresh, currentPlatform } =
           typeof input === 'string' ? { app: input } : input
         const query = new URLSearchParams({ app })
         if (refresh) query.set('refresh', '1')
+        if (currentPlatform) query.set('platform', 'current')
         return `releases?${query}`
       }
     }),

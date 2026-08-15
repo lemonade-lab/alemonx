@@ -238,6 +238,15 @@ func TestParsePM2StatusMatchesOnlyCurrentProject(t *testing.T) {
 	}
 }
 
+func TestSameWorkspacePathTreatsWindowsPathCaseAsEquivalent(t *testing.T) {
+	if !equivalentWorkspacePath(`C:\Robots\Demo`, `c:\robots\demo`, true) {
+		t.Fatal("Windows paths with different case must identify the same workspace")
+	}
+	if equivalentWorkspacePath(`/robots/Demo`, `/robots/demo`, false) {
+		t.Fatal("Unix paths with different case must remain distinct")
+	}
+}
+
 func TestRuntimeDependenciesDetectsMissingDirectPackage(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "package.json"), []byte(`{"dependencies":{"present":"1","missing":"1"},"devDependencies":{"@scope/tool":"1"}}`), 0644); err != nil {

@@ -103,3 +103,8 @@ func processPGID(pid int) int {
 	}
 	return pgid
 }
+
+// Unix process groups provide the authoritative descendant relationship for
+// supervised commands. Direct PID equality remains useful when a command
+// listens itself; descendants are handled by the group comparison at callsite.
+func processDescendsFrom(pid, ancestor int) bool { return pid > 0 && pid == ancestor }

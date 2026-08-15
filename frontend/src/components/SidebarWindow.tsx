@@ -164,7 +164,7 @@ export function SidebarWindow<ID extends string>({
             aria-label={hasNavigation ? undefined : windowProps.title}
           >
             <div
-              className={`h-full min-h-0 overflow-auto px-6 py-5 pb-7 ${bodyClassName}`}
+              className={`sidebar-window-body h-full min-h-0 overflow-auto ${bodyClassName}`}
               data-sidebar-window-body
             >
               {children}
