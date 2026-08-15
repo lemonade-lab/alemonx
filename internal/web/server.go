@@ -1042,6 +1042,7 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	mux.HandleFunc("/api/v1/catalog/document", s.catalogDocumentHandler)
 	mux.HandleFunc("/api/v1/catalog/package-config", s.catalogPackageConfigHandler)
 	mux.HandleFunc("/api/v1/setup/plugins", s.setupPluginsHandler)
+	mux.HandleFunc("/api/v1/setup/plugins/market", s.setupPluginMarketHandler)
 	mux.HandleFunc("/api/v1/setup/plugins/revision", s.setupPluginRevisionHandler)
 	mux.HandleFunc("/api/v1/setup/plugins/events", s.setupPluginEventsHandler)
 	mux.HandleFunc("/api/v1/setup/plugins/cache", s.setupPluginCacheHandler)
@@ -1535,15 +1536,24 @@ func (s *server) catalogPackageConfigHandler(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, http.StatusOK, config)
 }
 
-// setupPluginsHandler rescans plugin directories on each request. Adding or
-// removing a directory is therefore reflected after a normal UI refresh, with
-// no process restart and without running third-party code.
+// setupPluginsHandler returns locally downloaded plugins, including disabled
+// entries so the manager can start or remove them.
 func (s *server) setupPluginsHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
 		return
 	}
 	writeJSON(w, http.StatusOK, s.plugins.All())
+}
+
+// setupPluginMarketHandler returns the curated online catalogue independently
+// from local installations. This keeps the market and "我的" views distinct.
+func (s *server) setupPluginMarketHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
+		return
+	}
+	writeJSON(w, http.StatusOK, s.plugins.Market())
 }
 
 // setupPluginRevisionHandler exposes the plugin registry revision so the UI can

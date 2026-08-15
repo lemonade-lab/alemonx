@@ -416,11 +416,31 @@ func (r *Registry) List() []Plugin {
 	return enabled
 }
 
-// All includes disabled plugins so the manager can offer a deliberate
+// All includes disabled local plugins so the manager can offer a deliberate
 // re-enable action, while List remains the source for the live navigation.
 func (r *Registry) All() []Plugin {
 	r.ensureLoaded()
 	return r.snapshot()
+}
+
+// Market returns the curated online catalogue independently from installed
+// plugins. An installed plugin therefore remains in "我的", while its online
+// entry remains visible in "市场" for discovery and downloads.
+func (r *Registry) Market() []Plugin {
+	candidates := r.onlinePlugins()
+	items := make([]Plugin, 0, len(candidates))
+	for _, plugin := range candidates {
+		if supportsCurrentPlatform(plugin.Platforms) {
+			items = append(items, plugin)
+		}
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		if items[i].Navigation.Order != items[j].Navigation.Order {
+			return items[i].Navigation.Order < items[j].Navigation.Order
+		}
+		return items[i].Navigation.Label < items[j].Navigation.Label
+	})
+	return items
 }
 
 // Find returns one currently discoverable plugin from the cache.
@@ -651,14 +671,6 @@ func (r *Registry) compute() []Plugin {
 			seen[plugin.ID] = true
 			items = append(items, plugin)
 		}
-	}
-	for _, plugin := range r.onlinePlugins() {
-		if seen[plugin.ID] || !supportsCurrentPlatform(plugin.Platforms) {
-			continue
-		}
-		plugin.Enabled = !disabled[plugin.ID]
-		seen[plugin.ID] = true
-		items = append(items, plugin)
 	}
 	sort.SliceStable(items, func(i, j int) bool {
 		if items[i].Navigation.Order != items[j].Navigation.Order {
@@ -2048,17 +2060,10 @@ func locatePluginRoot(staging string) (string, error) {
 	return "", errors.New("插件安装包中未找到根目录 alx.json")
 }
 
-// onlinePlugin returns one currently discoverable online-only plugin, falling
-// back to a fresh index fetch if the cache has not been populated.
+// onlinePlugin returns one currently discoverable online plugin. The local
+// registry and market are deliberately separate, so this always reads the
+// current market catalogue.
 func (r *Registry) onlinePlugin(id string) *Plugin {
-	for _, plugin := range r.All() {
-		if plugin.Online && plugin.ID == id {
-			return &plugin
-		}
-	}
-	// Once a plugin is installed, the local entry hides the online catalogue
-	// entry during compute(). Refresh the catalogue on demand so versions and
-	// switching remain available for installed plugins too.
 	for _, plugin := range r.onlinePlugins() {
 		if plugin.ID == id {
 			return &plugin

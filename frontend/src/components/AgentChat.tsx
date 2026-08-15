@@ -1496,8 +1496,8 @@ export function AgentChatPage({
   )
 
   return (
-    <section className="relative flex min-w-0 w-full flex-col [container-name:agent-workspace] [container-type:inline-size]">
-      <header className="sticky top-2.5 z-5 mx-2.5 mt-2.5 flex min-h-13 items-center justify-between rounded-[10px] border border-(--theme-border-default) bg-(--theme-surface-panel) px-4 shadow-[0_4px_14px_var(--theme-shadow-soft)]">
+    <section className="agent-workspace relative flex h-full min-h-0 min-w-0 w-full flex-1 flex-col overflow-hidden [container-name:agent-workspace] [container-type:inline-size]">
+      <header className="agent-header sticky top-2.5 z-5 mx-2.5 mt-2.5 flex min-h-13 shrink-0 items-center justify-between rounded-[10px] border border-(--theme-border-default) bg-(--theme-surface-panel) px-4 shadow-[0_4px_14px_var(--theme-shadow-soft)]">
         <div className="flex min-w-0 items-center gap-2.5">
           <span className="flex size-7.5 items-center justify-center rounded-[9px] border border-(--theme-accent-soft-border) bg-(--theme-accent-soft) text-(--theme-accent-text)">
             <Sparkles className="size-4" />
@@ -1534,11 +1534,11 @@ export function AgentChatPage({
         </div>
       </header>
 
-      <div className="agent-body block min-h-0 min-w-0 w-full has-[.agent-sessions]:grid has-[.agent-sessions]:grid-cols-[240px_minmax(0,1fr)] has-[.agent-sessions]:items-start max-[760px]:has-[.agent-sessions]:block @max-[720px]:has-[.agent-sessions]:block">
-        <div className="agent-main relative flex min-h-0 min-w-0 w-full flex-[1_1_auto] flex-col has-[.agent-question-rail]:grid has-[.agent-question-rail]:items-start has-[.agent-question-rail]:pl-0">
+      <div className="agent-body min-h-0 min-w-0 w-full flex-1">
+        <div className="agent-main relative flex h-full min-h-0 min-w-0 w-full flex-col">
           <AgentQuestionRail messages={messages} threadRef={threadRef} />
           <section
-            className="grid min-h-0 w-full justify-items-stretch gap-5 overflow-visible px-8 pb-3 pt-3.5"
+            className="agent-thread grid min-h-0 w-full flex-1 content-start justify-items-stretch gap-5 overflow-y-auto px-8 pb-3 pt-3.5"
             ref={threadRef}
           >
             {messages.length === 0 && !busy && (
@@ -1763,7 +1763,7 @@ export function AgentChatPage({
             )}
           </section>
           <footer
-            className="bg-transparent px-4 pb-[18px] pt-2.5"
+            className="agent-composer shrink-0 bg-transparent px-4 pb-[18px] pt-2.5"
             ref={composerRef}
           >
             {editingIndex >= 0 && (

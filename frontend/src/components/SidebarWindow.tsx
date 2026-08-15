@@ -145,7 +145,7 @@ export function SidebarWindow<ID extends string>({
               </div>
             )}
             <div
-              className="mt-auto grid gap-1.5 border-t border-(--theme-border-default) pt-2.5"
+              className="mt-auto grid gap-1.5"
               data-sidebar-window-side-actions
             >
               <div data-sidebar-window-actions ref={setActionsTarget} />

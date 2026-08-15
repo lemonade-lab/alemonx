@@ -174,6 +174,7 @@ import {
   useLazySetupPluginDevelopmentLogsQuery,
   useSetSystemCurrentRobotMutation,
   useSystemMcpQuery,
+  useSetupPluginMarketQuery,
   useSetupPluginsQuery,
   useStartRobotTaskMutation,
   useWritePackageConfigMutation,
@@ -278,55 +279,6 @@ function systemFeatureLabel(feature: SystemFeature, plugins: SetupPlugin[]) {
     coreFeatureCatalog.find(item => item.id === feature)?.label ??
     { tasks: '任务', environment: '环境检查' }[feature] ??
     '系统功能'
-  )
-}
-
-function SystemFeatureSidebarHeader({
-  feature,
-  root
-}: {
-  feature: SystemFeature
-  root: string
-}) {
-  const details: Record<
-    string,
-    { icon: ReactNode; title: string; description: string }
-  > = {
-    plugins: {
-      icon: <Package className="size-4" />,
-      title: '插件中心',
-      description: '管理系统级插件与扩展能力'
-    },
-    'ops-overview': {
-      icon: <ShieldCheck className="size-4" />,
-      title: '运维总览',
-      description: '查看机器人与自动维护状态'
-    },
-    tasks: {
-      icon: <ClipboardList className="size-4" />,
-      title: '操作记录',
-      description: root ? '当前机器人与系统操作' : '系统操作'
-    },
-    environment: {
-      icon: <CheckCircle2 className="size-4" />,
-      title: '全局环境',
-      description: '检查 Node.js、Git 和系统工具'
-    }
-  }
-  const detail = details[feature]
-  if (!detail) return null
-  return (
-    <div className="grid gap-1 px-2.5 py-2">
-      <span className="inline-flex size-8 items-center justify-center rounded-lg bg-(--theme-accent-soft) text-(--theme-accent-text)">
-        {detail.icon}
-      </span>
-      <strong className="text-sm font-semibold text-(--theme-text-strong)">
-        {detail.title}
-      </strong>
-      <small className="text-xs leading-5 text-(--theme-text-muted)">
-        {detail.description}
-      </small>
-    </div>
   )
 }
 
@@ -1160,9 +1112,18 @@ export function Dashboard({
     useSetupPluginsQuery(undefined, {
       refetchOnMountOrArgChange: true
     })
+  const pluginMarketOpen = Boolean(systemWindows.plugins) || systemFeature === 'plugins'
+  const { data: setupPluginMarketData } = useSetupPluginMarketQuery(undefined, {
+    skip: !pluginMarketOpen,
+    refetchOnMountOrArgChange: true
+  })
   // The backend serialises an empty plugin registry as JSON null; normalise to
   // an array so render-time .find/.filter never reads a null value.
   const setupPlugins = useMemo(() => setupPluginsData ?? [], [setupPluginsData])
+  const setupPluginMarket = useMemo(
+    () => setupPluginMarketData ?? [],
+    [setupPluginMarketData]
+  )
   useEffect(() => {
     onWindowStateChange?.({
       terminal: { open: consoleOpen, minimized: consoleMinimized },
@@ -3003,6 +2964,7 @@ export function Dashboard({
     ) : feature === 'plugins' ? (
       <SystemPluginCenter
         plugins={setupPlugins}
+        marketPlugins={setupPluginMarket}
         sidebarLayout={sidebarLayout}
         onOpen={id => selectSystemFeature(`setup:${id}`)}
         onRefresh={() => void refetchSetupPlugins()}
@@ -3038,6 +3000,7 @@ export function Dashboard({
     ) : systemFeature === 'plugins' ? (
       <SystemPluginCenter
         plugins={setupPlugins}
+        marketPlugins={setupPluginMarket}
         onOpen={id => selectSystemFeature(`setup:${id}`)}
         onRefresh={() => void refetchSetupPlugins()}
       />
@@ -3669,9 +3632,6 @@ export function Dashboard({
                 <Settings className="size-4 shrink-0 text-brand-600 dark:text-brand-200" />
               }
               sidebarAriaLabel="系统功能"
-              sidebarContent={
-                <SystemFeatureSidebarHeader feature={feature} root={root} />
-              }
               onClose={() => closeSystemWindow(feature)}
               onMinimize={() =>
                 setSystemWindows(current => ({
@@ -5194,6 +5154,7 @@ function OperationTasksPage({
   )
   const [selected, setSelected] = useStoreState<string>('')
   const current = tasks.find(item => item.id === selected) ?? tasks[0]
+  const visibleTasks = tasks.slice(0, 20)
   const label = (action: string) =>
     action.startsWith('setup:')
       ? `系统插件 · ${action.split(':').slice(-1)[0]}`
@@ -5236,6 +5197,48 @@ function OperationTasksPage({
           </div>
         </header>
       )}
+      {sidebarLayout && visibleTasks.length > 0 && (
+        <SidebarWindowSectionNav>
+          <div className="sidebar-window-log-list" aria-label="日志列表">
+            {visibleTasks.map(item => (
+              <button
+                key={item.id}
+                className="sidebar-window-log-item"
+                type="button"
+                aria-current={current?.id === item.id ? 'page' : undefined}
+                onClick={() => setSelected(item.id)}
+              >
+                <i
+                  className={cn(
+                    'inline-flex size-5 shrink-0 items-center justify-center rounded-full text-[11px] not-italic',
+                    item.status === 'completed' &&
+                      'system-feature-status-success',
+                    item.status === 'failed' && 'system-feature-status-danger',
+                    item.status === 'running' && 'system-feature-status-running'
+                  )}
+                >
+                  {item.status === 'running'
+                    ? '◌'
+                    : item.status === 'completed'
+                      ? '✓'
+                      : '!'}
+                </i>
+                <span className="min-w-0">
+                  <strong>{label(item.action)}</strong>
+                  <small>
+                    {item.status === 'running'
+                      ? '进行中'
+                      : item.status === 'failed'
+                        ? '需要处理'
+                        : '已完成'}
+                    {item.createdAt && ` · ${formatTaskTime(item.createdAt)}`}
+                  </small>
+                </span>
+              </button>
+            ))}
+          </div>
+        </SidebarWindowSectionNav>
+      )}
       {isFetching && !tasks.length ? (
         <p className="m-0 text-xs text-slate-500">正在读取任务…</p>
       ) : !tasks.length ? (
@@ -5244,8 +5247,9 @@ function OperationTasksPage({
         </p>
       ) : (
         <div className="grid gap-3">
-          <div className="task-list grid gap-1">
-            {tasks.slice(0, 12).map(item => (
+          {!sidebarLayout && (
+            <div className="task-list grid gap-1">
+              {visibleTasks.map(item => (
               <button
                 key={item.id}
                 className={cn(
@@ -5288,14 +5292,32 @@ function OperationTasksPage({
                   </time>
                 )}
               </button>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
           {current && (
-            <pre className="overflow-auto rounded-lg bg-slate-950 p-2 text-[11px] leading-5 text-slate-200">
-              {current.status === 'failed'
-                ? current.error
-                : current.output || '正在执行…'}
-            </pre>
+            <div className="grid gap-2">
+              {sidebarLayout && (
+                <div className="grid gap-0.5 px-0.5">
+                  <strong className="text-sm font-semibold text-(--theme-text-strong)">
+                    {label(current.action)}
+                  </strong>
+                  <small className="text-xs text-(--theme-text-muted)">
+                    {current.status === 'running'
+                      ? '正在执行'
+                      : current.status === 'failed'
+                        ? '执行失败'
+                        : '已完成'}
+                    {current.createdAt && ` · ${formatTaskTime(current.createdAt)}`}
+                  </small>
+                </div>
+              )}
+              <pre className="overflow-auto rounded-lg bg-slate-950 p-2 text-[11px] leading-5 text-slate-200">
+                {current.status === 'failed'
+                  ? current.error
+                  : current.output || '正在执行…'}
+              </pre>
+            </div>
           )}
         </div>
       )}
@@ -5421,11 +5443,20 @@ function EnvironmentPage({
       {sidebarLayout ? (
         <SidebarWindowActions>
           <button
-            className="system-feature-refresh inline-flex min-h-8 items-center gap-1.5 justify-center rounded-lg px-3 text-xs font-semibold transition-colors"
+            className={
+              sidebarLayout
+                ? 'sidebar-window-action'
+                : 'system-feature-refresh inline-flex min-h-8 items-center gap-1.5 justify-center rounded-lg px-3 text-xs font-semibold transition-colors'
+            }
             disabled={checking}
             onClick={onRefresh}
           >
-            <RefreshCw className={cn('size-3.5', checking && 'animate-spin')} />
+            <RefreshCw
+              className={cn(
+                sidebarLayout ? 'size-4' : 'size-3.5',
+                checking && 'animate-spin'
+              )}
+            />
             重新检查
           </button>
         </SidebarWindowActions>
@@ -5570,10 +5601,12 @@ function InvalidDirectoryDialog({
 }
 function SystemPluginCenter({
   plugins,
+  marketPlugins,
   onOpen,
   sidebarLayout = false
 }: {
   plugins: SetupPlugin[]
+  marketPlugins: SetupPlugin[]
   onOpen: (id: string) => void
   onRefresh: () => void
   sidebarLayout?: boolean
@@ -5630,8 +5663,8 @@ function SystemPluginCenter({
   const visiblePlugins = !sidebarLayout
     ? plugins
     : pluginView === 'market'
-      ? plugins.filter(plugin => plugin.online)
-      : plugins.filter(plugin => !plugin.online && Boolean(plugin.source))
+      ? marketPlugins
+      : plugins
   const registerDevelopmentPath = async (paths: string[]) => {
     const path = paths[0]
     if (!path) return
@@ -5836,7 +5869,7 @@ function SystemPluginCenter({
       <Button
         variant="secondary"
         size="sm"
-        className={sidebarLayout ? 'w-full justify-start' : undefined}
+        className={sidebarLayout ? 'sidebar-window-action' : undefined}
         disabled={clearingDownloadCache || !downloadCacheSummary?.entries}
         onClick={() => void clearDownloads()}
         title={
@@ -5845,7 +5878,7 @@ function SystemPluginCenter({
             : '正在读取下载缓存'
         }
       >
-        {sidebarLayout && <Trash2 className="size-3.5" />}
+        {sidebarLayout && <Trash2 className="size-4" />}
         {sidebarLayout
           ? clearingDownloadCache
             ? '清理缓存中…'
@@ -5860,9 +5893,9 @@ function SystemPluginCenter({
         size="sm"
         disabled={registeringDevelopment}
         onClick={() => setDevelopmentFinderOpen(true)}
-        className={sidebarLayout ? 'w-full justify-start' : 'shrink-0'}
+        className={sidebarLayout ? 'sidebar-window-action' : 'shrink-0'}
       >
-        <Code2 className="mr-1 size-3.5" />
+        <Code2 className={sidebarLayout ? 'size-4' : 'mr-1 size-3.5'} />
         {registeringDevelopment ? '正在登记…' : '开发插件'}
       </Button>
     </>
@@ -9609,7 +9642,7 @@ function OpsWindow({
   onActivate: () => void
 }) {
   return (
-    <DesktopWindow
+    <SidebarWindow
       id="ops"
       open={open}
       minimized={minimized}
@@ -9625,11 +9658,10 @@ function OpsWindow({
       initialPosition={{ left: 120, top: 104 }}
       width={1080}
       height={720}
+      sidebarAriaLabel="运维操作"
     >
-      <div className="min-h-0 overflow-auto">
-        <OpsCenter root={root} />
-      </div>
-    </DesktopWindow>
+      <OpsCenter root={root} sidebarLayout />
+    </SidebarWindow>
   )
 }
 

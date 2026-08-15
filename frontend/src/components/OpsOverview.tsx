@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { ShieldCheck } from 'lucide-react'
+import { OctagonX, Pause, Play, ShieldCheck } from 'lucide-react'
 import { ConfirmDialog } from './ConfirmDialog'
 import { SidebarWindowActions } from './SidebarWindow'
 
@@ -60,17 +60,24 @@ export function OpsOverview({
   const persistentActions = (
     <>
       <button
-        className={sidebarLayout ? 'secondary-button w-full justify-start' : 'secondary-button'}
+        className={sidebarLayout ? 'sidebar-window-action' : 'secondary-button'}
         disabled={busy}
         onClick={() => void control(overview?.paused ? 'resume' : 'pause')}
       >
+        {sidebarLayout &&
+          (overview?.paused ? <Play className="size-4" /> : <Pause className="size-4" />)}
         {overview?.paused ? '恢复自动维护' : '暂停自动维护'}
       </button>
       <button
-        className={sidebarLayout ? 'danger-button w-full justify-start' : 'danger-button'}
+        className={
+          sidebarLayout
+            ? 'sidebar-window-action sidebar-window-action-danger'
+            : 'danger-button'
+        }
         disabled={busy}
         onClick={() => setConfirmStop(true)}
       >
+        {sidebarLayout && <OctagonX className="size-4" />}
         紧急停止全部
       </button>
     </>

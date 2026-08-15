@@ -377,7 +377,7 @@ func TestRegistryCanDisableAndReenablePlugin(t *testing.T) {
 	}
 }
 
-func TestRegistryRendersOnlinePluginFromAppsXIndex(t *testing.T) {
+func TestRegistrySeparatesOnlineMarketFromLocalPlugins(t *testing.T) {
 	server := newTestHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/apps-x.md":
@@ -389,14 +389,26 @@ func TestRegistryRendersOnlinePluginFromAppsXIndex(t *testing.T) {
 		}
 	}))
 	defer server.Close()
+	root := t.TempDir()
+	local := filepath.Join(root, "alemonx-network")
+	if err := os.Mkdir(local, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(local, manifestName), []byte(`{"id":"alemonx-network","name":"本地网络","version":"0.9.0","web":{"root":"web"}}`), 0644); err != nil {
+		t.Fatal(err)
+	}
 	registry := Registry{
+		roots:          []string{root},
 		onlineIndexURL: server.URL + "/apps-x.md",
 		httpClient:     server.Client(),
 		onlineManifestURL: func(string) string {
 			return server.URL + "/alx.json"
 		},
 	}
-	plugins := registry.List()
+	if local := registry.List(); len(local) != 1 || local[0].Name != "本地网络" {
+		t.Fatalf("local plugins = %#v", local)
+	}
+	plugins := registry.Market()
 	if len(plugins) != 1 || !plugins[0].Online || plugins[0].Runnable || plugins[0].Name != "网络" {
 		t.Fatalf("online plugin = %#v", plugins)
 	}

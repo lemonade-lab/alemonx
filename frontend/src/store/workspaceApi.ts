@@ -367,6 +367,10 @@ export const workspaceApi = createApi({
       query: () => 'setup/plugins',
       providesTags: ['SetupPlugins']
     }),
+    setupPluginMarket: build.query<SetupPlugin[], void>({
+      query: () => 'setup/plugins/market',
+      providesTags: ['SetupPlugins']
+    }),
     setupPluginReleases: build.query<SetupPluginRelease[], string>({
       query: pluginID =>
         `setup/plugins/releases/${encodeURIComponent(pluginID)}`
@@ -879,6 +883,7 @@ export const {
   useReleasesQuery,
   useLazySetupUpdateQuery,
   useSetupPluginsQuery,
+  useSetupPluginMarketQuery,
   useSetupPluginReleasesQuery,
   useLazySetupPluginReleasesQuery,
   useSetupPluginVersionsQuery,
