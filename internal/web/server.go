@@ -1052,6 +1052,7 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	mux.HandleFunc("/api/v1/setup/plugins/", s.setupPluginActionHandler)
 	mux.HandleFunc("/api/v1/setup/plugins/web/", s.setupPluginWebHandler)
 	mux.HandleFunc("/api/v1/services", s.localServicesHandler)
+	mux.HandleFunc("/api/v1/services/dynamic/", s.dynamicLocalServiceProxyHandler)
 	mux.HandleFunc("/api/v1/services/", s.localServiceProxyHandler)
 	mux.HandleFunc("/api/v1/robot", s.robotHandler)
 	mux.HandleFunc("/api/v1/robot/projects", s.robotProjectsHandler)

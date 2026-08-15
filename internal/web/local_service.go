@@ -23,6 +23,14 @@ import (
 
 const localServicePrefix = "/api/v1/services/"
 
+// dynamicServicePrefix mounts a same-origin proxy for a loopback port chosen
+// by an installed plugin at runtime (Docker-published container ports cannot
+// be declared statically in alx.json). The target is always forced to
+// 127.0.0.1 and the route is validated the same way as manifest services.
+const dynamicServicePrefix = localServicePrefix + "dynamic/"
+
+var pluginIDPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{1,63}$`)
+
 type localServiceView struct {
 	PluginID  string `json:"pluginId"`
 	ID        string `json:"id"`
@@ -154,12 +162,76 @@ func (s *server) localServiceProxyHandler(w http.ResponseWriter, r *http.Request
 		s.localServiceWebSocketHandler(w, r, plugin, service, requestPath)
 		return
 	}
+	s.localServiceProxyWith(w, r, plugin, service, requestPath, localServiceURL(plugin.ID, service.ID))
+}
+
+// dynamicLocalServiceProxyHandler proxies a loopback port supplied by the
+// plugin (e.g. a Docker-published port) through the authenticated management
+// origin, so the plugin's iframe can embed container web UIs the same way
+// alemonx-qq embeds its manifest-declared services. Only 127.0.0.1 is ever
+// reachable, and an installed plugin is already trusted with host execution.
+func (s *server) dynamicLocalServiceProxyHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodPost && r.Method != http.MethodPut && r.Method != http.MethodPatch && r.Method != http.MethodDelete {
+		writeError(w, http.StatusMethodNotAllowed, "本地服务不支持该请求方式。")
+		return
+	}
+	rest := strings.TrimPrefix(r.URL.Path, dynamicServicePrefix)
+	parts := strings.SplitN(rest, "/", 3)
+	if len(parts) < 2 || parts[0] == "" || !pluginIDPattern.MatchString(parts[0]) {
+		writeError(w, http.StatusNotFound, "缺少动态本地服务标识。")
+		return
+	}
+	port, err := strconv.Atoi(parts[1])
+	if err != nil || port < 1 || port > 65535 {
+		writeError(w, http.StatusBadRequest, "动态本地服务端口无效。")
+		return
+	}
+	plugin, err := s.plugins.Find(parts[0])
+	if err != nil || plugin.Online || !plugin.Enabled {
+		writeError(w, http.StatusNotFound, "未找到已启用的插件。")
+		return
+	}
+	requestPath := "/"
+	if len(parts) == 3 {
+		requestPath += parts[2]
+	}
+	if strings.Contains(requestPath, "\\") || strings.Contains(requestPath, "..") {
+		writeError(w, http.StatusBadRequest, "动态本地服务路径无效。")
+		return
+	}
+	service := setupplugin.ServiceSpec{
+		ID:             "dynamic-" + strconv.Itoa(port),
+		Name:           "动态回环服务",
+		Host:           "127.0.0.1",
+		Port:           port,
+		HealthPath:     "/",
+		Embed:          true,
+		RewriteHTML:    true,
+		RewriteAPIBase: true,
+		WebSocket:      true,
+		SSE:            true,
+	}
+	if !localServiceReachable(r.Context(), service) {
+		writeError(w, http.StatusBadGateway, "本地服务尚未启动或无法连接。")
+		return
+	}
+	if isUpgradeRequest(r) {
+		s.localServiceWebSocketHandler(w, r, plugin, service, requestPath)
+		return
+	}
+	s.localServiceProxyWith(w, r, plugin, service, requestPath, dynamicServiceURL(plugin.ID, port))
+}
+
+func dynamicServiceURL(pluginID string, port int) string {
+	return dynamicServicePrefix + pluginID + "/" + strconv.Itoa(port) + "/"
+}
+
+func (s *server) localServiceProxyWith(w http.ResponseWriter, r *http.Request, plugin setupplugin.Plugin, service setupplugin.ServiceSpec, requestPath, mount string) {
 	target, err := localServiceTarget(service, requestPath)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	mount := localServiceURL(plugin.ID, service.ID)
 	if !strings.HasSuffix(mount, "/") {
 		mount += "/"
 	}

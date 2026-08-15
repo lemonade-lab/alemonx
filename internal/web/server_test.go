@@ -1554,6 +1554,96 @@ func TestLocalServiceAPIBootstrapNotInjectedWithoutFlag(t *testing.T) {
 	}
 }
 
+func TestDynamicLocalServiceProxyForwardsLoopbackPort(t *testing.T) {
+	upstream := newIPv4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/":
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			_, _ = io.WriteString(w, "<!doctype html><html><head><title>DockerApp</title></head><body>app-root</body></html>")
+		case "/login":
+			_, _ = io.WriteString(w, "login-page")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+	parsed, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, rawPort, err := net.SplitHostPort(parsed.Host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pluginsRoot := t.TempDir()
+	pluginRoot := filepath.Join(pluginsRoot, "alemonx-docker")
+	if err := os.MkdirAll(filepath.Join(pluginRoot, "web"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := `{"id":"alemonx-docker","name":"Docker","version":"1.0.0","web":{"root":"web"}}`
+	if err := os.WriteFile(filepath.Join(pluginRoot, "alx.json"), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := &server{plugins: setupplugin.NewRegistry(pluginsRoot)}
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/services/dynamic/alemonx-docker/"+rawPort+"/login?x=1", nil)
+	request.AddCookie(&http.Cookie{Name: authCookieName, Value: "management-secret"})
+	s.dynamicLocalServiceProxyHandler(response, request)
+	if response.Code != http.StatusOK || response.Body.String() != "login-page" {
+		t.Fatalf("dynamic proxy = %d %q", response.Code, response.Body.String())
+	}
+
+	response = httptest.NewRecorder()
+	s.dynamicLocalServiceProxyHandler(response, httptest.NewRequest(http.MethodGet, "/api/v1/services/dynamic/alemonx-docker/"+rawPort+"/", nil))
+	body := response.Body.String()
+	mount := "/api/v1/services/dynamic/alemonx-docker/" + rawPort + "/"
+	if !strings.Contains(body, "__alxApiCompat") || !strings.Contains(body, "base href") || !strings.Contains(body, mount) {
+		t.Fatalf("dynamic HTML was not rewritten for embedding: %s", body)
+	}
+}
+
+func TestDynamicLocalServiceProxyRejectsInvalidTargets(t *testing.T) {
+	pluginsRoot := t.TempDir()
+	pluginRoot := filepath.Join(pluginsRoot, "alemonx-docker")
+	if err := os.MkdirAll(filepath.Join(pluginRoot, "web"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := `{"id":"alemonx-docker","name":"Docker","version":"1.0.0","web":{"root":"web"}}`
+	if err := os.WriteFile(filepath.Join(pluginRoot, "alx.json"), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := &server{plugins: setupplugin.NewRegistry(pluginsRoot)}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	closedPort := listener.Addr().(*net.TCPAddr).Port
+	_ = listener.Close()
+	cases := []struct {
+		path string
+		want int
+	}{
+		{"/api/v1/services/dynamic/missing-plugin/8080/", http.StatusNotFound},
+		{"/api/v1/services/dynamic/alemonx-docker/notaport/", http.StatusBadRequest},
+		{"/api/v1/services/dynamic/alemonx-docker/0/", http.StatusBadRequest},
+		{"/api/v1/services/dynamic/alemonx-docker/70000/", http.StatusBadRequest},
+		{"/api/v1/services/dynamic/alemonx-docker/8080/../etc", http.StatusBadRequest},
+		{"/api/v1/services/dynamic/alemonx-docker/" + strconv.Itoa(closedPort) + "/x/y", http.StatusBadGateway},
+	}
+	for _, item := range cases {
+		response := httptest.NewRecorder()
+		s.dynamicLocalServiceProxyHandler(response, httptest.NewRequest(http.MethodGet, item.path, nil))
+		if response.Code != item.want {
+			t.Fatalf("%s status = %d, want %d (%s)", item.path, response.Code, item.want, response.Body.String())
+		}
+	}
+	response := httptest.NewRecorder()
+	s.dynamicLocalServiceProxyHandler(response, httptest.NewRequest(http.MethodTrace, "/api/v1/services/dynamic/alemonx-docker/8080/", nil))
+	if response.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("TRACE status = %d, want 405", response.Code)
+	}
+}
+
 func TestLocalServiceWebSocketRequiresManifestDeclaration(t *testing.T) {
 	upstream := newIPv4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
 	parsed, err := url.Parse(upstream.URL)
