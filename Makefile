@@ -1,4 +1,4 @@
-.PHONY: help dev build test test-agent test-all test-sqlite test-space format lint dev-fe build-frontend test-sse verify-sse release-check
+.PHONY: help dev build test test-agent test-all test-sqlite test-space format lint dev-fe build-frontend test-sse verify-sse release-check docker-build docker-buildx docker-up docker-down docker-logs
 
 .DEFAULT_GOAL := help
 
@@ -91,3 +91,18 @@ release-check: ## Run the publishability gate
 	cd frontend && yarn lint
 	$(MAKE) build-frontend
 	git diff --check
+
+docker-build: ## Build the local Docker image
+	docker build --build-arg VERSION=$$(git describe --tags --always --dirty 2>/dev/null || echo dev) -t alx:local .
+
+docker-buildx: ## Manually validate or publish the multi-architecture Docker image
+	./scripts/docker-buildx.sh
+
+docker-up: ## Start ALemonX through Docker Compose
+	docker compose up -d
+
+docker-down: ## Stop the Docker Compose deployment
+	docker compose down
+
+docker-logs: ## Follow Docker Compose logs
+	docker compose logs -f --tail=200 alx

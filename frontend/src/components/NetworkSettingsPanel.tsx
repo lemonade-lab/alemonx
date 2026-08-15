@@ -198,7 +198,10 @@ export function NetworkSettingsPanel() {
               </div>
               {setting.mode === 'mirror' && mirrorPresets[item.id]?.length && (
                 <label className="settings-network-route-input">
-                  <span>镜像地址</span>
+                  <span>
+                    镜像地址
+                    <small title="默认已选择适合该类别的镜像地址。">已选推荐值</small>
+                  </span>
                   <select
                     aria-label={`${item.label}镜像地址`}
                     onChange={event => updateRoute(item.id, { mirrorUrl: event.target.value })}
@@ -209,12 +212,22 @@ export function NetworkSettingsPanel() {
                     )}
                     {mirrorPresets[item.id]?.map(preset => <option key={preset.value} value={preset.value}>{preset.label}</option>)}
                   </select>
-                  <small>默认已选择适合该类别的镜像地址。</small>
                 </label>
               )}
               {setting.mode === 'custom-mirror' && (
                 <label className="settings-network-route-input">
-                  <span>镜像模板</span>
+                  <span>
+                    镜像模板
+                    <small
+                      title={
+                        item.id === 'npm'
+                          ? '使用 {path} 保留软件包路径，例如 https://registry.example{path}。'
+                          : '使用 {url} 代表原始官方地址，例如 https://mirror.example/{url}。'
+                      }
+                    >
+                      {item.id === 'npm' ? '使用 {path}' : '使用 {url}'}
+                    </small>
+                  </span>
                   <input
                     autoCapitalize="none"
                     autoComplete="url"
@@ -224,11 +237,6 @@ export function NetworkSettingsPanel() {
                     spellCheck={false}
                     value={setting.mirrorUrl ?? ''}
                   />
-                  <small>
-                    {item.id === 'npm'
-                      ? <>使用 {`{path}`} 保留软件包路径，例如 https://registry.example{`{path}`}。</>
-                      : <>使用 {`{url}`} 代表原始官方地址，例如 https://mirror.example/{`{url}`}。</>}
-                  </small>
                 </label>
               )}
             </article>

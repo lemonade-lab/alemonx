@@ -36,6 +36,58 @@ async function request(path: string, init?: RequestInit) {
   return data
 }
 
+function asStringList(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string')
+    : []
+}
+
+function normalizeManagement(value: unknown): Management {
+  const source =
+    value && typeof value === 'object' ? (value as Record<string, unknown>) : {}
+  const current =
+    source.current && typeof source.current === 'object'
+      ? (source.current as Management['current'])
+      : {}
+  const accounts = Array.isArray(source.accounts)
+    ? source.accounts.flatMap(item => {
+        if (!item || typeof item !== 'object') return []
+        const account = item as Record<string, unknown>
+        return typeof account.account === 'string'
+          ? [
+              {
+                account: account.account,
+                roles: asStringList(account.roles),
+                superAdmin: account.superAdmin === true,
+                enabled: account.enabled !== false
+              }
+            ]
+          : []
+      })
+    : []
+  const roles = Array.isArray(source.roles)
+    ? source.roles.flatMap(item => {
+        if (!item || typeof item !== 'object') return []
+        const role = item as Record<string, unknown>
+        return typeof role.id === 'string' && typeof role.name === 'string'
+          ? [
+              {
+                id: role.id,
+                name: role.name,
+                permissions: asStringList(role.permissions)
+              }
+            ]
+          : []
+      })
+    : []
+  return {
+    current,
+    accounts,
+    roles,
+    permissions: asStringList(source.permissions)
+  }
+}
+
 export function AccountManagementPage() {
   const [data, setData] = useState<Management | null>(null)
   const [error, setError] = useState('')
@@ -52,7 +104,7 @@ export function AccountManagementPage() {
   const refresh = useCallback(async () => {
     setLoading(true)
     try {
-      setData((await request('management')) as Management)
+      setData(normalizeManagement(await request('management')))
       setError('')
     } catch (reason) {
       setError(

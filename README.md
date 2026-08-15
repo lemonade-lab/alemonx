@@ -2,7 +2,7 @@
 
 > 创建、运行、管理和扩展 AlemonJS 机器人；也能让 AI Agent 在你的确认下协助维护项目。
 
-[一行安装](#一行安装) · [命令行](docs/cli.md) · [MCP 文档](docs/mcp.md) · [系统插件开发](docs/plugin-development.md)
+[一行安装](#一行安装) · [Docker 部署](docs/docker.md) · [命令行](docs/cli.md) · [MCP 文档](docs/mcp.md) · [系统插件开发](docs/plugin-development.md)
 
 ![ALemonX 工作台：多机器人项目管理、运行配置与 Agent 协作](docs/images/alemonx-workbench.png)
 
@@ -44,34 +44,18 @@ Windows 直接运行 `alx.exe`。macOS / Linux / FreeBSD：
 chmod +x alx
 ./alx
 ```
+## Docker 部署
+
+详细的持久化、认证、更新与安全边界见 [Docker 部署文档](docs/docker.md)。
 
 ## 操作可控
 
 完整能力范围与权限边界见 [MCP 控制面文档](docs/mcp.md)。
 
-## 本地开发
-
-需要 Go 1.23+、Node.js 22+ 与 Yarn 1.x：
-
-```bash
-go run .
-
-cd frontend
-yarn install
-yarn dev
-```
-
-常用校验：
-
-```bash
-make test
-make build
-cd frontend && yarn lint && yarn build
-```
-
 ## 文档
 
 - [MCP 控制面](docs/mcp.md)
+- [Docker 部署](docs/docker.md)
 - [命令行](docs/cli.md)
 - [系统插件开发](docs/plugin-development.md)
 - [插件 WebView 规范](docs/webview.md)

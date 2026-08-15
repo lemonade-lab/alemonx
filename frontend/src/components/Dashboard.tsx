@@ -103,6 +103,7 @@ import { NpmPublishPanel } from './NpmPublishPanel'
 import { PackageManifestPanel } from './PackageManifestPanel'
 import { AgentChatPage } from './AgentChat'
 import { ErrorNotice } from './ErrorNotice'
+import { EmptyState } from './EmptyState'
 import { ConfirmDialog } from './ConfirmDialog'
 import { DownloadProgress } from './DownloadProgress'
 import { GLOBAL_MODAL_Z_INDEX, Modal } from './Modal'
@@ -112,6 +113,11 @@ import { useIsMobileViewport } from '../hooks/useIsMobileViewport'
 import { TestCenter } from './TestCenter'
 import { LiveChat } from './LiveChat'
 import { DesktopWindow } from './DesktopWindow'
+import {
+  SidebarWindow,
+  SidebarWindowActions,
+  SidebarWindowSectionNav
+} from './SidebarWindow'
 import { qqChatWindowStorageKey } from './qqChatStorage'
 import { SSHControl } from './SSHControl'
 import { GitHubAuthControl } from './GitHubAuthControl'
@@ -273,6 +279,59 @@ function systemFeatureLabel(feature: SystemFeature, plugins: SetupPlugin[]) {
     { tasks: '任务', environment: '环境检查' }[feature] ??
     '系统功能'
   )
+}
+
+function SystemFeatureSidebarHeader({
+  feature,
+  root
+}: {
+  feature: SystemFeature
+  root: string
+}) {
+  const details: Record<
+    string,
+    { icon: ReactNode; title: string; description: string }
+  > = {
+    plugins: {
+      icon: <Package className="size-4" />,
+      title: '插件中心',
+      description: '管理系统级插件与扩展能力'
+    },
+    'ops-overview': {
+      icon: <ShieldCheck className="size-4" />,
+      title: '运维总览',
+      description: '查看机器人与自动维护状态'
+    },
+    tasks: {
+      icon: <ClipboardList className="size-4" />,
+      title: '操作记录',
+      description: root ? '当前机器人与系统操作' : '系统操作'
+    },
+    environment: {
+      icon: <CheckCircle2 className="size-4" />,
+      title: '全局环境',
+      description: '检查 Node.js、Git 和系统工具'
+    }
+  }
+  const detail = details[feature]
+  if (!detail) return null
+  return (
+    <div className="grid gap-1 px-2.5 py-2">
+      <span className="inline-flex size-8 items-center justify-center rounded-lg bg-(--theme-accent-soft) text-(--theme-accent-text)">
+        {detail.icon}
+      </span>
+      <strong className="text-sm font-semibold text-(--theme-text-strong)">
+        {detail.title}
+      </strong>
+      <small className="text-xs leading-5 text-(--theme-text-muted)">
+        {detail.description}
+      </small>
+    </div>
+  )
+}
+
+function usesSystemFeatureSidebar(feature: SystemFeature) {
+  return ['plugins', 'ops-overview', 'tasks', 'environment'].includes(feature)
 }
 const directoryActions: Array<{
   id: Section | Page
@@ -999,10 +1058,21 @@ export function Dashboard({
   const [directoryPickerOpen, setDirectoryPickerOpen] = useStoreState(false)
   const [cloneProgress, setCloneProgress] = useStoreState(0)
   const [cloneStatus, setCloneStatus] = useStoreState('正在准备克隆…')
+  const [gitCloneMode, setGitCloneMode] = useStoreState<'robot' | 'package'>(
+    'robot'
+  )
   const [gitCloneOpen, setGitCloneOpen] = useStoreState(false)
   const [gitDestinationPickerOpen, setGitDestinationPickerOpen] =
     useStoreState(false)
   const [gitDestination, setGitDestination] = useStoreState('')
+  const openRobotClone = () => {
+    setGitCloneMode('robot')
+    setGitCloneOpen(true)
+  }
+  const openBackpackClone = () => {
+    setGitCloneMode('package')
+    setGitCloneOpen(true)
+  }
   const [gitProject, setGitProject] = useStoreState<Project | null>(null)
   const [appPortDialog, setAppPortDialog] = useStoreState(false)
   const [appPortValue, setAppPortValue] = useStoreState('')
@@ -2488,6 +2558,52 @@ export function Dashboard({
     }
   }
 
+  async function cloneBackpackPackage(
+    repository: string,
+    branch: string,
+    name: string,
+    mirror: string,
+    depth: number
+  ) {
+    if (!root) return
+    setBusy(true)
+    setCloneProgress(0)
+    setCloneStatus('正在启动 Git…')
+    try {
+      const response = await fetch('/api/v1/robot/packages/git-clone', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ root, repository, branch, name, mirror, depth })
+      })
+      const data = (await response.json()) as {
+        id?: string
+        output?: string
+        error?: string
+      }
+      if (!response.ok || !data.id)
+        throw new Error(data.error || '克隆插件包失败。')
+      setCloneStatus(data.output || '正在连接远程仓库…')
+      const task = await waitForRobotTask(data.id, {
+        onTask: current => {
+          setCloneProgress(current.progress ?? 10)
+          setCloneStatus(current.output || '正在克隆插件包…')
+        }
+      })
+      await refetchPackages()
+      showOutput(task.output || '插件包已克隆到背包。')
+      setGitCloneOpen(false)
+    } catch (reason) {
+      showOutput(
+        operationErrorMessage(reason, '克隆插件包失败，请检查 Git 地址和网络。'),
+        true
+      )
+    } finally {
+      setBusy(false)
+      setCloneProgress(0)
+      setCloneStatus('正在准备克隆…')
+    }
+  }
+
   function removeProject(id: string) {
     setPendingProjectRemoval(id)
   }
@@ -2628,6 +2744,7 @@ export function Dashboard({
           failed={Boolean(packagesError)}
           onRefresh={() => void refetchPackages()}
           onOpenPlugins={() => selectPage('plugins')}
+          onClone={openBackpackClone}
           busy={busy}
           onSaveConfig={savePackageConfig}
           onConfigChanged={refreshConfigDraft}
@@ -2812,8 +2929,35 @@ export function Dashboard({
             : '浏览并管理可安装的机器人包'
         }
       >
-        {catalogLoading && <p className="catalog-state">正在读取目录…</p>}
-        {catalogError && <p className="catalog-state">{catalogError}</p>}
+        {catalogLoading && (
+          <EmptyState
+            loading
+            icon={
+              page === 'modules' ? (
+                <Blocks className="size-6 text-slate-400 dark:text-slate-500" />
+              ) : page === 'connections' ? (
+                <Link className="size-6 text-slate-400 dark:text-slate-500" />
+              ) : (
+                <Package className="size-6 text-slate-400 dark:text-slate-500" />
+              )
+            }
+            title={`正在读取${
+              page === 'modules'
+                ? '模块目录'
+                : page === 'connections'
+                  ? '连接目录'
+                  : '插件目录'
+            }`}
+            description="正在加载可用内容，请稍候。"
+          />
+        )}
+        {catalogError && (
+          <EmptyState
+            icon={<AlertTriangle className="size-6 text-amber-500" />}
+            title="目录暂时不可用"
+            description={catalogError}
+          />
+        )}
         {!catalogLoading && !catalogError && currentCatalog && (
           <section className="grid gap-2">
             {currentCatalog.items.map(item => (
@@ -2840,13 +2984,17 @@ export function Dashboard({
   const workspaceSetupPlugin = setupPlugins.find(
     item => systemFeature === `setup:${item.id}`
   )
-  const systemWindowContent = (feature: SystemFeature) => {
+  const systemWindowContent = (
+    feature: SystemFeature,
+    sidebarLayout = false
+  ) => {
     const setupPlugin = setupPlugins.find(
       item => feature === `setup:${item.id}`
     )
     return feature === 'ops-overview' ? (
       <OpsOverview
         projects={projects}
+        sidebarLayout={sidebarLayout}
         onOpenProject={id => {
           openProject(id)
           closeSystemWindow(feature)
@@ -2855,17 +3003,19 @@ export function Dashboard({
     ) : feature === 'plugins' ? (
       <SystemPluginCenter
         plugins={setupPlugins}
+        sidebarLayout={sidebarLayout}
         onOpen={id => selectSystemFeature(`setup:${id}`)}
         onRefresh={() => void refetchSetupPlugins()}
       />
     ) : feature === 'accounts' ? (
       <AccountManagementPage />
     ) : feature === 'tasks' ? (
-      <OperationTasksPage root={root} />
+      <OperationTasksPage root={root} sidebarLayout={sidebarLayout} />
     ) : feature === 'environment' ? (
       <EnvironmentPage
         report={report}
         checking={checking}
+        sidebarLayout={sidebarLayout}
         onRefresh={onCheck}
         onFix={onFix}
       />
@@ -2964,7 +3114,7 @@ export function Dashboard({
     ) : (
       <EmptyWorkspace
         onAdd={chooseDirectories}
-        onClone={() => setGitCloneOpen(true)}
+        onClone={openRobotClone}
       />
     )
 
@@ -3251,13 +3401,23 @@ export function Dashboard({
           />
           <GitCloneDialog
             open={gitCloneOpen}
-            destination={gitDestination}
+            mode={gitCloneMode}
+            root={root}
+            destination={
+              gitCloneMode === 'package'
+                ? backpackDirectory(root)
+                : gitDestination
+            }
             busy={busy}
             progress={cloneProgress}
             status={cloneStatus}
             onClose={() => setGitCloneOpen(false)}
             onChooseDestination={() => setGitDestinationPickerOpen(true)}
-            onConfirm={cloneRobotRepository}
+            onConfirm={
+              gitCloneMode === 'package'
+                ? cloneBackpackPackage
+                : cloneRobotRepository
+            }
           />
           {renameTarget && (
             <Modal open className="bg-slate-900/40">
@@ -3324,7 +3484,7 @@ export function Dashboard({
               onRenameSession={requestRename}
               onArchiveSession={archiveSession}
               onAdd={chooseDirectories}
-              onClone={() => setGitCloneOpen(true)}
+              onClone={openRobotClone}
               onSelect={id => {
                 openProject(id)
                 setSystemFeature(null)
@@ -3497,6 +3657,41 @@ export function Dashboard({
         const windowID: FloatingWindowID = `system:${feature}`
         const zIndex = windowLayers[windowID] ?? 107
         const offset = (index % 6) * 28
+        if (usesSystemFeatureSidebar(feature)) {
+          return (
+            <SidebarWindow
+              id={`system:${feature}`}
+              key={feature}
+              open
+              minimized={state.minimized}
+              title={systemFeatureLabel(feature, setupPlugins)}
+              icon={
+                <Settings className="size-4 shrink-0 text-brand-600 dark:text-brand-200" />
+              }
+              sidebarAriaLabel="系统功能"
+              sidebarContent={
+                <SystemFeatureSidebarHeader feature={feature} root={root} />
+              }
+              onClose={() => closeSystemWindow(feature)}
+              onMinimize={() =>
+                setSystemWindows(current => ({
+                  ...current,
+                  [feature]: { minimized: true }
+                }))
+              }
+              zIndex={zIndex}
+              onActivate={() => {
+                setSystemWindowFeature(feature)
+                activateFloatingWindow(windowID)
+              }}
+              initialPosition={{ left: 216 + offset, top: 200 + offset }}
+              width={1080}
+              height={720}
+            >
+              {systemWindowContent(feature, true)}
+            </SidebarWindow>
+          )
+        }
         return (
           <DesktopWindow
             id={`system:${feature}`}
@@ -3949,6 +4144,8 @@ function MobileRailGroup({
 
 function GitCloneDialog({
   open,
+  mode,
+  root,
   destination,
   busy,
   progress,
@@ -3958,6 +4155,8 @@ function GitCloneDialog({
   onConfirm
 }: {
   open: boolean
+  mode: 'robot' | 'package'
+  root: string
   destination: string
   busy: boolean
   progress: number
@@ -3990,7 +4189,7 @@ function GitCloneDialog({
   useEffect(() => {
     if (open) {
       setRepository('')
-      setBranch('')
+      setBranch(mode === 'package' ? 'release' : '')
       setBranches([])
       setBranchesLoading(false)
       setName('')
@@ -4003,6 +4202,7 @@ function GitCloneDialog({
     }
   }, [
     open,
+    mode,
     setBranch,
     setBranches,
     setBranchesLoading,
@@ -4051,8 +4251,17 @@ function GitCloneDialog({
     }
     const controller = new AbortController()
     const timer = window.setTimeout(() => {
+      const checkPath =
+        mode === 'package'
+          ? '/api/v1/robot/packages/git-clone/check'
+          : '/api/v1/robot/git-clone/check'
+      const checkParameters = new URLSearchParams({ repository, name })
+      checkParameters.set(
+        mode === 'package' ? 'root' : 'destination',
+        mode === 'package' ? root : destination
+      )
       void fetch(
-        `/api/v1/robot/git-clone/check?${new URLSearchParams({ destination, repository, name })}`,
+        `${checkPath}?${checkParameters}`,
         { signal: controller.signal }
       )
         .then(async response => {
@@ -4081,7 +4290,7 @@ function GitCloneDialog({
       controller.abort()
       window.clearTimeout(timer)
     }
-  }, [destination, name, open, repository, setTarget, setTargetError])
+  }, [destination, mode, name, open, repository, root, setTarget, setTargetError])
   useEffect(() => {
     const value = repository.trim()
     if (!open || !isCompleteGitRepositoryURL(value)) {
@@ -4107,11 +4316,12 @@ function GitCloneDialog({
         })
         .then(data => {
           setBranches(data.branches ?? [])
-          setBranch(current =>
-            data.branches?.includes(current)
+          setBranch(current => {
+            if (mode === 'package') return current || 'release'
+            return data.branches?.includes(current)
               ? current
               : (data.defaultBranch ?? data.branches?.[0] ?? '')
-          )
+          })
         })
         .catch(() => {
           // 地址输入过程中或私有仓库尚未授权时保持静默，不打断用户填写。
@@ -4125,23 +4335,25 @@ function GitCloneDialog({
       controller.abort()
       window.clearTimeout(timer)
     }
-  }, [open, repository, setBranch, setBranches, setBranchesLoading])
+  }, [mode, open, repository, setBranch, setBranches, setBranchesLoading])
   if (!open) return null
   const usesSSH = /^(git@|ssh:\/\/)/.test(repository.trim())
   return (
-    <Modal open ariaLabel="从 Git 克隆机器人">
+    <Modal open ariaLabel={mode === 'package' ? '克隆插件包' : '从 Git 克隆机器人'}>
       <section
         className="git-dialog git-clone-dialog grid max-h-[min(720px,calc(100vh-32px))] w-full max-w-xl grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_22px_58px_rgb(28_26_23/0.25)]"
         role="dialog"
-        aria-label="从 Git 克隆机器人"
+        aria-label={mode === 'package' ? '克隆插件包' : '从 Git 克隆机器人'}
       >
         <header className="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
           <div className="grid gap-1">
             <strong className="text-sm font-semibold text-slate-900">
-              添加 Git 仓库
+              {mode === 'package' ? '克隆插件包' : '添加 Git 仓库'}
             </strong>
             <span className="text-xs text-slate-500">
-              下载完成后会自动加入机器人目录。
+              {mode === 'package'
+                ? '克隆到当前机器人的背包，完成后即可管理和启用。'
+                : '下载完成后会自动加入机器人目录。'}
             </span>
           </div>
           <button
@@ -4155,12 +4367,23 @@ function GitCloneDialog({
         <div className="grid gap-3 overflow-auto p-4">
           <section aria-label="仓库连接方式">
             <header className="flex items-center justify-between gap-2">
-              <small className="text-[11px] text-slate-500">
+              <small
+                className="truncate text-[11px] text-slate-500"
+                title={
+                  connection === 'ssh' && !sshLoading && !sshKeys.length
+                    ? '未配置 SSH 密钥；请在顶部 SSH 管理中生成并添加公钥，或改用 HTTPS。'
+                    : connection === 'https'
+                      ? 'HTTPS 可直接使用；访问私有仓库时，需要在代码平台完成在线授权。'
+                      : undefined
+                }
+              >
                 {sshLoading
                   ? '正在检查 SSH…'
-                  : sshKeys.length
-                    ? ``
-                    : '未配置 SSH 密钥'}
+                  : connection === 'ssh' && !sshKeys.length
+                    ? 'SSH 未配置'
+                    : connection === 'https'
+                      ? 'HTTPS 已选择'
+                      : ''}
               </small>
             </header>
             <Tabs
@@ -4182,17 +4405,20 @@ function GitCloneDialog({
               value={connection}
               variant="segmented"
             />
-            <p className="m-0 text-xs leading-5 text-slate-500">
-              {connection === 'ssh'
-                ? sshKeys.length
-                  ? ''
-                  : '未配置 SSH 密钥；请在顶部 SSH 管理中生成并添加公钥，或改用 HTTPS。'
-                : 'HTTPS 可直接使用；访问私有仓库时，需要在代码平台完成在线授权。'}
-            </p>
           </section>
           <section className="grid gap-3">
             <label className="grid gap-1 text-xs font-semibold text-slate-600">
-              仓库地址
+              <span className="flex min-w-0 items-center justify-between gap-2">
+                <span>仓库地址</span>
+                {usesSSH && !sshLoading && !sshKeys.length && (
+                  <small
+                    className="truncate font-normal text-red-700"
+                    title="请先配置 SSH 密钥，或改用 HTTPS 地址。"
+                  >
+                    未配置 SSH 密钥
+                  </small>
+                )}
+              </span>
               <input
                 className="h-9 rounded-md border border-slate-300 bg-white px-2.5 text-sm font-normal text-slate-800 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
                 autoFocus
@@ -4200,7 +4426,7 @@ function GitCloneDialog({
                 onChange={event => {
                   const value = event.target.value
                   setRepository(value)
-                  setBranch('')
+                  setBranch(mode === 'package' ? 'release' : '')
                   if (/^(git@|ssh:\/\/)/.test(value.trim()))
                     setConnection('ssh')
                   const derived =
@@ -4218,37 +4444,30 @@ function GitCloneDialog({
                     : 'https://github.com/组织/机器人仓库.git'
                 }
               />
-              {usesSSH && !sshLoading && !sshKeys.length && (
-                <small className="font-normal text-red-700">
-                  此 SSH 地址无法使用：请先在顶部 SSH
-                  管理中生成密钥并添加公钥，或改用 HTTPS 地址。
-                </small>
-              )}
             </label>
             <div className="grid gap-3 sm:grid-cols-2">
               <label className="grid gap-1 text-xs font-semibold text-slate-600">
-                分支{branchesLoading ? '（正在读取…）' : '（可选）'}
+                {mode === 'package' ? '插件分支' : '分支'}
+                {branchesLoading ? '（正在读取…）' : '（可选）'}
                 <select
                   className="h-9 rounded-md border border-slate-300 bg-white px-2.5 text-sm font-normal text-slate-800 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100 disabled:bg-slate-100"
                   value={branch}
                   onChange={event => setBranch(event.target.value)}
                   disabled={!branches.length || branchesLoading}
                 >
-                  <option value="">默认分支</option>
-                  {branches.map(item => (
+                  {mode === 'package' ? (
+                    <option value="release">发布分支（release）</option>
+                  ) : (
+                    <option value="">默认分支</option>
+                  )}
+                  {branches
+                    .filter(item => mode !== 'package' || item !== 'release')
+                    .map(item => (
                     <option key={item} value={item}>
                       {formatBranchLabel(item)}
                     </option>
                   ))}
                 </select>
-                {branch && (
-                  <small
-                    className="truncate text-[11px] font-normal text-slate-500"
-                    title={branch}
-                  >
-                    已选：{branch}
-                  </small>
-                )}
               </label>
               <label className="grid gap-1 text-xs font-semibold text-slate-600">
                 克隆深度
@@ -4279,30 +4498,54 @@ function GitCloneDialog({
           </section>
           <section className="grid gap-3 sm:grid-cols-2">
             <label className="grid gap-1 text-xs font-semibold text-slate-600">
-              所在文件夹
-              <button
-                type="button"
-                className="h-9 truncate rounded-md border border-slate-300 bg-white px-2.5 text-left text-sm font-normal text-slate-700"
-                onClick={onChooseDestination}
-              >
-                {gitDestinationLabel(destination)}
-              </button>
+              {mode === 'package' ? '存放位置' : '所在文件夹'}
+              {mode === 'package' ? (
+                <span
+                  className="h-9 truncate rounded-md border border-slate-200 bg-slate-50 px-2.5 leading-9 text-sm font-normal text-slate-600"
+                  title={destination}
+                >
+                  当前机器人背包（packages）
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  className="h-9 truncate rounded-md border border-slate-300 bg-white px-2.5 text-left text-sm font-normal text-slate-700"
+                  onClick={onChooseDestination}
+                >
+                  {gitDestinationLabel(destination)}
+                </button>
+              )}
             </label>
             <label className="grid gap-1 text-xs font-semibold text-slate-600">
-              新目录名称
+              <span className="flex min-w-0 items-center justify-between gap-2">
+                <span>新目录名称</span>
+                {target?.exists ? (
+                  <small
+                    className="truncate font-normal text-red-700"
+                    title={`目标已存在：${target.path}`}
+                  >
+                    目标已存在
+                  </small>
+                ) : target?.path ? null : targetError ? (
+                  <small
+                    className="truncate font-normal text-red-700"
+                    title={targetError}
+                  >
+                    无法检查目标
+                  </small>
+                ) : null}
+              </span>
               <input
-                className="h-9 rounded-md border border-slate-300 bg-white px-2.5 text-sm font-normal text-slate-800 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
+                className={cn(
+                  'h-9 rounded-md border bg-white px-2.5 text-sm font-normal text-slate-800 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100',
+                  target?.exists || targetError
+                    ? 'border-red-400 focus:ring-red-100'
+                    : 'border-slate-300'
+                )}
                 value={name}
                 onChange={event => setName(event.target.value)}
                 placeholder="默认使用仓库名"
               />
-              {target?.exists ? (
-                <small className="text-xs text-red-700">
-                  目标已存在：{target.path}
-                </small>
-              ) : target?.path ? null : targetError ? (
-                <small className="text-xs text-red-700">{targetError}</small>
-              ) : null}
             </label>
           </section>
         </div>
@@ -4325,7 +4568,7 @@ function GitCloneDialog({
             取消
           </button>
           <button
-            className="primary-button"
+            className="primary-button gap-1.5"
             disabled={
               busy ||
               ((connection === 'ssh' || usesSSH) &&
@@ -4348,7 +4591,11 @@ function GitCloneDialog({
               )
             }
           >
-            {busy ? '正在下载…' : '克隆并添加'}
+            {busy
+              ? '正在下载…'
+              : mode === 'package'
+                ? '克隆到背包'
+                : '克隆并添加'}
           </button>
         </footer>
       </section>
@@ -4358,6 +4605,13 @@ function GitCloneDialog({
 
 function gitDestinationLabel(path: string) {
   return path || '选择存放位置'
+}
+
+function backpackDirectory(root: string) {
+  if (!root) return ''
+  const cleaned = root.replace(/[\\/]+$/, '')
+  const separator = cleaned.includes('\\') ? '\\' : '/'
+  return `${cleaned}${separator}packages`
 }
 
 function formatBranchLabel(branch: string) {
@@ -4923,7 +5177,13 @@ function McpControl() {
     </div>
   )
 }
-function OperationTasksPage({ root }: { root: string }) {
+function OperationTasksPage({
+  root,
+  sidebarLayout = false
+}: {
+  root: string
+  sidebarLayout?: boolean
+}) {
   const { data, isFetching } = useRobotTasksQuery(undefined, {
     // Task state is driven by SSE task events (invalidateTags); no polling.
     pollingInterval: 0,
@@ -4961,19 +5221,21 @@ function OperationTasksPage({ root }: { root: string }) {
         }[action] ?? action)
   return (
     <section className="workspace-content system-feature-page mx-auto max-w-215">
-      <header className="system-feature-header">
-        <span className="system-feature-header-icon bg-brand-50 text-brand-600 dark:bg-brand-900/40 dark:text-brand-300">
-          <ClipboardList className="size-4" />
-        </span>
-        <div className="min-w-0 flex-1">
-          <strong className="block text-sm font-semibold text-slate-900 dark:text-slate-100">
-            操作记录
-          </strong>
-          <span className="block truncate text-xs text-slate-400 dark:text-slate-500">
-            {root ? '当前机器人与系统操作' : '系统操作'}
+      {!sidebarLayout && (
+        <header className="system-feature-header">
+          <span className="system-feature-header-icon bg-brand-50 text-brand-600 dark:bg-brand-900/40 dark:text-brand-300">
+            <ClipboardList className="size-4" />
           </span>
-        </div>
-      </header>
+          <div className="min-w-0 flex-1">
+            <strong className="block text-sm font-semibold text-slate-900 dark:text-slate-100">
+              操作记录
+            </strong>
+            <span className="block truncate text-xs text-slate-400 dark:text-slate-500">
+              {root ? '当前机器人与系统操作' : '系统操作'}
+            </span>
+          </div>
+        </header>
+      )}
       {isFetching && !tasks.length ? (
         <p className="m-0 text-xs text-slate-500">正在读取任务…</p>
       ) : !tasks.length ? (
@@ -5044,19 +5306,21 @@ function EnvironmentPage({
   report,
   checking,
   onRefresh,
-  onFix
+  onFix,
+  sidebarLayout = false
 }: {
   report: { checks: Check[] } | null
   checking: boolean
   onRefresh: () => void
   onFix: (check: Check) => void
+  sidebarLayout?: boolean
 }) {
   const checks = report?.checks ?? []
   const readyCount = checks.filter(check => check.status === 'ready').length
   const allReady = checks.length > 0 && readyCount === checks.length
   return (
     <section className="workspace-content system-feature-page mx-auto max-w-215">
-      <header className="system-feature-header">
+      {!sidebarLayout && <header className="system-feature-header">
         <span
           className={cn(
             'system-feature-header-icon',
@@ -5087,7 +5351,7 @@ function EnvironmentPage({
                 : '等待检查'}
           </span>
         </div>
-      </header>
+      </header>}
 
       {checking && (
         <p className="m-0 py-3 text-xs leading-5 text-slate-500">
@@ -5154,7 +5418,19 @@ function EnvironmentPage({
         <p className="m-0 py-3 text-xs text-slate-500">尚未获取检查结果。</p>
       )}
 
-      <footer className="flex justify-end border-t border-slate-100 pt-3 dark:border-slate-800">
+      {sidebarLayout ? (
+        <SidebarWindowActions>
+          <button
+            className="system-feature-refresh inline-flex min-h-8 items-center gap-1.5 justify-center rounded-lg px-3 text-xs font-semibold transition-colors"
+            disabled={checking}
+            onClick={onRefresh}
+          >
+            <RefreshCw className={cn('size-3.5', checking && 'animate-spin')} />
+            重新检查
+          </button>
+        </SidebarWindowActions>
+      ) : (
+        <footer className="flex justify-end border-t border-slate-100 pt-3 dark:border-slate-800">
         <button
           className="system-feature-refresh inline-flex min-h-8 items-center gap-1.5 justify-center rounded-lg px-3 text-xs font-semibold transition-colors"
           disabled={checking}
@@ -5163,7 +5439,8 @@ function EnvironmentPage({
           <RefreshCw className={cn('size-3.5', checking && 'animate-spin')} />
           重新检查
         </button>
-      </footer>
+        </footer>
+      )}
     </section>
   )
 }
@@ -5293,11 +5570,13 @@ function InvalidDirectoryDialog({
 }
 function SystemPluginCenter({
   plugins,
-  onOpen
+  onOpen,
+  sidebarLayout = false
 }: {
   plugins: SetupPlugin[]
   onOpen: (id: string) => void
   onRefresh: () => void
+  sidebarLayout?: boolean
 }) {
   const [setEnabled, { isLoading }] = useSetSetupPluginEnabledMutation()
   const [installPlugin, { isLoading: installing }] =
@@ -5344,7 +5623,15 @@ function SystemPluginCenter({
     useStoreState<SetupPluginDevelopment | null>(null)
   const [developmentLog, setDevelopmentLog] = useStoreState('')
   const [developmentFinderOpen, setDevelopmentFinderOpen] = useStoreState(false)
+  const [pluginView, setPluginView] = useStoreState<'market' | 'mine'>(
+    'market'
+  )
   const developmentItems = developmentData?.items ?? []
+  const visiblePlugins = !sidebarLayout
+    ? plugins
+    : pluginView === 'market'
+      ? plugins.filter(plugin => plugin.online)
+      : plugins.filter(plugin => !plugin.online && Boolean(plugin.source))
   const registerDevelopmentPath = async (paths: string[]) => {
     const path = paths[0]
     if (!path) return
@@ -5544,9 +5831,70 @@ function SystemPluginCenter({
     currentRelease?.assets.filter(
       asset => asset.compatible && /\.(zip|tar\.gz|tgz)$/i.test(asset.name)
     ) ?? []
+  const persistentActions = (
+    <>
+      <Button
+        variant="secondary"
+        size="sm"
+        className={sidebarLayout ? 'w-full justify-start' : undefined}
+        disabled={clearingDownloadCache || !downloadCacheSummary?.entries}
+        onClick={() => void clearDownloads()}
+        title={
+          downloadCacheSummary
+            ? `${(downloadCacheSummary.bytes / 1024 / 1024).toFixed(1)} MB · ${downloadCacheSummary.entries} 项下载缓存`
+            : '正在读取下载缓存'
+        }
+      >
+        {sidebarLayout && <Trash2 className="size-3.5" />}
+        {sidebarLayout
+          ? clearingDownloadCache
+            ? '清理缓存中…'
+            : '清理下载缓存'
+          : downloadCacheSummary
+            ? `${(downloadCacheSummary.bytes / 1024 / 1024).toFixed(1)} MB · ${downloadCacheSummary.entries} 项`
+            : '正在读取…'}
+        {!sidebarLayout && (clearingDownloadCache ? '清理中…' : '清理下载缓存')}
+      </Button>
+      <Button
+        variant="secondary"
+        size="sm"
+        disabled={registeringDevelopment}
+        onClick={() => setDevelopmentFinderOpen(true)}
+        className={sidebarLayout ? 'w-full justify-start' : 'shrink-0'}
+      >
+        <Code2 className="mr-1 size-3.5" />
+        {registeringDevelopment ? '正在登记…' : '开发插件'}
+      </Button>
+    </>
+  )
   return (
     <section className="workspace-content system-feature-page mx-auto max-w-215">
-      <header className="system-feature-header">
+      {sidebarLayout && (
+        <SidebarWindowSectionNav>
+          <button
+            type="button"
+            aria-current={pluginView === 'market' ? 'page' : undefined}
+            onClick={() => setPluginView('market')}
+          >
+            <Globe className="size-4" /> 市场
+          </button>
+          <button
+            type="button"
+            aria-current={pluginView === 'mine' ? 'page' : undefined}
+            onClick={() => setPluginView('mine')}
+          >
+            <HardDrive className="size-4" /> 我的
+          </button>
+        </SidebarWindowSectionNav>
+      )}
+      {sidebarLayout ? (
+        pluginView === 'mine' && (
+          <SidebarWindowActions>
+            <div className="grid gap-1.5">{persistentActions}</div>
+          </SidebarWindowActions>
+        )
+      ) : (
+        <header className="system-feature-header">
         <span className="system-feature-header-icon bg-brand-50 text-brand-600 dark:bg-brand-900/40 dark:text-brand-300">
           <Package className="size-4" />
         </span>
@@ -5558,31 +5906,10 @@ function SystemPluginCenter({
             管理系统级插件与扩展能力
           </span>
         </div>
-        <div className="flex gap-2">
-          <Button
-            variant="secondary"
-            size="sm"
-            disabled={clearingDownloadCache || !downloadCacheSummary?.entries}
-            onClick={() => void clearDownloads()}
-          >
-            {downloadCacheSummary
-              ? `${(downloadCacheSummary.bytes / 1024 / 1024).toFixed(1)} MB · ${downloadCacheSummary.entries} 项`
-              : '正在读取…'}
-            {clearingDownloadCache ? '清理中…' : '清理下载缓存'}
-          </Button>
-          <Button
-            variant="secondary"
-            size="sm"
-            disabled={registeringDevelopment}
-            onClick={() => setDevelopmentFinderOpen(true)}
-            className="shrink-0"
-          >
-            <Code2 className="mr-1 size-3.5" />
-            {registeringDevelopment ? '正在登记…' : '开发插件'}
-          </Button>
-        </div>
-      </header>
-      {developmentItems.length > 0 && (
+          <div className="flex gap-2">{persistentActions}</div>
+        </header>
+      )}
+      {(!sidebarLayout || pluginView === 'mine') && developmentItems.length > 0 && (
         <section>
           {developmentItems.map(session => (
             <div
@@ -5709,9 +6036,9 @@ function SystemPluginCenter({
         </section>
       )}
       {/* 插件列表 */}
-      {plugins.length ? (
+      {visiblePlugins.length ? (
         <div className="grid gap-2">
-          {plugins.map(plugin => {
+          {visiblePlugins.map(plugin => {
             const isOnline = Boolean(plugin.online)
             const isEnabled = Boolean(plugin.enabled)
             const isManagedRelease = Boolean(
@@ -5879,10 +6206,21 @@ function SystemPluginCenter({
                       <Button
                         variant="secondary"
                         size="sm"
+                        disabled={isLoading}
+                        onClick={() => void toggle(plugin)}
+                        className="h-7 rounded-md px-2.5 text-xs font-medium"
+                      >
+                        停止
+                      </Button>
+                    )}
+                    {isEnabled && (
+                      <Button
+                        variant="secondary"
+                        size="sm"
                         onClick={() => void manageVersions(plugin)}
                         className="h-7 rounded-md px-2.5 text-xs font-medium"
                       >
-                        版本管理
+                        版本
                       </Button>
                     )}
                     <Button
@@ -5906,7 +6244,7 @@ function SystemPluginCenter({
                     onClick={() => void toggle(plugin)}
                     className="system-feature-actions h-7 shrink-0 rounded-md px-2.5 text-xs font-medium"
                   >
-                    {isEnabled ? '停用' : '启用'}
+                    {isEnabled ? '停止' : '启动'}
                   </Button>
                 )}
               </article>
@@ -5915,17 +6253,23 @@ function SystemPluginCenter({
         </div>
       ) : (
         /* 空状态 */
-        <section className="system-feature-empty flex flex-col items-center justify-center">
-          <div className="mb-3 rounded-full bg-slate-100 p-3 dark:bg-slate-800">
-            <Package className="size-6 text-slate-400 dark:text-slate-500" />
-          </div>
-          <strong className="text-sm font-medium text-slate-600 dark:text-slate-300">
-            暂未发现插件
-          </strong>
-          <span className="mt-1 text-xs text-slate-400">
-            将插件目录放入 plugins 后刷新即可
-          </span>
-        </section>
+        <EmptyState
+          icon={<Package className="size-6 text-slate-400 dark:text-slate-500" />}
+          title={
+            !sidebarLayout
+              ? '暂未发现插件'
+              : pluginView === 'market'
+                ? '市场暂未提供插件'
+                : '还没有已下载的插件'
+          }
+          description={
+            !sidebarLayout
+              ? '将插件目录放入 plugins 后刷新即可'
+              : pluginView === 'market'
+                ? '稍后再试，或检查网络连接。'
+                : '前往市场下载插件后会显示在这里。'
+          }
+        />
       )}
 
       {/* 消息提示 */}
@@ -6339,6 +6683,7 @@ function BackpackPanel({
   failed,
   onRefresh,
   onOpenPlugins,
+  onClone,
   busy,
   onSaveConfig,
   onConfigChanged,
@@ -6357,6 +6702,7 @@ function BackpackPanel({
   failed: boolean
   onRefresh: () => void
   onOpenPlugins: () => void
+  onClone: () => void
   busy: boolean
   onSaveConfig: (
     packageName: string,
@@ -6413,8 +6759,11 @@ function BackpackPanel({
       description={<span title={`${root}/packages`}>packages</span>}
       actions={
         <>
-          <button className="text-button" onClick={onOpenPlugins}>
-            插件中心
+          <button className="text-button gap-1.5" onClick={onOpenPlugins}>
+            <Blocks className="size-4" />插件中心
+          </button>
+          <button className="secondary-button min-h-9 gap-1.5" onClick={onClone}>
+            <GitBranch className="size-3.5" />克隆
           </button>
           <button
             className="icon-button size-9 shrink-0 p-0"
@@ -6423,7 +6772,11 @@ function BackpackPanel({
             aria-label="刷新背包"
             title="刷新背包"
           >
-            {loading ? '读取中…' : <RefreshCw className="size-4" />}
+            {loading ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <RefreshCw className="size-4" />
+            )}
           </button>
         </>
       }
@@ -6450,7 +6803,7 @@ function BackpackPanel({
                   className="flex w-full items-center gap-3 p-3 text-left"
                   onClick={() => setSelectedName(item.name)}
                 >
-                  <div>
+                  <div className="min-w-0 flex-1">
                     <strong className="flex items-center gap-2 text-sm font-semibold text-slate-800">
                       {item.name}
                       {item.version && (
@@ -6471,6 +6824,7 @@ function BackpackPanel({
                       {item.path}
                     </small>
                   </div>
+                  <ChevronRight className="size-4 shrink-0 text-slate-400" />
                 </button>
                 <div className="flex justify-end shrink-0 items-center gap-2 border-t border-slate-100 px-3 py-2">
                   <span className="text-[11px] text-slate-400">
@@ -6482,14 +6836,21 @@ function BackpackPanel({
                     <button
                       className={
                         enabledApps.has(item.name)
-                          ? 'secondary-button'
-                          : 'primary-button'
+                          ? 'secondary-button gap-1.5'
+                          : 'primary-button gap-1.5'
                       }
                       disabled={appToggleBusy === item.name}
                       onClick={() =>
                         void toggleApp(item.name, !enabledApps.has(item.name))
                       }
                     >
+                      {appToggleBusy === item.name ? (
+                        <Loader2 className="size-4 animate-spin" />
+                      ) : enabledApps.has(item.name) ? (
+                        <X className="size-4" />
+                      ) : (
+                        <Play className="size-4" />
+                      )}
                       {appToggleBusy === item.name
                         ? '切换中…'
                         : enabledApps.has(item.name)
@@ -6502,19 +6863,15 @@ function BackpackPanel({
             ))}
           </div>
         ) : (
-          <section className="grid min-h-40 place-items-center gap-2 rounded-xl border border-dashed border-slate-300 p-6 text-center">
-            <strong className="text-sm font-semibold text-slate-700">
-              暂无插件包
-            </strong>
-            <span className="text-xs text-slate-500">
-              {failed
-                ? '暂未能读取本地 packages 目录，你仍可从插件页安装。'
-                : '安装后的本地插件包会显示在这里。'}
-            </span>
-            <button className="secondary-button" onClick={onOpenPlugins}>
-              前往插件
-            </button>
-          </section>
+          <EmptyState
+            icon={<Archive className="size-6 text-slate-400 dark:text-slate-500" />}
+            title={failed ? '暂时无法读取背包' : '背包还是空的'}
+            description={
+              failed
+                ? '请检查 packages 目录后刷新重试。'
+                : '克隆或安装插件包后，会显示在这里。'
+            }
+          />
         )}
       </div>
     </RobotPanel>
@@ -6620,8 +6977,8 @@ function BackpackPackageManager({
       }
       actions={
         <>
-          <button className="text-button" onClick={onBack}>
-            ‹ 返回背包
+          <button className="text-button gap-1.5" onClick={onBack}>
+            <ArrowLeft className="size-4" />返回背包
           </button>
           <button
             className="icon-button size-9 p-0"
@@ -6631,11 +6988,11 @@ function BackpackPackageManager({
             <RefreshCw className="size-4" />
           </button>
           <button
-            className="inline-flex min-h-8 items-center justify-center rounded-md border border-red-200 px-3 text-xs font-semibold text-red-700 transition hover:bg-red-50"
+            className="inline-flex h-9 items-center justify-center gap-1.5 rounded-md border border-red-200 px-3 text-xs font-semibold text-red-700 transition hover:bg-red-50"
             disabled={busy}
             onClick={() => void onRemove(item.name)}
           >
-            卸载
+            <Trash2 className="size-4" />卸载
           </button>
         </>
       }
@@ -6643,9 +7000,9 @@ function BackpackPackageManager({
       <Tabs
         ariaLabel="插件详情"
         items={[
-          { id: 'readme', label: '文档' },
-          { id: 'config', label: '配置' },
-          { id: 'version', label: '版本' }
+          { id: 'readme', label: '文档', icon: <FileText className="size-3.5" /> },
+          { id: 'config', label: '配置', icon: <Settings className="size-3.5" /> },
+          { id: 'version', label: '版本', icon: <GitBranch className="size-3.5" /> }
         ]}
         onChange={setTab}
         value={tab}
@@ -6747,7 +7104,7 @@ function BackpackPackageManager({
                 ))}
               </select>
               <button
-                className="primary-button"
+                className="primary-button gap-1.5"
                 disabled={
                   busy ||
                   !version ||
@@ -6756,11 +7113,11 @@ function BackpackPackageManager({
                 }
                 onClick={() => void onReplace(item.name, version)}
               >
-                切换版本
+                <GitBranch className="size-4" />切换版本
               </button>
               {versions.source === 'git' && (
                 <button
-                  className="inline-flex min-h-9 items-center justify-center rounded-md border border-orange-200 px-3 text-xs font-semibold text-orange-700 transition hover:bg-orange-50 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="inline-flex min-h-9 items-center justify-center gap-1.5 rounded-md border border-orange-200 px-3 text-xs font-semibold text-orange-700 transition hover:bg-orange-50 disabled:cursor-not-allowed disabled:opacity-60"
                   disabled={
                     busy ||
                     !version ||
@@ -6769,7 +7126,7 @@ function BackpackPackageManager({
                   }
                   onClick={() => setForceSwitchOpen(true)}
                 >
-                  强制切换
+                  <AlertTriangle className="size-4" />强制切换
                 </button>
               )}
             </div>
@@ -6867,8 +7224,8 @@ function CatalogDetail({
       }
       actions={
         <>
-          <button className="text-button" onClick={onBack}>
-            ‹ 返回目录
+          <button className="text-button gap-1.5" onClick={onBack}>
+            <ArrowLeft className="size-4" />返回目录
           </button>
         </>
       }
@@ -6923,10 +7280,15 @@ function CatalogDetail({
             }
             onClick={() => onRun(installAction, installTarget)}
           >
+            {busy ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <Package className="size-4" />
+            )}
             {busy ? '处理中…' : kind === 'connection' ? '安装' : '安装'}
           </button>
           <button
-            className="secondary-button"
+            className="secondary-button gap-1.5"
             disabled={
               busy || !packageName || (kind === 'plugin' && repositoryInstall)
             }
@@ -6937,7 +7299,7 @@ function CatalogDetail({
             }
             onClick={() => onRun(uninstallAction, packageName)}
           >
-            卸载
+            <Trash2 className="size-4" />卸载
           </button>
           {item.url && (
             <a
@@ -7770,11 +8132,11 @@ function RuntimePanel({
                         {packageTarget} 尚未安装；安装后才能读取它的连接配置。
                       </small>
                       <button
-                        className="secondary-button"
+                        className="secondary-button gap-1.5"
                         disabled={loginDialogBusy || busy}
                         onClick={() => void installSelectedConnection()}
                       >
-                        安装连接包
+                        <Package className="size-4" />安装连接包
                       </button>
                     </footer>
                   )}
@@ -7838,7 +8200,7 @@ function RuntimePanel({
                   (userLogin && missing.length > 0)
                 return (
                   <button
-                    className="primary-button"
+                    className="primary-button gap-1.5"
                     disabled={loginDialogBusy || busy || blocked}
                     title={
                       blocked
@@ -7851,6 +8213,7 @@ function RuntimePanel({
                     }
                     onClick={() => void startFromDialog()}
                   >
+                    <Play className="size-4" />
                     {loginDialogBusy || busy ? '启动中…' : '启动'}
                   </button>
                 )
@@ -7885,10 +8248,15 @@ function RuntimePanel({
                 </span>
               </div>
               <button
-                className="text-button"
+                className="text-button gap-1.5"
                 disabled={portStatusBusy}
                 onClick={() => void refreshPorts()}
               >
+                {portStatusBusy ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="size-4" />
+                )}
                 {portStatusBusy ? '检测中…' : '重新检测'}
               </button>
             </div>
@@ -7970,7 +8338,7 @@ function RuntimePanel({
               </div>
               <div className="ml-auto flex shrink-0 flex-wrap justify-end gap-2">
                 <button
-                  className="secondary-button"
+                  className="secondary-button gap-1.5"
                   disabled={busy || !overview?.dependenciesComplete}
                   title={
                     !overview?.dependenciesComplete
@@ -7985,13 +8353,13 @@ function RuntimePanel({
                     )
                   }
                 >
-                  一键升级
+                  <RefreshCw className="size-4" />一键升级
                 </button>
                 <button
                   className={
                     overview?.dependenciesComplete
-                      ? 'secondary-button'
-                      : 'danger-button'
+                      ? 'secondary-button gap-1.5'
+                      : 'danger-button gap-1.5'
                   }
                   disabled={busy}
                   onClick={() =>
@@ -8006,6 +8374,7 @@ function RuntimePanel({
                     )
                   }
                 >
+                  <Package className="size-4" />
                   {overview?.dependenciesComplete ? '重新安装' : '安装'}
                 </button>
               </div>
@@ -8034,10 +8403,10 @@ function RuntimePanel({
               <div className="ml-auto flex gap-2 shrink-0 justify-end">
                 {overview?.hasAppScript ? (
                   <button
-                    className={
-                      foregroundRunning || foregroundStopping
-                        ? 'secondary-button'
-                        : 'primary-button'
+                  className={
+                    foregroundRunning || foregroundStopping
+                        ? 'secondary-button gap-1.5'
+                        : 'primary-button gap-1.5'
                     }
                     disabled={busy || foregroundStopping}
                     title={
@@ -8059,6 +8428,11 @@ function RuntimePanel({
                           )
                     }
                   >
+                    {foregroundRunning || foregroundStopping ? (
+                      <X className="size-4" />
+                    ) : (
+                      <Play className="size-4" />
+                    )}
                     {foregroundStopping
                       ? '正在停止…'
                       : foregroundRunning
@@ -8067,7 +8441,7 @@ function RuntimePanel({
                   </button>
                 ) : developerMode ? (
                   <button
-                    className="secondary-button"
+                    className="secondary-button gap-1.5"
                     disabled={busy}
                     onClick={() =>
                       ask(
@@ -8077,7 +8451,7 @@ function RuntimePanel({
                       )
                     }
                   >
-                    修复
+                    <Settings className="size-4" />修复
                   </button>
                 ) : (
                   <small>还没有可直接运行的命令。</small>
@@ -8114,7 +8488,7 @@ function RuntimePanel({
               <div className="flex shrink-0 flex-wrap justify-end gap-2">
                 {overview?.hasBuildScript && (
                   <button
-                    className="secondary-button"
+                    className="secondary-button gap-1.5"
                     disabled={busy}
                     onClick={() =>
                       ask(
@@ -8124,15 +8498,15 @@ function RuntimePanel({
                       )
                     }
                   >
-                    构建脚本
+                    <Code2 className="size-4" />构建脚本
                   </button>
                 )}
                 {overview?.hasDevScript ? (
                   <button
-                    className={
-                      developmentRunning || developmentStopping
-                        ? 'secondary-button'
-                        : 'primary-button'
+                  className={
+                    developmentRunning || developmentStopping
+                        ? 'secondary-button gap-1.5'
+                        : 'primary-button gap-1.5'
                     }
                     disabled={busy || developmentStopping}
                     title={
@@ -8152,6 +8526,11 @@ function RuntimePanel({
                           )
                     }
                   >
+                    {developmentRunning || developmentStopping ? (
+                      <X className="size-4" />
+                    ) : (
+                      <Play className="size-4" />
+                    )}
                     {developmentStopping
                       ? '正在停止…'
                       : developmentRunning
@@ -8160,7 +8539,7 @@ function RuntimePanel({
                   </button>
                 ) : (
                   <button
-                    className="secondary-button"
+                    className="secondary-button gap-1.5"
                     disabled={busy}
                     onClick={() =>
                       ask(
@@ -8170,7 +8549,7 @@ function RuntimePanel({
                       )
                     }
                   >
-                    修复
+                    <Settings className="size-4" />修复
                   </button>
                 )}
               </div>
@@ -8210,7 +8589,7 @@ function RuntimePanel({
               </span>
             </div>
             <button
-              className="primary-button"
+              className="primary-button gap-1.5"
               disabled={busy || !persistentReady}
               title={
                 localRunning
@@ -8229,6 +8608,11 @@ function RuntimePanel({
                 )
               }
             >
+              {pm2Running ? (
+                <RefreshCw className="size-4" />
+              ) : (
+                <Play className="size-4" />
+              )}
               {pm2Running ? '应用设置' : '启动服务'}
             </button>
           </header>
@@ -8239,7 +8623,7 @@ function RuntimePanel({
             {persistentReady && (
               <>
                 <button
-                  className="secondary-button"
+                  className="secondary-button gap-1.5"
                   disabled={busy}
                   onClick={() =>
                     ask('停止服务', '会停止当前项目在后台运行的机器人。', () =>
@@ -8247,10 +8631,10 @@ function RuntimePanel({
                     )
                   }
                 >
-                  停止服务
+                  <X className="size-4" />停止服务
                 </button>
                 <button
-                  className="secondary-button"
+                  className="secondary-button gap-1.5"
                   disabled={busy}
                   onClick={() =>
                     ask('重启服务', '会停止并重新启动后台运行的机器人。', () =>
@@ -8258,10 +8642,10 @@ function RuntimePanel({
                     )
                   }
                 >
-                  重启
+                  <RefreshCw className="size-4" />重启
                 </button>
                 <button
-                  className="secondary-button"
+                  className="secondary-button gap-1.5"
                   disabled={busy}
                   onClick={() =>
                     ask('更新服务', '会尽量不中断服务地应用最新设置。', () =>
@@ -8269,13 +8653,13 @@ function RuntimePanel({
                     )
                   }
                 >
-                  重载
+                  <RefreshCw className="size-4" />重载
                 </button>
               </>
             )}
             {!persistentReady && (
               <button
-                className="secondary-button"
+                className="secondary-button gap-1.5"
                 disabled={busy}
                 onClick={() =>
                   ask(
@@ -8285,26 +8669,26 @@ function RuntimePanel({
                   )
                 }
               >
-                修复
+                <Settings className="size-4" />修复
               </button>
             )}
             <div className="runtime-persistent-utilities">
               <button
-                className="text-button"
+                className="text-button gap-1.5"
                 disabled={busy}
                 onClick={onOpenPM2Processes}
               >
-                状态
+                <Activity className="size-4" />状态
               </button>
               <button
-                className="text-button"
+                className="text-button gap-1.5"
                 disabled={busy}
                 onClick={onOpenPM2Logs}
               >
-                日志
+                <ClipboardList className="size-4" />日志
               </button>
               <button
-                className="text-button danger-action"
+                className="text-button danger-action gap-1.5"
                 disabled={busy}
                 onClick={() =>
                   ask(
@@ -8314,7 +8698,7 @@ function RuntimePanel({
                   )
                 }
               >
-                删除
+                <Trash2 className="size-4" />删除
               </button>
             </div>
           </div>
@@ -9570,8 +9954,12 @@ function EditorMode({
       onChange={value => (value === 'text' ? onText() : onVisual())}
       variant="segmented"
       items={[
-        { id: 'visual', label: '表单' },
-        { id: 'text', label: '文本' }
+        {
+          id: 'visual',
+          label: '表单',
+          icon: <ClipboardList className="size-3.5" />
+        },
+        { id: 'text', label: '文本', icon: <FileText className="size-3.5" /> }
       ]}
     />
   )
@@ -9912,23 +10300,25 @@ function GitReleasePanelNext({
         <div className="release-toolbar-actions flex flex-wrap items-end justify-end gap-2">
           {(phase === 'artifacts' || phase === 'confirm') && (
             <button
-              className="inline-flex min-h-9 items-center justify-center rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-600 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-300"
+              className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-600 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-300"
               onClick={() =>
                 setPhase(phase === 'confirm' ? 'artifacts' : 'source')
               }
             >
-              上一步
+              <ArrowLeft className="size-4" />上一步
             </button>
           )}
           <button
-            className="inline-flex min-h-9 items-center justify-center rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-600 disabled:opacity-40 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-300"
+            className="inline-flex size-9 items-center justify-center rounded-lg border border-slate-200 bg-white p-0 text-xs font-semibold text-slate-600 disabled:opacity-40 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-300"
             onClick={refresh}
             disabled={loading || busy}
+            aria-label="刷新发布状态"
+            title="刷新发布状态"
           >
             <RefreshCw className="size-4" />
           </button>
           <button
-            className="inline-flex min-h-9 items-center justify-center rounded-lg bg-brand-600 px-3 text-xs font-semibold text-white transition hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg bg-brand-600 px-3 text-xs font-semibold text-white transition hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-50"
             disabled={
               busy ||
               loading ||
@@ -9943,6 +10333,15 @@ function GitReleasePanelNext({
               else if (phase === 'published') refresh()
             }}
           >
+            {phase === 'source' ? (
+              <Code2 className="size-4" />
+            ) : phase === 'artifacts' ? (
+              <ArrowRight className="size-4" />
+            ) : phase === 'confirm' ? (
+              <CheckCircle2 className="size-4" />
+            ) : (
+              <RefreshCw className="size-4" />
+            )}
             {busy || phase === 'building'
               ? '构建中…'
               : phase === 'source'
@@ -10180,10 +10579,15 @@ function GitReleasePanelNext({
           )}
           {session && requestError.includes('release 分支已推送') && (
             <button
-              className="inline-flex min-h-9 w-fit items-center justify-center rounded-lg bg-brand-600 px-3 text-xs font-semibold text-white hover:bg-brand-700 disabled:opacity-50"
+              className="inline-flex min-h-9 w-fit items-center justify-center gap-1.5 rounded-lg bg-brand-600 px-3 text-xs font-semibold text-white hover:bg-brand-700 disabled:opacity-50"
               disabled={retryingTag}
               onClick={() => void retryTag()}
             >
+              {retryingTag ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <GitBranch className="size-4" />
+              )}
               {retryingTag ? '正在重试标签…' : '重试推送 Tag'}
             </button>
           )}

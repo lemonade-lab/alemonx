@@ -125,6 +125,47 @@ func CloneDestination(destination, repository, name string) (CloneTarget, error)
 	return CloneTarget{Path: target}, nil
 }
 
+// LocalPackageCloneDestination resolves a Git checkout below one robot's
+// packages directory. Keeping this path calculation in the robot package
+// prevents a backpack action from being repurposed to write elsewhere.
+func LocalPackageCloneDestination(root, repository, name string) (CloneTarget, error) {
+	project, err := projectPath(root)
+	if err != nil {
+		return CloneTarget{}, err
+	}
+	return CloneDestination(filepath.Join(project, "packages"), repository, name)
+}
+
+// CloneLocalPackageWithProgress clones a plugin repository into the current
+// robot's backpack. It creates the packages directory when this is the first
+// local package, but never accepts a caller-controlled destination.
+func CloneLocalPackageWithProgress(root, repository, branch, name, mirror string, depth int, onProgress func(CloneProgress)) (Result, error) {
+	project, err := projectPath(root)
+	if err != nil {
+		return Result{}, err
+	}
+	destination := filepath.Join(project, "packages")
+	if info, err := os.Lstat(destination); err == nil && (!info.IsDir() || info.Mode()&os.ModeSymlink != 0) {
+		return Result{}, errors.New("packages 必须是普通目录")
+	} else if err != nil && !os.IsNotExist(err) {
+		return Result{}, fmt.Errorf("无法检查 packages 目录：%w", err)
+	} else if os.IsNotExist(err) {
+		if err := os.MkdirAll(destination, 0755); err != nil {
+			if permissionError(err) {
+				return Result{}, permissionAdvice("创建 packages 目录")
+			}
+			return Result{}, fmt.Errorf("无法创建 packages 目录：%w", err)
+		}
+	}
+	if info, err := os.Lstat(destination); err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		if permissionError(err) {
+			return Result{}, permissionAdvice("访问 packages 目录")
+		}
+		return Result{}, errors.New("packages 必须是普通目录")
+	}
+	return CloneRepositoryWithProgress(destination, repository, branch, name, mirror, depth, onProgress)
+}
+
 // CloneRepository clones a remote robot repository into an existing parent
 // directory. The destination name and mirror are validated from fixed choices.
 // depth limits how much history is downloaded; 0 means the full repository.

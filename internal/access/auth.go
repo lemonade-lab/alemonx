@@ -322,7 +322,10 @@ func (m *Manager) ListAccounts() ([]Account, error) {
 	if err != nil {
 		return nil, err
 	}
-	items := append([]Account(nil), data.Accounts...)
+	// The management API represents collections as JSON arrays, including when
+	// they are empty.  Starting with a non-nil slice avoids serializing an
+	// unconfigured account store as `null`.
+	items := append([]Account{}, data.Accounts...)
 	for index := range items {
 		items[index].PasswordHash = ""
 		sort.Strings(items[index].Roles)
@@ -336,7 +339,7 @@ func (m *Manager) ListRoles() ([]Role, error) {
 	if err != nil {
 		return nil, err
 	}
-	items := append([]Role(nil), data.Roles...)
+	items := append([]Role{}, data.Roles...)
 	sort.Slice(items, func(i, j int) bool { return items[i].Name < items[j].Name })
 	return items, nil
 }

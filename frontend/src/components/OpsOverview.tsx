@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { ShieldCheck } from 'lucide-react'
 import { ConfirmDialog } from './ConfirmDialog'
+import { SidebarWindowActions } from './SidebarWindow'
 
 type Project = { id: string; name: string; path: string }
 type Policy = { projectRoot: string; mode: string; autoAllowed: boolean }
@@ -27,10 +28,12 @@ const METRIC_ITEMS: Array<{ key: keyof Overview['metrics']; label: string }> = [
 
 export function OpsOverview({
   projects,
-  onOpenProject
+  onOpenProject,
+  sidebarLayout = false
 }: {
   projects: Project[]
   onOpenProject: (id: string) => void
+  sidebarLayout?: boolean
 }) {
   const [overview, setOverview] = useState<Overview | null>(null)
   const [busy, setBusy] = useState(false)
@@ -54,12 +57,35 @@ export function OpsOverview({
       setBusy(false)
     }
   }
+  const persistentActions = (
+    <>
+      <button
+        className={sidebarLayout ? 'secondary-button w-full justify-start' : 'secondary-button'}
+        disabled={busy}
+        onClick={() => void control(overview?.paused ? 'resume' : 'pause')}
+      >
+        {overview?.paused ? '恢复自动维护' : '暂停自动维护'}
+      </button>
+      <button
+        className={sidebarLayout ? 'danger-button w-full justify-start' : 'danger-button'}
+        disabled={busy}
+        onClick={() => setConfirmStop(true)}
+      >
+        紧急停止全部
+      </button>
+    </>
+  )
   return (
     <section
       className="workspace-content system-feature-page ops-panel mx-auto max-w-215"
       aria-label="全局运维总览"
     >
-      <header className="system-feature-header">
+      {sidebarLayout ? (
+        <SidebarWindowActions>
+          <div className="grid gap-1.5">{persistentActions}</div>
+        </SidebarWindowActions>
+      ) : (
+        <header className="system-feature-header">
         <span className="system-feature-header-icon bg-brand-50 text-brand-600 dark:bg-brand-900/40 dark:text-brand-300">
           <ShieldCheck className="size-4" />
         </span>
@@ -71,23 +97,9 @@ export function OpsOverview({
             统一查看所有受管机器人和自动维护状态。
           </span>
         </div>
-        <div className="flex shrink-0 gap-2">
-          <button
-            className="secondary-button"
-            disabled={busy}
-            onClick={() => void control(overview?.paused ? 'resume' : 'pause')}
-          >
-            {overview?.paused ? '恢复自动维护' : '暂停自动维护'}
-          </button>
-          <button
-            className="danger-button"
-            disabled={busy}
-            onClick={() => setConfirmStop(true)}
-          >
-            紧急停止全部
-          </button>
-        </div>
-      </header>
+          <div className="flex shrink-0 gap-2">{persistentActions}</div>
+        </header>
+      )}
       {overview && (
         <div className="ops-metrics mx-2.5 mb-4 grid grid-cols-2 gap-3">
           {METRIC_ITEMS.map(({ key, label }) => (

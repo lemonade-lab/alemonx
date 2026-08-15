@@ -172,8 +172,22 @@ const ModalCommandTimer = ({
         <div className="space-y-3">
           {/* 执行频率 */}
           <div className="space-y-2">
-            <label className="block text-sm font-medium text-[var(--editor-foreground)]">
-              速度频率（秒）⚡
+            <label className="flex items-center justify-between gap-2 text-sm font-medium text-[var(--editor-foreground)]">
+              <span>速度频率（秒）⚡</span>
+              <span
+                className={`truncate text-xs font-normal ${
+                  timeInvalid && time
+                    ? 'text-red-500'
+                    : 'text-[var(--descriptionForeground)]'
+                }`}
+                title={
+                  timeInvalid && time
+                    ? '请输入 1 - 12 之间的数值'
+                    : '所有任务总计不低于 1 秒，低于该频率将被限流'
+                }
+              >
+                {timeInvalid && time ? '请输入 1 - 12 秒' : '最小 1 秒'}
+              </span>
             </label>
             <div className="flex items-center gap-2">
               <Input
@@ -204,13 +218,6 @@ const ModalCommandTimer = ({
                 }`}
               />
             </div>
-            {timeInvalid && time ? (
-              <p className="text-xs text-red-500">请输入 1 - 12 之间的数值</p>
-            ) : (
-              <p className="text-xs text-[var(--descriptionForeground)] leading-relaxed">
-                所有任务总计不低于 1 秒，低于该频率将被限流
-              </p>
-            )}
           </div>
 
           {/* 是否循环 */}

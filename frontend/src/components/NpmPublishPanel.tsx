@@ -1,7 +1,18 @@
 import { useStoreState } from '../store/guideStore'
 import cn from 'classnames'
 import { useEffect, type ReactNode } from 'react'
-import { ChevronDown, File, Folder, Package, RefreshCw, X } from 'lucide-react'
+import {
+  ChevronDown,
+  Check,
+  Eye,
+  File,
+  Folder,
+  KeyRound,
+  Package,
+  RefreshCw,
+  Upload,
+  X
+} from 'lucide-react'
 import { useNpmStatusQuery, useLazyNpmPackQuery } from '../store/workspaceApi'
 import { ErrorNotice } from './ErrorNotice'
 import { RobotPanel } from './RobotPanel'
@@ -198,10 +209,10 @@ export function NpmPublishPanel({ root, busy, onRun }: Props) {
         <section className="grid min-h-32 place-items-center gap-3 rounded-xl border border-rose-200 bg-rose-50 p-5 text-sm text-rose-700 dark:border-rose-900 dark:bg-rose-950/30 dark:text-rose-300">
           <p className="m-0">无法读取 npm 发布状态。</p>
           <button
-            className="inline-flex min-h-9 items-center justify-center rounded-lg border border-rose-300 bg-white px-3 text-xs font-semibold text-rose-700 dark:border-rose-800 dark:bg-slate-900 dark:text-rose-300"
+            className="inline-flex min-h-9 items-center justify-center gap-1.5 rounded-lg border border-rose-300 bg-white px-3 text-xs font-semibold text-rose-700 dark:border-rose-800 dark:bg-slate-900 dark:text-rose-300"
             onClick={() => void refresh()}
           >
-            重新检查
+            <RefreshCw className="size-4" />重新检查
           </button>
         </section>
       </RobotPanel>
@@ -258,10 +269,11 @@ export function NpmPublishPanel({ root, busy, onRun }: Props) {
             <RefreshCw className="size-4" />
           </button>
           <button
-            className="inline-flex min-h-9 items-center justify-center rounded-lg bg-brand-600 px-3 text-xs font-semibold text-white hover:bg-brand-700 disabled:opacity-50"
+            className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg bg-brand-600 px-3 text-xs font-semibold text-white hover:bg-brand-700 disabled:opacity-50"
             disabled={busy || !canPublish}
             onClick={() => void publish()}
           >
+            <Upload className="size-4" />
             {confirming ? '确认发布' : '发布到 npm'}
           </button>
         </div>
@@ -337,11 +349,11 @@ export function NpmPublishPanel({ root, busy, onRun }: Props) {
               建议 v{status.suggestedVersion}
             </strong>
             <button
-              className="secondary-button"
+              className="secondary-button gap-1.5"
               disabled={busy}
               onClick={() => void applySuggestedVersion()}
             >
-              采用
+              <Check className="size-4" />采用
             </button>
           </section>
         )}
@@ -370,9 +382,10 @@ export function NpmPublishPanel({ root, busy, onRun }: Props) {
               打开登录页
             </a>
             <button
-              className="text-button"
+              className="text-button gap-1.5"
               onClick={() => setTokenMode(value => !value)}
             >
+              <KeyRound className="size-4" />
               {tokenMode ? '改用网页登录' : '使用发布令牌'}
             </button>
             <a
@@ -424,10 +437,15 @@ export function NpmPublishPanel({ root, busy, onRun }: Props) {
             </span>
           </div>
           <button
-            className="secondary-button"
+            className="secondary-button gap-1.5"
             disabled={busy || previewing}
             onClick={() => void createPreview()}
           >
+            {previewing ? (
+              <RefreshCw className="size-4 animate-spin" />
+            ) : (
+              <Eye className="size-4" />
+            )}
             {previewing ? '预览中…' : preview ? '重新预览' : '查看打包内容'}
           </button>
         </header>

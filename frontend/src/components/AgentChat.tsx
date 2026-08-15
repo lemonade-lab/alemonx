@@ -1514,9 +1514,9 @@ export function AgentChatPage({
             </span>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="robot-panel-actions flex items-center gap-2">
           <button
-            className="icon-button size-8 p-0"
+            className="icon-button size-9 p-0"
             onClick={newSession}
             title="新增对话"
             aria-label="新增对话"
@@ -1524,7 +1524,7 @@ export function AgentChatPage({
             <Plus className="size-4" />
           </button>
           <button
-            className="icon-button size-8 p-0"
+            className="icon-button size-9 p-0"
             onClick={() => setSettings(value => !value)}
             title="AI 设置"
             aria-label="AI 设置"

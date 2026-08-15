@@ -1,3 +1,4 @@
+import { Plus, X } from 'lucide-react'
 import { useState } from 'react'
 import type { PackageConfigField } from '../store/workspaceApi'
 import { validateFieldValue } from './configFieldUtils'
@@ -8,34 +9,33 @@ function defaultText(value: unknown): string {
   return String(value)
 }
 
-function inputClass() {
-  return 'min-h-9 w-full rounded-md border border-slate-300 bg-white px-2.5 text-sm font-normal text-slate-800 outline-none transition focus:border-brand-600 focus:ring-2 focus:ring-brand-100'
-}
-
-function FieldMessages({ messages }: { messages: string[] }) {
-  if (!messages.length) return null
-  return (
-    <span className="text-[11px] leading-4 text-red-600">
-      {messages.map((message, index) => (
-        <span key={index} className="block">
-          {message}
-        </span>
-      ))}
-    </span>
-  )
+function inputClass(invalid = false) {
+  return `min-h-9 w-full rounded-md border bg-white px-2.5 text-sm font-normal text-slate-800 outline-none transition focus:ring-2 ${
+    invalid
+      ? 'border-red-400 focus:border-red-500 focus:ring-red-100'
+      : 'border-slate-300 focus:border-brand-600 focus:ring-brand-100'
+  }`
 }
 
 function FieldLabel({
   field,
-  tone
+  tone,
+  messages = []
 }: {
   field: PackageConfigField
   tone?: 'orange' | 'amber'
+  messages?: string[]
 }) {
+  const defaultValue =
+    field.default !== undefined && field.default !== null
+      ? `默认：${defaultText(field.default)}`
+      : ''
+  const status = messages.length ? '输入有误' : defaultValue
+  const statusTitle = messages.length ? messages.join('\n') : defaultValue
   return (
-    <span className="grid gap-0.5">
-      <span className="flex items-center gap-1.5">
-        {field.description || field.name}
+    <span className="flex min-w-0 items-center justify-between gap-2">
+      <span className="flex min-w-0 items-center gap-1.5">
+        <span className="truncate">{field.description || field.name}</span>
         {field.required && (
           <em
             className={`not-italic ${
@@ -46,9 +46,14 @@ function FieldLabel({
           </em>
         )}
       </span>
-      {field.default !== undefined && field.default !== null && (
-        <span className="font-normal text-slate-400">
-          默认：{defaultText(field.default)}
+      {status && (
+        <span
+          className={`max-w-[52%] shrink truncate font-normal ${
+            messages.length ? 'text-red-600' : 'text-slate-400'
+          }`}
+          title={statusTitle}
+        >
+          {status}
         </span>
       )}
     </span>
@@ -109,12 +114,13 @@ function FieldControl({
     const messages = validateFieldValue(field, items)
     return (
       <label className="grid gap-1 text-xs font-semibold text-slate-600">
-        <FieldLabel field={field} />
+        <FieldLabel field={field} messages={messages} />
         <div className="grid gap-1.5">
           {items.map((item, index) => (
             <div className="flex gap-1.5" key={index}>
               <input
-                className={inputClass()}
+                className={inputClass(messages.length > 0)}
+                aria-invalid={messages.length > 0}
                 type={isNumber ? 'number' : 'text'}
                 value={String(item ?? '')}
                 onChange={event => {
@@ -130,7 +136,7 @@ function FieldControl({
               />
               <button
                 type="button"
-                className="shrink-0 rounded-md border border-slate-200 px-2 text-xs text-slate-500 hover:bg-slate-50"
+                className="config-field-action inline-flex size-9 shrink-0 items-center justify-center rounded-md text-slate-500"
                 onClick={() => {
                   const next = [...items]
                   next.splice(index, 1)
@@ -138,30 +144,31 @@ function FieldControl({
                 }}
                 aria-label="移除一项"
               >
-                ×
+                <X className="size-4" />
               </button>
             </div>
           ))}
           <button
             type="button"
-            className="h-8 rounded-md border border-dashed border-slate-300 text-xs text-slate-500 hover:border-brand-600 hover:text-brand-600"
+            className="config-field-action inline-flex h-8 items-center justify-center gap-1.5 rounded-md px-2.5 text-xs text-slate-500"
             onClick={() => onChange([...items, isNumber ? 0 : ''])}
           >
-            + 添加一项
+            <Plus className="size-3.5" />添加一项
           </button>
         </div>
-        <FieldMessages messages={messages} />
       </label>
     )
   }
 
   if (type === 'boolean' || type === 'bool') {
     const current = value === true ? 'true' : value === false ? 'false' : ''
+    const messages = validateFieldValue(field, value)
     return (
       <label className="grid gap-1 text-xs font-semibold text-slate-600">
-        <FieldLabel field={field} />
+        <FieldLabel field={field} messages={messages} />
         <select
-          className={inputClass()}
+          className={inputClass(messages.length > 0)}
+          aria-invalid={messages.length > 0}
           value={current}
           onChange={event => {
             const next = event.target.value
@@ -172,18 +179,19 @@ function FieldControl({
           <option value="true">开启</option>
           <option value="false">关闭</option>
         </select>
-        <FieldMessages messages={validateFieldValue(field, value)} />
       </label>
     )
   }
 
   const isNumber = type === 'number' || type === 'integer'
   const textValue = value === undefined || value === null ? '' : String(value)
+  const messages = validateFieldValue(field, value)
   return (
     <label className="grid gap-1 text-xs font-semibold text-slate-600">
-      <FieldLabel field={field} />
+      <FieldLabel field={field} messages={messages} />
       <input
-        className={inputClass()}
+        className={inputClass(messages.length > 0)}
+        aria-invalid={messages.length > 0}
         type={isNumber ? 'number' : 'text'}
         value={textValue}
         onChange={event => {
@@ -197,7 +205,6 @@ function FieldControl({
         }}
         placeholder={field.name}
       />
-      <FieldMessages messages={validateFieldValue(field, value)} />
     </label>
   )
 }

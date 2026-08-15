@@ -107,11 +107,18 @@ export function AuthGate({ children }: { children: ReactNode }) {
     <main className="auth-gate flex min-h-screen items-center justify-center p-5">
       <section className="grid w-full max-w-90 gap-3 rounded-xl border border-slate-200 bg-white p-6 shadow-[0_18px_52px_rgb(28_26_23/0.12)]">
         <LockKeyhole className="size-6 text-brand-600" />
-        <div>
-          <strong className="text-sm text-slate-800">身份认证</strong>
-          <p className="mt-1 text-xs leading-5 text-slate-500">
-            此 alx 服务已开启账户保护，请登录后继续。
-          </p>
+        <div className="flex min-w-0 items-start justify-between gap-3">
+          <div>
+            <strong className="text-sm text-slate-800">身份认证</strong>
+            <p className="mt-1 text-xs leading-5 text-slate-500">
+              此 alx 服务已开启账户保护，请登录后继续。
+            </p>
+          </div>
+          {error && (
+            <small className="shrink-0 text-xs text-red-700" title={error}>
+              登录失败
+            </small>
+          )}
         </div>
         <label className="grid gap-1 text-xs font-semibold text-slate-600">
           账户
@@ -135,7 +142,6 @@ export function AuthGate({ children }: { children: ReactNode }) {
             }}
           />
         </label>
-        {error && <small className="text-xs text-red-700">{error}</small>}
         <Button
           variant="primary"
           loading={busy}
@@ -239,10 +245,20 @@ export function AuthControl({ embedded = false }: { embedded?: boolean }) {
             if (event.key === 'Escape') setOpen(false)
           }}
         >
-          <header className="flex items-center justify-between">
-            <strong className="text-xs text-slate-800">
-              {status?.enabled ? '身份认证已开启' : '开启身份认证'}
-            </strong>
+          <header className="flex items-center justify-between gap-3">
+            <div className="flex min-w-0 items-center gap-2">
+              <strong className="text-xs text-slate-800">
+                {status?.enabled ? '身份认证已开启' : '开启身份认证'}
+              </strong>
+              {error && !status?.enabled && (
+                <small
+                  className="truncate text-[11px] text-amber-700"
+                  title={error}
+                >
+                  操作失败
+                </small>
+              )}
+            </div>
             {!embedded && (
               <Button
                 variant="icon"
@@ -303,9 +319,6 @@ export function AuthControl({ embedded = false }: { embedded?: boolean }) {
                   onChange={event => setConfirmation(event.target.value)}
                 />
               </label>
-              {error && (
-                <small className="text-[11px] text-amber-700">{error}</small>
-              )}
               <Button
                 variant="primary"
                 className="gap-1.5"

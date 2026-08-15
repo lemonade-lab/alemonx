@@ -1,0 +1,39 @@
+services:
+  alx:
+    image: ${ALX_IMAGE:-ccr.ccs.tencentyun.com/ningmengchongshui/alemonx:latest}
+    container_name: alx
+    restart: unless-stopped
+    ports:
+      - "${ALX_PORT:-17390}:17390"
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      HOME: /data
+      XDG_CONFIG_HOME: /data/config
+      XDG_CACHE_HOME: /data/cache
+      # Container deployments use the durable SQLite backend and require the
+      # first administrator to enable authentication through the UI or CLI.
+      ALX_DEPLOYMENT: ${ALX_DEPLOYMENT:-production}
+      ALX_OPS_STORAGE: sqlite
+      ALEMONJS_SETUP_ROOTS: /workspace
+      # A container must not request host sudo privileges. It can only manage
+      # commands in its own mounted robot workspace.
+      ALX_PRIVILEGED_MODE: disabled
+    volumes:
+      - alx-data:/data
+      - ${ALX_WORKSPACE:-./workspace}:/workspace
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=256m
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:17390/healthz >/dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  alx-data:

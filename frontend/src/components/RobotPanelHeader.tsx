@@ -61,7 +61,7 @@ export function RobotPanelHeader({
         </div>
       </div>
       {actions && (
-        <div className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-2 [&_.icon-button]:shrink-0">
+        <div className="robot-panel-actions ml-auto flex shrink-0 flex-wrap items-center justify-end gap-2 [&_.icon-button]:size-9 [&_.icon-button]:shrink-0 [&_.primary-button]:min-h-9 [&_.secondary-button]:min-h-9 [&_.text-button]:min-h-9 [&_[role=tab]]:min-h-9">
           {actions}
         </div>
       )}

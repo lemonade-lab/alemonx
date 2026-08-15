@@ -47,6 +47,26 @@ export function WindowResizeHandles({
   )
 }
 
+export type DesktopWindowProps = {
+  id: string
+  open: boolean
+  minimized: boolean
+  title: string
+  subtitle?: string
+  icon: ReactNode
+  headerLeft?: ReactNode
+  actions?: ReactNode
+  onClose: () => void
+  onMinimize: () => void
+  zIndex: number
+  onActivate: () => void
+  initialPosition?: { left: number; top: number }
+  width?: number
+  height?: number
+  storageKey?: string
+  children: ReactNode
+}
+
 export function DesktopWindow({
   id,
   open,
@@ -65,25 +85,7 @@ export function DesktopWindow({
   height = 620,
   storageKey,
   children
-}: {
-  id: string
-  open: boolean
-  minimized: boolean
-  title: string
-  subtitle?: string
-  icon: ReactNode
-  headerLeft?: ReactNode
-  actions?: ReactNode
-  onClose: () => void
-  onMinimize: () => void
-  zIndex: number
-  onActivate: () => void
-  initialPosition?: { left: number; top: number }
-  width?: number
-  height?: number
-  storageKey?: string
-  children: ReactNode
-}) {
+}: DesktopWindowProps) {
   const [windowRect, setWindowRect] = useState(() => ({
     left: initialPosition?.left ?? 64,
     top: initialPosition?.top ?? 56,

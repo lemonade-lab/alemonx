@@ -1073,6 +1073,8 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	mux.HandleFunc("/api/v1/robot/tasks", s.robotTasksHandler)
 	mux.HandleFunc("/api/v1/robot/events", s.robotEventsHandler)
 	mux.HandleFunc("/api/v1/robot/packages", s.robotPackagesHandler)
+	mux.HandleFunc("/api/v1/robot/packages/git-clone", s.robotPackageGitCloneHandler)
+	mux.HandleFunc("/api/v1/robot/packages/git-clone/check", s.robotPackageGitCloneCheckHandler)
 	mux.HandleFunc("/api/v1/robot/package-versions", s.robotPackageVersionsHandler)
 	mux.HandleFunc("/api/v1/robot/package-readme", s.robotPackageReadmeHandler)
 	mux.HandleFunc("/api/v1/robot/webviews", s.robotWebViewsHandler)
@@ -6812,6 +6814,76 @@ func (s *server) robotGitCloneCheckHandler(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	target, err := robot.CloneDestination(destination, r.URL.Query().Get("repository"), r.URL.Query().Get("name"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, target)
+}
+
+func (s *server) robotPackageGitCloneHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
+		return
+	}
+	var input struct {
+		Root       string `json:"root"`
+		Repository string `json:"repository"`
+		Branch     string `json:"branch"`
+		Name       string `json:"name"`
+		Mirror     string `json:"mirror"`
+		Depth      int    `json:"depth"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, "Git 信息无法识别。")
+		return
+	}
+	if strings.TrimSpace(input.Branch) == "" {
+		input.Branch = "release"
+	}
+	if _, err := s.robots.Validate(input.Root); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := robot.ValidateCloneRepository(input.Repository); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	target, err := robot.LocalPackageCloneDestination(input.Root, input.Repository, input.Name)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if target.Exists {
+		writeError(w, http.StatusConflict, "背包中已存在同名目录。")
+		return
+	}
+	created := operationTask{ID: "clone-package-" + time.Now().Format("20060102150405.000000000"), Root: input.Root, Path: target.Path, Action: "git-clone-package", Status: "running", Output: "正在启动 Git…", Progress: 0, CreatedAt: time.Now()}
+	s.addOperation(created)
+	go func() {
+		result, err := robot.CloneLocalPackageWithProgress(input.Root, input.Repository, input.Branch, input.Name, input.Mirror, input.Depth, func(progress robot.CloneProgress) {
+			s.updateOperation(created.ID, progress.Percent, progress.Detail, "", false)
+		})
+		if err != nil {
+			s.updateOperation(created.ID, 100, result.Output, err.Error(), true)
+			return
+		}
+		s.updateOperation(created.ID, 100, result.Output, "", true)
+	}()
+	writeJSON(w, http.StatusAccepted, created)
+}
+
+func (s *server) robotPackageGitCloneCheckHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
+		return
+	}
+	root := r.URL.Query().Get("root")
+	if _, err := s.robots.Validate(root); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	target, err := robot.LocalPackageCloneDestination(root, r.URL.Query().Get("repository"), r.URL.Query().Get("name"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return

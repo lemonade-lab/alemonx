@@ -1,6 +1,6 @@
 import { useStoreState } from '../store/guideStore'
 import { useEffect } from 'react'
-import { KeyRound, Plus, Trash2 } from 'lucide-react'
+import { ClipboardList, FileText, KeyRound, Plus, Trash2 } from 'lucide-react'
 import { Tabs } from './Tabs'
 import { RobotPanel } from './RobotPanel'
 
@@ -62,8 +62,12 @@ export function EnvConfigForm({ content, onChange }: Props) {
       onChange={setMode}
       variant="segmented"
       items={[
-        { id: 'visual', label: '表单' },
-        { id: 'text', label: '文本' }
+        {
+          id: 'visual',
+          label: '表单',
+          icon: <ClipboardList className="size-3.5" />
+        },
+        { id: 'text', label: '文本', icon: <FileText className="size-3.5" /> }
       ]}
     />
   )
@@ -118,7 +122,7 @@ export function EnvConfigForm({ content, onChange }: Props) {
               autoComplete="off"
             />
             <button
-              className="env-config-remove inline-flex size-8 items-center justify-center justify-self-end rounded-md border border-slate-300 bg-white text-slate-400 hover:bg-slate-50 hover:text-red-700"
+              className="env-config-remove inline-flex size-8 items-center justify-center justify-self-end rounded-md text-slate-400 hover:text-red-700"
               onClick={() => {
                 const next = entries.filter((_, position) => position !== index)
                 setEntries(next)
@@ -132,7 +136,7 @@ export function EnvConfigForm({ content, onChange }: Props) {
         ))}
       </div>
       <button
-        className="inline-flex min-h-8 items-center gap-1.5 justify-self-start rounded-md px-2.5 text-xs font-semibold text-slate-500 hover:bg-slate-50 hover:text-brand-600"
+        className="env-config-add inline-flex min-h-8 items-center gap-1.5 justify-self-start rounded-md px-2.5 text-xs font-semibold text-slate-500 hover:text-brand-600"
         onClick={() =>
           setEntries(current => [...current, { key: '', value: '' }])
         }

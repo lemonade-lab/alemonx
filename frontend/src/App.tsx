@@ -10,7 +10,6 @@ import {
 } from './store/guideStore'
 import { Dashboard } from './components/Dashboard'
 import { AppSettingsPanel } from './components/AppSettingsPanel'
-import { DesktopWindow } from './components/DesktopWindow'
 import { isWindowHeaderInteractiveTarget } from './components/desktopWindowInteraction'
 import { registerDesktopWindowShortcut } from './components/desktopWindowShortcuts'
 import { EnvironmentFixDialog } from './components/EnvironmentFixDialog'
@@ -677,7 +676,7 @@ export default function App() {
         )}
         </div>
       </div>
-      <DesktopWindow
+      <AppSettingsPanel
         id="app-settings"
         open={settingsOpen}
         minimized={settingsMinimized}
@@ -693,9 +692,7 @@ export default function App() {
         initialPosition={{ left: 180, top: 120 }}
         width={820}
         height={640}
-      >
-        <AppSettingsPanel />
-      </DesktopWindow>
+      />
       {repairCheck && (
         <EnvironmentFixDialog
           check={repairCheck}
@@ -1040,8 +1037,24 @@ function FlowView({
   }
   const releasePicker = () => (
     <div className="release-picker">
-      <label>
-        选择版本
+      <label className="release-picker-label">
+        <span>
+          选择版本
+          {!releases.length && !releaseError && releaseFetching && (
+            <small>读取中…</small>
+          )}
+          {!releases.length && releaseError && (
+            <small
+              className="text-(--theme-danger-text)"
+              title="正式版本列表获取失败，可能是网络或代理问题。"
+            >
+              读取失败
+              <button type="button" onClick={() => void refetchReleases()}>
+                重试
+              </button>
+            </small>
+          )}
+        </span>
         <select
           value={releaseURL ?? ''}
           onChange={event => {
@@ -1056,17 +1069,6 @@ function FlowView({
           ))}
         </select>
       </label>
-      {!releases.length && !releaseError && releaseFetching && (
-        <small>正在获取正式版本列表…</small>
-      )}
-      {!releases.length && releaseError && (
-        <small className="text-(--theme-danger-text)">
-          正式版本列表获取失败，可能是网络或代理问题。
-          <button type="button" onClick={() => void refetchReleases()}>
-            重试
-          </button>
-        </small>
-      )}
     </div>
   )
   const selectedRelease = releases.find(item => item.url === releaseURL)
@@ -1183,7 +1185,14 @@ function FlowView({
                   onClick={chooseDestination}
                 >
                   <strong>选择指定文件夹</strong>
-                  <small>
+                  <small
+                    className="truncate"
+                    title={
+                      project.destinationMode === 'custom' && project.destination
+                        ? project.destination
+                        : '在目录选择器中选择保存位置。'
+                    }
+                  >
                     {project.destinationMode === 'custom' && project.destination
                       ? `已选择：${project.destination}`
                       : '在目录选择器中选择保存位置。'}
@@ -1273,7 +1282,14 @@ function FlowView({
                   onClick={() => toggleCapability(value)}
                 >
                   <strong>{label}</strong>
-                  <small>
+                  <small
+                    className="truncate"
+                    title={
+                      project.destinationMode === 'custom' && project.destination
+                        ? project.destination
+                        : '在目录选择器中选择保存位置。'
+                    }
+                  >
                     {note} ·{' '}
                     {capabilities.includes(value) ? '已选择' : '点击添加'}
                   </small>

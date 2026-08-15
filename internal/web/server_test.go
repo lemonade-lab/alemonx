@@ -1215,6 +1215,16 @@ func TestAccountRolesControlManagementAndWorkbenchAccess(t *testing.T) {
 		t.Fatalf("super login = %d %s", login.Code, login.Body.String())
 	}
 	superCookie := login.Result().Cookies()[0]
+	management := httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodGet, "/api/v1/auth/management", nil)
+	request.AddCookie(superCookie)
+	handler.ServeHTTP(management, request)
+	if management.Code != http.StatusOK {
+		t.Fatalf("initial management = %d %s", management.Code, management.Body.String())
+	}
+	if !bytes.Contains(management.Body.Bytes(), []byte(`"roles":[]`)) {
+		t.Fatalf("initial management must return an empty roles array: %s", management.Body.String())
+	}
 
 	createRole := httptest.NewRecorder()
 	request = httptest.NewRequest(http.MethodPost, "/api/v1/auth/roles", bytes.NewBufferString(`{"id":"reader","name":"只读","permissions":["workbench.view"]}`))

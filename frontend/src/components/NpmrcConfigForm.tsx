@@ -1,6 +1,6 @@
 import { useStoreState } from '../store/guideStore'
 import { useEffect } from 'react'
-import { Package } from 'lucide-react'
+import { ClipboardList, FileText, Package } from 'lucide-react'
 import { Tabs } from './Tabs'
 import { RobotPanel } from './RobotPanel'
 
@@ -51,8 +51,12 @@ export function NpmrcConfigForm({ content, onChange }: Props) {
       onChange={setEditor}
       variant="segmented"
       items={[
-        { id: 'visual', label: '表单' },
-        { id: 'text', label: '文本' }
+        {
+          id: 'visual',
+          label: '表单',
+          icon: <ClipboardList className="size-3.5" />
+        },
+        { id: 'text', label: '文本', icon: <FileText className="size-3.5" /> }
       ]}
     />
   )

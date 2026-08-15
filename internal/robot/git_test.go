@@ -27,6 +27,21 @@ func TestCloneProgressFromGitOutput(t *testing.T) {
 	}
 }
 
+func TestLocalPackageCloneDestinationStaysInBackpack(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "package.json"), []byte(`{"name":"robot"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	target, err := LocalPackageCloneDestination(root, "https://github.com/example/plugin.git", "plugin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(root, "packages", "plugin")
+	if target.Path != want || target.Exists {
+		t.Fatalf("target = %#v, want path %q and no existing directory", target, want)
+	}
+}
+
 func TestGitReleaseStatusDoesNotBlockLocalChangesOrMissingBuildOutput(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "package.json"), []byte(`{"name":"example","version":"1.0.0","scripts":{"build":"echo build"}}`), 0644); err != nil {
