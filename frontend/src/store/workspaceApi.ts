@@ -221,6 +221,17 @@ type PackageManifest = {
   license: string
   private: boolean
   access: string
+  packageManager: string
+  moduleType: string
+  workspacesEnabled: boolean
+  workspaces: string[]
+  alemonjsConfig?: PackageConfigField[]
+  alemonjsConfigSourceReadme: string
+  alemonjsConfigSourceOfficial: string
+  alemonjsConfigSourcePlatform: string
+  alemonjsDesktopLogo: string
+  alemonjsWebRoot: string
+  alemonjsWebServerPort: boolean
 }
 export type SetupPlugin = {
   id: string

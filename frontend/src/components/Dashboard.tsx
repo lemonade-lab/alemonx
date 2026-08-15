@@ -141,6 +141,7 @@ import {
   useLocalPackagesQuery,
   useLocalPackageVersionsQuery,
   useLocalPackageReadmeQuery,
+  usePackageManifestQuery,
   usePackageConfigQuery,
   useRobotRuntimeQuery,
   useRobotPM2StatusQuery,
@@ -208,7 +209,7 @@ import {
 type Check = {
   id: string
   name: string
-  status: 'ready' | 'missing' | 'warning'
+  status: 'ready' | 'missing' | 'warning' | 'outdated'
   detail: string
   suggestion: string
 }
@@ -2342,7 +2343,9 @@ export function Dashboard({
           'remove-local-package',
           'replace-local-package',
           'switch-local-package-version',
-          'force-switch-local-package-version'
+          'force-switch-local-package-version',
+          'enable-backpack-workspace',
+          'disable-backpack-workspace'
         ].includes(data.action)
       ) {
         // The task mutation invalidates when it starts, which is still too
@@ -2351,6 +2354,7 @@ export function Dashboard({
         dispatch(
           workspaceApi.util.invalidateTags([
             { type: 'LocalPackages', id: root },
+            { type: 'PackageManifest', id: root },
             // Installing/uninstalling a connection package changes whether
             // its alemon.config.yaml section can be parsed, so drop any
             // cached PackageConfig for this root.
@@ -2700,6 +2704,14 @@ export function Dashboard({
           onOpenPlugins={() => selectPage('plugins')}
           onClone={openBackpackClone}
           busy={busy}
+          onSetPrivate={enabled =>
+            api('POST', {
+              root,
+              action: enabled
+                ? 'enable-backpack-workspace'
+                : 'disable-backpack-workspace'
+            })
+          }
           onSaveConfig={savePackageConfig}
           onConfigChanged={refreshConfigDraft}
           onRemove={async packageName => setPendingBackpackRemoval(packageName)}
@@ -5433,7 +5445,9 @@ function EnvironmentPage({
                     className="shrink-0 self-center rounded-md px-2 py-1 text-xs font-semibold text-brand-600 transition-colors hover:bg-white dark:text-brand-200 dark:hover:bg-slate-900"
                     onClick={() => onFix(check)}
                   >
-                    修复
+                    {check.id === 'node' && check.status === 'outdated'
+                      ? '升级'
+                      : '修复'}
                   </button>
                 )}
               </article>
@@ -6789,6 +6803,7 @@ function BackpackPanel({
   onOpenPlugins,
   onClone,
   busy,
+  onSetPrivate,
   onSaveConfig,
   onConfigChanged,
   onRemove,
@@ -6808,6 +6823,7 @@ function BackpackPanel({
   onOpenPlugins: () => void
   onClone: () => void
   busy: boolean
+  onSetPrivate: (enabled: boolean) => Promise<boolean>
   onSaveConfig: (
     packageName: string,
     values: Record<string, unknown>
@@ -6822,11 +6838,22 @@ function BackpackPanel({
 }) {
   const [selectedName, setSelectedName] = useStoreState('')
   const [appToggleBusy, setAppToggleBusy] = useStoreState('')
+  const [privacyToggleBusy, setPrivacyToggleBusy] = useStoreState(false)
   const { data: appsData, refetch: refetchApps } = useRobotAppsQuery(root, {
     skip: !root
   })
+  const {
+    data: manifest,
+    isFetching: manifestLoading,
+    refetch: refetchManifest
+  } = usePackageManifestQuery(root, { skip: !root })
   const [setAppEnabled] = useSetAppEnabledMutation()
   const enabledApps = new Set(appsData?.items ?? [])
+  const isPrivateBackpack = Boolean(
+    manifest?.private &&
+      manifest.workspacesEnabled &&
+      manifest.workspaces?.includes('packages/*')
+  )
   useEffect(() => {
     if (selectedName && !items.some(item => item.name === selectedName))
       setSelectedName('')
@@ -6840,6 +6867,15 @@ function BackpackPanel({
       await Promise.all([refetchApps(), onConfigChanged()])
     } finally {
       setAppToggleBusy('')
+    }
+  }
+  const toggleBackpackPrivacy = async () => {
+    if (!manifest || privacyToggleBusy) return
+    setPrivacyToggleBusy(true)
+    try {
+      if (await onSetPrivate(!isPrivateBackpack)) await refetchManifest()
+    } finally {
+      setPrivacyToggleBusy(false)
     }
   }
   if (selected)
@@ -6863,6 +6899,43 @@ function BackpackPanel({
       description={<span title={`${root}/packages`}>packages</span>}
       actions={
         <>
+          <button
+            type="button"
+            className={cn(
+              'secondary-button min-h-9 gap-1.5',
+              isPrivateBackpack && 'border-brand-300 bg-brand-50 text-brand-700'
+            )}
+            disabled={!manifest || manifestLoading || privacyToggleBusy || busy}
+            onClick={() => void toggleBackpackPrivacy()}
+            aria-pressed={isPrivateBackpack}
+            title={isPrivateBackpack ? '切换为公开背包' : '切换为私有背包'}
+          >
+            {privacyToggleBusy || manifestLoading ? (
+              <Loader2 className="size-3.5 animate-spin" />
+            ) : isPrivateBackpack ? (
+              <EyeOff className="size-3.5" />
+            ) : (
+              <Eye className="size-3.5" />
+            )}
+            {isPrivateBackpack ? '私有' : '公开'}
+            <span
+              className={cn(
+                'relative ml-0.5 inline-flex shrink-0 items-center rounded-full transition',
+                isPrivateBackpack ? 'bg-brand-600' : 'bg-slate-300'
+              )}
+              style={{ boxSizing: 'border-box', height: 16, padding: 2, width: 28 }}
+              aria-hidden="true"
+            >
+              <span
+                className="block shrink-0 rounded-full bg-white shadow-sm transition-transform"
+                style={{
+                  height: 12,
+                  transform: `translateX(${isPrivateBackpack ? 12 : 0}px)`,
+                  width: 12
+                }}
+              />
+            </span>
+          </button>
           <button className="text-button gap-1.5" onClick={onOpenPlugins}>
             <Blocks className="size-4" />
             插件中心

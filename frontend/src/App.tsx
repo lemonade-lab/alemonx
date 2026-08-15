@@ -650,6 +650,7 @@ export default function App() {
               }}
               onCheck={checkEnvironment}
               onCreate={createProject}
+              onFix={setRepairCheck}
               registerBack={registerBack}
             />
           )}
@@ -900,6 +901,7 @@ function FlowView({
   onSelect,
   onCheck,
   onCreate,
+  onFix,
   registerBack
 }: {
   loading: boolean
@@ -911,6 +913,7 @@ function FlowView({
   onSelect: (id: string | null) => void
   onCheck: (variant?: string) => void
   onCreate: (config: ProjectConfig) => void
+  onFix: (check: Check) => void
   registerBack: (handler: () => void) => void
 }) {
   const navigate = useNavigate()
@@ -1152,6 +1155,7 @@ function FlowView({
             report={report}
             checking={checking}
             onCheck={() => onCheck()}
+            onFix={onFix}
           />
         )
       case 1:
@@ -1470,6 +1474,7 @@ function FlowView({
           report={report}
           checking={checking}
           onCheck={() => onCheck()}
+          onFix={onFix}
         />
       )
     if (flowStep === 1)
@@ -1612,6 +1617,7 @@ function FlowView({
           report={report}
           checking={checking}
           onCheck={() => onCheck(webEdition ?? undefined)}
+          onFix={onFix}
         />
       )
     if (webEdition === 'clean' && flowStep === 2)
@@ -1698,6 +1704,7 @@ function FlowView({
           report={report}
           checking={checking}
           onCheck={() => onCheck(buildMode ?? undefined)}
+          onFix={onFix}
         />
       )
     return (

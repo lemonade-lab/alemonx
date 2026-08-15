@@ -155,19 +155,10 @@ func ensurePackagesWorkspace(root string) error {
 	if err := json.Unmarshal(data, &values); err != nil {
 		return errors.New("package.json 格式无法识别")
 	}
-	if workspaces, ok := values["workspaces"].([]any); ok {
-		for _, item := range workspaces {
-			if item == "packages/*" {
-				return nil
-			}
-		}
-		values["workspaces"] = append(workspaces, "packages/*")
-	} else if _, ok := values["workspaces"]; !ok {
-		values["private"] = true
-		values["workspaces"] = []string{"packages/*"}
-	} else {
-		return errors.New("package.json 的 workspaces 格式暂不支持自动添加 packages/*")
+	if err := addPackagesWorkspace(values); err != nil {
+		return err
 	}
+	values["private"] = true
 	updated, err := json.MarshalIndent(values, "", "  ")
 	if err != nil {
 		return err
@@ -179,6 +170,140 @@ func ensurePackagesWorkspace(root string) error {
 		return fmt.Errorf("无法写入 packages 工作区配置：%w", err)
 	}
 	return nil
+}
+
+// setBackpackWorkspace keeps the root manifest in the only topology that can
+// load local packages from packages/: a private workspace root containing
+// packages/*. Unlike the generic package manifest editor it changes only this
+// one workspace pattern, so independently configured workspaces are retained.
+func setBackpackWorkspace(root string, enabled bool) (Result, error) {
+	manifest := filepath.Join(root, "package.json")
+	data, err := os.ReadFile(manifest)
+	if err != nil {
+		return Result{}, fmt.Errorf("无法读取 package.json：%w", err)
+	}
+	var values map[string]any
+	if err := json.Unmarshal(data, &values); err != nil {
+		return Result{}, errors.New("package.json 格式无法识别")
+	}
+	if enabled {
+		if err := addPackagesWorkspace(values); err != nil {
+			return Result{}, err
+		}
+		values["private"] = true
+	} else {
+		if err := removePackagesWorkspace(values); err != nil {
+			return Result{}, err
+		}
+		values["private"] = false
+	}
+	updated, err := json.MarshalIndent(values, "", "  ")
+	if err != nil {
+		return Result{}, err
+	}
+	if err := os.WriteFile(manifest, append(updated, '\n'), 0644); err != nil {
+		if permissionError(err) {
+			return Result{}, permissionAdvice("保存背包工作区配置")
+		}
+		return Result{}, fmt.Errorf("无法保存 package.json：%w", err)
+	}
+	if enabled {
+		return Result{Path: manifest, Output: "背包已设为私有，并已启用 packages/* 工作空间。"}, nil
+	}
+	return Result{Path: manifest, Output: "背包已设为公开，并已移除 packages/* 工作空间。"}, nil
+}
+
+func addPackagesWorkspace(values map[string]any) error {
+	workspaces, exists := values["workspaces"]
+	if !exists || workspaces == nil {
+		values["workspaces"] = []string{"packages/*"}
+		return nil
+	}
+	switch current := workspaces.(type) {
+	case []any:
+		if workspaceContains(current, "packages/*") {
+			return nil
+		}
+		values["workspaces"] = append(current, "packages/*")
+		return nil
+	case map[string]any:
+		packages, err := workspacePackages(current)
+		if err != nil {
+			return err
+		}
+		if !workspaceContains(packages, "packages/*") {
+			current["packages"] = append(packages, "packages/*")
+		}
+		values["workspaces"] = current
+		return nil
+	default:
+		return errors.New("package.json 的 workspaces 格式暂不支持背包开关")
+	}
+}
+
+func removePackagesWorkspace(values map[string]any) error {
+	workspaces, exists := values["workspaces"]
+	if !exists || workspaces == nil {
+		return nil
+	}
+	switch current := workspaces.(type) {
+	case []any:
+		remaining := withoutWorkspace(current, "packages/*")
+		if len(remaining) == 0 {
+			delete(values, "workspaces")
+		} else {
+			values["workspaces"] = remaining
+		}
+		return nil
+	case map[string]any:
+		packages, err := workspacePackages(current)
+		if err != nil {
+			return err
+		}
+		remaining := withoutWorkspace(packages, "packages/*")
+		if len(remaining) == 0 {
+			// yarn's object form has no useful meaning without packages; remove
+			// its associated nohoist metadata together with the last package.
+			delete(values, "workspaces")
+		} else {
+			current["packages"] = remaining
+			values["workspaces"] = current
+		}
+		return nil
+	default:
+		return errors.New("package.json 的 workspaces 格式暂不支持背包开关")
+	}
+}
+
+func workspacePackages(workspaces map[string]any) ([]any, error) {
+	value, exists := workspaces["packages"]
+	if !exists || value == nil {
+		return nil, nil
+	}
+	packages, ok := value.([]any)
+	if !ok {
+		return nil, errors.New("package.json 的 workspaces.packages 格式暂不支持背包开关")
+	}
+	return packages, nil
+}
+
+func workspaceContains(workspaces []any, target string) bool {
+	for _, workspace := range workspaces {
+		if workspace == target {
+			return true
+		}
+	}
+	return false
+}
+
+func withoutWorkspace(workspaces []any, target string) []any {
+	remaining := make([]any, 0, len(workspaces))
+	for _, workspace := range workspaces {
+		if workspace != target {
+			remaining = append(remaining, workspace)
+		}
+	}
+	return remaining
 }
 
 func removeLocalPackage(root, source string) (Result, error) {

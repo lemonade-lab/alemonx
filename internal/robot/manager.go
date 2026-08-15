@@ -1409,6 +1409,10 @@ func (m Manager) Run(root, action, message, packageName, version, tag, token str
 		return m.syncLocalPackageOperation(root, func() (Result, error) {
 			return switchLocalPackageVersion(root, packageName, version, true)
 		})
+	case "enable-backpack-workspace":
+		return setBackpackWorkspace(root, true)
+	case "disable-backpack-workspace":
+		return setBackpackWorkspace(root, false)
 	case "install-connection":
 		if !allowedInstallPackage(packageName) {
 			return Result{}, errors.New("连接包名无效")
@@ -1443,6 +1447,14 @@ func (m Manager) Run(root, action, message, packageName, version, tag, token str
 		output, runErr = runPackageManager(root, args...)
 	} else {
 		output, runErr = run(root, name, args...)
+	}
+	if runErr == nil && (action == "pm2" || action == "pm2-restart" || action == "pm2-reload") {
+		saved, saveErr := run(root, "npx", "--yes", "pm2", "save")
+		output = strings.TrimSpace(output + "\n" + saved)
+		if saveErr != nil {
+			return Result{Path: root, Output: output}, fmt.Errorf("PM2 已启动，但保存重启恢复清单失败：%w", saveErr)
+		}
+		output = strings.TrimSpace(output + "\nPM2 进程清单已保存；请在服务器上完成一次 PM2 startup 配置以支持主机重启恢复。")
 	}
 	return Result{Path: root, Output: strings.TrimSpace(dependencyOutput + "\n" + output)}, runErr
 }

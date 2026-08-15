@@ -1,19 +1,22 @@
-import type { Report } from './types'
+import type { Check, Report } from './types'
 
 type Props = {
   title: string
   report: Report | null
   checking: boolean
   onCheck: () => void
+  onFix?: (check: Check) => void
 }
 
 export function EnvironmentCheckPanel({
   title,
   report,
   checking,
-  onCheck
+  onCheck,
+  onFix
 }: Props) {
-  const ready = Boolean(report?.ready)
+  const hasIssues = Boolean(report?.checks.some(check => check.status !== 'ready'))
+  const ready = Boolean(report?.ready) && !hasIssues
 
   return (
     <section className="mx-auto grid w-full max-w-160 gap-5 pt-8">
@@ -33,7 +36,9 @@ export function EnvironmentCheckPanel({
                 ? '正在检查所需工具…'
                 : ready
                   ? '环境已就绪，可以继续。'
-                  : '有项目需要先处理。'}
+                  : report?.ready
+                    ? '检测到建议升级的环境，仍可继续。'
+                    : '有项目需要先处理。'}
             </p>
           </div>
         </div>
@@ -74,6 +79,16 @@ export function EnvironmentCheckPanel({
                   </small>
                 )}
               </div>
+              {check.status !== 'ready' && onFix && (
+                <button
+                  className="shrink-0 rounded-lg border border-brand-200 px-2 py-1 text-xs font-bold text-brand-700 transition hover:bg-brand-50"
+                  onClick={() => onFix(check)}
+                >
+                  {check.id === 'node' && check.status === 'outdated'
+                    ? '升级'
+                    : '修复'}
+                </button>
+              )}
             </article>
           ))}
         </div>

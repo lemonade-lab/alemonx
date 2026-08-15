@@ -71,3 +71,13 @@ alx --host 127.0.0.1 --port 17390
 `alx install` 也支持 `--host`，安装的后台服务会按同样的地址监听；`--redis-port` 与 `--redis-off` 会持久化到 Redis 配置（`alx-redis.json`），设置页可随时重新调整。
 
 `alx logs` 读取托管服务日志：macOS 读取 `~/Library/Logs/alx.log`，Linux 读取 `journalctl --user -u alx.service`，Windows 读取 `%LOCALAPPDATA%\\alx\\alx.log`。前台直接运行时日志只在启动它的终端内；FreeBSD 请使用其系统服务管理器的日志工具。
+
+## 保活与开机恢复
+
+`alx install` 注册的后台服务会在登录后启动，并在 macOS/Linux 上于异常退出后自动拉起。Linux 服务器若需要在用户**未登录**时、系统重启后也持续运行，应在设置 → 服务 → 保活与开机恢复中确认“启用无登录运行”；等效的管理员命令为：
+
+```sh
+loginctl enable-linger "$(id -un)"
+```
+
+机器人生产运行应使用 PM2。ALemonX 在启动、重启或 reload 成功后会执行 `pm2 save` 保存恢复清单；首次部署仍需由服务器管理员按 PM2 输出完成一次 `pm2 startup` 注册，避免在主机重启后丢失 PM2 守护进程。

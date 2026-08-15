@@ -12,7 +12,7 @@ export type Goal = {
 export type Check = {
   id: string
   name: string
-  status: 'ready' | 'missing' | 'warning'
+  status: 'ready' | 'missing' | 'warning' | 'outdated'
   detail: string
   suggestion: string
 }

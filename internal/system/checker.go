@@ -7,9 +7,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 )
+
+const minimumNodeVersion = "22.22.3"
 
 type Check struct {
 	ID         string `json:"id"`
@@ -52,14 +55,21 @@ func (c *Checker) CheckGoal(goalID, variant string) Report {
 			checks = append(checks, c.command("node", "Node.js", "--version", "请安装 Node.js LTS 版本后重新检查。"), c.command("npm", "npm", "--version", "请随 Node.js 一并安装 npm 后重新检查。"))
 		}
 	}
-	ready := true
+	ready := checksAreUsable(checks)
+	return Report{goalID, ready, runtime.GOOS + "/" + runtime.GOARCH, checks, time.Now().Format(time.RFC3339)}
+}
+
+// checksAreUsable keeps a detected but old Node.js version visible as an
+// exception without treating it as a hard stop. The user can continue using
+// the workbench and choose when to upgrade; a missing or broken tool remains
+// a blocking prerequisite.
+func checksAreUsable(checks []Check) bool {
 	for _, check := range checks {
-		if check.Status != "ready" {
-			ready = false
-			break
+		if check.Status != "ready" && check.Status != "outdated" {
+			return false
 		}
 	}
-	return Report{goalID, ready, runtime.GOOS + "/" + runtime.GOARCH, checks, time.Now().Format(time.RFC3339)}
+	return true
 }
 
 func (c *Checker) platform() Check {
@@ -88,14 +98,61 @@ func (c *Checker) command(id, name, argument, suggestion string) Check {
 	if err != nil {
 		return Check{ID: id, Name: name, Status: "warning", Detail: "已找到，但无法正常运行", Suggestion: "请重新安装或修复 " + name + " 后重试。"}
 	}
-	version := strings.TrimSpace(strings.Split(string(output), "\n")[0])
+	rawVersion := strings.TrimSpace(strings.Split(string(output), "\n")[0])
+	version := rawVersion
 	if repaired {
 		if version != "" {
 			version += " · "
 		}
 		version += "已自动修复当前服务 PATH"
 	}
+	if id == "node" && !nodeVersionAtLeast(rawVersion, minimumNodeVersion) {
+		return Check{
+			ID:         id,
+			Name:       name,
+			Status:     "outdated",
+			Detail:     version + " · 低于最低要求 v" + minimumNodeVersion,
+			Suggestion: "当前 Node.js 版本低于 v" + minimumNodeVersion + "。建议升级；不限制继续使用，但部分项目或依赖可能无法正常运行。",
+		}
+	}
 	return Check{ID: id, Name: name, Status: "ready", Detail: version}
+}
+
+func nodeVersionAtLeast(version, minimum string) bool {
+	actual, ok := parseNodeVersion(version)
+	if !ok {
+		return false
+	}
+	required, ok := parseNodeVersion(minimum)
+	if !ok {
+		return false
+	}
+	for index := range actual {
+		if actual[index] != required[index] {
+			return actual[index] > required[index]
+		}
+	}
+	return true
+}
+
+func parseNodeVersion(value string) ([3]int, bool) {
+	value = strings.TrimPrefix(strings.TrimSpace(value), "v")
+	parts := strings.Split(value, ".")
+	if len(parts) != 3 {
+		return [3]int{}, false
+	}
+	var parsed [3]int
+	for index, part := range parts {
+		if part == "" || strings.ContainsAny(part, "+-") {
+			return [3]int{}, false
+		}
+		item, err := strconv.Atoi(part)
+		if err != nil || item < 0 {
+			return [3]int{}, false
+		}
+		parsed[index] = item
+	}
+	return parsed, true
 }
 
 // ResolveCommand resolves a prerequisite without relying solely on the PATH

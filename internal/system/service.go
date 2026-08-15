@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -14,6 +15,91 @@ import (
 )
 
 const serviceName = "com.alemonjs.alx"
+
+// ServiceResilience describes the persistent supervisor that owns the
+// workbench. It is intentionally separate from ServiceStatus: a process can
+// be running now without being configured to return after login or a crash.
+type ServiceResilience struct {
+	StartupEnabled  bool   `json:"startupEnabled"`
+	KeepAlive       bool   `json:"keepAlive"`
+	LingerSupported bool   `json:"lingerSupported"`
+	LingerKnown     bool   `json:"lingerKnown"`
+	LingerEnabled   bool   `json:"lingerEnabled"`
+	Summary         string `json:"summary"`
+}
+
+// ServiceResilienceStatus exposes only supervisor configuration, never the
+// service command line. On Linux, linger keeps the user systemd manager alive
+// after logout so a headless deployment truly survives a reboot.
+func ServiceResilienceStatus() ServiceResilience {
+	if !ServiceInstalled() {
+		return ServiceResilience{Summary: "尚未安装工作台后台服务。"}
+	}
+	switch runtime.GOOS {
+	case "darwin":
+		path, err := launchAgentPath()
+		data, readErr := os.ReadFile(path)
+		if err != nil || readErr != nil {
+			return ServiceResilience{Summary: "无法读取 LaunchAgent 保活配置。"}
+		}
+		text := string(data)
+		startup := strings.Contains(text, "<key>RunAtLoad</key><true/>")
+		keepAlive := strings.Contains(text, "<key>KeepAlive</key><true/>")
+		return ServiceResilience{StartupEnabled: startup, KeepAlive: keepAlive, Summary: "登录后自动启动；进程异常退出后由 LaunchAgent 拉起。"}
+	case "linux":
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return ServiceResilience{Summary: "无法定位 systemd 用户服务。"}
+		}
+		data, readErr := os.ReadFile(filepath.Join(home, ".config", "systemd", "user", "alx.service"))
+		if readErr != nil {
+			return ServiceResilience{Summary: "无法读取 systemd 用户服务配置。"}
+		}
+		text := string(data)
+		startup := strings.Contains(text, "WantedBy=default.target")
+		keepAlive := strings.Contains(text, "Restart=on-failure") || strings.Contains(text, "Restart=always")
+		result := ServiceResilience{StartupEnabled: startup, KeepAlive: keepAlive, LingerSupported: true, Summary: "用户 systemd 已配置为异常退出自动重启。"}
+		output, lingerErr := exec.Command("loginctl", "show-user", strconv.Itoa(os.Getuid()), "-p", "Linger", "--value").Output()
+		if lingerErr != nil {
+			result.LingerSupported = false
+			result.Summary = "用户 systemd 已配置保活；无法确认 logout 后是否继续运行。"
+			return result
+		}
+		result.LingerKnown = true
+		result.LingerEnabled = strings.EqualFold(strings.TrimSpace(string(output)), "yes")
+		if result.LingerEnabled {
+			result.Summary = "已启用无登录运行：重启后无需用户登录即可启动，并会在异常退出后自动重启。"
+		} else {
+			result.Summary = "服务会在登录后启动并在异常退出后重启；启用无登录运行后，重启或退出登录也会持续运行。"
+		}
+		return result
+	case "windows":
+		return ServiceResilience{StartupEnabled: true, Summary: "已注册登录启动任务；建议使用 Docker 或系统服务承载需要无人值守运行的服务器部署。"}
+	default:
+		return ServiceResilience{Summary: "当前系统不支持工作台后台服务管理。"}
+	}
+}
+
+// EnableUserLinger is an explicit Linux-only action. It can require host
+// authorization, so callers must obtain confirmation before invoking it.
+func EnableUserLinger() (string, error) {
+	if runtime.GOOS != "linux" {
+		return "", errors.New("无登录运行仅适用于 Linux systemd")
+	}
+	current, err := user.Current()
+	if err != nil || strings.TrimSpace(current.Username) == "" {
+		return "", errors.New("无法识别当前 Linux 用户")
+	}
+	output, err := exec.Command("loginctl", "enable-linger", current.Username).CombinedOutput()
+	if err != nil {
+		message := strings.TrimSpace(string(output))
+		if message == "" {
+			message = err.Error()
+		}
+		return "", fmt.Errorf("启用无登录运行失败：%s。请由管理员执行 loginctl enable-linger %s", message, current.Username)
+	}
+	return "已启用无登录运行；Linux 重启或用户退出登录后，ALemonX 用户服务仍会自动启动。", nil
+}
 
 // ServiceStatus reports whether the user-level service is registered and running.
 func ServiceStatus() (string, error) {
@@ -409,7 +495,7 @@ func installSystemdUserService(executable, host, port string, start bool) (strin
 		return "", err
 	}
 	path := filepath.Join(directory, "alx.service")
-	content := fmt.Sprintf("[Unit]\nDescription=ALemonX\n[Service]\nExecStart=%s serve --port %s --host %s\nRestart=on-failure\nKillMode=process\n[Install]\nWantedBy=default.target\n", shellQuote(executable), port, host)
+	content := fmt.Sprintf("[Unit]\nDescription=ALemonX\nStartLimitIntervalSec=120\nStartLimitBurst=5\n[Service]\nExecStart=%s serve --port %s --host %s\nRestart=on-failure\nRestartSec=3\nKillMode=process\n[Install]\nWantedBy=default.target\n", shellQuote(executable), port, host)
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 		return "", err
 	}
@@ -444,8 +530,14 @@ func ensureSystemdUserUnitKillMode(path string) error {
 		return err
 	}
 	text := string(data)
+	if !strings.Contains(text, "RestartSec=") {
+		text = strings.Replace(text, "Restart=on-failure", "Restart=on-failure\nRestartSec=3", 1)
+	}
+	if !strings.Contains(text, "StartLimitIntervalSec=") {
+		text = strings.Replace(text, "Description=ALemonX", "Description=ALemonX\nStartLimitIntervalSec=120\nStartLimitBurst=5", 1)
+	}
 	if strings.Contains(text, "KillMode=process") {
-		return nil
+		return os.WriteFile(path, []byte(text), 0644)
 	}
 	lines := strings.Split(text, "\n")
 	out := make([]string, 0, len(lines)+1)

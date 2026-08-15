@@ -54,7 +54,9 @@ export function GuideHome({
   const missingChecks =
     report?.checks.filter(
       check =>
-        check.status !== 'ready' && ['node', 'git', 'docker'].includes(check.id)
+        check.status !== 'ready' &&
+        check.status !== 'outdated' &&
+        ['node', 'git', 'docker'].includes(check.id)
     ) ?? []
   const isCheckStep =
     goal?.id === 'install' || goal?.id === 'develop'

@@ -1,11 +1,68 @@
 package robot
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestBackpackWorkspaceSwitchAddsAndRemovesOnlyBackpackPattern(t *testing.T) {
+	root := t.TempDir()
+	writeWebViewFixture(t, filepath.Join(root, "package.json"), `{
+  "name": "robot",
+  "workspaces": {"packages": ["modules/*"], "nohoist": ["legacy"]}
+}`)
+	manager := Manager{}
+	if _, err := manager.Run(root, "enable-backpack-workspace", "", "", "", "", "", false); err != nil {
+		t.Fatalf("enable backpack workspace: %v", err)
+	}
+	manifest := readWorkspaceManifest(t, root)
+	if manifest["private"] != true {
+		t.Fatalf("private = %#v, want true", manifest["private"])
+	}
+	workspaces := manifest["workspaces"].(map[string]any)
+	if !workspaceContains(workspaces["packages"].([]any), "packages/*") || !workspaceContains(workspaces["packages"].([]any), "modules/*") {
+		t.Fatalf("workspaces = %#v", workspaces)
+	}
+	if _, err := manager.Run(root, "disable-backpack-workspace", "", "", "", "", "", false); err != nil {
+		t.Fatalf("disable backpack workspace: %v", err)
+	}
+	manifest = readWorkspaceManifest(t, root)
+	if manifest["private"] != false {
+		t.Fatalf("private = %#v, want false", manifest["private"])
+	}
+	workspaces = manifest["workspaces"].(map[string]any)
+	if workspaceContains(workspaces["packages"].([]any), "packages/*") || !workspaceContains(workspaces["packages"].([]any), "modules/*") {
+		t.Fatalf("workspaces = %#v", workspaces)
+	}
+}
+
+func TestBackpackWorkspaceSwitchRemovesEmptyWorkspace(t *testing.T) {
+	root := t.TempDir()
+	writeWebViewFixture(t, filepath.Join(root, "package.json"), `{"name":"robot","private":true,"workspaces":["packages/*"]}`)
+	if _, err := (Manager{}).Run(root, "disable-backpack-workspace", "", "", "", "", "", false); err != nil {
+		t.Fatalf("disable backpack workspace: %v", err)
+	}
+	manifest := readWorkspaceManifest(t, root)
+	if _, exists := manifest["workspaces"]; exists {
+		t.Fatalf("workspaces should be removed: %#v", manifest)
+	}
+}
+
+func readWorkspaceManifest(t *testing.T, root string) map[string]any {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(root, "package.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest map[string]any
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	return manifest
+}
 
 func TestBackpackPackageCanBeConfiguredAndRemovedByManifestName(t *testing.T) {
 	root := t.TempDir()

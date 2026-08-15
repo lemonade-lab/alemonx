@@ -3284,7 +3284,7 @@ func (s *server) systemServiceHandler(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"status": status, "runtime": system.UpdateRuntime(), "installed": system.ServiceInstalled()})
+		writeJSON(w, http.StatusOK, map[string]any{"status": status, "runtime": system.UpdateRuntime(), "installed": system.ServiceInstalled(), "resilience": system.ServiceResilienceStatus()})
 		return
 	}
 	if r.Method != http.MethodPost {
@@ -3300,6 +3300,13 @@ func (s *server) systemServiceHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch input.Action {
+	case "enable-linger":
+		output, err := system.EnableUserLinger()
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"output": output})
 	case "install":
 		if system.ServiceInstalled() {
 			writeError(w, http.StatusConflict, "后台服务已安装；请使用启动或重启服务。")

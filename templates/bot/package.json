@@ -1,8 +1,9 @@
 {
-  "name": "alemonjs-bot",
+  "name": "alemonb",
   "version": "1.0.0",
   "description": "template bot",
   "type": "module",
+  "private": true,
   "scripts": {
     "app": "node index.js",
     "review": "npx alemonc start",
@@ -19,5 +20,8 @@
   "dependencies": {
     "@alemonjs/db": "^0.0.17",
     "jsxp": "^1.4.0"
-  }
+  },
+  "workspaces": [
+    "packages/*"
+  ]
 }

@@ -1,9 +1,18 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Download, Power, RotateCcw, Server } from 'lucide-react'
+import { Download, Power, RotateCcw, Server, ShieldCheck } from 'lucide-react'
 import { Button } from './Button'
 import { ConfirmDialog } from './ConfirmDialog'
 
-type ServiceAction = 'install' | 'stop' | 'restart'
+type ServiceAction = 'install' | 'stop' | 'restart' | 'enable-linger'
+
+type ServiceResilience = {
+  startupEnabled: boolean
+  keepAlive: boolean
+  lingerSupported: boolean
+  lingerKnown: boolean
+  lingerEnabled: boolean
+  summary: string
+}
 
 export function ServiceControlCard() {
   const [busy, setBusy] = useState(false)
@@ -11,6 +20,7 @@ export function ServiceControlCard() {
   const [serviceAction, setServiceAction] = useState<ServiceAction | null>(null)
   const [serviceStatus, setServiceStatus] = useState('')
   const [serviceInstalled, setServiceInstalled] = useState<boolean | null>(null)
+  const [resilience, setResilience] = useState<ServiceResilience | null>(null)
   const serviceStatusTone =
     serviceInstalled === false
       ? 'is-offline'
@@ -25,10 +35,12 @@ export function ServiceControlCard() {
       const result = (await response.json()) as {
         status?: string
         installed?: boolean
+        resilience?: ServiceResilience
       }
       if (!response.ok) throw new Error()
       setServiceStatus(result.status || '')
       setServiceInstalled(result.installed ?? null)
+      setResilience(result.resilience ?? null)
     } catch {
       setServiceStatus('无法读取 AlemonX 服务状态。')
     }
@@ -106,6 +118,7 @@ export function ServiceControlCard() {
       setMessage(result.output || '服务操作已提交。')
       if (action === 'install') reconnectAfterServiceInstall()
       else if (action === 'restart') reconnectAfterServiceRestart()
+      else void loadServiceStatus()
     } catch (reason) {
       setMessage(reason instanceof Error ? reason.message : '服务操作失败。')
     } finally {
@@ -167,6 +180,32 @@ export function ServiceControlCard() {
           </Button>
         </footer>
       </section>
+      <section className="grid gap-2 rounded-xl border border-(--theme-border-default) bg-(--theme-surface-panel) p-3 text-xs text-(--theme-text-muted)">
+        <header className="flex items-center gap-2 text-(--theme-text-primary)">
+          <ShieldCheck className="size-4" />
+          <strong>保活与开机恢复</strong>
+        </header>
+        <p>{resilience?.summary || '正在读取保活配置…'}</p>
+        {serviceInstalled && resilience && (
+          <div className="grid gap-1 text-[11px]">
+            <span>登录/开机启动：{resilience.startupEnabled ? '已配置' : '未配置'}</span>
+            <span>异常退出自动拉起：{resilience.keepAlive ? '已配置' : '未配置'}</span>
+            {resilience.lingerKnown && (
+              <span>Linux 无登录运行：{resilience.lingerEnabled ? '已启用' : '未启用'}</span>
+            )}
+          </div>
+        )}
+        {serviceInstalled && resilience?.lingerSupported && !resilience.lingerEnabled && (
+          <Button
+            variant="secondary"
+            className="w-fit gap-1.5"
+            disabled={busy}
+            onClick={() => setServiceAction('enable-linger')}
+          >
+            <ShieldCheck className="size-3.5" /> 启用无登录运行
+          </Button>
+        )}
+      </section>
       {message && (
         <small className="rounded-md bg-slate-50 p-2 text-[11px] leading-4 text-slate-500">
           {message}
@@ -177,6 +216,8 @@ export function ServiceControlCard() {
         title={
           serviceAction === 'install'
             ? '安装 AlemonX 后台服务'
+            : serviceAction === 'enable-linger'
+              ? '启用 Linux 无登录运行'
             : serviceAction === 'stop'
               ? '停止 AlemonX 服务'
               : '重启 AlemonX 服务'
@@ -184,6 +225,8 @@ export function ServiceControlCard() {
         subtitle={
           serviceAction === 'install'
             ? ''
+            : serviceAction === 'enable-linger'
+              ? '此操作可能需要系统管理员授权。'
             : serviceAction === 'stop' && serviceInstalled === false
               ? '未安装后台守护服务；这会关闭当前前台运行的工作台服务。'
               : '仅影响工作台后台服务，不会停止机器人项目。'
@@ -191,6 +234,8 @@ export function ServiceControlCard() {
         message={
           serviceAction === 'install'
             ? '当前前台工作台会关闭，并切换为系统后台服务；页面恢复连接后会自动刷新。'
+            : serviceAction === 'enable-linger'
+              ? '启用后，Linux 重启或用户退出登录时，已安装的 ALemonX systemd 用户服务仍可自动运行。'
             : serviceAction === 'stop'
               ? serviceInstalled === false
                 ? '当前页面会断开连接；之后可从启动应用的位置重新打开工作台。'
@@ -200,6 +245,8 @@ export function ServiceControlCard() {
         confirmLabel={
           serviceAction === 'install'
             ? '安装并启动'
+            : serviceAction === 'enable-linger'
+              ? '确认启用'
             : serviceAction === 'stop'
               ? '确认停止'
               : '确认重启'

@@ -3,7 +3,7 @@ import { useState } from 'react'
 import { Modal } from './Modal'
 import { DownloadProgress } from './DownloadProgress'
 
-type Check = { id: string; name: string; suggestion: string }
+type Check = { id: string; name: string; status?: string; suggestion: string }
 
 type Props = {
   check: Check
@@ -62,6 +62,7 @@ export function EnvironmentFixDialog({
   const isMacOS = platform.startsWith('darwin/')
   const isWindows = platform.startsWith('windows/')
   const isManagedNode = check.id === 'node'
+  const isNodeUpgrade = isManagedNode && check.status === 'outdated'
   const installOnServer = async () => {
     setInstalling(true)
     setMessage('')
@@ -105,7 +106,7 @@ export function EnvironmentFixDialog({
           id="environment-fix-title"
           className="mr-9 text-base font-semibold text-ink-950"
         >
-          安装 {check.name}
+          {isNodeUpgrade ? '升级' : '安装'} {check.name}
         </h2>
         <p className="mt-2 text-sm leading-6 text-slate-500">
           {check.suggestion || '请选择官方安装包，完成后返回环境面板重新检查。'}
@@ -130,7 +131,9 @@ export function EnvironmentFixDialog({
               onClick={() => void installOnServer()}
             >
               {installing ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}
-              {installing ? '正在服务器安装…' : `安装 ${check.name}`}
+              {installing
+                ? '正在服务器安装…'
+                : `${isNodeUpgrade ? '升级' : '安装'} ${check.name}`}
             </button>
             {installing && (
               <DownloadProgress

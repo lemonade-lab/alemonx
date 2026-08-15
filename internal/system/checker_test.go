@@ -2,6 +2,35 @@ package system
 
 import "testing"
 
+func TestNodeVersionAtLeast(t *testing.T) {
+	for _, test := range []struct {
+		version string
+		want    bool
+	}{
+		{"v22.22.2", false},
+		{"v22.22.3", true},
+		{"v22.23.0", true},
+		{"v23.0.0", true},
+		{"v22.22.3-pre", false},
+		{"not-a-version", false},
+	} {
+		if got := nodeVersionAtLeast(test.version, minimumNodeVersion); got != test.want {
+			t.Errorf("nodeVersionAtLeast(%q) = %t, want %t", test.version, got, test.want)
+		}
+	}
+}
+
+func TestOutdatedNodeDoesNotBlockEnvironment(t *testing.T) {
+	checks := []Check{{ID: "node", Status: "outdated"}, {ID: "git", Status: "ready"}}
+	if !checksAreUsable(checks) {
+		t.Fatal("outdated Node.js should be non-blocking")
+	}
+	checks[1].Status = "missing"
+	if checksAreUsable(checks) {
+		t.Fatal("missing prerequisite should remain blocking")
+	}
+}
+
 func TestGitBuildCheckDoesNotRequireGlobalPackageTools(t *testing.T) {
 	report := NewChecker().CheckGoal("build", "git")
 	ids := map[string]bool{}
