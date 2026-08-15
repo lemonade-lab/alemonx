@@ -98,6 +98,9 @@ docker-build: ## Build the local Docker image
 docker-buildx: ## Manually validate or publish the multi-architecture Docker image
 	./scripts/docker-buildx.sh
 
+docker-buildx-push: ## Manually validate or publish the multi-architecture Docker image
+	ALX_PUSH=1 ./scripts/docker-buildx.sh
+
 docker-up: ## Start ALemonX through Docker Compose
 	docker compose up -d
 

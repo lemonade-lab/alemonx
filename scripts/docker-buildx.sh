@@ -1,41 +1,63 @@
 #!/bin/sh
-# Manually build and optionally publish ALemonX's multi-architecture image.
-# Examples:
-#   ./scripts/docker-buildx.sh
-#   ALX_VERSION=v1.2.3 ALX_PUSH=1 ./scripts/docker-buildx.sh
-
 set -eu
 
+# ========== 配置 ==========
 image="${ALX_IMAGE:-ccr.ccs.tencentyun.com/ningmengchongshui/alemonx}"
-version="${ALX_VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo dev)}"
+version="${ALX_VERSION:-$(git describe --tags --abbrev=0 2>/dev/null || git rev-parse --short HEAD 2>/dev/null || echo dev)}"
 platforms="${ALX_PLATFORMS:-linux/amd64,linux/arm64}"
 push="${ALX_PUSH:-0}"
 builder="${ALX_BUILDER:-alx-builder}"
 
-command -v docker >/dev/null 2>&1 || { printf '%s\n' '未检测到 Docker。' >&2; exit 1; }
-docker info >/dev/null 2>&1 || { printf '%s\n' 'Docker 未运行，或当前账户没有访问权限。' >&2; exit 1; }
+# ========== 检查环境 ==========
+command -v docker >/dev/null 2>&1 || { echo '❌ 未检测到 Docker。' >&2; exit 1; }
+docker info >/dev/null 2>&1 || { echo '❌ Docker 未运行，或当前账户没有访问权限。' >&2; exit 1; }
 
+# ========== 配置 Builder ==========
 if ! docker buildx inspect "$builder" >/dev/null 2>&1; then
+  echo "🔧 创建新的 builder: $builder"
   docker buildx create --name "$builder" --use
 else
+  echo "🔧 使用已有 builder: $builder"
   docker buildx use "$builder"
 fi
 docker buildx inspect --bootstrap
 
-set -- \
-  docker buildx build \
-  --platform "$platforms" \
-  --build-arg "VERSION=$version" \
-  -t "$image:latest" \
-  -t "$image:$version"
+# ========== 显示构建信息 ==========
+echo "=========================================="
+echo "📦 镜像: $image"
+echo "🏷️  版本: $version"
+echo "🖥️  平台: $platforms"
+echo "📤 推送: $([ "$push" = '1' ] && echo '是' || echo '否')"
+echo "=========================================="
 
+# ========== 构建 ==========
 if [ "$push" = '1' ]; then
-  set -- "$@" --push
-  printf '%s\n' "构建并推送 $image:$version ($platforms)"
+  echo "🚀 构建并推送..."
+  docker buildx build \
+    --platform "$platforms" \
+    --build-arg "VERSION=$version" \
+    -t "$image:latest" \
+    -t "$image:$version" \
+    --push \
+    .
 else
-  # Multi-platform results are retained in BuildKit's cache only. This makes
-  # the default safe for validation; use `docker build` for a local image.
-  printf '%s\n' "仅验证构建 $image:$version ($platforms)，不会推送"
+  echo "🔨 仅验证构建（结果在缓存中）..."
+  echo "💡 提示: 如需推送，执行: ALX_PUSH=1 $0"
+  docker buildx build \
+    --platform "$platforms" \
+    --build-arg "VERSION=$version" \
+    -t "$image:latest" \
+    -t "$image:$version" \
+    .
 fi
 
-"$@" .
+echo "=========================================="
+echo "✅ 完成！"
+echo "📦 镜像: $image"
+echo "🏷️  标签: latest, $version"
+if [ "$push" = '1' ]; then
+  echo "📤 已推送到远程仓库"
+else
+  echo "💡 镜像仅在本地缓存中"
+fi
+echo "=========================================="
