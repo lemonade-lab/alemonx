@@ -50,6 +50,7 @@ import {
   resultItems
 } from './qqChatDirectory'
 import { ConfirmDialog } from './ConfirmDialog'
+import { createRandomID } from '../lib/randomId'
 
 type Segment = { type: string; value?: unknown }
 type LiveEvent = {
@@ -159,7 +160,7 @@ type CBPResponse = {
 
 const historyDays = 30
 const requestTimeout = 20_000
-const deviceID = `alemonx-live-${crypto.randomUUID()}`
+const deviceID = `alemonx-live-${createRandomID()}`
 const uploadActions = new Set([
   'file.send.channel',
   'file.send.user',
@@ -708,7 +709,7 @@ export function LiveChat({ root }: { root: string }) {
     (title: string, message: string) => {
       setSystemNotifications(current => [
         {
-          id: crypto.randomUUID(),
+          id: createRandomID(),
           title,
           message,
           createdAt: Date.now()
@@ -761,7 +762,7 @@ export function LiveChat({ root }: { root: string }) {
       setTools(current =>
         [
           {
-            id: crypto.randomUUID(),
+            id: createRandomID(),
             action,
             target,
             state,
@@ -1224,7 +1225,7 @@ export function LiveChat({ root }: { root: string }) {
         return ''
       }
       const createdAt = Date.now()
-      const requestID = `${deviceID}:${createdAt}:${crypto.randomUUID().slice(0, 8)}`
+      const requestID = `${deviceID}:${createdAt}:${createRandomID().slice(0, 8)}`
       const next = { ...pendingRef.current, [requestID]: pendingAction }
       pendingRef.current = next
       setPending(next)
@@ -2205,7 +2206,7 @@ export function LiveChat({ root }: { root: string }) {
         if (existing) return current.filter(item => item !== existing)
         return [
           {
-            id: crypto.randomUUID(),
+            id: createRandomID(),
             conversationId: currentConversation.id,
             messageId,
             text: eventText(event).slice(0, 160) || '非文本消息',
