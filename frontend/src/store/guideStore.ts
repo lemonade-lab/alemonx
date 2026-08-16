@@ -74,7 +74,7 @@ const initialState: GuideState = {
     skills: 'yes',
     capabilities: []
   },
-  project: { name: 'alemonb', destinationMode: 'current', destination: '' }
+  project: { name: '', destinationMode: 'current', destination: '' }
 }
 
 const guideSlice = createSlice({

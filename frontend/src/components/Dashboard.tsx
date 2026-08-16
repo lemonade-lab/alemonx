@@ -1239,6 +1239,7 @@ export function Dashboard({
   }, [loadAgentSessions, setAgentSessionId])
   const environmentChecked = useRef(false)
   const pendingRootValidation = useRef<string | null>(null)
+  const removedProjectRoots = useRef<Set<string>>(new Set())
   const eventsRef = useRef<EventSource | null>(null)
   const opsRefreshTimer = useRef<number | null>(null)
   const rawProjects = useSelector(
@@ -2212,8 +2213,28 @@ export function Dashboard({
     const path = navigationFromURL.root
     if (!path || path === root) {
       pendingRootValidation.current = null
+      removedProjectRoots.current.clear()
       return
     }
+    if (removedProjectRoots.current.has(path)) {
+      // The URL still references a directory the user just removed. Drop the
+      // parameter instead of re-adding it; the guard is pruned once the URL
+      // moves on, so a later explicit link can re-add the directory again.
+      pendingRootValidation.current = null
+      const parameters = new URLSearchParams(location.search)
+      parameters.delete('root')
+      const search = parameters.toString()
+      navigate(
+        {
+          pathname: location.pathname,
+          search: search ? `?${search}` : '',
+          hash: location.hash
+        },
+        { replace: true }
+      )
+      return
+    }
+    removedProjectRoots.current.clear()
     if (projects.some(item => item.path === path)) {
       dispatch(selectProject(projects.find(item => item.path === path)!.id))
       return
@@ -2227,6 +2248,7 @@ export function Dashboard({
         )
         const data = (await response.json()) as { valid?: boolean }
         if (response.ok && data.valid === true) {
+          if (removedProjectRoots.current.has(path)) return
           dispatch(addProjects([{ id: path, path, name: projectName(path) }]))
           return
         }
@@ -2600,25 +2622,13 @@ export function Dashboard({
   function confirmRemoveProject() {
     if (!pendingProjectRemoval) return
     const removedPath = pendingProjectRemoval
+    removedProjectRoots.current.add(removedPath)
+    if (pendingRootValidation.current === removedPath) {
+      pendingRootValidation.current = null
+    }
     dispatch(removeWorkspaceProject(removedPath))
     setPendingProjectRemoval(null)
     setOutput('')
-    // The URL root is the durable navigation contract: leaving it in place
-    // makes the URL restoration effect re-validate and re-add the directory
-    // immediately after it is removed from the management list.
-    if (navigationFromURL.root === removedPath) {
-      const parameters = new URLSearchParams(location.search)
-      parameters.delete('root')
-      const search = parameters.toString()
-      navigate(
-        {
-          pathname: location.pathname,
-          search: search ? `?${search}` : '',
-          hash: location.hash
-        },
-        { replace: true }
-      )
-    }
   }
 
   // AI is a content page, not an overlay. Any normal navigation must leave it

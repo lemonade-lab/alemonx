@@ -2,7 +2,7 @@
 
 > 本页还有 [English version](en/cli.md)。
 
-工作台提供同名的 `alx` 命令，用于在浏览器不可用或需要远程排障时完成常见操作。后台安装后命令会位于用户目录的本地命令目录；若终端尚未找到它，请按安装结果将该目录加入 `PATH`。
+工作台提供同名的 `alx` 命令，用于在浏览器不可用或需要远程排障时完成常见操作。安装脚本会把 `alx` 放到用户命令目录（macOS/Linux 通常 `~/.local/bin`，Windows 为 `%LOCALAPPDATA%\Programs\ALemonX`）；后台服务注册的是**你当前执行的 alx 程序**，不会复制到其他目录。若终端找不到 `alx`，把对应目录加入 `PATH` 即可。
 
 尚未安装时，不必前往 GitHub Releases。macOS、Linux、FreeBSD 可执行：
 
@@ -47,7 +47,7 @@ alx --redis-port 6380                   # 调整内置 Redis 端口
 alx --redis-off                         # 禁止启动内置 Redis
 
 # 后台服务（Windows、macOS、Linux）
-alx install --port 17390 [--host 0.0.0.0]
+alx install --port 17390 [--host 0.0.0.0] [--workspace /path/to/workspace]
 alx start
 alx restart
 alx stop
@@ -64,6 +64,8 @@ alx update
 ```
 
 工作区默认取 `ALX_WORKSPACE` 环境变量，其次取 `ALEMONJS_SETUP_ROOTS` 中第一个可写目录，最后回退到 `<运行目录>/workspace`；`--workspace` 优先级最高。模板存放在 `<workspace>/templates`，新建机器人默认落在 `<workspace>/bots`，内置 Yarn 物化到 `<workspace>/packages/yarn`；PM2 不随包嵌入，首次需要时用内置 Yarn 安装到 `<workspace>/packages/pm2`（位置固定）。
+
+`alx install` 注册的是**当前执行的 alx 程序**（不会复制到其他目录），并把安装时解析出的工作区固定进服务参数，后台服务与前台使用同一工作区。**无论后台服务是否已安装，每次执行 `alx install` 都会以当前程序与工作区直接覆盖重新注册，不会因为已安装而跳过。** 程序移动后，从新位置重新执行 `alx install`，或直接执行 `alx start`（会自动检测并按当前程序重新注册）；`alx status` 会显示注册的程序与工作区路径。
 
 `alx health --port 17390` 只检查本机 `127.0.0.1` 的 `/healthz`，可用于确认服务是否已恢复。`alx doctor` 额外汇总后台服务、HTTP 健康、Node.js 与 Git 的环境状态。
 
@@ -85,10 +87,12 @@ alx --host 127.0.0.1 --port 17390
 
 ## 保活与开机恢复
 
-`alx install` 注册的后台服务会在登录后启动，并在 macOS/Linux 上于异常退出后自动拉起。Linux 服务器若需要在用户**未登录**时、系统重启后也持续运行，应在设置 → 服务 → 保活与开机恢复中确认“启用无登录运行”；等效的管理员命令为：
+`alx install` 默认开启**开机自启**：注册的服务会在登录/开机后启动，并在 macOS/Linux 上于异常退出后自动拉起。Linux 上安装时默认会尝试开启**无登录运行**（linger），让服务在用户未登录时、系统重启后也持续运行；若权限不足，安装会提示，可在设置 → 服务 → 保活与开机恢复中稍后启用。等效的管理员命令为：
 
 ```sh
 loginctl enable-linger "$(id -un)"
 ```
 
 机器人生产运行应使用 PM2。ALemonX 在启动、重启或 reload 成功后会执行 `pm2 save` 保存恢复清单；首次部署仍需由服务器管理员按 PM2 输出完成一次 `pm2 startup` 注册，避免在主机重启后丢失 PM2 守护进程。
+
+PM2 应用名使用**稳定的项目身份**：机器人根目录的 `.alemonx-id` 与 `package.json` 名称共同决定，移动或改名目录不会改变身份；存量项目没有该文件时沿用旧路径摘要名，直到配置被重写（重写时工作台会自动清理旧 PM2 登记）。生成的 `pm2.config.cjs` 使用 `cwd: __dirname`（配置随目录自定位）并内置重启退避字段。

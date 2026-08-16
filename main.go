@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -139,11 +140,26 @@ func main() {
 				usage()
 				return
 			}
-			result, err := system.InstallService(port, host)
+			root, resolveErr := workspace.ResolveRoot(workspaceRoot)
+			if resolveErr != nil {
+				log.Fatal(resolveErr)
+			}
+			result, err := system.InstallService(port, host, root)
 			if err != nil {
 				log.Fatal(err)
 			}
 			fmt.Println(result)
+			// Default installs also enable run-without-login on Linux so the
+			// service survives reboots and logouts. A permission failure is
+			// reported but does not abort the installation.
+			if runtime.GOOS == "linux" {
+				linger, lingerErr := system.EnableUserLinger()
+				if lingerErr != nil {
+					fmt.Println(lingerErr.Error() + "（可在 设置 → 服务 中稍后启用无登录运行）")
+				} else {
+					fmt.Println(linger)
+				}
+			}
 			return
 		case "open":
 			if len(arguments) != 1 {
@@ -623,7 +639,7 @@ func usage() {
 
   alx mcp                            启动本机 stdio MCP 服务
   MCP_TOKEN=... alx mcp-http         启动受保护的本机 HTTP MCP 服务
-  alx install --port 17390 [--host 0.0.0.0]   注册为后台常驻服务（默认 0.0.0.0）
+  alx install --port 17390 [--host 0.0.0.0] [--workspace <目录>]   注册当前程序为后台常驻服务（默认 0.0.0.0；工作区以安装时为准）
   alx open [--port 17390]            打开浏览器
   alx update                         检查并更新 alx
   alx status                         查看后台服务状态

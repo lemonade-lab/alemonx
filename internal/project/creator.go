@@ -279,7 +279,10 @@ func patchPackage(root string, config Config) error {
 		dependencies["pm2"] = "^5"
 		dependencies["yaml"] = "^2.6.0"
 		// The embedded template is intentionally rewritten with this project's
-		// absolute path. This gives each project a stable, isolated PM2 identity.
+		// stable identity so the PM2 app name survives directory moves.
+		if err := pm2config.EnsureID(root); err != nil {
+			return fmt.Errorf("写入项目身份失败：%w", err)
+		}
 		if err := os.WriteFile(filepath.Join(root, "pm2.config.cjs"), []byte(pm2config.Config(root)), 0644); err != nil {
 			return err
 		}

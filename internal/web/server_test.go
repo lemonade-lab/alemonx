@@ -170,6 +170,30 @@ func TestWorkspaceEndpointExposesUnifiedLayout(t *testing.T) {
 	}
 }
 
+func TestWorkspaceOpenRejectsPathsOutsideRoot(t *testing.T) {
+	handler := newTestServer()
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/workspace/open",
+		strings.NewReader(`{"path":"/tmp/outside-workspace"}`),
+	)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	request = httptest.NewRequest(
+		http.MethodGet,
+		"/api/v1/workspace/open",
+		nil,
+	)
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("GET status = %d", response.Code)
+	}
+}
+
 // TestLoggableRequestBodyRedactsSecretsAndRestoresStream ensures the request
 // logger prints the action for the console while redacting tokens/passwords
 // and keeping the body readable by the downstream handler.

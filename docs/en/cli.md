@@ -2,7 +2,7 @@
 
 > 中文版：[../cli.md](../cli.md)。
 
-The workbench ships a matching `alx` command for common operations when the browser is unavailable or you need to troubleshoot remotely. Once installed as a background service, the command lives in a local command directory under your user directory; if your terminal cannot find it, add that directory to `PATH` as the install result suggests.
+The workbench ships a matching `alx` command for common operations when the browser is unavailable or you need to troubleshoot remotely. The installer script places `alx` in a user command directory (typically `~/.local/bin` on macOS/Linux and `%LOCALAPPDATA%\Programs\ALemonX` on Windows); the background service registers the `alx` program you are currently running and never copies it elsewhere. If your terminal cannot find `alx`, add that directory to `PATH`.
 
 ## Installation
 
@@ -51,7 +51,7 @@ alx --redis-port 6380                   # change the built-in Redis port
 alx --redis-off                         # do not start the built-in Redis
 
 # Background service (Windows, macOS, Linux)
-alx install --port 17390 [--host 0.0.0.0]
+alx install --port 17390 [--host 0.0.0.0] [--workspace /path/to/workspace]
 alx start
 alx restart
 alx stop
@@ -68,6 +68,8 @@ alx update
 ```
 
 The workspace root is resolved from the `ALX_WORKSPACE` environment variable, then from the first writable entry in `ALEMONJS_SETUP_ROOTS`, and finally falls back to `<run-dir>/workspace`; `--workspace` takes the highest precedence. Templates live in `<workspace>/templates`, new robots land in `<workspace>/bots` by default, the built-in Yarn is materialized into `<workspace>/packages/yarn`, and PM2 is not embedded - when first needed it is installed with the built-in Yarn into `<workspace>/packages/pm2` (a stable location).
+
+`alx install` registers the alx program you are currently running and pins the workspace resolved at install time into the service command line, so the background service and the foreground share the same workspace. Every `alx install` overwrites the existing registration with the current program and workspace; it never skips because a service is already installed. After moving the program, run `alx install` again from the new location, or simply run `alx start` (it detects the change and re-registers with the current program); `alx status` shows the registered program and workspace paths.
 
 `alx health --port 17390` only checks `127.0.0.1` `/healthz` locally and can confirm whether the service has recovered. `alx doctor` additionally summarizes the background service, HTTP health, and Node.js/Git environment state.
 
@@ -89,10 +91,12 @@ Because it listens on all interfaces by default, enable local authentication fir
 
 ## Keep-alive and startup recovery
 
-The background service registered by `alx install` starts after login and is automatically restarted after abnormal exits on macOS/Linux. If a Linux server must keep running when the user is **not** logged in and after a system reboot, confirm "Run without login" in Settings → Service → Keep-alive & Startup Recovery; the equivalent admin command is:
+The background service registered by `alx install` enables **startup recovery** by default: it starts after login/boot and is automatically restarted after abnormal exits on macOS/Linux. On Linux, installation also attempts to enable **run-without-login** (linger) by default so the service keeps running when the user is not logged in and after a system reboot; if permission is missing, installation reports it and you can enable it later under Settings → Service → Keep-alive & Startup Recovery. The equivalent admin command is:
 
 ```sh
 loginctl enable-linger "$(id -un)"
 ```
 
 Robots should run with PM2 in production. ALemonX runs `pm2 save` after a successful start, restart, or reload to persist the recovery list; on first deployment a server administrator still needs to run `pm2 startup` once per the PM2 output, so the PM2 daemon survives host reboots.
+
+PM2 app names use a **stable project identity**: the `.alemonx-id` file in the robot root combined with the `package.json` name, so moving or renaming the directory does not change the identity. Projects without the identity file keep the legacy path-digest name until the config is rewritten (the workbench then removes the old PM2 registration). The generated `pm2.config.cjs` uses `cwd: __dirname` (the config self-locates with the directory) and includes restart backoff fields.

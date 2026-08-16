@@ -1194,7 +1194,7 @@ function FlowView({
                   onChange={event =>
                     dispatch(setProject({ name: event.target.value }))
                   }
-                  placeholder="alemonb"
+                  placeholder="my-alemonjs-bot"
                 />
               </label>
               <div className="location-options">

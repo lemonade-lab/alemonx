@@ -369,6 +369,10 @@ export const workspaceApi = createApi({
         templates: string
         bots: string
         packages: string
+        refreshable: {
+          templates: boolean
+          packages: Record<string, boolean>
+        }
       },
       void
     >({ query: () => 'workspace' }),

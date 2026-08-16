@@ -40,6 +40,7 @@ The most common `.env` variables:
 | --- | --- | --- |
 | `ALX_IMAGE` | `ccr.ccs.tencentyun.com/ningmengchongshui/alemonx:latest` | Default Tencent Cloud image; use `alx:local` for local builds. |
 | `ALX_PORT` | `17390` | Port exposed to the host. |
+| `ALX_CONTAINER_NAME` | `alx` | Container name shown by `docker ps`; customize for multi-instance deployments. |
 | `ALX_DEPLOYMENT` | `production` | Production mode: missing SQLite or local auth only prints reminders and does not block startup; an admin can be created from the setup guide. |
 
 Runtime data is not kept in a named volume but in host directories next to the compose file:

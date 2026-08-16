@@ -147,6 +147,7 @@ You will meet the technologies below in the workbench. As a beginner you do **no
 
 - **What it is**: a Node.js process daemon that keeps programs running, restarts them after crashes, and manages logs.
 - **What it does in ALemonX**: the robot "persistent run" mode is based on PM2; ALemonX runs `pm2 save` after a successful start/restart/reload to persist the recovery list.
+- **Identity and moves**: the PM2 app name is derived from the `.alemonx-id` file in the robot root plus the `package.json` name, so moving the directory does not change it; older projects without the file keep their legacy name until the config is rewritten.
 - **What you need to do**: on first server deployment, an admin runs `pm2 startup` once per the PM2 output so the daemon survives host reboots.
 
 ### Redis
@@ -199,65 +200,73 @@ Confirm the service is running with `alx health`, `alx status`, or `alx doctor`.
 
 Some system-level operations (installing environment dependencies, system services, privileged plugin operations) need authorization. Enter a password in the privileged dialog (password mode) or use native system authorization (native mode); operations are written to the audit log.
 
+**Q6: Where is the background service registered? What if I move the alx program?**
+
+`alx install` registers the alx program you are currently running (it is not copied to another directory) and pins the workspace resolved at install time into the service command line, so the background service and the foreground share the same workspace. Every `alx install` overwrites the existing registration with the current program and workspace; it never skips because a service is already installed. Installation enables **startup recovery** by default; on Linux it also attempts to enable **run-without-login** (a permission failure is reported and can be fixed later under Settings → Service). After moving the program, run `alx install` again from the new location, or simply run `alx start` (it detects the change and re-registers with the current program); `alx status` shows the registered program and workspace paths.
+
+To uninstall the background service, run `alx uninstall --yes` or click "Uninstall service" under Settings → Service. Uninstalling only removes the service registration and startup recovery; it never deletes workbench data, accounts, or robot projects. You can reopen the workbench later by running `alx` manually.
+
 ### Environment and dependencies
 
-**Q6: Node.js version is too low?**
+**Q7: Node.js version is too low?**
 
 Upgrade to v22.22.3+ if possible. A low version is marked `outdated` with an upgrade entry but does not block usage; only a missing or broken environment is a blocker.
 
-**Q7: Git or a package manager is missing?**
+**Q8: Git or a package manager is missing?**
 
 Check the "Environment" page and install with one click as prompted. Git is used for version control and publishing; a package manager installs robot dependencies.
 
 ### Running robots
 
-**Q8: The robot failed to start. Where are the logs?**
+**Q9: The robot failed to start. Where are the logs?**
 
 Development/foreground logs are in the terminal or run panel; for PM2 mode use "PM2 logs" (paging, streaming, export supported). From the CLI, `alx logs` shows the background service logs (macOS: `~/Library/Logs/alx.log`; Linux: `journalctl --user -u alx.service`; Windows: `%LOCALAPPDATA%\alx\alx.log`).
 
-**Q9: The port is already in use by another process?**
+**Q10: The port is already in use by another process?**
 
 The workbench identifies port ownership automatically; if another program owns it, use a different robot port or stop the occupying program. On Windows, ownership is resolved through the managed process tree (npm/yarn-launched Node processes).
 
-**Q10: What is the difference between dev mode and PM2 mode?**
+**Q11: What is the difference between dev mode and PM2 mode?**
 
 Dev mode is for editing code: hot reload and direct logs. PM2 mode is for stable running: daemon management, auto-restart, and startup recovery lists - recommended for production.
 
 ### Configuration and data
 
-**Q11: Where do I change robot configuration?**
+**Q12: Where do I change robot configuration?**
 
 `alemon.config.yaml` in the robot root (platform accounts, ports, etc.) and `package.json` (dependencies, scripts, publishing info). The workbench provides visual editors; sensitive fields (`.env`, `.npmrc`, alemon config drafts) are never persisted in the browser.
 
-**Q12: Where does workbench data live, and how do I back it up?**
+**Q13: Where does workbench data live, and how do I back it up?**
 
 The workspace directory stores templates, tools, and new robots; workbench state (accounts, config, SQLite, caches, plugins) lives in the user config directory (host `./data` in Docker). AI ops data defaults to `ops.db` (SQLite). Back up these directories.
 
-**Q13: I forgot the workbench admin password?**
+Settings → Workspace shows these paths with open buttons; when templates or built-in tools have a newer version, it shows a "refreshable" hint there (it never overwrites your changes automatically).
+
+**Q14: I forgot the workbench admin password?**
 
 Reconfigure the account with `alx auth enable --account ... --password ... --confirm-password ...`; `alx auth status` shows the current state. In production, also restrict access with a firewall.
 
 ### AI and MCP
 
-**Q14: Why does the AI ask for confirmation again and again?**
+**Q15: Why does the AI ask for confirmation again and again?**
 
 This is a deliberate security boundary: every modifying operation requires your confirmation (`confirm: true`), and MCP constraints are enforced in the Go service layer, not by client hints. You can reject or stop tasks anytime.
 
-**Q15: Codex cannot connect to MCP?**
+**Q16: Codex cannot connect to MCP?**
 
 First run `command -v alx` to confirm `alx` is on PATH. For stdio, use launch command `alx` with arguments `mcp`; for Streamable HTTP, set `MCP_TOKEN` and start `alx mcp-http`, then use `http://127.0.0.1:17391/mcp`. Optionally set `MCP_ALLOWED_ROOTS` to limit manageable directories.
 
-**Q16: What can the AI do to my robots, and what not?**
+**Q17: What can the AI do to my robots, and what not?**
 
 Can: read source, edit code, install dependencies, build, Git operations, manage runs (with your confirmation). Cannot: arbitrary host shell commands; reading `.env`/`.npmrc`/private keys; accessing `.git`/`node_modules`/symlinks; reading or writing files larger than 1 MiB.
 
 ### Updates and upgrades
 
-**Q17: How do I update ALemonX?**
+**Q18: How do I update ALemonX?**
 
 `alx update` checks and auto-updates (with SHA-256 verification). For Docker, run `sh docker-install.sh pull` followed by `restart` on the host; **do not run `alx update` inside the container**.
 
-**Q18: Will my configuration be lost after an update?**
+**Q19: Will my configuration be lost after an update?**
 
 No. Templates and tools are only copied when missing, and existing files are never overwritten; accounts, config, SQLite, and plugin data are kept. If you hit incompatibilities, back up `workspace`, `./data` (Docker), and `ops.db` before upgrading.
 

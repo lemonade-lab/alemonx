@@ -21,15 +21,19 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"alemonx/internal/workspace"
 )
+
+const versionMarker = ".alemonx-version"
 
 // Tool describes one runtime package and the entry point used to run it.
 type Tool struct {
@@ -41,23 +45,31 @@ type Tool struct {
 	// PackageName and PackageVersion are used for on-demand installation.
 	PackageName    string
 	PackageVersion string
+	// BundleVersion identifies the embedded/provisioned bundle for the
+	// .alemonx-version marker; bump it when the tool definition changes.
+	BundleVersion string
 }
 
 var tools = map[string]Tool{
-	"yarn": {Entry: filepath.ToSlash("node_modules/yarn/bin/yarn.js")},
+	"yarn": {
+		Entry:         filepath.ToSlash("node_modules/yarn/bin/yarn.js"),
+		BundleVersion: "1",
+	},
 	"pm2": {
 		Entry:          filepath.ToSlash("node_modules/pm2/bin/pm2"),
 		OnDemand:       true,
 		PackageName:    "pm2",
 		PackageVersion: "^5.4.3",
+		BundleVersion:  "1",
 	},
 }
 
 var (
-	mu            sync.Mutex
-	embedded      fs.FS
-	workspaceRoot string
-	materialized  = map[string]string{}
+	mu              sync.Mutex
+	embedded        fs.FS
+	workspaceRoot   string
+	materialized    = map[string]string{}
+	provisionErrors = map[string]string{}
 
 	// provisionRunner executes an install command inside a directory. It is a
 	// variable so tests can substitute a stub that never touches the network.
@@ -88,6 +100,7 @@ func Init(root fs.FS, layout workspace.Layout) {
 	embedded = root
 	workspaceRoot = layout.Root
 	materialized = map[string]string{}
+	provisionErrors = map[string]string{}
 }
 
 // ToolCommand returns the command line used to run a tool:
@@ -129,6 +142,11 @@ func toolDirectory(name string, tool Tool) (string, error) {
 		if err := materializePackage(name, dir); err != nil {
 			return "", err
 		}
+		_ = writeVersionMarker(dir, tool)
+		if data, readErr := os.ReadFile(filepath.Join(dir, versionMarker)); readErr == nil && tool.BundleVersion != "" &&
+			strings.TrimSpace(string(data)) != tool.BundleVersion {
+			log.Printf("内置 %s 有更新版本（副本 v%s，内置 v%s）；可在 设置 → 工作区 刷新，不会自动覆盖。", name, strings.TrimSpace(string(data)), tool.BundleVersion)
+		}
 		materialized[name] = dir
 		return dir, nil
 	}
@@ -166,12 +184,86 @@ func ensureProvisioned(dir string, tool Tool) (string, error) {
 	}
 	installArgs := append(append([]string{}, yarnArgs...), "install", "--ignore-scripts", "--non-interactive")
 	if err := provisionRunner(dir, yarnCommand, installArgs...); err != nil {
+		provisionErrors[tool.PackageName] = err.Error()
 		return "", fmt.Errorf("使用内置 Yarn 安装 %s 失败：%w", tool.PackageName, err)
 	}
 	if info, err := os.Stat(entry); err != nil || info.IsDir() {
+		provisionErrors[tool.PackageName] = "安装后入口缺失"
 		return "", fmt.Errorf("%s 安装后入口缺失：%w", tool.PackageName, err)
 	}
+	delete(provisionErrors, tool.PackageName)
+	_ = writeVersionMarker(dir, tool)
 	return dir, nil
+}
+
+func writeVersionMarker(dir string, tool Tool) error {
+	if tool.BundleVersion == "" {
+		return nil
+	}
+	return os.WriteFile(filepath.Join(dir, versionMarker), []byte(tool.BundleVersion), 0o644)
+}
+
+// Outdated reports whether a materialized copy was produced by an older bundle
+// definition. It never modifies the copy; callers decide how to surface it.
+func Outdated(name string) (bool, string) {
+	tool, ok := tools[name]
+	if !ok {
+		return false, ""
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if workspaceRoot == "" {
+		return false, ""
+	}
+	data, err := os.ReadFile(filepath.Join(workspaceRoot, "packages", name, versionMarker))
+	if err != nil {
+		return false, ""
+	}
+	current := strings.TrimSpace(string(data))
+	if current == "" || current == tool.BundleVersion {
+		return false, current
+	}
+	return true, current
+}
+
+// LastProvisionError returns the recorded failure reason of an on-demand
+// installation, or "" when the tool is available or was never attempted.
+func LastProvisionError(name string) string {
+	tool, ok := tools[name]
+	if !ok {
+		return ""
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	return provisionErrors[tool.PackageName]
+}
+
+// Names returns the supported tool names in sorted order.
+func Names() []string {
+	mu.Lock()
+	defer mu.Unlock()
+	names := make([]string, 0, len(tools))
+	for name := range tools {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// Installed reports whether a tool's entry already exists in the workspace
+// without triggering materialization or provisioning.
+func Installed(name string) bool {
+	mu.Lock()
+	defer mu.Unlock()
+	if workspaceRoot == "" {
+		return false
+	}
+	tool, ok := tools[name]
+	if !ok {
+		return false
+	}
+	_, err := os.Stat(filepath.Join(workspaceRoot, "packages", name, tool.Entry))
+	return err == nil
 }
 
 // embeddedYarnCommand materializes the embedded Yarn and returns its node

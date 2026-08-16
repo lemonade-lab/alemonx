@@ -1072,6 +1072,7 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	mux.HandleFunc("/api/v1/system/privileged/audit", s.privilegedAuditHandler)
 	mux.HandleFunc("/api/v1/directories", s.directoryHandler)
 	mux.HandleFunc("/api/v1/workspace", s.workspaceHandler)
+	mux.HandleFunc("/api/v1/workspace/open", s.workspaceOpenHandler)
 	mux.HandleFunc("/api/v1/catalog", s.catalogHandler)
 	mux.HandleFunc("/api/v1/catalog/versions", s.catalogVersionsHandler)
 	mux.HandleFunc("/api/v1/catalog/document", s.catalogDocumentHandler)
@@ -3256,13 +3257,58 @@ func (s *server) workspaceHandler(w http.ResponseWriter, r *http.Request) {
 		root = resolved
 	}
 	layout := workspace.Layout{Root: root}
+	refreshablePackages := map[string]bool{}
+	for _, name := range resources.Names() {
+		outdated, _ := resources.Outdated(name)
+		refreshablePackages[name] = outdated
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"name":      "工作区",
-		"root":      layout.Root,
-		"templates": layout.Templates(),
-		"bots":      layout.Bots(),
-		"packages":  layout.Packages(),
+		"name":        "工作区",
+		"root":        layout.Root,
+		"templates":   layout.Templates(),
+		"bots":        layout.Bots(),
+		"packages":    layout.Packages(),
+		"refreshable": map[string]any{"templates": workspace.TemplatesOutdated(layout.Root), "packages": refreshablePackages},
 	})
+}
+
+// workspaceOpenHandler lets the settings panel ask the system to reveal a
+// workspace directory. It only allows paths inside the workspace root.
+func (s *server) workspaceOpenHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
+		return
+	}
+	var input struct {
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 8<<10)).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, "打开目标无效。")
+		return
+	}
+	root := s.workspace.Root
+	if root == "" {
+		resolved, err := workspace.ResolveRoot(s.workspaceRequested)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "无法解析工作区目录："+err.Error())
+			return
+		}
+		root = resolved
+	}
+	absolute, err := filepath.Abs(input.Path)
+	if err != nil || !isWithinRoot(absolute, root) {
+		writeError(w, http.StatusForbidden, "只能打开工作区内的目录。")
+		return
+	}
+	if info, err := os.Stat(absolute); err != nil || !info.IsDir() {
+		writeError(w, http.StatusBadRequest, "目标目录不存在。")
+		return
+	}
+	if err := system.OpenDesktopTarget(absolute); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"output": "已交给系统打开。"})
 }
 
 // directoryLocations prepends the workspace root so the picker surfaces the
@@ -3475,18 +3521,26 @@ func (s *server) systemServiceHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"output": output})
 	case "install":
-		if system.ServiceInstalled() {
-			writeError(w, http.StatusConflict, "后台服务已安装；请使用启动或重启服务。")
-			return
-		}
 		if system.UpdateRuntime() != "direct" {
 			writeError(w, http.StatusConflict, "当前不是可迁移的前台运行模式。")
 			return
 		}
+		// Install always replaces any existing registration with the current
+		// foreground instance, so re-running it moves the service to the
+		// program and workspace the user is running right now.
 		output, err := system.PrepareService(updateRequestPort(r))
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "注册后台服务失败："+err.Error())
 			return
+		}
+		// Default installs also enable run-without-login on Linux. A permission
+		// failure is reported but does not abort the installation.
+		if runtime.GOOS == "linux" {
+			if linger, lingerErr := system.EnableUserLinger(); lingerErr != nil {
+				output += "\n" + lingerErr.Error() + "（可稍后在此页面启用无登录运行）"
+			} else {
+				output += "\n" + linger
+			}
 		}
 		if err := system.ScheduleServiceStart(); err != nil {
 			writeError(w, http.StatusInternalServerError, "无法安排后台服务启动："+err.Error())
@@ -3537,6 +3591,18 @@ func (s *server) systemServiceHandler(w http.ResponseWriter, r *http.Request) {
 				log.Printf("AlemonX 服务%s失败：%v", map[string]string{"stop": "停止", "restart": "重启"}[action], err)
 			}
 		}(input.Action, foreground)
+	case "uninstall":
+		output := "正在卸载 AlemonX 后台服务。"
+		if system.UpdateRuntime() == "direct" {
+			output = "正在卸载后台服务注册。当前为前台运行，工作台不会中断。"
+		}
+		writeJSON(w, http.StatusAccepted, map[string]string{"output": output})
+		go func() {
+			time.Sleep(150 * time.Millisecond)
+			if _, err := system.UninstallService(); err != nil {
+				log.Printf("AlemonX 后台服务卸载失败：%v", err)
+			}
+		}()
 	default:
 		writeError(w, http.StatusBadRequest, "未知服务操作。")
 	}

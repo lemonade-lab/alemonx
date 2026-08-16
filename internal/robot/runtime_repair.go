@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"alemonx/internal/pm2config"
+	"alemonx/internal/resources"
 	"alemonx/internal/system"
 )
 
@@ -175,10 +176,21 @@ func (m Manager) ApplyRuntimeRepair(root, mode string, confirmOverrides bool) (R
 		manifest.DevDependencies["pm2"] = "^5"
 		manifest.DevDependencies["yaml"] = "^2.6.0"
 		configPath := filepath.Join(path, "pm2.config.cjs")
+		oldName := pm2ConfigAppName(path)
 		data, readErr := os.ReadFile(configPath)
 		if os.IsNotExist(readErr) || readErr == nil && string(data) != defaultPM2Config(path) {
+			if err := pm2config.EnsureID(path); err != nil {
+				return result, err
+			}
 			if err := os.WriteFile(configPath, []byte(defaultPM2Config(path)), 0644); err != nil {
 				return result, err
+			}
+			// A rewritten config may change the PM2 app name (legacy path
+			// digest -> stable identity). Drop the old registration so the
+			// daemon never resurrects a stale process.
+			if oldName != "" && oldName != pm2config.Name(path) && (localPM2(path) || resources.Installed("pm2")) {
+				command, args := pm2Launcher(path)
+				_, _ = run(path, command, append(args, "delete", oldName)...)
 			}
 		} else if readErr != nil {
 			return result, readErr

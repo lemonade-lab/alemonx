@@ -4,14 +4,16 @@ package system
 import (
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
+
+	"alemonx/internal/workspace"
 )
 
 const serviceName = "com.alemonjs.alx"
@@ -214,21 +216,21 @@ func ServiceStatus() (string, error) {
 		}
 		uid := strconv.Itoa(os.Getuid())
 		if err := exec.Command("launchctl", "print", "gui/"+uid+"/"+serviceName).Run(); err != nil {
-			return "后台服务已安装，目前已停止。", nil
+			return "后台服务已安装，目前已停止。" + registrationStatusSuffix(), nil
 		}
-		return "后台服务运行中。", nil
+		return "后台服务运行中。" + registrationStatusSuffix(), nil
 	case "linux":
 		output, err := exec.Command("systemctl", "--user", "is-active", "alx.service").CombinedOutput()
 		if err != nil {
-			return "后台服务未运行（" + strings.TrimSpace(string(output)) + "）。", nil
+			return "后台服务未运行（" + strings.TrimSpace(string(output)) + "）。" + registrationStatusSuffix(), nil
 		}
-		return "后台服务运行中。", nil
+		return "后台服务运行中。" + registrationStatusSuffix(), nil
 	case "windows":
 		output, err := exec.Command("schtasks", "/Query", "/TN", "ALemonX", "/FO", "LIST").CombinedOutput()
 		if err != nil {
 			return "未安装后台服务。运行 alx install 进行安装。", nil
 		}
-		return "后台服务已注册。\n" + strings.TrimSpace(string(output)), nil
+		return "后台服务已注册。\n" + strings.TrimSpace(string(output)) + registrationStatusSuffix(), nil
 	default:
 		return "", fmt.Errorf("暂不支持在 %s 上管理后台服务", runtime.GOOS)
 	}
@@ -255,6 +257,9 @@ func ServiceInstalled() bool {
 }
 
 func StartService() (string, error) {
+	if err := reconcileServiceRegistration(); err != nil {
+		return "", err
+	}
 	switch runtime.GOOS {
 	case "darwin":
 		path, err := launchAgentPath()
@@ -353,7 +358,11 @@ func RestartForeground(port string) error {
 // it. It is used when the current foreground instance owns the listening port:
 // the caller can close that instance first and then schedule StartService.
 func PrepareService(port string) (string, error) {
-	return installService(port, "0.0.0.0", false)
+	workspaceRoot, err := workspace.ResolveRoot("")
+	if err != nil {
+		workspaceRoot = ""
+	}
+	return installService(port, "0.0.0.0", workspaceRoot, false)
 }
 
 // ScheduleServiceStart starts a previously registered service after a short
@@ -424,16 +433,268 @@ func UninstallService() (string, error) {
 	default:
 		return "", fmt.Errorf("暂不支持在 %s 上管理后台服务", runtime.GOOS)
 	}
-	return "后台服务已移除。alx 命令文件仍保留，便于以后重新安装。", nil
+	return "后台服务已移除。alx 程序文件仍保留，便于以后重新安装。", nil
 }
 
-// InstallService registers the current binary as a user-level background
-// service bound to the given host.
-func InstallService(port, host string) (string, error) {
-	return installService(port, host, true)
+// ServiceRegistration describes the currently installed service definition.
+type ServiceRegistration struct {
+	Executable string
+	Port       string
+	Host       string
+	Workspace  string
 }
 
-func installService(port, host string, start bool) (string, error) {
+// ReadRegistration parses the installed service definition. The second return
+// value reports whether a service is installed at all.
+func ReadRegistration() (ServiceRegistration, bool, error) {
+	switch runtime.GOOS {
+	case "darwin":
+		path, err := launchAgentPath()
+		if err != nil {
+			return ServiceRegistration{}, false, err
+		}
+		data, err := os.ReadFile(path)
+		if errors.Is(err, os.ErrNotExist) {
+			return ServiceRegistration{}, false, nil
+		}
+		if err != nil {
+			return ServiceRegistration{}, false, err
+		}
+		arguments, ok := parsePlistProgramArguments(string(data))
+		if !ok {
+			return ServiceRegistration{}, false, errors.New("无法解析 LaunchAgent 参数")
+		}
+		return registrationFromArguments(arguments), true, nil
+	case "linux":
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return ServiceRegistration{}, false, err
+		}
+		data, err := os.ReadFile(filepath.Join(home, ".config", "systemd", "user", "alx.service"))
+		if errors.Is(err, os.ErrNotExist) {
+			return ServiceRegistration{}, false, nil
+		}
+		if err != nil {
+			return ServiceRegistration{}, false, err
+		}
+		arguments, ok := parseExecStartArgs(string(data))
+		if !ok {
+			return ServiceRegistration{}, false, errors.New("无法解析 systemd ExecStart")
+		}
+		return registrationFromArguments(arguments), true, nil
+	case "windows":
+		return windowsRegistration()
+	default:
+		return ServiceRegistration{}, false, nil
+	}
+}
+
+func registrationFromArguments(arguments []string) ServiceRegistration {
+	registration := ServiceRegistration{}
+	if len(arguments) > 0 {
+		registration.Executable = strings.Trim(arguments[0], `"`)
+	}
+	values := flagValues(arguments, "--port", "--host", "--workspace")
+	registration.Port = values["--port"]
+	registration.Host = values["--host"]
+	registration.Workspace = values["--workspace"]
+	return registration
+}
+
+func flagValues(arguments []string, flags ...string) map[string]string {
+	values := map[string]string{}
+	for index := 0; index < len(arguments); index++ {
+		argument := arguments[index]
+		for _, flag := range flags {
+			if argument == flag && index+1 < len(arguments) {
+				values[flag] = strings.Trim(arguments[index+1], `"`)
+				index++
+				break
+			}
+			if strings.HasPrefix(argument, flag+"=") {
+				values[flag] = strings.TrimPrefix(argument, flag+"=")
+			}
+		}
+	}
+	return values
+}
+
+var plistProgramArgumentsPattern = regexp.MustCompile(`<key>ProgramArguments</key><array>(.*?)</array>`)
+var plistStringPattern = regexp.MustCompile(`<string>([^<]*)</string>`)
+
+func parsePlistProgramArguments(text string) ([]string, bool) {
+	match := plistProgramArgumentsPattern.FindStringSubmatch(text)
+	if len(match) < 2 {
+		return nil, false
+	}
+	items := plistStringPattern.FindAllStringSubmatch(match[1], -1)
+	arguments := make([]string, 0, len(items))
+	for _, item := range items {
+		arguments = append(arguments, xmlUnescape(item[1]))
+	}
+	if len(arguments) == 0 {
+		return nil, false
+	}
+	return arguments, true
+}
+
+func xmlUnescape(value string) string {
+	return strings.NewReplacer("&amp;", "&", "&lt;", "<", "&gt;", ">", "&quot;", `"`).Replace(value)
+}
+
+func parseExecStartArgs(text string) ([]string, bool) {
+	var line string
+	for _, candidate := range strings.Split(text, "\n") {
+		candidate = strings.TrimSpace(candidate)
+		if strings.HasPrefix(candidate, "ExecStart=") {
+			line = strings.TrimSpace(strings.TrimPrefix(candidate, "ExecStart="))
+			break
+		}
+	}
+	if line == "" {
+		return nil, false
+	}
+	arguments := splitShellArgs(line)
+	if len(arguments) == 0 {
+		return nil, false
+	}
+	return arguments, true
+}
+
+// splitShellArgs splits a systemd ExecStart command line, honoring single
+// quotes (the quoting style installSystemdUserService writes).
+func splitShellArgs(line string) []string {
+	var arguments []string
+	var current strings.Builder
+	inQuote := false
+	for index := 0; index < len(line); index++ {
+		switch line[index] {
+		case '\'':
+			inQuote = !inQuote
+		case ' ', '\t':
+			if inQuote {
+				current.WriteByte(line[index])
+			} else if current.Len() > 0 {
+				arguments = append(arguments, current.String())
+				current.Reset()
+			}
+		default:
+			current.WriteByte(line[index])
+		}
+	}
+	if current.Len() > 0 {
+		arguments = append(arguments, current.String())
+	}
+	return arguments
+}
+
+func windowsRegistration() (ServiceRegistration, bool, error) {
+	output, err := exec.Command("schtasks", "/Query", "/TN", "ALemonX", "/FO", "LIST", "/V").CombinedOutput()
+	if err != nil {
+		return ServiceRegistration{}, false, nil
+	}
+	for _, line := range strings.Split(string(output), "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "Task To Run:") {
+			continue
+		}
+		command := strings.TrimSpace(strings.TrimPrefix(line, "Task To Run:"))
+		registration := ServiceRegistration{
+			Executable: windowsTaskExecutable(command),
+			Port:       commandFlagValue(command, "--port"),
+			Host:       commandFlagValue(command, "--host"),
+			Workspace:  commandFlagValue(command, "--workspace"),
+		}
+		return registration, true, nil
+	}
+	return ServiceRegistration{}, false, nil
+}
+
+var windowsTaskExecutablePattern = regexp.MustCompile(`""(.*?)" serve `)
+
+func windowsTaskExecutable(command string) string {
+	match := windowsTaskExecutablePattern.FindStringSubmatch(command)
+	if len(match) < 2 {
+		return ""
+	}
+	return strings.Trim(match[1], `"`)
+}
+
+func commandFlagValue(command, flag string) string {
+	quoted := regexp.MustCompile(regexp.QuoteMeta(flag) + ` "([^"]*)"`).FindStringSubmatch(command)
+	if len(quoted) == 2 {
+		return quoted[1]
+	}
+	plain := regexp.MustCompile(regexp.QuoteMeta(flag) + ` ([^ "]+)`).FindStringSubmatch(command)
+	if len(plain) == 2 {
+		return plain[1]
+	}
+	return ""
+}
+
+// reconcileServiceRegistration keeps the registered service in sync with the
+// binary the user is actually running: when the registered executable is
+// missing or differs from the current one, the service definition is recreated
+// with the current binary, keeping the registered port/host and workspace.
+func reconcileServiceRegistration() error {
+	registration, installed, err := ReadRegistration()
+	if err != nil || !installed {
+		return nil
+	}
+	current, err := os.Executable()
+	if err != nil {
+		return nil
+	}
+	if resolved, resolveErr := filepath.EvalSymlinks(current); resolveErr == nil {
+		current = resolved
+	}
+	if filepath.Clean(current) == filepath.Clean(registration.Executable) {
+		if _, statErr := os.Stat(registration.Executable); statErr != nil {
+			return fmt.Errorf("服务注册的程序已不存在（%s）。如果程序已移动，请从新位置重新执行 alx install", registration.Executable)
+		}
+		return nil
+	}
+	workspaceRoot := registration.Workspace
+	if workspaceRoot == "" {
+		if resolved, resolveErr := workspace.ResolveRoot(""); resolveErr == nil {
+			workspaceRoot = resolved
+		}
+	}
+	if _, err := installService(registration.Port, registration.Host, workspaceRoot, false); err != nil {
+		return fmt.Errorf("检测到程序位置变化，尝试按当前程序重新注册失败：%w", err)
+	}
+	return nil
+}
+
+func registrationStatusSuffix() string {
+	registration, installed, err := ReadRegistration()
+	if err != nil || !installed {
+		return ""
+	}
+	lines := []string{"服务程序：" + registration.Executable}
+	if registration.Workspace != "" {
+		lines = append(lines, "工作区："+registration.Workspace)
+	}
+	if current, err := os.Executable(); err == nil {
+		if resolved, resolveErr := filepath.EvalSymlinks(current); resolveErr == nil {
+			current = resolved
+		}
+		if filepath.Clean(current) != filepath.Clean(registration.Executable) {
+			lines = append(lines, "注意：当前运行的 alx 与注册程序不同（当前："+current+"）。如需更新注册，请从新位置重新执行 alx install。")
+		}
+	}
+	return "\n" + strings.Join(lines, "\n")
+}
+
+// InstallService registers the binary the user is currently running as a
+// user-level background service bound to the given host. The workspace root
+// is pinned into the service command line so the service always uses the same
+// working directory the user chose when installing.
+func InstallService(port, host, workspaceRoot string) (string, error) {
+	return installService(port, host, workspaceRoot, true)
+}
+
+func installService(port, host, workspaceRoot string, start bool) (string, error) {
 	value, err := strconv.ParseUint(port, 10, 16)
 	if err != nil || value == 0 {
 		return "", errors.New("端口应为 1 到 65535 的数字")
@@ -451,78 +712,30 @@ func installService(port, host string, start bool) (string, error) {
 	if resolved, err := filepath.EvalSymlinks(executable); err == nil {
 		executable = resolved
 	}
-	installed, note, err := installCommand(executable)
-	if err != nil {
-		return "", err
+	if strings.TrimSpace(workspaceRoot) != "" {
+		if absolute, absErr := filepath.Abs(workspaceRoot); absErr == nil {
+			workspaceRoot = filepath.Clean(absolute)
+		}
 	}
-	executable = installed
 	var result string
 	switch runtime.GOOS {
 	case "darwin":
-		result, err = installLaunchAgent(executable, host, port, start)
+		result, err = installLaunchAgent(executable, host, port, workspaceRoot, start)
 	case "linux":
-		result, err = installSystemdUserService(executable, host, port, start)
+		result, err = installSystemdUserService(executable, host, port, workspaceRoot, start)
 	case "windows":
-		result, err = installScheduledTask(executable, host, port, start)
+		result, err = installScheduledTask(executable, host, port, workspaceRoot, start)
 	default:
 		return "", fmt.Errorf("暂不支持在 %s 上注册后台服务", runtime.GOOS)
 	}
 	if err != nil {
 		return "", err
 	}
-	return "alx 命令已安装到：" + executable + "\n" + note + "\n" + result, nil
-}
-
-func installCommand(source string) (string, string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", "", err
+	message := "已注册后台服务。\n程序：" + executable
+	if workspaceRoot != "" {
+		message += "\n工作区：" + workspaceRoot
 	}
-	directory := filepath.Join(home, ".local", "bin")
-	if runtime.GOOS == "windows" {
-		directory = filepath.Join(home, "AppData", "Local", "alx")
-	}
-	if err := os.MkdirAll(directory, 0755); err != nil {
-		return "", "", fmt.Errorf("无法创建 alx 命令目录：%w", err)
-	}
-	name := "alx"
-	if runtime.GOOS == "windows" {
-		name += ".exe"
-	}
-	target := filepath.Join(directory, name)
-	if filepath.Clean(source) != filepath.Clean(target) {
-		input, err := os.Open(source)
-		if err != nil {
-			return "", "", err
-		}
-		defer input.Close()
-		output, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0755)
-		if err != nil {
-			return "", "", fmt.Errorf("无法安装 alx 命令：%w", err)
-		}
-		_, copyErr := io.Copy(output, input)
-		closeErr := output.Close()
-		if copyErr != nil {
-			return "", "", copyErr
-		}
-		if closeErr != nil {
-			return "", "", closeErr
-		}
-	}
-	note := "现在可使用 alx open 打开引导。"
-	if !pathContains(directory) {
-		note = "请将 " + directory + " 加入 PATH 后，可直接使用 alx 命令。"
-	}
-	return target, note, nil
-}
-
-func pathContains(directory string) bool {
-	for _, item := range filepath.SplitList(os.Getenv("PATH")) {
-		if filepath.Clean(item) == filepath.Clean(directory) {
-			return true
-		}
-	}
-	return false
+	return message + "\n" + result, nil
 }
 
 func OpenBrowser(port string) error {
@@ -542,7 +755,7 @@ func OpenBrowser(port string) error {
 	return nil
 }
 
-func installLaunchAgent(executable, host, port string, start bool) (string, error) {
+func installLaunchAgent(executable, host, port, workspaceRoot string, start bool) (string, error) {
 	path, err := launchAgentPath()
 	if err != nil {
 		return "", err
@@ -556,10 +769,18 @@ func installLaunchAgent(executable, host, port string, start bool) (string, erro
 		return "", err
 	}
 	logs := filepath.Join(home, "Library", "Logs", "alx.log")
+	arguments := []string{executable, "serve", "--port", port, "--host", host}
+	if workspaceRoot != "" {
+		arguments = append(arguments, "--workspace", workspaceRoot)
+	}
+	argumentStrings := make([]string, 0, len(arguments))
+	for _, argument := range arguments {
+		argumentStrings = append(argumentStrings, "<string>"+xmlEscape(argument)+"</string>")
+	}
 	plist := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict><key>Label</key><string>%s</string><key>ProgramArguments</key><array><string>%s</string><string>serve</string><string>--port</string><string>%s</string><string>--host</string><string>%s</string></array><key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>StandardOutPath</key><string>%s</string><key>StandardErrorPath</key><string>%s</string></dict></plist>
-`, serviceName, xmlEscape(executable), xmlEscape(port), xmlEscape(host), xmlEscape(logs), xmlEscape(logs))
+<plist version="1.0"><dict><key>Label</key><string>%s</string><key>ProgramArguments</key><array>%s</array><key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>StandardOutPath</key><string>%s</string><key>StandardErrorPath</key><string>%s</string></dict></plist>
+`, serviceName, strings.Join(argumentStrings, ""), xmlEscape(logs), xmlEscape(logs))
 	if err := os.WriteFile(path, []byte(plist), 0644); err != nil {
 		return "", err
 	}
@@ -585,7 +806,7 @@ func launchAgentPath() (string, error) {
 	return filepath.Join(home, "Library", "LaunchAgents", serviceName+".plist"), nil
 }
 
-func installSystemdUserService(executable, host, port string, start bool) (string, error) {
+func installSystemdUserService(executable, host, port, workspaceRoot string, start bool) (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
@@ -595,7 +816,11 @@ func installSystemdUserService(executable, host, port string, start bool) (strin
 		return "", err
 	}
 	path := filepath.Join(directory, "alx.service")
-	content := fmt.Sprintf("[Unit]\nDescription=ALemonX\nStartLimitIntervalSec=120\nStartLimitBurst=5\n[Service]\nExecStart=%s serve --port %s --host %s\nRestart=on-failure\nRestartSec=3\nKillMode=process\n[Install]\nWantedBy=default.target\n", shellQuote(executable), port, host)
+	execStart := shellQuote(executable) + " serve --port " + shellQuote(port) + " --host " + shellQuote(host)
+	if workspaceRoot != "" {
+		execStart += " --workspace " + shellQuote(workspaceRoot)
+	}
+	content := fmt.Sprintf("[Unit]\nDescription=ALemonX\nStartLimitIntervalSec=120\nStartLimitBurst=5\n[Service]\nExecStart=%s\nRestart=on-failure\nRestartSec=3\nKillMode=process\n[Install]\nWantedBy=default.target\n", execStart)
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 		return "", err
 	}
@@ -662,7 +887,7 @@ func ensureSystemdUserUnitKillMode(path string) error {
 	return os.WriteFile(path, []byte(strings.Join(out, "\n")), 0644)
 }
 
-func installScheduledTask(executable, host, port string, start bool) (string, error) {
+func installScheduledTask(executable, host, port, workspaceRoot string, start bool) (string, error) {
 	logs, err := serviceLogPath()
 	if err != nil {
 		return "", err
@@ -673,7 +898,11 @@ func installScheduledTask(executable, host, port string, start bool) (string, er
 	// The task scheduler does not retain an application's stdout/stderr. Run
 	// through cmd.exe so `alx logs` can expose the same diagnostics as macOS
 	// and Linux managed services.
-	command := `cmd.exe /d /s /c ""` + executable + `" serve --port ` + port + ` --host ` + host + ` >> "` + logs + `" 2>&1"`
+	command := `cmd.exe /d /s /c ""` + executable + `" serve --port ` + port + ` --host ` + host
+	if workspaceRoot != "" {
+		command += ` --workspace "` + strings.ReplaceAll(workspaceRoot, `"`, `""`) + `"`
+	}
+	command += ` >> "` + logs + `" 2>&1"`
 	if output, err := exec.Command("schtasks", "/Create", "/TN", "ALemonX", "/SC", "ONLOGON", "/TR", command, "/F").CombinedOutput(); err != nil {
 		return "", fmt.Errorf("注册计划任务失败：%s", strings.TrimSpace(string(output)))
 	}

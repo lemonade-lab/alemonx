@@ -157,3 +157,19 @@ func TestLayoutPaths(t *testing.T) {
 		t.Fatalf("packages = %q", layout.Packages())
 	}
 }
+
+func TestTemplatesOutdatedDetectsVersionDrift(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "workspace")
+	if _, err := Ensure(root, embeddedTemplates()); err != nil {
+		t.Fatal(err)
+	}
+	if TemplatesOutdated(root) {
+		t.Fatal("fresh materialized templates must not be outdated")
+	}
+	if err := os.WriteFile(filepath.Join(root, "templates", templateMarker), []byte("0"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !TemplatesOutdated(root) {
+		t.Fatal("version drift must be detected")
+	}
+}

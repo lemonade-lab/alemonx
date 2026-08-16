@@ -956,7 +956,7 @@ func (Manager) PM2Logs(root string, page int) (PM2LogPage, error) {
 	pm2Name, pm2Args := pm2Launcher(root)
 	output, err := run(root, pm2Name, append(pm2Args, "logs", "--lines", strconv.Itoa(requested), "--nostream")...)
 	if err != nil {
-		return PM2LogPage{}, fmt.Errorf("无法读取 PM2 日志：%w", err)
+		return PM2LogPage{}, pm2UnavailableHint(fmt.Errorf("无法读取 PM2 日志：%w", err))
 	}
 	lines := strings.Split(strings.TrimSpace(output), "\n")
 	if len(lines) == 1 && lines[0] == "" {
@@ -1019,9 +1019,9 @@ func pm2JList(root string) (string, error) {
 	}
 	if err != nil && text == "" {
 		if commandNotFound(err, text) {
-			return text, missingCommandAdvice("pm2")
+			return text, pm2UnavailableHint(missingCommandAdvice("pm2"))
 		}
-		return text, fmt.Errorf("pm2 jlist 失败：%w", err)
+		return text, pm2UnavailableHint(fmt.Errorf("pm2 jlist 失败：%w", err))
 	}
 	// Cut any banner/notice that PM2 wrote to stdout ahead of the JSON array
 	// (for example ">>>> In-memory PM2 is out-of-date ...").
@@ -1042,6 +1042,16 @@ func pm2Launcher(root string) (string, []string) {
 	return nodeToolPath("npx"), []string{"--yes", "pm2"}
 }
 
+// pm2UnavailableHint attaches the recorded reason when the bundled PM2
+// provisioning failed, so offline failures are not reported as a bare npx
+// download error.
+func pm2UnavailableHint(err error) error {
+	if reason := resources.LastProvisionError("pm2"); reason != "" {
+		return fmt.Errorf("%w（内置 PM2 安装失败：%s；可能未联网，请联网后重试）", err, reason)
+	}
+	return err
+}
+
 func localPM2(root string) bool {
 	_, err := os.Stat(filepath.Join(root, "node_modules", "pm2"))
 	return err == nil
@@ -1050,9 +1060,9 @@ func localPM2(root string) bool {
 var pm2ConfigNamePattern = regexp.MustCompile("name:\\s*[`\"]([^`\"]+)[`\"]")
 
 // pm2ConfigAppName extracts the application name declared in a generated
-// pm2.config.cjs. The name embeds a digest of the original project path, so it
-// is the only stable identity that survives the directory being moved. Custom
-// configs that cannot be parsed are left alone (empty result).
+// pm2.config.cjs. The name is the stable identity the workbench uses to match
+// a project's PM2 registration. Custom configs that cannot be parsed are left
+// alone (empty result).
 func pm2ConfigAppName(root string) string {
 	data, err := os.ReadFile(filepath.Join(root, "pm2.config.cjs"))
 	if err != nil {

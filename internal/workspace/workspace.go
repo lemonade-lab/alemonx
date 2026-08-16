@@ -47,6 +47,16 @@ func (l Layout) Packages() string {
 	return filepath.Join(l.Root, "packages")
 }
 
+// TemplatesOutdated reports whether the materialized templates were produced
+// by an older embedded template version. It never modifies the copy.
+func TemplatesOutdated(root string) bool {
+	data, err := os.ReadFile(filepath.Join(root, "templates", templateMarker))
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(data)) != TemplateVersion
+}
+
 // ResolveRoot returns the absolute workspace root. Precedence:
 //
 //  1. an explicit value (the --workspace flag),

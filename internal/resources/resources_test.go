@@ -148,3 +148,75 @@ func TestToolCommandWithoutInitFallsBack(t *testing.T) {
 		t.Fatal("tool must not resolve before Init")
 	}
 }
+
+func TestVersionMarkerAndOutdated(t *testing.T) {
+	layout, err := workspace.Ensure(filepath.Join(t.TempDir(), "ws"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	Init(embeddedBundle(), layout)
+	if _, _, ok := ToolCommand("yarn"); !ok {
+		t.Fatal("yarn should materialize")
+	}
+	marker := filepath.Join(layout.Root, "packages", "yarn", ".alemonx-version")
+	data, err := os.ReadFile(marker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != tools["yarn"].BundleVersion {
+		t.Fatalf("marker = %q, want %q", data, tools["yarn"].BundleVersion)
+	}
+	if outdated, _ := Outdated("yarn"); outdated {
+		t.Fatal("fresh materialized copy must not be outdated")
+	}
+	if err := os.WriteFile(marker, []byte("0"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outdated, current := Outdated("yarn")
+	if !outdated || current != "0" {
+		t.Fatalf("outdated = %t, current = %q", outdated, current)
+	}
+	names := Names()
+	if len(names) != 2 || names[0] != "pm2" || names[1] != "yarn" {
+		t.Fatalf("Names = %#v", names)
+	}
+}
+
+func TestProvisionErrorRecorded(t *testing.T) {
+	layout, err := workspace.Ensure(filepath.Join(t.TempDir(), "ws"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	Init(embeddedBundle(), layout)
+	original := provisionRunner
+	defer func() { provisionRunner = original }()
+	provisionRunner = func(directory, command string, args ...string) error {
+		return errors.New("offline registry")
+	}
+	if _, _, ok := ToolCommand("pm2"); ok {
+		t.Fatal("pm2 provisioning must fail")
+	}
+	if reason := LastProvisionError("pm2"); !strings.Contains(reason, "offline") {
+		t.Fatalf("provision error = %q, want offline reason", reason)
+	}
+}
+
+func TestInstalledDoesNotTriggerProvisioning(t *testing.T) {
+	layout, err := workspace.Ensure(filepath.Join(t.TempDir(), "ws"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	Init(embeddedBundle(), layout)
+	if Installed("pm2") {
+		t.Fatal("pm2 must not be considered installed before provisioning")
+	}
+	if _, _, ok := ToolCommand("yarn"); !ok {
+		t.Fatal("yarn should materialize")
+	}
+	if !Installed("yarn") {
+		t.Fatal("yarn should be installed after materialization")
+	}
+	if Installed("pm2") {
+		t.Fatal("Installed must not trigger on-demand provisioning")
+	}
+}

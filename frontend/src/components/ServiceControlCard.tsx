@@ -1,11 +1,20 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Download, Power, RotateCcw, Server, ShieldCheck } from 'lucide-react'
+import {
+  Download,
+  Power,
+  RefreshCw,
+  RotateCcw,
+  Server,
+  ShieldCheck,
+  Trash2
+} from 'lucide-react'
 import { Button } from './Button'
 import { ConfirmDialog } from './ConfirmDialog'
 import { SettingsCard, SettingsMessage, SettingsPage } from './SettingsCard'
 
 type ServiceAction =
   | 'install'
+  | 'uninstall'
   | 'stop'
   | 'restart'
   | 'enable-linger'
@@ -168,6 +177,16 @@ export function ServiceControlCard() {
               <Download className="size-3.5" /> 安装并启动
             </Button>
           )}
+          {serviceInstalled === true && (
+            <Button
+              variant="secondary"
+              className="gap-1.5"
+              disabled={busy}
+              onClick={() => setServiceAction('install')}
+            >
+              <RefreshCw className="size-3.5" /> 更新注册
+            </Button>
+          )}
           {serviceInstalled !== false && (
             <Button
               variant="secondary"
@@ -176,6 +195,16 @@ export function ServiceControlCard() {
               onClick={() => setServiceAction('restart')}
             >
               <RotateCcw className="size-3.5" /> 重启
+            </Button>
+          )}
+          {serviceInstalled === true && (
+            <Button
+              variant="danger"
+              className="gap-1.5"
+              disabled={busy}
+              onClick={() => setServiceAction('uninstall')}
+            >
+              <Trash2 className="size-3.5" /> 卸载服务
             </Button>
           )}
           <Button
@@ -257,7 +286,11 @@ export function ServiceControlCard() {
         open={serviceAction !== null}
         title={
           serviceAction === 'install'
-            ? '安装 AlemonX 后台服务'
+            ? serviceInstalled
+              ? '更新后台服务注册'
+              : '安装 AlemonX 后台服务'
+            : serviceAction === 'uninstall'
+              ? '卸载 AlemonX 后台服务'
             : serviceAction === 'enable-startup'
               ? '开启开机自启'
               : serviceAction === 'disable-startup'
@@ -270,7 +303,11 @@ export function ServiceControlCard() {
         }
         subtitle={
           serviceAction === 'install'
-            ? ''
+            ? serviceInstalled
+              ? '以当前运行的前台程序与工作区重新注册后台服务。'
+              : ''
+            : serviceAction === 'uninstall'
+              ? '移除后台服务注册与开机自启，不删除工作台数据与机器人项目。'
             : serviceAction === 'enable-startup'
               ? '登录后自动启动 AlemonX 服务，异常退出仍会由系统拉起。'
               : serviceAction === 'disable-startup'
@@ -283,7 +320,11 @@ export function ServiceControlCard() {
         }
         message={
           serviceAction === 'install'
-            ? '当前前台工作台会关闭，并切换为系统后台服务；页面恢复连接后会自动刷新。'
+            ? serviceInstalled
+              ? '后台服务将按当前程序与工作区重新注册并自动切换；页面会短暂断开。'
+              : '当前前台工作台会关闭，并切换为系统后台服务；页面恢复连接后会自动刷新。'
+            : serviceAction === 'uninstall'
+              ? '卸载后需要手动运行 alx 才能再次打开工作台；页面会断开连接。'
             : serviceAction === 'enable-linger'
               ? '启用后，Linux 重启或用户退出登录时，已安装的 ALemonX systemd 用户服务仍可自动运行。'
               : serviceAction === 'stop'
@@ -294,7 +335,11 @@ export function ServiceControlCard() {
         }
         confirmLabel={
           serviceAction === 'install'
-            ? '安装并启动'
+            ? serviceInstalled
+              ? '更新并重启'
+              : '安装并启动'
+            : serviceAction === 'uninstall'
+              ? '确认卸载'
             : serviceAction === 'enable-linger'
               ? '确认启用'
               : serviceAction === 'stop'

@@ -40,6 +40,7 @@ docker compose up -d
 | --- | --- | --- |
 | `ALX_IMAGE` | `ccr.ccs.tencentyun.com/ningmengchongshui/alemonx:latest` | 腾讯云默认镜像；本地构建使用 `alx:local`。 |
 | `ALX_PORT` | `17390` | 工作台暴露到宿主机的端口。 |
+| `ALX_CONTAINER_NAME` | `alx` | 容器名（`docker ps` 显示），多实例部署时自定义。 |
 | `ALX_DEPLOYMENT` | `production` | 生产模式：SQLite 与本地认证未配置时仅提示，不拦截启动；可在引导页创建管理员。 |
 
 运行数据不放在命名卷，而是放在 compose 文件旁的宿主机目录中：
