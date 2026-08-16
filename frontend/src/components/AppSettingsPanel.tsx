@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import {
   Database,
-  HardDrive,
   KeyRound,
   Network,
   Power,
@@ -16,7 +15,6 @@ import { NetworkSettingsPanel } from './NetworkSettingsPanel'
 import { GithubSettingsPanel } from './GithubSettingsPanel'
 import { GithubMark } from './GithubMark'
 import { ServiceControlCard } from './ServiceControlCard'
-import { WorkspaceSettingsCard } from './WorkspaceSettingsCard'
 import { ConfirmDialog } from './ConfirmDialog'
 import { RedisSettingsPanel } from './RedisSettingsPanel'
 import { SidebarWindow, type SidebarWindowItem } from './SidebarWindow'
@@ -28,7 +26,6 @@ type SettingsSection =
   | 'github'
   | 'network'
   | 'update'
-  | 'workspace'
   | 'service'
   | 'redis'
 
@@ -57,11 +54,6 @@ const sections: SidebarWindowItem<SettingsSection>[] = [
     id: 'update',
     label: '更新',
     icon: RefreshCw
-  },
-  {
-    id: 'workspace',
-    label: '工作区',
-    icon: HardDrive
   },
   {
     id: 'service',
@@ -135,7 +127,6 @@ export function AppSettingsPanel({
       }
     >
       {active === 'update' && <SetupUpdateButton embedded />}
-      {active === 'workspace' && <WorkspaceSettingsCard />}
       {active === 'network' && <NetworkSettingsPanel />}
       {active === 'github' && <GithubSettingsPanel />}
       {active === 'auth' && <AuthControl embedded />}

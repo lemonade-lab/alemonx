@@ -240,7 +240,7 @@ Dev mode is for editing code: hot reload and direct logs. PM2 mode is for stable
 
 The workspace directory stores templates, tools, and new robots; workbench state (accounts, config, SQLite, caches, plugins) lives in the user config directory (host `./data` in Docker). AI ops data defaults to `ops.db` (SQLite). Back up these directories.
 
-Settings → Workspace shows these paths with open buttons; when templates or built-in tools have a newer version, it shows a "refreshable" hint there (it never overwrites your changes automatically).
+The workspace paths also appear in the robot creation destination step (default `workspace/bots`). When templates or built-in tools have a newer version, they are never overwritten automatically; to refresh, delete the corresponding copy directory and use it again.
 
 **Q14: I forgot the workbench admin password?**
 

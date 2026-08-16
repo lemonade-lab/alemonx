@@ -145,7 +145,7 @@ func toolDirectory(name string, tool Tool) (string, error) {
 		_ = writeVersionMarker(dir, tool)
 		if data, readErr := os.ReadFile(filepath.Join(dir, versionMarker)); readErr == nil && tool.BundleVersion != "" &&
 			strings.TrimSpace(string(data)) != tool.BundleVersion {
-			log.Printf("内置 %s 有更新版本（副本 v%s，内置 v%s）；可在 设置 → 工作区 刷新，不会自动覆盖。", name, strings.TrimSpace(string(data)), tool.BundleVersion)
+			log.Printf("内置 %s 有更新版本（副本 v%s，内置 v%s）；不会自动覆盖，如需更新请删除工作区中的副本目录后重新使用。", name, strings.TrimSpace(string(data)), tool.BundleVersion)
 		}
 		materialized[name] = dir
 		return dir, nil
