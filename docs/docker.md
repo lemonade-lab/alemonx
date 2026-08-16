@@ -83,6 +83,8 @@ ALX_IMAGE=alx:local docker compose up -d
 
 构建使用多阶段镜像：Node 阶段生成嵌入式前端，Go 阶段交叉编译静态 `alx`，最终镜像只保留运行机器人所需的 Node、Git、SSH 与工作台二进制。
 
+镜像内置 Noto CJK 与 Emoji 字体，机器人图片消息（jsxp 渲染）中文与表情显示正常。**浏览器（Chrome/Chromium）未内置**：它属于可选能力，Puppeteer 会在需要时自行下载浏览器，或可在宿主机安装后映射进容器使用。
+
 多架构发布采用类似 alemongo 的人工 Buildx 流程，而不是版本标签自动推送：
 
 ```sh

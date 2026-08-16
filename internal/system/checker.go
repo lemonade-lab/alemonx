@@ -73,7 +73,7 @@ func (c *Checker) fonts() Check {
 	}
 	check.Status = "missing"
 	check.Detail = "未检测到中文/Emoji 字体"
-	check.Suggestion = "可选：安装 Noto CJK/Emoji 字体，避免无头浏览器截图或导出 PDF 时缺字。"
+	check.Suggestion = "可选：安装 Noto CJK/Emoji 字体，避免机器人图片消息、无头浏览器截图或导出 PDF 时缺字。"
 	return check
 }
 

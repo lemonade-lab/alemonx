@@ -41,7 +41,7 @@ RUN set -eu; \
 # only the explicit workspace and persistent data directories.
 FROM node:22-bookworm-slim AS runtime
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates curl git lsof openssh-client tini \
+  && apt-get install -y --no-install-recommends ca-certificates curl git lsof openssh-client tini fonts-noto-cjk fonts-noto-color-emoji \
   && rm -rf /var/lib/apt/lists/* \
   && corepack enable \
   && mkdir -p /app /app/workspace /data \
