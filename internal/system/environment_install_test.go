@@ -106,7 +106,7 @@ func TestRPMBrowserInstallReportsUnavailableBrowserPackage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantCalls := 1 + len(browserDependencyPackageCandidates()) + 1
+	wantCalls := 3 + len(browserDependencyPackageCandidates()) + 1
 	if len(calls) != wantCalls {
 		t.Fatalf("install calls = %d, want %d: %#v", len(calls), wantCalls, calls)
 	}
@@ -129,7 +129,7 @@ func TestRPMBrowserInstallSucceedsWithBrowserPackage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantCalls := 1 + len(browserDependencyPackageCandidates()) + 1
+	wantCalls := 3 + len(browserDependencyPackageCandidates()) + 1
 	if len(calls) != wantCalls {
 		t.Fatalf("install calls = %d, want %d: %#v", len(calls), wantCalls, calls)
 	}
@@ -138,7 +138,68 @@ func TestRPMBrowserInstallSucceedsWithBrowserPackage(t *testing.T) {
 	}
 }
 
+func TestRPMBrowserInstallEnablesEPELWhenBrowserMissing(t *testing.T) {
+	originalProbe := rpmBrowserPackageAvailable
+	probeCalls := 0
+	rpmBrowserPackageAvailable = func(string) string {
+		probeCalls++
+		return "chromium"
+	}
+	defer func() { rpmBrowserPackageAvailable = originalProbe }()
+	originalRun := runPackageCommand
+	var calls [][]string
+	runPackageCommand = func(_ context.Context, _ string, args []string) (string, error) {
+		calls = append(calls, args)
+		return "", nil
+	}
+	defer func() { runPackageCommand = originalRun }()
+
+	plan := EnvironmentInstallPlan{CheckID: "browser", Name: "浏览器及依赖包", PackageManager: "dnf"}
+	message, err := installRPMBrowserEnvironment(context.Background(), plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(message, "chromium") {
+		t.Fatalf("browser should be installed after EPEL fallback: %q", message)
+	}
+	sawEPEL := false
+	for _, args := range calls {
+		if slices.Contains(args, "epel-release") {
+			sawEPEL = true
+		}
+	}
+	if !sawEPEL {
+		t.Fatalf("EPEL fallback was never attempted: %#v", calls)
+	}
+	if probeCalls != 1 {
+		t.Fatalf("browser availability should be probed once after EPEL: %d", probeCalls)
+	}
+}
+
+func TestRPMBrowserInstallNotesFailedEPELFallback(t *testing.T) {
+	originalProbe := rpmBrowserPackageAvailable
+	rpmBrowserPackageAvailable = func(string) string { return "" }
+	defer func() { rpmBrowserPackageAvailable = originalProbe }()
+	originalRun := runPackageCommand
+	runPackageCommand = func(_ context.Context, _ string, _ []string) (string, error) {
+		return "", nil
+	}
+	defer func() { runPackageCommand = originalRun }()
+
+	plan := EnvironmentInstallPlan{CheckID: "browser", Name: "浏览器及依赖包", PackageManager: "dnf"}
+	message, err := installRPMBrowserEnvironment(context.Background(), plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(message, "EPEL") {
+		t.Fatalf("deps-only message should mention the EPEL attempt: %q", message)
+	}
+}
+
 func TestRPMBrowserInstallOnlyInstallsDepsWithoutBrowserPackage(t *testing.T) {
+	originalProbe := rpmBrowserPackageAvailable
+	rpmBrowserPackageAvailable = func(string) string { return "" }
+	defer func() { rpmBrowserPackageAvailable = originalProbe }()
 	originalRun := runPackageCommand
 	var calls [][]string
 	runPackageCommand = func(_ context.Context, _ string, args []string) (string, error) {
@@ -152,7 +213,8 @@ func TestRPMBrowserInstallOnlyInstallsDepsWithoutBrowserPackage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantCalls := 1 + len(browserDependencyPackageCandidates())
+	// makecache + epel-release + makecache + every core candidate group.
+	wantCalls := 3 + len(browserDependencyPackageCandidates())
 	if len(calls) != wantCalls {
 		t.Fatalf("install calls = %d, want %d: %#v", len(calls), wantCalls, calls)
 	}
@@ -161,7 +223,10 @@ func TestRPMBrowserInstallOnlyInstallsDepsWithoutBrowserPackage(t *testing.T) {
 	}
 }
 
-func TestRPMBrowserInstallRunsMakecacheFirst(t *testing.T) {
+func TestRPMBrowserInstallPreparesRepositoriesFirst(t *testing.T) {
+	originalProbe := rpmBrowserPackageAvailable
+	rpmBrowserPackageAvailable = func(string) string { return "" }
+	defer func() { rpmBrowserPackageAvailable = originalProbe }()
 	originalRun := runPackageCommand
 	var calls [][]string
 	runPackageCommand = func(_ context.Context, _ string, args []string) (string, error) {
@@ -174,12 +239,18 @@ func TestRPMBrowserInstallRunsMakecacheFirst(t *testing.T) {
 	if _, err := installRPMBrowserEnvironment(context.Background(), plan); err != nil {
 		t.Fatal(err)
 	}
-	if len(calls) == 0 || len(calls[0]) != 1 || calls[0][0] != "makecache" {
-		t.Fatalf("first call must be makecache, got %#v", calls)
+	if len(calls) < 3 || !slices.Contains(calls[0], "epel-release") {
+		t.Fatalf("first call must enable EPEL, got %#v", calls)
+	}
+	if len(calls) < 2 || !slices.Contains(calls[1], "update") {
+		t.Fatalf("second call must update the repository state, got %#v", calls)
 	}
 }
 
 func TestRPMBrowserInstallTriesAlternativeCandidate(t *testing.T) {
+	originalProbe := rpmBrowserPackageAvailable
+	rpmBrowserPackageAvailable = func(string) string { return "" }
+	defer func() { rpmBrowserPackageAvailable = originalProbe }()
 	originalRun := runPackageCommand
 	var calls [][]string
 	runPackageCommand = func(_ context.Context, _ string, args []string) (string, error) {
@@ -211,6 +282,9 @@ func TestRPMBrowserInstallTriesAlternativeCandidate(t *testing.T) {
 }
 
 func TestRPMBrowserInstallSkipsUnavailableDependency(t *testing.T) {
+	originalProbe := rpmBrowserPackageAvailable
+	rpmBrowserPackageAvailable = func(string) string { return "" }
+	defer func() { rpmBrowserPackageAvailable = originalProbe }()
 	originalRun := runPackageCommand
 	var calls [][]string
 	runPackageCommand = func(_ context.Context, _ string, args []string) (string, error) {
@@ -232,16 +306,19 @@ func TestRPMBrowserInstallSkipsUnavailableDependency(t *testing.T) {
 	}
 	// Every dnf invocation installs exactly one package.
 	for _, args := range calls {
-		if args[0] == "makecache" {
+		if len(args) != 4 || args[0] != "install" {
 			continue
 		}
-		if len(args) != 4 || args[0] != "install" || args[1] != "-y" || args[2] != "--allowerasing" {
+		if args[1] != "-y" || args[2] != "--allowerasing" {
 			t.Fatalf("per-package install args = %#v", args)
 		}
 	}
 }
 
 func TestRPMBrowserInstallFailsWhenNothingInstalls(t *testing.T) {
+	originalProbe := rpmBrowserPackageAvailable
+	rpmBrowserPackageAvailable = func(string) string { return "" }
+	defer func() { rpmBrowserPackageAvailable = originalProbe }()
 	originalRun := runPackageCommand
 	runPackageCommand = func(_ context.Context, _ string, _ []string) (string, error) {
 		return "Error: Could not find package", errors.New("exit status 1")
@@ -316,7 +393,59 @@ func TestFontsInstallSkipsMissingPackage(t *testing.T) {
 	}
 }
 
+func TestPrepareRPMRepositoriesEnablesEPELAndUpdates(t *testing.T) {
+	originalRun := runPackageCommand
+	var calls [][]string
+	runPackageCommand = func(_ context.Context, _ string, args []string) (string, error) {
+		calls = append(calls, args)
+		return "", nil
+	}
+	defer func() { runPackageCommand = originalRun }()
+
+	if !prepareRPMRepositories(context.Background(), "dnf") {
+		t.Fatal("RPM preparation should succeed")
+	}
+	if len(calls) != 2 || !slices.Contains(calls[0], "epel-release") || !slices.Contains(calls[1], "update") {
+		t.Fatalf("RPM preparation calls = %#v", calls)
+	}
+	if prepareRPMRepositories(context.Background(), "apt-get") {
+		t.Fatal("prepareRPMRepositories must be a no-op for non-RPM managers")
+	}
+}
+
+func TestPackageManagerPreconditionRefreshesMetadata(t *testing.T) {
+	for _, test := range []struct {
+		manager string
+		want    string
+	}{
+		{"apt-get", "update"},
+		{"pacman", "-Sy"},
+		{"apk", "update"},
+		{"brew", "update"},
+	} {
+		originalRun := runPackageCommand
+		var got []string
+		runPackageCommand = func(_ context.Context, _ string, args []string) (string, error) {
+			got = args
+			return "", nil
+		}
+		if !packageManagerPrecondition(context.Background(), test.manager) {
+			t.Fatalf("%s precondition failed", test.manager)
+		}
+		runPackageCommand = originalRun
+		if len(got) != 1 || got[0] != test.want {
+			t.Fatalf("%s precondition args = %#v, want %q", test.manager, got, test.want)
+		}
+	}
+	if packageManagerPrecondition(context.Background(), "dnf") {
+		t.Fatal("dnf precondition must be handled by prepareRPMRepositories")
+	}
+}
+
 func TestRPMBrowserInstallAbortsOnSudoFailure(t *testing.T) {
+	originalProbe := rpmBrowserPackageAvailable
+	rpmBrowserPackageAvailable = func(string) string { return "" }
+	defer func() { rpmBrowserPackageAvailable = originalProbe }()
 	originalRun := runPackageCommand
 	runPackageCommand = func(_ context.Context, _ string, _ []string) (string, error) {
 		return "sudo: a password is required", errors.New("exit status 1")

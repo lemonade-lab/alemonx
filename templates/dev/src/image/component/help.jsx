@@ -11,7 +11,7 @@ export default function App({ name }) {
   return (
     <Html>
       <section id='root' className='flex flex-col'>
-        <BackgroundImage className='min-h-[31rem] w-full h-full flex items-end justify-center' url={img_logo} size={'100% auto'}>
+        <BackgroundImage className='min-h-[31rem] w-full h-full flex items-end justify-center' src={img_logo} >
           <div className='text-blue-400 text-5xl'>{name}</div>
         </BackgroundImage>
       </section>

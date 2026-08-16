@@ -284,6 +284,11 @@ func InstallEnvironment(ctx context.Context, checkID string) (string, error) {
 	if checkID == "fonts" && (plan.PackageManager == "apt-get" || plan.PackageManager == "dnf" || plan.PackageManager == "yum" || plan.PackageManager == "pacman" || plan.PackageManager == "apk") {
 		return installFontsEnvironment(ctx, plan)
 	}
+	// Refresh package metadata before every fixed install so a stale or
+	// incomplete source never turns into a false "package not found".
+	if strings.TrimSpace(checkID) != "node" {
+		packageManagerPrecondition(ctx, plan.PackageManager)
+	}
 	text, runErr := runPackageCommand(ctx, plan.PackageManager, installArguments(plan.PackageManager, plan.Packages))
 	if runErr == nil {
 		RefreshCommandEnvironment(checkID)
@@ -299,10 +304,12 @@ func InstallEnvironment(ctx context.Context, checkID string) (string, error) {
 // reported at the end — one unavailable package never aborts the rest.
 func installRPMBrowserEnvironment(ctx context.Context, plan EnvironmentInstallPlan) (string, error) {
 	manager := plan.PackageManager
-	// Precondition: a stale or incomplete metadata cache is a common cause of
-	// "No match for argument". makecache is best-effort; if it fails (network
-	// or repository config) the per-package attempts still run and the summary
-	// reports what could not be found.
+	// Preconditions, run before every install: enable EPEL and update the
+	// system repository state. Both are best-effort; failures never block the
+	// per-package attempts that follow.
+	reposPrepared := prepareRPMRepositories(ctx, manager)
+	// A stale metadata cache is another common cause of "No match for
+	// argument". makecache is best-effort for the same reason.
 	makecacheOutput, makecacheErr := runPackageCommand(ctx, manager, []string{"makecache"})
 	if makecacheErr != nil {
 		if ctx.Err() != nil {
@@ -311,6 +318,11 @@ func installRPMBrowserEnvironment(ctx context.Context, plan EnvironmentInstallPl
 		if fatalPackageError(makecacheOutput) {
 			return "", packageInstallFailure(plan.Name, makecacheOutput, makecacheErr, ctx)
 		}
+	}
+	// RHEL-family default repositories have no chromium; it lives in EPEL.
+	// Re-probe after the repository preparation, then install if available.
+	if plan.BrowserPackage == "" {
+		plan.BrowserPackage = rpmBrowserPackageAvailable(manager)
 	}
 	total := len(browserCorePackageCandidates())
 	if plan.BrowserPackage != "" {
@@ -338,7 +350,11 @@ func installRPMBrowserEnvironment(ctx context.Context, plan EnvironmentInstallPl
 	RefreshCommandEnvironment(plan.CheckID)
 	if len(failed) == 0 {
 		if plan.BrowserPackage == "" {
-			return "已在当前主机安装浏览器运行库与字体；当前软件源未提供 Chromium、Chrome 或 Edge 软件包，Puppeteer 将使用项目自带的浏览器。请重新检查环境确认。", nil
+			browserNote := "当前软件源未提供 Chromium、Chrome 或 Edge 软件包"
+			if reposPrepared {
+				browserNote = "已启用 EPEL 并更新软件源，但软件源仍未提供 Chromium、Chrome 或 Edge 软件包"
+			}
+			return fmt.Sprintf("已在当前主机安装浏览器运行库与字体；%s，Puppeteer 将使用项目自带的浏览器。请重新检查环境确认。", browserNote), nil
 		}
 		return fmt.Sprintf("已在当前主机安装浏览器及依赖包（%s）。请重新检查环境确认版本。", plan.BrowserPackage), nil
 	}
@@ -354,15 +370,9 @@ func installRPMBrowserEnvironment(ctx context.Context, plan EnvironmentInstallPl
 func installFontsEnvironment(ctx context.Context, plan EnvironmentInstallPlan) (string, error) {
 	manager := plan.PackageManager
 	if manager == "dnf" || manager == "yum" {
-		makecacheOutput, makecacheErr := runPackageCommand(ctx, manager, []string{"makecache"})
-		if makecacheErr != nil {
-			if ctx.Err() != nil {
-				return "", errors.New("服务器安装超时，请检查网络与包管理器状态后重试")
-			}
-			if fatalPackageError(makecacheOutput) {
-				return "", packageInstallFailure(plan.Name, makecacheOutput, makecacheErr, ctx)
-			}
-		}
+		prepareRPMRepositories(ctx, manager)
+	} else {
+		packageManagerPrecondition(ctx, manager)
 	}
 	var failed []string
 	for _, group := range fontPackageGroups(manager) {
@@ -379,6 +389,46 @@ func installFontsEnvironment(ctx context.Context, plan EnvironmentInstallPlan) (
 		return "已安装系统字体（Noto CJK/Emoji）。请重新检查环境确认。", nil
 	}
 	return fmt.Sprintf("已安装部分字体；以下字体包未找到：%s（不影响浏览器与基本功能，仅影响部分文字渲染）。如软件源缺少这些包，可启用 EPEL 等仓库后重试。请重新检查环境确认。", strings.Join(failed, "、")), nil
+}
+
+// prepareRPMRepositories runs the fixed dnf/yum preconditions before every
+// install: enable EPEL, then update the repository state and packages. It is
+// best-effort host policy: failures are skipped and reported by the
+// per-package attempts that follow.
+func prepareRPMRepositories(ctx context.Context, manager string) bool {
+	if manager != "dnf" && manager != "yum" {
+		return false
+	}
+	output, runErr := runPackageCommand(ctx, manager, []string{"install", "-y", "epel-release"})
+	if runErr != nil || ctx.Err() != nil || fatalPackageError(output) {
+		return false
+	}
+	_, _ = runPackageCommand(ctx, manager, []string{"update", "-y"})
+	return true
+}
+
+// packageManagerPrecondition refreshes package metadata before a fixed install
+// on non-RPM package managers. Best-effort: failures are skipped so the
+// install attempt still runs and reports what could not be found.
+func packageManagerPrecondition(ctx context.Context, manager string) bool {
+	var args []string
+	switch manager {
+	case "apt-get":
+		args = []string{"update"}
+	case "pacman":
+		args = []string{"-Sy"}
+	case "apk":
+		args = []string{"update"}
+	case "brew":
+		args = []string{"update"}
+	default:
+		return false
+	}
+	output, runErr := runPackageCommand(ctx, manager, args)
+	if runErr != nil || ctx.Err() != nil || fatalPackageError(output) {
+		return false
+	}
+	return true
 }
 
 // installCandidateGroup tries every candidate name in a group until one
