@@ -83,7 +83,7 @@ ALX_IMAGE=alx:local docker compose up -d
 
 The build uses a multi-stage image: the Node stage produces the embedded frontend, the Go stage cross-compiles the static `alx`, and the final image keeps only the Node, Git, SSH, and workbench binaries needed to run robots.
 
-The image ships Noto CJK and Emoji fonts so Chinese text and emoji render correctly in robot image messages (jsxp). **A browser (Chrome/Chromium) is intentionally not bundled**: it is an optional capability, Puppeteer downloads one on demand, or you can install a browser on the host and map it into the container.
+The image ships Noto CJK and Emoji fonts plus **Chromium**, so Chinese text and emoji render correctly in robot image messages (jsxp) and browser automation with Puppeteer/Playwright works out of the box (no manual download). The container runs as a non-root user without sandbox privileges, so browser launches inside it need `--no-sandbox` (for example `chromium --headless --no-sandbox ...`, or `args: ['--no-sandbox']` with Puppeteer). The image size grows noticeably (Chromium adds roughly 500 MB).
 
 Multi-architecture releases follow a manual Buildx flow (similar to alemongo) rather than automatic pushes on version tags:
 
