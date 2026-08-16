@@ -586,7 +586,13 @@ export function DirectoryPicker({
           : [...current, itemPath]
         : [itemPath]
     )
-  const home = data?.roots[0] ?? ''
+  // The home directory is identified by its location kind, not by array
+  // position: the workspace root is prepended to roots and would otherwise
+  // shadow the real user home.
+  const home =
+    data?.locations?.find(location => location.kind === 'home')?.path ??
+    data?.roots[0] ??
+    ''
   const workspacePath =
     data?.locations?.find(location => location.kind === 'workspace')?.path ?? ''
   const favorites: Array<{
