@@ -4,7 +4,7 @@
 
 English · [中文](README.md)
 
-[One-line install](#one-line-install) · [Docker deployment](docs/en/docker.md) · [Command line](docs/en/cli.md) · [MCP](docs/en/mcp.md) · [System plugin development](docs/en/plugin-development.md)
+[User manual](docs/en/user-manual.md) · [One-line install](#one-line-install) · [Docker deployment](docs/en/docker.md) · [Command line](docs/en/cli.md) · [MCP](docs/en/mcp.md) · [System plugin development](docs/en/plugin-development.md)
 
 ![ALemonX workbench: multi-robot project management, run configuration, and Agent collaboration](docs/images/alemonx-workbench.png)
 
@@ -90,6 +90,7 @@ The full capability model and permission boundaries are described in the [MCP do
 
 ## Documentation
 
+- [User manual](docs/en/user-manual.md)
 - [MCP control plane](docs/en/mcp.md)
 - [Docker deployment](docs/en/docker.md)
 - [Command line](docs/en/cli.md)
