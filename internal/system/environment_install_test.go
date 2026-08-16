@@ -24,10 +24,13 @@ func TestBrowserInstallPlanForDNFIncludesPuppeteerDependencies(t *testing.T) {
 	for _, pkg := range plan.Packages {
 		packages[pkg] = true
 	}
-	for _, pkg := range []string{"chromium", "alsa-lib", "gtk3", "mesa-libgbm", "wqy-microhei-fonts"} {
+	for _, pkg := range []string{"chromium", "alsa-lib", "gtk3", "mesa-libgbm"} {
 		if !packages[pkg] {
 			t.Fatalf("DNF browser plan lacks %q: %#v", pkg, plan.Packages)
 		}
+	}
+	if packages["wqy-microhei-fonts"] {
+		t.Fatalf("browser plan must not include fonts: %#v", plan.Packages)
 	}
 }
 
@@ -49,7 +52,7 @@ func TestBrowserInstallPlanForRPMWithoutBrowserPackageSkipsBrowser(t *testing.T)
 				t.Fatalf("%s browser plan must not include a browser when repositories lack one: %#v", manager, plan.Packages)
 			}
 		}
-		for _, pkg := range []string{"alsa-lib", "gtk3", "mesa-libgbm", "wqy-microhei-fonts"} {
+		for _, pkg := range []string{"alsa-lib", "gtk3", "mesa-libgbm"} {
 			found := false
 			for _, candidate := range plan.Packages {
 				if candidate == pkg {
@@ -59,6 +62,14 @@ func TestBrowserInstallPlanForRPMWithoutBrowserPackageSkipsBrowser(t *testing.T)
 			}
 			if !found {
 				t.Fatalf("%s browser plan lacks dependency %q: %#v", manager, pkg, plan.Packages)
+			}
+		}
+		if packages := map[string]bool{}; true {
+			for _, pkg := range plan.Packages {
+				packages[pkg] = true
+			}
+			if packages["wqy-microhei-fonts"] {
+				t.Fatalf("%s browser plan must not include fonts: %#v", manager, plan.Packages)
 			}
 		}
 	}
@@ -173,8 +184,8 @@ func TestRPMBrowserInstallTriesAlternativeCandidate(t *testing.T) {
 	var calls [][]string
 	runPackageCommand = func(_ context.Context, _ string, args []string) (string, error) {
 		calls = append(calls, args)
-		if slices.Contains(args, "wqy-microhei-fonts") {
-			return "Error: No match for argument: wqy-microhei-fonts", errors.New("exit status 1")
+		if slices.Contains(args, "atk") && !slices.Contains(args, "at-spi2-atk") && !slices.Contains(args, "at-spi2-core") {
+			return "Error: No match for argument: atk", errors.New("exit status 1")
 		}
 		return "", nil
 	}
@@ -190,7 +201,7 @@ func TestRPMBrowserInstallTriesAlternativeCandidate(t *testing.T) {
 	}
 	seenAlternative := false
 	for _, args := range calls {
-		if slices.Contains(args, "wqy-zenhei-fonts") {
+		if slices.Contains(args, "at-spi2-atk") {
 			seenAlternative = true
 		}
 	}
@@ -204,8 +215,8 @@ func TestRPMBrowserInstallSkipsUnavailableDependency(t *testing.T) {
 	var calls [][]string
 	runPackageCommand = func(_ context.Context, _ string, args []string) (string, error) {
 		calls = append(calls, args)
-		if slices.Contains(args, "xorg-x11-fonts-cyrillic") {
-			return "Error: No match for argument: xorg-x11-fonts-cyrillic", errors.New("exit status 1")
+		if slices.Contains(args, "alsa-lib") {
+			return "Error: No match for argument: alsa-lib", errors.New("exit status 1")
 		}
 		return "", nil
 	}
@@ -216,7 +227,7 @@ func TestRPMBrowserInstallSkipsUnavailableDependency(t *testing.T) {
 	if err != nil {
 		t.Fatalf("partial failure should not abort: %v", err)
 	}
-	if !strings.Contains(message, "xorg-x11-fonts-cyrillic") || !strings.Contains(message, "未能安装") {
+	if !strings.Contains(message, "alsa-lib") || !strings.Contains(message, "未能安装") {
 		t.Fatalf("partial failure message = %q", message)
 	}
 	// Every dnf invocation installs exactly one package.
@@ -241,6 +252,67 @@ func TestRPMBrowserInstallFailsWhenNothingInstalls(t *testing.T) {
 	_, err := installRPMBrowserEnvironment(context.Background(), plan)
 	if err == nil || !strings.Contains(err.Error(), "均未安装") {
 		t.Fatalf("all-failed error = %v", err)
+	}
+}
+
+func TestFontInstallPlanPerManager(t *testing.T) {
+	for _, test := range []struct {
+		manager string
+		want    []string
+	}{
+		{"apt-get", []string{"fonts-noto-cjk", "fonts-noto-color-emoji"}},
+		{"dnf", []string{"google-noto-serif-cjk-fonts"}},
+		{"yum", []string{"google-noto-serif-cjk-fonts"}},
+		{"pacman", []string{"noto-fonts-cjk", "noto-fonts-emoji"}},
+		{"apk", []string{"font-noto-cjk", "font-noto-emoji"}},
+	} {
+		plan, err := environmentInstallPlan("fonts", test.manager)
+		if err != nil {
+			t.Fatalf("%s fonts plan: %v", test.manager, err)
+		}
+		if !slices.Equal(plan.Packages, test.want) {
+			t.Fatalf("%s fonts plan = %#v, want %#v", test.manager, plan.Packages, test.want)
+		}
+	}
+	if _, err := environmentInstallPlan("fonts", "brew"); err == nil {
+		t.Fatal("fonts install on brew must be rejected")
+	}
+}
+
+func TestFontsInstallSucceeds(t *testing.T) {
+	originalRun := runPackageCommand
+	runPackageCommand = func(_ context.Context, _ string, _ []string) (string, error) {
+		return "", nil
+	}
+	defer func() { runPackageCommand = originalRun }()
+
+	plan := EnvironmentInstallPlan{CheckID: "fonts", Name: "系统字体（CJK/Emoji）", PackageManager: "apt-get"}
+	message, err := installFontsEnvironment(context.Background(), plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(message, "已安装系统字体") {
+		t.Fatalf("fonts success message = %q", message)
+	}
+}
+
+func TestFontsInstallSkipsMissingPackage(t *testing.T) {
+	originalRun := runPackageCommand
+	runPackageCommand = func(_ context.Context, _ string, args []string) (string, error) {
+		if slices.Contains(args, "fonts-noto-cjk") {
+			return "Error: No match for argument: fonts-noto-cjk", errors.New("exit status 1")
+		}
+		return "", nil
+	}
+	defer func() { runPackageCommand = originalRun }()
+
+	plan := EnvironmentInstallPlan{CheckID: "fonts", Name: "系统字体（CJK/Emoji）", PackageManager: "apt-get"}
+	message, err := installFontsEnvironment(context.Background(), plan)
+	if err != nil {
+		t.Fatalf("partial fonts failure should not abort: %v", err)
+	}
+	if !strings.Contains(message, "fonts-noto-cjk") || !strings.Contains(message, "未找到") {
+		t.Fatalf("fonts partial message = %q", message)
 	}
 }
 

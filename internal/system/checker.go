@@ -34,7 +34,7 @@ type Checker struct{ timeout time.Duration }
 func NewChecker() *Checker { return &Checker{timeout: 5 * time.Second} }
 
 func (c *Checker) CheckGoal(goalID, variant string) Report {
-	checks := []Check{c.browser()}
+	checks := []Check{c.browser(), c.fonts()}
 	switch goalID {
 	case "install", "develop":
 		checks = append(checks, c.command("node", "Node.js", "--version", "请安装 Node.js LTS 版本后重新检查。"), c.command("git", "Git", "--version", "请安装 Git 后重新检查。"))
@@ -58,6 +58,44 @@ func (c *Checker) CheckGoal(goalID, variant string) Report {
 	}
 	ready := platformSupported() && checksAreUsable(checks)
 	return Report{goalID, ready, runtime.GOOS + "/" + runtime.GOARCH, checks, time.Now().Format(time.RFC3339)}
+}
+
+// fonts is a fully optional check: CJK/Emoji fonts only affect text rendering
+// in screenshots or PDFs, never browser startup, so they must not influence
+// the browser environment result.
+func (c *Checker) fonts() Check {
+	check := Check{ID: "fonts", Name: "系统字体（CJK/Emoji）", Status: "ready", Detail: "系统已内置", Optional: true}
+	if runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
+		return check
+	}
+	if hasCJKFonts() {
+		return check
+	}
+	check.Status = "missing"
+	check.Detail = "未检测到中文/Emoji 字体"
+	check.Suggestion = "可选：安装 Noto CJK/Emoji 字体，避免无头浏览器截图或导出 PDF 时缺字。"
+	return check
+}
+
+func hasCJKFonts() bool {
+	if path, err := exec.LookPath("fc-list"); err == nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if exec.CommandContext(ctx, path, ":lang=zh").Run() == nil {
+			return true
+		}
+	}
+	for _, pattern := range []string{
+		"/usr/share/fonts/noto-cjk/*",
+		"/usr/share/fonts/opentype/noto/*",
+		"/usr/share/fonts/google-noto*/*",
+		"/usr/share/fonts/truetype/wqy*/*",
+	} {
+		if matches, _ := filepath.Glob(pattern); len(matches) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // checksAreUsable keeps a detected but old Node.js version visible as an

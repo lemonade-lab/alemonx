@@ -101,6 +101,20 @@ func environmentInstallPlan(checkID, manager string) (EnvironmentInstallPlan, er
 		default:
 			plan.Packages = []string{"chromium"}
 		}
+	case "fonts":
+		plan.Name = "系统字体（CJK/Emoji）"
+		switch manager {
+		case "apt-get":
+			plan.Packages = fontDependencyPackages("apt-get")
+		case "dnf", "yum":
+			plan.Packages = fontDependencyPackages("dnf")
+		case "pacman":
+			plan.Packages = fontDependencyPackages("pacman")
+		case "apk":
+			plan.Packages = fontDependencyPackages("apk")
+		default:
+			return EnvironmentInstallPlan{}, errors.New("当前系统已内置中文字体，无需在工作台内安装")
+		}
 	default:
 		return EnvironmentInstallPlan{}, errors.New("该环境暂不支持工作台内安装")
 	}
@@ -174,6 +188,12 @@ func browserDependencyPackages(manager string) []string {
 // first available candidate in each group; a group is reported as failed only
 // when every candidate is unavailable.
 func browserDependencyPackageCandidates() [][]string {
+	return browserCorePackageCandidates()
+}
+
+// browserCorePackageCandidates are the runtime libraries a headless browser
+// needs to start. A missing core library can break Puppeteer.
+func browserCorePackageCandidates() [][]string {
 	return [][]string{
 		{"alsa-lib"},
 		{"atk", "at-spi2-atk", "at-spi2-core"},
@@ -189,15 +209,34 @@ func browserDependencyPackageCandidates() [][]string {
 		{"libXtst"},
 		{"pango"},
 		{"mesa-libgbm"},
-		{"ipa-gothic-fonts", "vlgothic-fonts"},
-		{"xorg-x11-fonts-100dpi", "xorg-x11-fonts-ISO8859-1-100dpi"},
-		{"xorg-x11-fonts-75dpi", "xorg-x11-fonts-ISO8859-1-75dpi"},
 		{"xorg-x11-utils"},
-		{"xorg-x11-fonts-cyrillic"},
-		{"xorg-x11-fonts-Type1"},
-		{"xorg-x11-fonts-misc"},
-		{"wqy-microhei-fonts", "wqy-zenhei-fonts", "google-noto-sans-cjk-fonts"},
 	}
+}
+
+// fontPackageGroups returns the Noto CJK/Emoji font candidates for each Linux
+// package manager. Fonts are fully separate from the browser: missing fonts
+// only affect text rendering in screenshots or PDFs, never browser startup.
+func fontPackageGroups(manager string) [][]string {
+	switch manager {
+	case "apt-get":
+		return [][]string{{"fonts-noto-cjk"}, {"fonts-noto-color-emoji"}}
+	case "dnf", "yum":
+		return [][]string{{"google-noto-serif-cjk-fonts", "google-noto-sans-cjk-fonts"}}
+	case "pacman":
+		return [][]string{{"noto-fonts-cjk"}, {"noto-fonts-emoji"}}
+	case "apk":
+		return [][]string{{"font-noto-cjk"}, {"font-noto-emoji"}}
+	}
+	return nil
+}
+
+func fontDependencyPackages(manager string) []string {
+	groups := fontPackageGroups(manager)
+	packages := make([]string, 0, len(groups))
+	for _, group := range groups {
+		packages = append(packages, group[0])
+	}
+	return packages
 }
 
 func hostPackageManager() (string, error) {
@@ -242,6 +281,9 @@ func InstallEnvironment(ctx context.Context, checkID string) (string, error) {
 	if checkID == "browser" && (plan.PackageManager == "dnf" || plan.PackageManager == "yum") {
 		return installRPMBrowserEnvironment(ctx, plan)
 	}
+	if checkID == "fonts" && (plan.PackageManager == "apt-get" || plan.PackageManager == "dnf" || plan.PackageManager == "yum" || plan.PackageManager == "pacman" || plan.PackageManager == "apk") {
+		return installFontsEnvironment(ctx, plan)
+	}
 	text, runErr := runPackageCommand(ctx, plan.PackageManager, installArguments(plan.PackageManager, plan.Packages))
 	if runErr == nil {
 		RefreshCommandEnvironment(checkID)
@@ -257,7 +299,6 @@ func InstallEnvironment(ctx context.Context, checkID string) (string, error) {
 // reported at the end — one unavailable package never aborts the rest.
 func installRPMBrowserEnvironment(ctx context.Context, plan EnvironmentInstallPlan) (string, error) {
 	manager := plan.PackageManager
-	groups := browserDependencyPackageCandidates()
 	// Precondition: a stale or incomplete metadata cache is a common cause of
 	// "No match for argument". makecache is best-effort; if it fails (network
 	// or repository config) the per-package attempts still run and the summary
@@ -271,39 +312,26 @@ func installRPMBrowserEnvironment(ctx context.Context, plan EnvironmentInstallPl
 			return "", packageInstallFailure(plan.Name, makecacheOutput, makecacheErr, ctx)
 		}
 	}
-	total := len(groups)
+	total := len(browserCorePackageCandidates())
 	if plan.BrowserPackage != "" {
 		total++
 	}
 	failed := make([]string, 0, 2)
-	for _, group := range groups {
-		installed := false
-		for _, candidate := range group {
-			output, runErr := runPackageCommand(ctx, manager, installArguments(manager, []string{candidate}))
-			if runErr == nil {
-				installed = true
-				break
-			}
-			if ctx.Err() != nil {
-				return "", errors.New("服务器安装超时，请检查网络与包管理器状态后重试")
-			}
-			if fatalPackageError(output) {
-				return "", packageInstallFailure(plan.Name, output, runErr, ctx)
-			}
+	for _, group := range browserCorePackageCandidates() {
+		installed, installErr := installCandidateGroup(ctx, manager, plan.Name, group)
+		if installErr != nil {
+			return "", installErr
 		}
 		if !installed {
 			failed = append(failed, group[0])
 		}
 	}
 	if plan.BrowserPackage != "" {
-		output, runErr := runPackageCommand(ctx, manager, installArguments(manager, []string{plan.BrowserPackage}))
-		if runErr != nil {
-			if ctx.Err() != nil {
-				return "", errors.New("服务器安装超时，请检查网络与包管理器状态后重试")
-			}
-			if fatalPackageError(output) {
-				return "", packageInstallFailure(plan.Name, output, runErr, ctx)
-			}
+		installed, installErr := installCandidateGroup(ctx, manager, plan.Name, []string{plan.BrowserPackage})
+		if installErr != nil {
+			return "", installErr
+		}
+		if !installed {
 			failed = append(failed, plan.BrowserPackage)
 		}
 	}
@@ -317,7 +345,59 @@ func installRPMBrowserEnvironment(ctx context.Context, plan EnvironmentInstallPl
 	if len(failed) == total {
 		return "", fmt.Errorf("服务器安装 %s 失败：以下软件包均未安装：%s。请检查软件源或网络后重试", plan.Name, strings.Join(failed, "、"))
 	}
-	return fmt.Sprintf("已在当前主机安装浏览器运行库与字体；以下软件包未能安装：%s。Puppeteer 将使用项目自带的浏览器，缺失包可能影响部分自动化功能；如软件源确实缺少这些包，可启用 EPEL 等仓库后重试。请重新检查环境确认。", strings.Join(failed, "、")), nil
+	return fmt.Sprintf("已在当前主机安装浏览器运行库与字体；以下软件包未能安装：%s（可能影响浏览器自动化功能）。Puppeteer 将使用项目自带的浏览器；如软件源确实缺少这些包，可启用 EPEL 等仓库后重试。请重新检查环境确认。", strings.Join(failed, "、")), nil
+}
+
+// installFontsEnvironment installs the optional Noto CJK/Emoji fonts. Fonts
+// are fully separate from the browser: missing ones never affect browser
+// startup, only text rendering in screenshots or PDFs.
+func installFontsEnvironment(ctx context.Context, plan EnvironmentInstallPlan) (string, error) {
+	manager := plan.PackageManager
+	if manager == "dnf" || manager == "yum" {
+		makecacheOutput, makecacheErr := runPackageCommand(ctx, manager, []string{"makecache"})
+		if makecacheErr != nil {
+			if ctx.Err() != nil {
+				return "", errors.New("服务器安装超时，请检查网络与包管理器状态后重试")
+			}
+			if fatalPackageError(makecacheOutput) {
+				return "", packageInstallFailure(plan.Name, makecacheOutput, makecacheErr, ctx)
+			}
+		}
+	}
+	var failed []string
+	for _, group := range fontPackageGroups(manager) {
+		installed, installErr := installCandidateGroup(ctx, manager, plan.Name, group)
+		if installErr != nil {
+			return "", installErr
+		}
+		if !installed {
+			failed = append(failed, group[0])
+		}
+	}
+	RefreshCommandEnvironment(plan.CheckID)
+	if len(failed) == 0 {
+		return "已安装系统字体（Noto CJK/Emoji）。请重新检查环境确认。", nil
+	}
+	return fmt.Sprintf("已安装部分字体；以下字体包未找到：%s（不影响浏览器与基本功能，仅影响部分文字渲染）。如软件源缺少这些包，可启用 EPEL 等仓库后重试。请重新检查环境确认。", strings.Join(failed, "、")), nil
+}
+
+// installCandidateGroup tries every candidate name in a group until one
+// installs. A hard error (timeout, authorization) aborts; otherwise it reports
+// whether the group could be installed at all.
+func installCandidateGroup(ctx context.Context, manager, name string, group []string) (bool, error) {
+	for _, candidate := range group {
+		output, runErr := runPackageCommand(ctx, manager, installArguments(manager, []string{candidate}))
+		if runErr == nil {
+			return true, nil
+		}
+		if ctx.Err() != nil {
+			return false, errors.New("服务器安装超时，请检查网络与包管理器状态后重试")
+		}
+		if fatalPackageError(output) {
+			return false, packageInstallFailure(name, output, runErr, ctx)
+		}
+	}
+	return false, nil
 }
 
 // fatalPackageError reports whether a package-manager failure is environmental

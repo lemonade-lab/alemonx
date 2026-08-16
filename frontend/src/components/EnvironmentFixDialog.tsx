@@ -43,6 +43,12 @@ const links: Record<
       label: 'Chromium',
       href: 'https://www.chromium.org/getting-involved/download-chromium/'
     }
+  ],
+  fonts: [
+    {
+      label: 'Google Noto 字体',
+      href: 'https://fonts.google.com/noto'
+    }
   ]
 }
 
@@ -60,7 +66,7 @@ export function EnvironmentFixDialog({
     (platform.startsWith('linux/') ||
       platform.startsWith('darwin/') ||
       platform.startsWith('windows/')) &&
-    ['node', 'git', 'docker', 'browser'].includes(check.id)
+    ['node', 'git', 'docker', 'browser', 'fonts'].includes(check.id)
   const isMacOS = platform.startsWith('darwin/')
   const isWindows = platform.startsWith('windows/')
   const isManagedNode = check.id === 'node'
@@ -120,6 +126,8 @@ export function EnvironmentFixDialog({
               <small className="text-xs leading-5 text-brand-800/75">
                 {isManagedNode
                   ? '自动下载 Node.js LTS 并校验安装。'
+                  : check.id === 'fonts'
+                    ? '安装 Noto CJK/Emoji 字体，仅影响截图与 PDF 的文字渲染。'
                   : isMacOS
                   ? '使用 Homebrew 自动安装。'
                   : isWindows

@@ -110,9 +110,9 @@ export function EnvironmentCheckPanel({
                   >
                     {check.id === 'node' && check.status === 'outdated'
                       ? '升级'
-                      : check.id === 'browser'
+                      : check.id === 'browser' || check.id === 'fonts'
                         ? '安装'
-                      : '修复'}
+                        : '修复'}
                   </button>
                 )}
               </div>

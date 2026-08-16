@@ -38,6 +38,13 @@ func TestOptionalBrowserDoesNotBlockEnvironment(t *testing.T) {
 	}
 }
 
+func TestOptionalFontsDoesNotBlockEnvironment(t *testing.T) {
+	checks := []Check{{ID: "fonts", Status: "missing", Optional: true}, {ID: "node", Status: "ready"}}
+	if !checksAreUsable(checks) {
+		t.Fatal("optional fonts should not block the environment")
+	}
+}
+
 func TestGitBuildCheckDoesNotRequireGlobalPackageTools(t *testing.T) {
 	report := NewChecker().CheckGoal("build", "git")
 	ids := map[string]bool{}
