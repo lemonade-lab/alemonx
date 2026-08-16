@@ -92,8 +92,8 @@ func (m Manager) RuntimeRepairPlan(root, mode string) (RuntimeRepairPlan, error)
 		planScriptChange(&plan, manifest.Scripts["app"], "node index.js", "app")
 	}
 	if mode == "pm2" || mode == "all" {
-		planScriptChange(&plan, manifest.Scripts["start"], "npx --yes pm2 startOrRestart pm2.config.cjs", "start")
-		planScriptChange(&plan, manifest.Scripts["stop"], "npx --yes pm2 stop pm2.config.cjs", "stop")
+		planScriptChange(&plan, manifest.Scripts["start"], "pm2 startOrRestart pm2.config.cjs", "start")
+		planScriptChange(&plan, manifest.Scripts["stop"], "pm2 stop pm2.config.cjs", "stop")
 		config := filepath.Join(path, "pm2.config.cjs")
 		if !exists(config) {
 			plan.Automatic = append(plan.Automatic, "创建默认 PM2 配置")
@@ -171,8 +171,8 @@ func (m Manager) ApplyRuntimeRepair(root, mode string, confirmOverrides bool) (R
 		manifest.Scripts["app"] = "node index.js"
 	}
 	if mode == "pm2" || mode == "all" {
-		manifest.Scripts["start"] = "npx --yes pm2 startOrRestart pm2.config.cjs"
-		manifest.Scripts["stop"] = "npx --yes pm2 stop pm2.config.cjs"
+		manifest.Scripts["start"] = "pm2 startOrRestart pm2.config.cjs"
+		manifest.Scripts["stop"] = "pm2 stop pm2.config.cjs"
 		manifest.DevDependencies["pm2"] = "^5"
 		manifest.DevDependencies["yaml"] = "^2.6.0"
 		configPath := filepath.Join(path, "pm2.config.cjs")

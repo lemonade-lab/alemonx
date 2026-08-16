@@ -1105,15 +1105,45 @@ func reconcilePM2Registration(root string) (bool, error) {
 	if err != nil {
 		return false, nil
 	}
-	if !pm2StaleRegistration(processes, appName, root) {
-		return false, nil
-	}
+	// Drop stale registrations of this same project that were left behind by a
+	// config rewrite (for example the legacy path-digest name -> stable
+	// identity migration). Only stopped/errored apps are removed.
 	command, args := pm2Launcher(root)
+	removed := false
+	for _, stale := range stalePM2SameProject(processes, appName, root) {
+		if _, deleteErr := run(root, command, append(args, "delete", stale)...); deleteErr == nil {
+			removed = true
+		}
+	}
+	if !pm2StaleRegistration(processes, appName, root) {
+		return removed, nil
+	}
 	args = append(args, "delete", appName)
 	if _, deleteErr := run(root, command, args...); deleteErr != nil {
 		return true, fmt.Errorf("清理旧 PM2 登记失败（目录已移动）：%w", deleteErr)
 	}
 	return true, nil
+}
+
+// stalePM2SameProject returns stopped/errored PM2 app names registered in the
+// alemonx namespace at the project root whose name differs from the current
+// config name. They are leftovers of an identity change and safe to remove.
+func stalePM2SameProject(processes []PM2Process, appName, root string) []string {
+	var names []string
+	for _, process := range processes {
+		if process.Name == appName || process.Namespace != "alemonx" {
+			continue
+		}
+		if !sameWorkspacePath(process.CWD, root) {
+			continue
+		}
+		status := strings.ToLower(process.Status)
+		if status == "online" || status == "launching" {
+			continue
+		}
+		names = append(names, process.Name)
+	}
+	return names
 }
 
 // stripPM2Banner removes any non-JSON prefix (PM2 banner/notice) so the caller
@@ -1360,6 +1390,9 @@ func (m Manager) Write(root, name, content string) (Result, error) {
 		}
 		return Result{}, err
 	}
+	if filepath.Base(path) == ".npmrc" && looksLikeYAMLConfig(content) {
+		return Result{}, errors.New(".npmrc 内容看起来是 YAML 配置（例如 alemon.config.yaml 被误存到了 .npmrc）。npm 无法识别这类内容并会把其中的值打印到日志；请改存到 alemon.config.yaml")
+	}
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 		if !permissionError(err) {
 			return Result{}, fmt.Errorf("保存 %s 失败：%w", filepath.Base(path), err)
@@ -1367,6 +1400,24 @@ func (m Manager) Write(root, name, content string) (Result, error) {
 		return Result{}, permissionAdvice("保存 " + filepath.Base(path))
 	}
 	return Result{Path: path, Output: "已保存。"}, nil
+}
+
+var yamlKeyValuePattern = regexp.MustCompile(`^[A-Za-z0-9_.-]+\s*:\s`)
+
+// looksLikeYAMLConfig detects lines such as `mysql:` or `host: value` that
+// belong in alemon.config.yaml, not in an npm .npmrc file. npm would treat
+// them as unknown config and echo the values into process logs.
+func looksLikeYAMLConfig(content string) bool {
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, ";") {
+			continue
+		}
+		if yamlKeyValuePattern.MatchString(trimmed) {
+			return true
+		}
+	}
+	return false
 }
 func (m Manager) Run(root, action, message, packageName, version, tag, token string, confirmed bool) (Result, error) {
 	if action == "git-release" {

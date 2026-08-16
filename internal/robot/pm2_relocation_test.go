@@ -63,3 +63,36 @@ func TestPM2ConfigAppNameToleratesTemplateStyleName(t *testing.T) {
 		t.Fatal("template-style name should be parsed (even if it cannot match a registration)")
 	}
 }
+
+func TestStalePM2SameProjectPicksStoppedSameCWDApps(t *testing.T) {
+	processes := []PM2Process{
+		{Name: "alemonx-bot-11111111", Namespace: "alemonx", CWD: "/robots/current", Status: "stopped"},
+		{Name: "alemonx-bot-22222222", Namespace: "alemonx", CWD: "/robots/current", Status: "online"},
+		{Name: "alemonx-bot-33333333", Namespace: "alemonx", CWD: "/robots/other", Status: "stopped"},
+		{Name: "other-app", Namespace: "default", CWD: "/robots/current", Status: "stopped"},
+	}
+	stale := stalePM2SameProject(processes, "alemonx-bot-84673d56", "/robots/current")
+	if len(stale) != 1 || stale[0] != "alemonx-bot-11111111" {
+		t.Fatalf("stale = %#v, want only the stopped same-cwd alemonx app", stale)
+	}
+}
+
+func TestLooksLikeYAMLConfig(t *testing.T) {
+	for _, good := range []string{
+		"registry=https://registry.npmjs.org\npackage-lock=false\n",
+		"//registry.npmjs.org/:_authToken=secret\n",
+		"; comment\n# comment\n",
+	} {
+		if looksLikeYAMLConfig(good) {
+			t.Fatalf("valid npmrc flagged as YAML: %q", good)
+		}
+	}
+	for _, bad := range []string{
+		"mysql:\n  host: db.example.com\n",
+		"qq-bot:\n  app_id: \"123\"\n",
+	} {
+		if !looksLikeYAMLConfig(bad) {
+			t.Fatalf("YAML config not detected: %q", bad)
+		}
+	}
+}

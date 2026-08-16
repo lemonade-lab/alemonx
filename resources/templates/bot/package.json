@@ -7,9 +7,9 @@
   "scripts": {
     "app": "node index.js",
     "review": "npx alemonc start",
-    "start": "npx pm2 startOrRestart pm2.config.cjs",
-    "stop": "npx pm2 stop pm2.config.cjs",
-    "delete": "npx pm2 delete pm2.config.cjs"
+    "start": "pm2 startOrRestart pm2.config.cjs",
+    "stop": "pm2 stop pm2.config.cjs",
+    "delete": "pm2 delete pm2.config.cjs"
   },
   "devDependencies": {
     "@alemonjs/onebot": "^2.1.21",
