@@ -1,60 +1,80 @@
-# syntax=docker/dockerfile:1
-
-# Build the embedded React workbench before compiling the Go binary. Keeping
-# this stage separate makes dependency downloads cacheable between releases.
-FROM node:22-bookworm-slim AS frontend
+# 前端构建阶段 - 构建 React 工作台
+FROM node:22 AS frontend
 WORKDIR /src/frontend
 COPY frontend/package.json frontend/yarn.lock ./
 RUN corepack enable && yarn install --frozen-lockfile --non-interactive
 COPY frontend/ ./
 RUN yarn build
 
-# Install the embedded Yarn with its locked dependency tree so the Go binary
-# always ships a package manager that never relies on npm. Optional tools such
-# as PM2 are provisioned on demand with this Yarn at runtime instead of being
-# embedded.
-FROM node:22-bookworm-slim AS resources
+# 资源准备阶段 - 安装 Yarn 依赖
+FROM node:22 AS resources
 WORKDIR /out
 COPY resources/packages/yarn/package.json resources/packages/yarn/package-lock.json ./yarn/
 RUN (cd yarn && npm ci --no-bin-links --ignore-scripts --no-audit --no-fund)
 
-FROM golang:1.23-bookworm AS builder
+# 后端构建阶段
+FROM golang:1.24 AS builder
 WORKDIR /src
+
+# 配置 Go 模块代理为国内镜像源
+ENV GOPROXY=https://goproxy.cn,https://goproxy.io,direct
+
+# 先复制依赖文件，利用 Docker 缓存
 COPY go.mod go.sum ./
 RUN go mod download
+
+# 复制源代码和其他资源
 COPY . ./
 COPY --from=frontend /src/dist ./dist
 COPY --from=resources /out ./resources/packages
 
+# 打包 go 支持多架构
 ARG TARGETOS=linux
 ARG TARGETARCH=amd64
 ARG TARGETVARIANT
 ARG VERSION=dev
-RUN set -eu; \
-  goarm=""; \
-  if [ "$TARGETARCH" = "arm" ] && [ -n "${TARGETVARIANT:-}" ]; then goarm="${TARGETVARIANT#v}"; fi; \
-  CGO_ENABLED=0 GOOS="$TARGETOS" GOARCH="$TARGETARCH" GOARM="$goarm" \
-  go build -trimpath -ldflags "-s -w -X main.Version=$VERSION" -o /out/alx .
 
-# AlemonJS projects need Node.js, npm/corepack, Git and SSH at runtime. The
-# workbench intentionally runs as the unprivileged node user; Compose mounts
-# only the explicit workspace and persistent data directories.
-FROM node:22-bookworm-slim AS runtime
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates curl git lsof openssh-client tini fonts-noto-cjk fonts-noto-color-emoji chromium \
+RUN set -eu; \
+  GOARM_VALUE=""; \
+  if [ "${TARGETARCH}" = "arm" ] && [ -n "${TARGETVARIANT:-}" ]; then \
+    GOARM_VALUE="${TARGETVARIANT#v}"; \
+  fi; \
+  CGO_ENABLED=0 \
+  GOOS=${TARGETOS} \
+  GOARCH=${TARGETARCH} \
+  GOARM=${GOARM_VALUE} \
+  go build -trimpath -ldflags "-s -w -X main.Version=${VERSION} -X main.BuildTime=$(date +%s)" -o /out/alx .
+
+# 最终运行阶段
+FROM node:22 AS runtime
+
+RUN  (apt-get update || (sleep 3 && apt-get update)) \
+  && apt-get install -y --no-install-recommends ca-certificates curl \
+  && apt-get install -y --no-install-recommends git lsof openssh-client tini \
+  && apt-get install -y --no-install-recommends fonts-noto-cjk fonts-noto-color-emoji \
+  && apt-get install -y --no-install-recommends --fix-missing chromium \
   && rm -rf /var/lib/apt/lists/* \
   && corepack enable \
   && mkdir -p /app /app/workspace /data \
+  && mkdir -p ~/.ssh \
+  && chmod 700 ~/.ssh \
+  && ssh-keyscan github.com >> ~/.ssh/known_hosts \
   && chown -R node:node /app /data
+
 WORKDIR /app
 COPY --from=builder /out/alx /app/alx
+
 USER node
+
+# 设置环境变量
 ENV HOME=/data \
     XDG_CONFIG_HOME=/data/config \
     XDG_CACHE_HOME=/data/cache \
     ALX_WORKSPACE=/app/workspace \
     ALEMONJS_SETUP_ROOTS=/app/workspace \
-    NODE_ENV=production
+    NODE_ENV=production \
+    YARN_CACHE_FOLDER=/app/.yarn_cache
+
 EXPOSE 17390
 ENTRYPOINT ["/usr/bin/tini", "--", "/app/alx"]
 CMD ["--host", "0.0.0.0", "--port", "17390", "--redis-off"]
