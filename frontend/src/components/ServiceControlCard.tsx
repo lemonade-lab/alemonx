@@ -4,7 +4,13 @@ import { Button } from './Button'
 import { ConfirmDialog } from './ConfirmDialog'
 import { SettingsCard, SettingsMessage, SettingsPage } from './SettingsCard'
 
-type ServiceAction = 'install' | 'stop' | 'restart' | 'enable-linger'
+type ServiceAction =
+  | 'install'
+  | 'stop'
+  | 'restart'
+  | 'enable-linger'
+  | 'enable-startup'
+  | 'disable-startup'
 
 type ServiceResilience = {
   startupEnabled: boolean
@@ -189,23 +195,52 @@ export function ServiceControlCard() {
       >
         {serviceInstalled && resilience && (
           <div className="grid gap-1.5 text-xs text-(--theme-text-secondary)">
-            <span>登录/开机启动：{resilience.startupEnabled ? '已配置' : '未配置'}</span>
-            <span>异常退出自动拉起：{resilience.keepAlive ? '已配置' : '未配置'}</span>
+            <span>
+              登录/开机启动：{resilience.startupEnabled ? '已配置' : '未配置'}
+            </span>
+            <span>
+              异常退出自动拉起：{resilience.keepAlive ? '已配置' : '未配置'}
+            </span>
             {resilience.lingerKnown && (
-              <span>Linux 无登录运行：{resilience.lingerEnabled ? '已启用' : '未启用'}</span>
+              <span>
+                Linux 无登录运行：
+                {resilience.lingerEnabled ? '已启用' : '未启用'}
+              </span>
             )}
           </div>
         )}
-        {serviceInstalled && resilience?.lingerSupported && !resilience.lingerEnabled && (
+        {serviceInstalled && resilience && (
           <Button
-            variant="secondary"
+            variant={resilience.startupEnabled ? 'secondary' : 'primary'}
             className="w-fit gap-1.5"
             disabled={busy}
-            onClick={() => setServiceAction('enable-linger')}
+            title={
+              resilience.startupEnabled
+                ? '下次登录时不再自动启动，当前运行中的服务不受影响'
+                : '登录后自动启动 ALemonX 服务'
+            }
+            onClick={() =>
+              setServiceAction(
+                resilience.startupEnabled ? 'disable-startup' : 'enable-startup'
+              )
+            }
           >
-            <ShieldCheck className="size-3.5" /> 启用无登录运行
+            <Power className="size-3.5" />
+            {resilience.startupEnabled ? '关闭开机自启' : '开启开机自启'}
           </Button>
         )}
+        {serviceInstalled &&
+          resilience?.lingerSupported &&
+          !resilience.lingerEnabled && (
+            <Button
+              variant="secondary"
+              className="w-fit gap-1.5"
+              disabled={busy}
+              onClick={() => setServiceAction('enable-linger')}
+            >
+              <ShieldCheck className="size-3.5" /> 启用无登录运行
+            </Button>
+          )}
       </SettingsCard>
       {message && (
         <SettingsMessage
@@ -223,40 +258,48 @@ export function ServiceControlCard() {
         title={
           serviceAction === 'install'
             ? '安装 AlemonX 后台服务'
-            : serviceAction === 'enable-linger'
-              ? '启用 Linux 无登录运行'
-            : serviceAction === 'stop'
-              ? '停止 AlemonX 服务'
-              : '重启 AlemonX 服务'
+            : serviceAction === 'enable-startup'
+              ? '开启开机自启'
+              : serviceAction === 'disable-startup'
+                ? '关闭开机自启'
+                : serviceAction === 'enable-linger'
+                  ? '启用 Linux 无登录运行'
+                  : serviceAction === 'stop'
+                    ? '停止 AlemonX 服务'
+                    : '重启 AlemonX 服务'
         }
         subtitle={
           serviceAction === 'install'
             ? ''
-            : serviceAction === 'enable-linger'
-              ? '此操作可能需要系统管理员授权。'
-            : serviceAction === 'stop' && serviceInstalled === false
-              ? '未安装后台守护服务；这会关闭当前前台运行的工作台服务。'
-              : '仅影响工作台后台服务，不会停止机器人项目。'
+            : serviceAction === 'enable-startup'
+              ? '登录后自动启动 AlemonX 服务，异常退出仍会由系统拉起。'
+              : serviceAction === 'disable-startup'
+                ? '下次登录时不会自动启动；当前运行中的服务不受影响。'
+                : serviceAction === 'enable-linger'
+                  ? '此操作可能需要系统管理员授权。'
+                  : serviceAction === 'stop' && serviceInstalled === false
+                    ? '未安装后台守护服务；这会关闭当前前台运行的工作台服务。'
+                    : '仅影响工作台后台服务，不会停止机器人项目。'
         }
         message={
           serviceAction === 'install'
             ? '当前前台工作台会关闭，并切换为系统后台服务；页面恢复连接后会自动刷新。'
             : serviceAction === 'enable-linger'
               ? '启用后，Linux 重启或用户退出登录时，已安装的 ALemonX systemd 用户服务仍可自动运行。'
-            : serviceAction === 'stop'
-              ? serviceInstalled === false
-                ? '当前页面会断开连接；之后可从启动应用的位置重新打开工作台。'
-                : '服务停止后，工作台页面将无法继续连接，直到你从系统服务或命令行重新启动它。'
-              : '工作台会短暂断开，服务恢复后可重新打开页面。'
+              : serviceAction === 'stop'
+                ? serviceInstalled === false
+                  ? '当前页面会断开连接；之后可从启动应用的位置重新打开工作台。'
+                  : '服务停止后，工作台页面将无法继续连接，直到你从系统服务或命令行重新启动它。'
+                : '工作台会短暂断开，服务恢复后可重新打开页面。'
         }
         confirmLabel={
           serviceAction === 'install'
             ? '安装并启动'
             : serviceAction === 'enable-linger'
               ? '确认启用'
-            : serviceAction === 'stop'
-              ? '确认停止'
-              : '确认重启'
+              : serviceAction === 'stop'
+                ? '确认停止'
+                : '确认重启'
         }
         busy={busy}
         onCancel={() => setServiceAction(null)}

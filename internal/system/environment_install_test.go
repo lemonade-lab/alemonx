@@ -106,7 +106,9 @@ func TestRPMBrowserInstallReportsUnavailableBrowserPackage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantCalls := 3 + len(browserDependencyPackageCandidates()) + 1
+	// dnf preparation: dnf-plugins-core, CRB, epel-release, update; then
+	// makecache, every dependency group and the browser binary.
+	wantCalls := 5 + len(browserDependencyPackageCandidates("dnf")) + 1
 	if len(calls) != wantCalls {
 		t.Fatalf("install calls = %d, want %d: %#v", len(calls), wantCalls, calls)
 	}
@@ -129,7 +131,7 @@ func TestRPMBrowserInstallSucceedsWithBrowserPackage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantCalls := 3 + len(browserDependencyPackageCandidates()) + 1
+	wantCalls := 5 + len(browserDependencyPackageCandidates("dnf")) + 1
 	if len(calls) != wantCalls {
 		t.Fatalf("install calls = %d, want %d: %#v", len(calls), wantCalls, calls)
 	}
@@ -214,7 +216,7 @@ func TestRPMBrowserInstallOnlyInstallsDepsWithoutBrowserPackage(t *testing.T) {
 		t.Fatal(err)
 	}
 	// makecache + epel-release + makecache + every core candidate group.
-	wantCalls := 3 + len(browserDependencyPackageCandidates())
+	wantCalls := 3 + len(browserDependencyPackageCandidates("yum"))
 	if len(calls) != wantCalls {
 		t.Fatalf("install calls = %d, want %d: %#v", len(calls), wantCalls, calls)
 	}
@@ -239,11 +241,22 @@ func TestRPMBrowserInstallPreparesRepositoriesFirst(t *testing.T) {
 	if _, err := installRPMBrowserEnvironment(context.Background(), plan); err != nil {
 		t.Fatal(err)
 	}
-	if len(calls) < 3 || !slices.Contains(calls[0], "epel-release") {
-		t.Fatalf("first call must enable EPEL, got %#v", calls)
+	if len(calls) < 4 || !slices.Contains(calls[0], "dnf-plugins-core") {
+		t.Fatalf("first call must install dnf-plugins-core, got %#v", calls)
 	}
-	if len(calls) < 2 || !slices.Contains(calls[1], "update") {
-		t.Fatalf("second call must update the repository state, got %#v", calls)
+	sawCRB, sawEPEL, sawUpdate := false, false, false
+	for _, args := range calls {
+		switch {
+		case slices.Contains(args, "crb"):
+			sawCRB = true
+		case slices.Contains(args, "epel-release"):
+			sawEPEL = true
+		case slices.Contains(args, "update"):
+			sawUpdate = true
+		}
+	}
+	if !sawCRB || !sawEPEL || !sawUpdate {
+		t.Fatalf("preparation must enable CRB/EPEL and update, got %#v", calls)
 	}
 }
 
@@ -332,14 +345,199 @@ func TestRPMBrowserInstallFailsWhenNothingInstalls(t *testing.T) {
 	}
 }
 
+func TestBrowserInstallPlanForAPTUsesCandidates(t *testing.T) {
+	plan, err := environmentInstallPlan("browser", "apt-get")
+	if err != nil {
+		t.Fatal(err)
+	}
+	packages := map[string]bool{}
+	for _, pkg := range plan.Packages {
+		packages[pkg] = true
+	}
+	for _, pkg := range []string{"chromium", "chromium-browser", "libnss3", "libgbm1", "libxkbcommon0"} {
+		if !packages[pkg] {
+			t.Fatalf("apt browser plan lacks %q: %#v", pkg, plan.Packages)
+		}
+	}
+	if packages["wqy-microhei-fonts"] {
+		t.Fatalf("browser plan must not include fonts: %#v", plan.Packages)
+	}
+}
+
+func TestLinuxBrowserInstallInstallsBrowserCandidates(t *testing.T) {
+	originalRun := runPackageCommand
+	var calls [][]string
+	runPackageCommand = func(_ context.Context, _ string, args []string) (string, error) {
+		calls = append(calls, args)
+		return "Installed", nil
+	}
+	defer func() { runPackageCommand = originalRun }()
+
+	plan := EnvironmentInstallPlan{CheckID: "browser", Name: "浏览器及依赖包", PackageManager: "apt-get"}
+	message, err := installLinuxBrowserEnvironment(context.Background(), plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(message, "chromium") {
+		t.Fatalf("browser install message = %q", message)
+	}
+	sawChromium := false
+	for _, args := range calls {
+		if slices.Contains(args, "chromium") && !slices.Contains(args, "chromium-browser") {
+			sawChromium = true
+		}
+	}
+	if !sawChromium {
+		t.Fatalf("chromium was never attempted: %#v", calls)
+	}
+}
+
+func TestLinuxBrowserInstallTriesAlternativeBrowserCandidate(t *testing.T) {
+	originalRun := runPackageCommand
+	runPackageCommand = func(_ context.Context, _ string, args []string) (string, error) {
+		if slices.Contains(args, "chromium") && !slices.Contains(args, "chromium-browser") {
+			return "Error: No match for argument: chromium", errors.New("exit status 1")
+		}
+		return "Installed", nil
+	}
+	defer func() { runPackageCommand = originalRun }()
+
+	plan := EnvironmentInstallPlan{CheckID: "browser", Name: "浏览器及依赖包", PackageManager: "apt-get"}
+	message, err := installLinuxBrowserEnvironment(context.Background(), plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(message, "chromium-browser") {
+		t.Fatalf("alternative browser candidate should be reported: %q", message)
+	}
+	if strings.Contains(message, "未能安装") {
+		t.Fatalf("alternative candidate should have succeeded: %q", message)
+	}
+}
+
+func TestLinuxBrowserInstallSkipsUnavailableDependency(t *testing.T) {
+	originalRun := runPackageCommand
+	var calls [][]string
+	runPackageCommand = func(_ context.Context, _ string, args []string) (string, error) {
+		calls = append(calls, args)
+		if slices.Contains(args, "libnss3") || slices.Contains(args, "libnss3t64") {
+			return "Error: No match for argument: libnss3", errors.New("exit status 1")
+		}
+		return "", nil
+	}
+	defer func() { runPackageCommand = originalRun }()
+
+	plan := EnvironmentInstallPlan{CheckID: "browser", Name: "浏览器及依赖包", PackageManager: "apt-get"}
+	message, err := installLinuxBrowserEnvironment(context.Background(), plan)
+	if err != nil {
+		t.Fatalf("partial failure should not abort: %v", err)
+	}
+	if !strings.Contains(message, "libnss3") || !strings.Contains(message, "未能安装") {
+		t.Fatalf("partial failure message = %q", message)
+	}
+	// Every apt invocation installs exactly one package.
+	for _, args := range calls {
+		if len(args) != 3 || args[0] != "install" {
+			continue
+		}
+		if args[1] != "-y" {
+			t.Fatalf("per-package install args = %#v", args)
+		}
+	}
+}
+
+func TestLinuxBrowserInstallFallsBackToDepsOnly(t *testing.T) {
+	originalRun := runPackageCommand
+	runPackageCommand = func(_ context.Context, _ string, args []string) (string, error) {
+		for _, arg := range args {
+			if arg == "chromium" || arg == "chromium-browser" {
+				return "Error: No match for argument: chromium", errors.New("exit status 1")
+			}
+		}
+		return "", nil
+	}
+	defer func() { runPackageCommand = originalRun }()
+
+	plan := EnvironmentInstallPlan{CheckID: "browser", Name: "浏览器及依赖包", PackageManager: "apt-get"}
+	message, err := installLinuxBrowserEnvironment(context.Background(), plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(message, "自带") {
+		t.Fatalf("deps-only fallback message = %q", message)
+	}
+}
+
+func TestLinuxBrowserInstallFailsWhenNothingInstalls(t *testing.T) {
+	originalRun := runPackageCommand
+	runPackageCommand = func(_ context.Context, _ string, _ []string) (string, error) {
+		return "Error: Could not find package", errors.New("exit status 1")
+	}
+	defer func() { runPackageCommand = originalRun }()
+
+	plan := EnvironmentInstallPlan{CheckID: "browser", Name: "浏览器及依赖包", PackageManager: "apt-get"}
+	_, err := installLinuxBrowserEnvironment(context.Background(), plan)
+	if err == nil || !strings.Contains(err.Error(), "均未安装") {
+		t.Fatalf("all-failed error = %v", err)
+	}
+}
+
+func TestRPMBrowserInstallTimeoutIncludesPartialProgress(t *testing.T) {
+	originalProbe := rpmBrowserPackageAvailable
+	rpmBrowserPackageAvailable = func(string) string { return "" }
+	defer func() { rpmBrowserPackageAvailable = originalProbe }()
+	originalRun := runPackageCommand
+	ctx, cancel := context.WithCancel(context.Background())
+	runPackageCommand = func(_ context.Context, _ string, args []string) (string, error) {
+		for _, arg := range args {
+			if arg == "atk" || arg == "at-spi2-atk" || arg == "at-spi2-core" {
+				return "Error: No match for argument: atk", errors.New("exit status 1")
+			}
+		}
+		if slices.Contains(args, "gtk3") {
+			cancel()
+			return "", errors.New("context canceled")
+		}
+		return "", nil
+	}
+	defer func() { runPackageCommand = originalRun }()
+
+	plan := EnvironmentInstallPlan{CheckID: "browser", Name: "浏览器及依赖包", PackageManager: "dnf"}
+	_, err := installRPMBrowserEnvironment(ctx, plan)
+	if err == nil || !strings.Contains(err.Error(), "服务器安装超时") || !strings.Contains(err.Error(), "atk") {
+		t.Fatalf("timeout error should keep partial progress: %v", err)
+	}
+}
+
+func TestEnableCRBRepositoryFallsBackToCrbHelper(t *testing.T) {
+	originalRun := runPackageCommand
+	var calls [][]string
+	runPackageCommand = func(_ context.Context, _ string, args []string) (string, error) {
+		calls = append(calls, args)
+		if slices.Contains(args, "config-manager") {
+			return "Error: Unknown command", errors.New("exit status 1")
+		}
+		return "", nil
+	}
+	defer func() { runPackageCommand = originalRun }()
+
+	enableCRBRepository(context.Background(), "dnf")
+	if len(calls) != 3 ||
+		!slices.Contains(calls[0], "dnf-plugins-core") ||
+		!slices.Contains(calls[1], "crb") ||
+		!slices.Contains(calls[2], "enable") {
+		t.Fatalf("CRB enable calls = %#v", calls)
+	}
+}
+
 func TestFontInstallPlanPerManager(t *testing.T) {
 	for _, test := range []struct {
 		manager string
 		want    []string
 	}{
 		{"apt-get", []string{"fonts-noto-cjk", "fonts-noto-color-emoji"}},
-		{"dnf", []string{"google-noto-serif-cjk-fonts"}},
-		{"yum", []string{"google-noto-serif-cjk-fonts"}},
+		{"dnf", []string{"google-noto-serif-cjk-fonts", "google-noto-emoji-fonts"}},
+		{"yum", []string{"google-noto-serif-cjk-fonts", "google-noto-emoji-fonts"}},
 		{"pacman", []string{"noto-fonts-cjk", "noto-fonts-emoji"}},
 		{"apk", []string{"font-noto-cjk", "font-noto-emoji"}},
 	} {
@@ -402,11 +600,23 @@ func TestPrepareRPMRepositoriesEnablesEPELAndUpdates(t *testing.T) {
 	}
 	defer func() { runPackageCommand = originalRun }()
 
+	// dnf additionally enables CRB before EPEL.
 	if !prepareRPMRepositories(context.Background(), "dnf") {
 		t.Fatal("RPM preparation should succeed")
 	}
-	if len(calls) != 2 || !slices.Contains(calls[0], "epel-release") || !slices.Contains(calls[1], "update") {
+	if len(calls) != 4 ||
+		!slices.Contains(calls[0], "dnf-plugins-core") ||
+		!slices.Contains(calls[1], "crb") ||
+		!slices.Contains(calls[2], "epel-release") ||
+		!slices.Contains(calls[3], "update") {
 		t.Fatalf("RPM preparation calls = %#v", calls)
+	}
+	calls = nil
+	if !prepareRPMRepositories(context.Background(), "yum") {
+		t.Fatal("RPM preparation should succeed")
+	}
+	if len(calls) != 2 || !slices.Contains(calls[0], "epel-release") || !slices.Contains(calls[1], "update") {
+		t.Fatalf("yum preparation calls = %#v", calls)
 	}
 	if prepareRPMRepositories(context.Background(), "apt-get") {
 		t.Fatal("prepareRPMRepositories must be a no-op for non-RPM managers")

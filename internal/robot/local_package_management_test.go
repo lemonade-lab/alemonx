@@ -92,6 +92,49 @@ func TestBackpackPackageCanBeConfiguredAndRemovedByManifestName(t *testing.T) {
 	}
 }
 
+func TestBackpackRemovesLeftoverDirectoryWithoutValidManifest(t *testing.T) {
+	root := t.TempDir()
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
+	// A failed install can leave an empty folder (or one with a broken
+	// package.json). The backpack lists it by directory name, so removal must
+	// work for that identifier even though it cannot run as a plugin.
+	leftover := filepath.Join(root, "packages", "broken-plugin")
+	if err := os.MkdirAll(leftover, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := removeLocalPackageByName(root, "broken-plugin"); err != nil {
+		t.Fatalf("removeLocalPackageByName(leftover): %v", err)
+	}
+	if _, err := os.Stat(leftover); !os.IsNotExist(err) {
+		t.Fatalf("leftover directory should be removed, stat error = %v", err)
+	}
+
+	// A directory whose package.json is corrupt is also removable.
+	corrupt := filepath.Join(root, "packages", "corrupt-plugin")
+	if err := os.MkdirAll(corrupt, 0755); err != nil {
+		t.Fatal(err)
+	}
+	writeAppPageFixture(t, filepath.Join(corrupt, "package.json"), `{not-json`)
+	if _, err := removeLocalPackageByName(root, "corrupt-plugin"); err != nil {
+		t.Fatalf("removeLocalPackageByName(corrupt): %v", err)
+	}
+	if _, err := os.Stat(corrupt); !os.IsNotExist(err) {
+		t.Fatalf("corrupt directory should be removed, stat error = %v", err)
+	}
+
+	// An invalid directory must not be removable through a mismatched name.
+	kept := filepath.Join(root, "packages", "keep-me")
+	if err := os.MkdirAll(kept, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := removeLocalPackageByName(root, "other-name"); err == nil {
+		t.Fatal("removing a mismatched directory must fail")
+	}
+	if _, err := os.Stat(kept); err != nil {
+		t.Fatalf("mismatched directory must be kept, stat error = %v", err)
+	}
+}
+
 func TestSwitchLocalPackageVersionRequiresConfirmationBeforeDiscardingGitChanges(t *testing.T) {
 	root := t.TempDir()
 	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)

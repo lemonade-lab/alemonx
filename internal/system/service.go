@@ -56,7 +56,10 @@ func ServiceResilienceStatus() ServiceResilience {
 			return ServiceResilience{Summary: "无法读取 systemd 用户服务配置。"}
 		}
 		text := string(data)
-		startup := strings.Contains(text, "WantedBy=default.target")
+		// systemctl enable/disable manages the default.target.wants symlink;
+		// the WantedBy line in the unit file stays in place either way.
+		_, startupErr := os.Stat(filepath.Join(home, ".config", "systemd", "user", "default.target.wants", "alx.service"))
+		startup := startupErr == nil
 		keepAlive := strings.Contains(text, "Restart=on-failure") || strings.Contains(text, "Restart=always")
 		result := ServiceResilience{StartupEnabled: startup, KeepAlive: keepAlive, LingerSupported: true, Summary: "用户 systemd 已配置为异常退出自动重启。"}
 		output, lingerErr := exec.Command("loginctl", "show-user", strconv.Itoa(os.Getuid()), "-p", "Linger", "--value").Output()
@@ -70,13 +73,110 @@ func ServiceResilienceStatus() ServiceResilience {
 		if result.LingerEnabled {
 			result.Summary = "已启用无登录运行：重启后无需用户登录即可启动，并会在异常退出后自动重启。"
 		} else {
-			result.Summary = "服务会在登录后启动并在异常退出后重启；启用无登录运行后，重启或退出登录也会持续运行。"
+			if !startup {
+				result.Summary = "服务未开启登录自启；异常退出仍会自动重启。启用无登录运行后，可在不登录的情况下开机启动。"
+			} else {
+				result.Summary = "服务会在登录后启动并在异常退出后重启；启用无登录运行后，重启或退出登录也会持续运行。"
+			}
 		}
 		return result
 	case "windows":
-		return ServiceResilience{StartupEnabled: true, Summary: "已注册登录启动任务；建议使用 Docker 或系统服务承载需要无人值守运行的服务器部署。"}
+		startup := windowsScheduledTaskEnabled()
+		summary := "已注册登录启动任务；建议使用 Docker 或系统服务承载需要无人值守运行的服务器部署。"
+		if !startup {
+			summary = "已注册登录启动任务，但当前处于禁用状态；可在服务设置中重新开启。"
+		}
+		return ServiceResilience{StartupEnabled: startup, Summary: summary}
 	default:
 		return ServiceResilience{Summary: "当前系统不支持工作台后台服务管理。"}
+	}
+}
+
+// windowsScheduledTaskEnabled reports whether the ALemonX scheduled task is
+// currently enabled. Query failures are treated as enabled so a localization
+// or permission issue never makes the UI offer to re-enable an already
+// registered startup task.
+func windowsScheduledTaskEnabled() bool {
+	output, err := exec.Command("schtasks", "/Query", "/TN", "ALemonX", "/FO", "LIST", "/V").CombinedOutput()
+	if err != nil {
+		return true
+	}
+	for _, line := range strings.Split(string(output), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "Scheduled Task State:") {
+			return strings.Contains(line, "Enabled")
+		}
+	}
+	return true
+}
+
+// SetStartupEnabled toggles whether the installed background service starts
+// automatically at login (macOS/Windows) or at login/boot (Linux). It never
+// stops or starts the currently running service.
+func SetStartupEnabled(enabled bool) (string, error) {
+	switch runtime.GOOS {
+	case "darwin":
+		path, err := launchAgentPath()
+		if err != nil {
+			return "", err
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return "", errors.New("尚未安装后台服务，请先安装后再设置开机自启")
+		}
+		text := string(data)
+		if !strings.Contains(text, "<key>RunAtLoad</key>") {
+			return "", errors.New("无法识别 LaunchAgent 的开机自启配置")
+		}
+		want := "<key>RunAtLoad</key><true/>"
+		if !enabled {
+			want = "<key>RunAtLoad</key><false/>"
+		}
+		if strings.Contains(text, want) {
+			if enabled {
+				return "开机自启已开启。", nil
+			}
+			return "开机自启已关闭。", nil
+		}
+		if enabled {
+			text = strings.Replace(text, "<key>RunAtLoad</key><false/>", "<key>RunAtLoad</key><true/>", 1)
+		} else {
+			text = strings.Replace(text, "<key>RunAtLoad</key><true/>", "<key>RunAtLoad</key><false/>", 1)
+		}
+		if err := os.WriteFile(path, []byte(text), 0644); err != nil {
+			return "", err
+		}
+		if enabled {
+			return "已开启登录自启：下次登录时 ALemonX 会自动启动。", nil
+		}
+		return "已关闭登录自启：下次登录时 ALemonX 不会自动启动，当前运行中的服务不受影响。", nil
+	case "linux":
+		if !ServiceInstalled() {
+			return "", errors.New("尚未安装后台服务，请先安装后再设置开机自启")
+		}
+		action, verb, done := "enable", "开启", "已开启登录自启；登录后 ALemonX 会自动启动。"
+		if !enabled {
+			action, verb, done = "disable", "关闭", "已关闭登录自启；下次登录时 ALemonX 不会自动启动。"
+		}
+		if output, err := exec.Command("systemctl", "--user", action, "alx.service").CombinedOutput(); err != nil {
+			return "", fmt.Errorf("%s登录自启失败：%s", verb, strings.TrimSpace(string(output)))
+		}
+		_ = exec.Command("systemctl", "--user", "daemon-reload").Run()
+		return done, nil
+	case "windows":
+		if !ServiceInstalled() {
+			return "", errors.New("尚未安装后台服务，请先安装后再设置开机自启")
+		}
+		flag, verb, done := "/ENABLE", "开启", "已开启登录自启；登录后 ALemonX 会自动启动。"
+		if !enabled {
+			flag, verb, done = "/DISABLE", "关闭", "已关闭登录自启；下次登录时 ALemonX 不会自动启动。"
+		}
+		if output, err := exec.Command("schtasks", "/Change", "/TN", "ALemonX", flag).CombinedOutput(); err != nil {
+			return "", fmt.Errorf("%s登录自启失败：%s", verb, strings.TrimSpace(string(output)))
+		}
+		return done, nil
+	default:
+		return "", fmt.Errorf("暂不支持在 %s 上管理后台服务", runtime.GOOS)
 	}
 }
 

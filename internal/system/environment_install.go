@@ -97,7 +97,11 @@ func environmentInstallPlan(checkID, manager string) (EnvironmentInstallPlan, er
 			}
 			plan.Packages = packages
 		case "apt-get", "apk", "pacman":
-			plan.Packages = []string{"chromium"}
+			// Non-RPM hosts may rename the browser package (Ubuntu ships
+			// chromium-browser on some releases) and the runtime libraries
+			// Puppeteer still needs when it downloads its own browser. The
+			// install path tries every candidate group one at a time.
+			plan.Packages = flattenedBrowserPlan(manager)
 		default:
 			plan.Packages = []string{"chromium"}
 		}
@@ -175,20 +179,45 @@ func browserDependencyPackages(manager string) []string {
 	if manager != "dnf" && manager != "yum" {
 		return nil
 	}
-	packages := make([]string, 0, len(browserDependencyPackageCandidates()))
-	for _, group := range browserDependencyPackageCandidates() {
+	groups := browserDependencyPackageCandidates(manager)
+	packages := make([]string, 0, len(groups))
+	for _, group := range groups {
 		packages = append(packages, group[0])
 	}
 	return packages
 }
 
-// browserDependencyPackageCandidates lists every required runtime library and
-// font with alternative names, because repository package names differ across
-// RHEL-family distros and occasionally get renamed. The workbench installs the
-// first available candidate in each group; a group is reported as failed only
-// when every candidate is unavailable.
-func browserDependencyPackageCandidates() [][]string {
-	return browserCorePackageCandidates()
+// browserDependencyPackageCandidates lists every required runtime library
+// with alternative names per package manager. Repository package names differ
+// across distros and occasionally get renamed (for example the Debian -t64
+// transition), so the workbench installs the first available candidate in
+// each group and a group is reported as failed only when every candidate is
+// unavailable.
+func browserDependencyPackageCandidates(manager string) [][]string {
+	switch manager {
+	case "apt-get":
+		return debianBrowserCorePackageCandidates()
+	case "apk":
+		return alpineBrowserCorePackageCandidates()
+	case "pacman":
+		return archBrowserCorePackageCandidates()
+	default:
+		return browserCorePackageCandidates()
+	}
+}
+
+// browserPackageCandidates are the system browser binaries for non-RPM Linux
+// package managers, in preference order. RPM hosts probe their configured
+// repositories instead, because a browser binary often lives in EPEL or a
+// vendor repository rather than the default repositories.
+func browserPackageCandidates(manager string) [][]string {
+	switch manager {
+	case "apt-get":
+		return [][]string{{"chromium", "chromium-browser"}}
+	case "apk", "pacman":
+		return [][]string{{"chromium"}}
+	}
+	return nil
 }
 
 // browserCorePackageCandidates are the runtime libraries a headless browser
@@ -213,6 +242,122 @@ func browserCorePackageCandidates() [][]string {
 	}
 }
 
+// debianBrowserCorePackageCandidates are the Puppeteer-documented runtime
+// libraries for Debian/Ubuntu. The -t64 variants cover Ubuntu 24.04's package
+// renames.
+func debianBrowserCorePackageCandidates() [][]string {
+	return [][]string{
+		{"libasound2", "libasound2t64"},
+		{"libatk1.0-0", "libatk1.0-0t64", "libatk-bridge2.0-0", "libatk-bridge2.0-0t64", "libatspi2.0-0", "libatspi2.0-0t64"},
+		{"libcups2", "libcups2t64"},
+		{"libgtk-3-0", "libgtk-3-0t64"},
+		{"libxcomposite1"},
+		{"libxcursor1"},
+		{"libxdamage1"},
+		{"libxext6"},
+		{"libxi6"},
+		{"libxrandr2"},
+		{"libxss1"},
+		{"libxtst6"},
+		{"libpango-1.0-0", "libpango-1.0-0t64"},
+		{"libgbm1"},
+		{"libnss3", "libnss3t64"},
+		{"libnspr4", "libnspr4t64"},
+		{"libxkbcommon0"},
+		{"libdrm2"},
+		{"libxshmfence1"},
+		{"libxfixes3"},
+		{"libx11-6"},
+		{"libxcb1"},
+		{"libdbus-1-3", "libdbus-1-3t64"},
+		{"libglib2.0-0", "libglib2.0-0t64"},
+		{"libcairo2"},
+		{"fonts-liberation"},
+		{"xdg-utils"},
+	}
+}
+
+// alpineBrowserCorePackageCandidates are the runtime libraries a headless
+// browser needs on Alpine (apk). Names follow the Alpine community packages.
+func alpineBrowserCorePackageCandidates() [][]string {
+	return [][]string{
+		{"alsa-lib"},
+		{"atk", "at-spi2-atk", "at-spi2-core"},
+		{"cups-libs"},
+		{"gtk3"},
+		{"libxcomposite"},
+		{"libxcursor"},
+		{"libxdamage"},
+		{"libxext"},
+		{"libxi"},
+		{"libxrandr"},
+		{"libxscrnsaver", "libxss"},
+		{"libxtst"},
+		{"pango"},
+		{"mesa-gbm", "mesa"},
+		{"nss"},
+		{"nspr"},
+		{"libxkbcommon"},
+		{"libdrm"},
+		{"xshmfence", "libxshmfence"},
+		{"libxfixes"},
+		{"libx11"},
+		{"libxcb"},
+		{"dbus-libs", "dbus"},
+		{"glib"},
+		{"cairo"},
+	}
+}
+
+// archBrowserCorePackageCandidates are the runtime libraries a headless
+// browser needs on Arch Linux (pacman).
+func archBrowserCorePackageCandidates() [][]string {
+	return [][]string{
+		{"alsa-lib"},
+		{"atk", "at-spi2-atk", "at-spi2-core"},
+		{"cups"},
+		{"gtk3"},
+		{"libxcomposite"},
+		{"libxcursor"},
+		{"libxdamage"},
+		{"libxext"},
+		{"libxi"},
+		{"libxrandr"},
+		{"libxss", "libxscrnsaver"},
+		{"libxtst"},
+		{"pango"},
+		{"mesa", "libgbm"},
+		{"nss"},
+		{"nspr"},
+		{"libxkbcommon"},
+		{"libdrm"},
+		{"libxshmfence"},
+		{"libxfixes"},
+		{"libx11"},
+		{"libxcb"},
+		{"dbus"},
+		{"glib2"},
+		{"cairo"},
+		{"ttf-liberation"},
+		{"xdg-utils"},
+	}
+}
+
+// flattenedBrowserPlan lists the browser binary candidates followed by the
+// first candidate of every runtime library group. It is only used for the
+// install plan's Packages field; the install itself tries candidates one at a
+// time.
+func flattenedBrowserPlan(manager string) []string {
+	var packages []string
+	for _, group := range browserPackageCandidates(manager) {
+		packages = append(packages, group...)
+	}
+	for _, group := range browserDependencyPackageCandidates(manager) {
+		packages = append(packages, group[0])
+	}
+	return packages
+}
+
 // fontPackageGroups returns the Noto CJK/Emoji font candidates for each Linux
 // package manager. Fonts are fully separate from the browser: missing fonts
 // only affect text rendering in screenshots or PDFs, never browser startup.
@@ -221,7 +366,10 @@ func fontPackageGroups(manager string) [][]string {
 	case "apt-get":
 		return [][]string{{"fonts-noto-cjk"}, {"fonts-noto-color-emoji"}}
 	case "dnf", "yum":
-		return [][]string{{"google-noto-serif-cjk-fonts", "google-noto-sans-cjk-fonts"}}
+		return [][]string{
+			{"google-noto-serif-cjk-fonts", "google-noto-sans-cjk-fonts", "wqy-microhei-fonts", "wqy-zenhei-fonts"},
+			{"google-noto-emoji-fonts", "google-noto-color-emoji-fonts"},
+		}
 	case "pacman":
 		return [][]string{{"noto-fonts-cjk"}, {"noto-fonts-emoji"}}
 	case "apk":
@@ -281,6 +429,9 @@ func InstallEnvironment(ctx context.Context, checkID string) (string, error) {
 	if checkID == "browser" && (plan.PackageManager == "dnf" || plan.PackageManager == "yum") {
 		return installRPMBrowserEnvironment(ctx, plan)
 	}
+	if checkID == "browser" && (plan.PackageManager == "apt-get" || plan.PackageManager == "apk" || plan.PackageManager == "pacman") {
+		return installLinuxBrowserEnvironment(ctx, plan)
+	}
 	if checkID == "fonts" && (plan.PackageManager == "apt-get" || plan.PackageManager == "dnf" || plan.PackageManager == "yum" || plan.PackageManager == "pacman" || plan.PackageManager == "apk") {
 		return installFontsEnvironment(ctx, plan)
 	}
@@ -324,26 +475,33 @@ func installRPMBrowserEnvironment(ctx context.Context, plan EnvironmentInstallPl
 	if plan.BrowserPackage == "" {
 		plan.BrowserPackage = rpmBrowserPackageAvailable(manager)
 	}
-	total := len(browserCorePackageCandidates())
+	groups := browserDependencyPackageCandidates(manager)
+	total := len(groups)
 	if plan.BrowserPackage != "" {
 		total++
 	}
 	failed := make([]string, 0, 2)
-	for _, group := range browserCorePackageCandidates() {
+	for _, group := range groups {
 		installed, installErr := installCandidateGroup(ctx, manager, plan.Name, group)
 		if installErr != nil {
+			if len(failed) > 0 {
+				return "", fmt.Errorf("%v（此前已完成安装，以下包未安装：%s）", installErr, strings.Join(failed, "、"))
+			}
 			return "", installErr
 		}
-		if !installed {
+		if installed == "" {
 			failed = append(failed, group[0])
 		}
 	}
 	if plan.BrowserPackage != "" {
 		installed, installErr := installCandidateGroup(ctx, manager, plan.Name, []string{plan.BrowserPackage})
 		if installErr != nil {
+			if len(failed) > 0 {
+				return "", fmt.Errorf("%v（此前已完成安装，以下包未安装：%s）", installErr, strings.Join(failed, "、"))
+			}
 			return "", installErr
 		}
-		if !installed {
+		if installed == "" {
 			failed = append(failed, plan.BrowserPackage)
 		}
 	}
@@ -354,14 +512,62 @@ func installRPMBrowserEnvironment(ctx context.Context, plan EnvironmentInstallPl
 			if reposPrepared {
 				browserNote = "已启用 EPEL 并更新软件源，但软件源仍未提供 Chromium、Chrome 或 Edge 软件包"
 			}
-			return fmt.Sprintf("已在当前主机安装浏览器运行库与字体；%s，Puppeteer 将使用项目自带的浏览器。请重新检查环境确认。", browserNote), nil
+			return fmt.Sprintf("已在当前主机安装浏览器运行库；%s，Puppeteer 将使用项目自带的浏览器。请重新检查环境确认。", browserNote), nil
 		}
 		return fmt.Sprintf("已在当前主机安装浏览器及依赖包（%s）。请重新检查环境确认版本。", plan.BrowserPackage), nil
 	}
 	if len(failed) == total {
 		return "", fmt.Errorf("服务器安装 %s 失败：以下软件包均未安装：%s。请检查软件源或网络后重试", plan.Name, strings.Join(failed, "、"))
 	}
-	return fmt.Sprintf("已在当前主机安装浏览器运行库与字体；以下软件包未能安装：%s（可能影响浏览器自动化功能）。Puppeteer 将使用项目自带的浏览器；如软件源确实缺少这些包，可启用 EPEL 等仓库后重试。请重新检查环境确认。", strings.Join(failed, "、")), nil
+	return fmt.Sprintf("已在当前主机安装浏览器运行库；以下软件包未能安装：%s（可能影响浏览器自动化功能）。Puppeteer 将使用项目自带的浏览器；如软件源确实缺少这些包，可启用 EPEL 等仓库后重试。请重新检查环境确认。", strings.Join(failed, "、")), nil
+}
+
+// installLinuxBrowserEnvironment installs the runtime libraries and the
+// browser binary on apt/apk/pacman hosts one package group at a time. The
+// same skip-fail-then-summarize semantics as the RPM path apply: a missing
+// package never aborts the remaining groups.
+func installLinuxBrowserEnvironment(ctx context.Context, plan EnvironmentInstallPlan) (string, error) {
+	manager := plan.PackageManager
+	packageManagerPrecondition(ctx, manager)
+	dependencyGroups := browserDependencyPackageCandidates(manager)
+	browserGroups := browserPackageCandidates(manager)
+	total := len(dependencyGroups) + len(browserGroups)
+	failed := make([]string, 0, 2)
+	for _, group := range dependencyGroups {
+		installed, installErr := installCandidateGroup(ctx, manager, plan.Name, group)
+		if installErr != nil {
+			if len(failed) > 0 {
+				return "", fmt.Errorf("%v（此前已完成安装，以下包未安装：%s）", installErr, strings.Join(failed, "、"))
+			}
+			return "", installErr
+		}
+		if installed == "" {
+			failed = append(failed, group[0])
+		}
+	}
+	browserName := ""
+	for _, group := range browserGroups {
+		installed, installErr := installCandidateGroup(ctx, manager, plan.Name, group)
+		if installErr != nil {
+			if len(failed) > 0 {
+				return "", fmt.Errorf("%v（此前已完成安装，以下包未安装：%s）", installErr, strings.Join(failed, "、"))
+			}
+			return "", installErr
+		}
+		if installed != "" {
+			browserName = installed
+			break
+		}
+		failed = append(failed, group[0])
+	}
+	RefreshCommandEnvironment(plan.CheckID)
+	if len(failed) == 0 {
+		return fmt.Sprintf("已在当前主机安装浏览器及依赖包（%s）。请重新检查环境确认版本。", browserName), nil
+	}
+	if browserName == "" && len(failed) == total {
+		return "", fmt.Errorf("服务器安装 %s 失败：以下软件包均未安装：%s。请检查软件源或网络后重试", plan.Name, strings.Join(failed, "、"))
+	}
+	return fmt.Sprintf("已在当前主机安装浏览器运行库；以下软件包未能安装：%s（可能影响浏览器自动化功能）。Puppeteer 将使用项目自带的浏览器；如软件源确实缺少这些包，请检查软件源或网络后重试。请重新检查环境确认。", strings.Join(failed, "、")), nil
 }
 
 // installFontsEnvironment installs the optional Noto CJK/Emoji fonts. Fonts
@@ -378,9 +584,12 @@ func installFontsEnvironment(ctx context.Context, plan EnvironmentInstallPlan) (
 	for _, group := range fontPackageGroups(manager) {
 		installed, installErr := installCandidateGroup(ctx, manager, plan.Name, group)
 		if installErr != nil {
+			if len(failed) > 0 {
+				return "", fmt.Errorf("%v（此前已完成安装，以下字体包未安装：%s）", installErr, strings.Join(failed, "、"))
+			}
 			return "", installErr
 		}
-		if !installed {
+		if installed == "" {
 			failed = append(failed, group[0])
 		}
 	}
@@ -392,19 +601,47 @@ func installFontsEnvironment(ctx context.Context, plan EnvironmentInstallPlan) (
 }
 
 // prepareRPMRepositories runs the fixed dnf/yum preconditions before every
-// install: enable EPEL, then update the repository state and packages. It is
-// best-effort host policy: failures are skipped and reported by the
-// per-package attempts that follow.
+// install: enable CRB (EL9-family, dnf only), enable EPEL, then update the
+// repository state and packages. It is best-effort host policy: failures are
+// skipped and reported by the per-package attempts that follow. The result
+// reports whether EPEL was enabled and the update completed, so the caller
+// can phrase the browser availability note accurately.
 func prepareRPMRepositories(ctx context.Context, manager string) bool {
 	if manager != "dnf" && manager != "yum" {
 		return false
+	}
+	if manager == "dnf" {
+		enableCRBRepository(ctx, manager)
 	}
 	output, runErr := runPackageCommand(ctx, manager, []string{"install", "-y", "epel-release"})
 	if runErr != nil || ctx.Err() != nil || fatalPackageError(output) {
 		return false
 	}
-	_, _ = runPackageCommand(ctx, manager, []string{"update", "-y"})
-	return true
+	output, runErr = runPackageCommand(ctx, manager, []string{"update", "-y"})
+	return runErr == nil && ctx.Err() == nil && !fatalPackageError(output)
+}
+
+// enableCRBRepository best-effort enables the CodeReady Builder (CRB) /
+// PowerTools repository on EL9-family hosts. Many EPEL packages depend on it
+// (chromium dependency resolution included), so it must be enabled before
+// epel-release on dnf hosts. Every failure is skipped: hosts without CRB (or
+// without the config-manager plugin) simply proceed with what they have.
+func enableCRBRepository(ctx context.Context, manager string) {
+	if manager != "dnf" {
+		return
+	}
+	// dnf config-manager is provided by dnf-plugins-core.
+	_, _ = runPackageCommand(ctx, manager, []string{"install", "-y", "dnf-plugins-core"})
+	if ctx.Err() != nil {
+		return
+	}
+	output, runErr := runPackageCommand(ctx, manager, []string{"config-manager", "--set-enabled", "crb"})
+	if runErr == nil && ctx.Err() == nil && !fatalPackageError(output) {
+		return
+	}
+	// AlmaLinux/Rocky 9 also ship a crb helper script; RHEL proper needs
+	// subscription-manager instead and is left untouched.
+	_, _ = runPackageCommand(ctx, "crb", []string{"enable"})
 }
 
 // packageManagerPrecondition refreshes package metadata before a fixed install
@@ -432,22 +669,23 @@ func packageManagerPrecondition(ctx context.Context, manager string) bool {
 }
 
 // installCandidateGroup tries every candidate name in a group until one
-// installs. A hard error (timeout, authorization) aborts; otherwise it reports
-// whether the group could be installed at all.
-func installCandidateGroup(ctx context.Context, manager, name string, group []string) (bool, error) {
+// installs. A hard error (timeout, authorization) aborts; otherwise it returns
+// the installed candidate name, or an empty string when every candidate was
+// unavailable.
+func installCandidateGroup(ctx context.Context, manager, name string, group []string) (string, error) {
 	for _, candidate := range group {
 		output, runErr := runPackageCommand(ctx, manager, installArguments(manager, []string{candidate}))
 		if runErr == nil {
-			return true, nil
+			return candidate, nil
 		}
 		if ctx.Err() != nil {
-			return false, errors.New("服务器安装超时，请检查网络与包管理器状态后重试")
+			return "", errors.New("服务器安装超时，请检查网络与包管理器状态后重试")
 		}
 		if fatalPackageError(output) {
-			return false, packageInstallFailure(name, output, runErr, ctx)
+			return "", packageInstallFailure(name, output, runErr, ctx)
 		}
 	}
-	return false, nil
+	return "", nil
 }
 
 // fatalPackageError reports whether a package-manager failure is environmental

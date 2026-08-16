@@ -3391,6 +3391,17 @@ func (s *server) systemServiceHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"output": output})
+	case "enable-startup", "disable-startup":
+		if !system.ServiceInstalled() {
+			writeError(w, http.StatusConflict, "请先安装后台服务，再设置开机自启。")
+			return
+		}
+		output, err := system.SetStartupEnabled(input.Action == "enable-startup")
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"output": output})
 	case "install":
 		if system.ServiceInstalled() {
 			writeError(w, http.StatusConflict, "后台服务已安装；请使用启动或重启服务。")

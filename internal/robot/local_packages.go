@@ -323,8 +323,11 @@ func removeLocalPackage(root, source string) (Result, error) {
 }
 
 // removeLocalPackageByName removes a package selected from the backpack UI.
-// The selected package name is resolved by its package.json rather than being
-// used as a filesystem path, so a request cannot escape packages/.
+// A failed install can leave a directory without a valid package.json; the
+// backpack still lists it by its directory name, so deletion must accept the
+// same identifier instead of requiring a parseable manifest. The requested
+// name is validated before it is ever compared with directory names, so a
+// request cannot escape packages/.
 func removeLocalPackageByName(root, packageName string) (Result, error) {
 	if !packageNamePattern.MatchString(packageName) {
 		return Result{}, errors.New("本地插件包名无效")
@@ -337,27 +340,67 @@ func removeLocalPackageByName(root, packageName string) (Result, error) {
 	if err != nil {
 		return Result{}, fmt.Errorf("无法读取背包：%w", err)
 	}
+	type candidate struct {
+		name   string
+		target string
+	}
+	candidates := make([]candidate, 0, len(entries))
 	for _, entry := range entries {
 		if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
 			continue
 		}
 		target := filepath.Join(directory, entry.Name())
-		data, readErr := os.ReadFile(filepath.Join(target, "package.json"))
-		if readErr != nil {
+		if name := packageManifestName(target); name != "" {
+			candidates = append(candidates, candidate{name: name, target: target})
 			continue
 		}
-		var manifest struct {
-			Name string `json:"name"`
+		// Invalid leftover directory (failed install): the backpack shows the
+		// directory name, so that identifier must be removable as well.
+		candidates = append(candidates, candidate{name: entry.Name(), target: target})
+		if strings.HasPrefix(entry.Name(), "@") {
+			scopeEntries, scopeErr := os.ReadDir(target)
+			if scopeErr != nil {
+				continue
+			}
+			for _, child := range scopeEntries {
+				if !child.IsDir() || strings.HasPrefix(child.Name(), ".") {
+					continue
+				}
+				childTarget := filepath.Join(target, child.Name())
+				name := entry.Name() + "/" + child.Name()
+				if manifestName := packageManifestName(childTarget); manifestName != "" {
+					name = manifestName
+				}
+				candidates = append(candidates, candidate{name: name, target: childTarget})
+			}
 		}
-		if json.Unmarshal(data, &manifest) != nil || manifest.Name != packageName {
+	}
+	for _, item := range candidates {
+		if item.name != packageName {
 			continue
 		}
-		if err := os.RemoveAll(target); err != nil {
+		if err := os.RemoveAll(item.target); err != nil {
 			return Result{}, fmt.Errorf("移除本地插件包失败：%w", err)
 		}
-		return Result{Path: target, Output: "已从背包移除 " + packageName + "。"}, nil
+		return Result{Path: item.target, Output: "已从背包移除 " + packageName + "。"}, nil
 	}
 	return Result{}, fmt.Errorf("背包中没有 %s", packageName)
+}
+
+// packageManifestName returns the package name declared by a directory's
+// package.json, or an empty string when the manifest is missing or invalid.
+func packageManifestName(directory string) string {
+	data, err := os.ReadFile(filepath.Join(directory, "package.json"))
+	if err != nil {
+		return ""
+	}
+	var manifest struct {
+		Name string `json:"name"`
+	}
+	if json.Unmarshal(data, &manifest) != nil || manifest.Name == "" {
+		return ""
+	}
+	return manifest.Name
 }
 
 // replaceLocalPackage downloads the selected published npm version before the

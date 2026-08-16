@@ -5382,8 +5382,11 @@ function EnvironmentPage({
 }) {
   const checks = report?.checks ?? []
   const requiredChecks = checks.filter(check => !check.optional)
-  const readyCount = requiredChecks.filter(check => check.status === 'ready').length
-  const allReady = requiredChecks.length > 0 && readyCount === requiredChecks.length
+  const readyCount = requiredChecks.filter(
+    check => check.status === 'ready'
+  ).length
+  const allReady =
+    requiredChecks.length > 0 && readyCount === requiredChecks.length
   return (
     <section className="workspace-content system-feature-page mx-auto max-w-215">
       {!sidebarLayout && (
@@ -5828,7 +5831,9 @@ function SystemPluginCenter({
     setPluginUploadError('')
     try {
       const installed = await uploadPluginArchiveAction(file).unwrap()
-      setMessage(`已上传并安装“${installed.name}”。现在可以点击「启动」加载它。`)
+      setMessage(
+        `已上传并安装“${installed.name}”。现在可以点击「启动」加载它。`
+      )
       onRefresh()
     } catch (reason) {
       setPluginUploadError(operationErrorMessage(reason, '插件上传未完成。'))
@@ -6060,7 +6065,10 @@ function SystemPluginCenter({
       )}
       {(!sidebarLayout || pluginView === 'development') &&
         developmentItems.length > 0 && (
-          <section className="setup-plugin-development-list" aria-label="已登记源码">
+          <section
+            className="setup-plugin-development-list"
+            aria-label="已登记源码"
+          >
             {developmentItems.map(session => {
               const developmentStatus = session.busy
                 ? `正在${session.state === 'starting' ? '启动' : session.state === 'stopping' ? '停止' : '构建'}`
@@ -6078,13 +6086,18 @@ function SystemPluginCenter({
                   data-state={developmentState}
                 >
                   <div className="setup-plugin-development-card-main">
-                    <span className="setup-plugin-development-card-icon" aria-hidden="true">
+                    <span
+                      className="setup-plugin-development-card-icon"
+                      aria-hidden="true"
+                    >
                       <Code2 className="size-5" />
                     </span>
                     <div className="min-w-0">
                       <div className="setup-plugin-development-card-title">
                         <strong>{session.name}</strong>
-                        <span className="setup-plugin-development-badge">源码开发</span>
+                        <span className="setup-plugin-development-badge">
+                          源码开发
+                        </span>
                         <span
                           className="setup-plugin-development-state"
                           data-state={developmentState}
@@ -6097,13 +6110,19 @@ function SystemPluginCenter({
                         className="setup-plugin-development-source"
                         title={session.source}
                       >
-                        <Folder className="size-3.5 shrink-0" aria-hidden="true" />
+                        <Folder
+                          className="size-3.5 shrink-0"
+                          aria-hidden="true"
+                        />
                         <span>{session.source}</span>
                       </code>
-                      {session.privileges?.length || session.services?.length ? (
+                      {session.privileges?.length ||
+                      session.services?.length ? (
                         <div className="setup-plugin-development-meta">
                           {session.privileges?.length ? (
-                            <span title={`权限：${session.privileges.join('、')}`}>
+                            <span
+                              title={`权限：${session.privileges.join('、')}`}
+                            >
                               <Shield className="size-3.5" aria-hidden="true" />
                               {session.privileges.join('、')}
                             </span>
@@ -6117,7 +6136,10 @@ function SystemPluginCenter({
                                 )
                                 .join('、')}
                             >
-                              <Network className="size-3.5" aria-hidden="true" />
+                              <Network
+                                className="size-3.5"
+                                aria-hidden="true"
+                              />
                               {session.services
                                 .map(
                                   service =>
@@ -6197,7 +6219,9 @@ function SystemPluginCenter({
                       variant="secondary"
                       size="sm"
                       disabled={
-                        removingDevelopment || runningDevelopment || session.busy
+                        removingDevelopment ||
+                        runningDevelopment ||
+                        session.busy
                       }
                       onClick={() => void removeDevelopmentSession(session)}
                     >
@@ -6445,7 +6469,9 @@ function SystemPluginCenter({
               <Loader2 className="size-6 animate-spin text-slate-400 dark:text-slate-500" />
             }
             title={
-              pluginView === 'market' ? '正在加载插件市场…' : '正在加载插件列表…'
+              pluginView === 'market'
+                ? '正在加载插件市场…'
+                : '正在加载插件列表…'
             }
             description="正在获取最新数据，请稍候。"
           />
@@ -6471,8 +6497,9 @@ function SystemPluginCenter({
             }
           />
         ))}
-      {isDevelopmentView && developmentItems.length === 0 && (
-        isDevelopmentLoading || isDevelopmentFetching ? (
+      {isDevelopmentView &&
+        developmentItems.length === 0 &&
+        (isDevelopmentLoading || isDevelopmentFetching ? (
           <EmptyState
             icon={
               <Loader2 className="size-6 animate-spin text-slate-400 dark:text-slate-500" />
@@ -6488,8 +6515,7 @@ function SystemPluginCenter({
             title="还没有已登记的源码"
             description="点击上方“添加新源码”，选择本地插件目录开始开发。"
           />
-        )
-      )}
+        ))}
 
       {/* 消息提示 */}
       {message && (
@@ -6819,14 +6845,11 @@ function SetupPluginCenter({ plugin }: { plugin: SetupPlugin }) {
   useEffect(() => {
     setActiveModalBusy(false)
   }, [uiDialogQueue[0]?.requestId])
-  const registerWebviewFrame = useCallback(
-    (id: string, win: Window | null) => {
-      const frames = webviewFrames.current
-      if (win) frames.set(id, win)
-      else frames.delete(id)
-    },
-    []
-  )
+  const registerWebviewFrame = useCallback((id: string, win: Window | null) => {
+    const frames = webviewFrames.current
+    if (win) frames.set(id, win)
+    else frames.delete(id)
+  }, [])
   useEffect(() => {
     const receivePluginBridgeMessage = (event: MessageEvent) => {
       if (event.origin !== window.location.origin) return
@@ -6857,12 +6880,7 @@ function SetupPluginCenter({ plugin }: { plugin: SetupPlugin }) {
           height?: number
         }
         ui?: {
-          kind?:
-            | 'alert'
-            | 'message'
-            | 'modal'
-            | 'notification'
-            | 'set-busy'
+          kind?: 'alert' | 'message' | 'modal' | 'notification' | 'set-busy'
           busy?: boolean
           title?: string
           message?: string
@@ -6893,7 +6911,10 @@ function SetupPluginCenter({ plugin }: { plugin: SetupPlugin }) {
         void fetch('/api/v1/system/capabilities/finder', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ pluginId: plugin.id, pickerId: value.pickerId })
+          body: JSON.stringify({
+            pluginId: plugin.id,
+            pickerId: value.pickerId
+          })
         })
           .then(async response => {
             const body = (await response.json()) as {
@@ -7193,9 +7214,7 @@ function SetupPluginCenter({ plugin }: { plugin: SetupPlugin }) {
           webview={webview}
           onFrame={registerWebviewFrame}
           onClose={() =>
-            setHostWebviews(list =>
-              list.filter(item => item.id !== webview.id)
-            )
+            setHostWebviews(list => list.filter(item => item.id !== webview.id))
           }
           onMinimize={() =>
             setHostWebviews(list =>
@@ -7375,8 +7394,8 @@ function BackpackPanel({
   const enabledApps = new Set(appsData?.items ?? [])
   const isPrivateBackpack = Boolean(
     manifest?.private &&
-      manifest.workspacesEnabled &&
-      manifest.workspaces?.includes('packages/*')
+    manifest.workspacesEnabled &&
+    manifest.workspaces?.includes('packages/*')
   )
   useEffect(() => {
     if (selectedName && !items.some(item => item.name === selectedName))
@@ -7458,7 +7477,12 @@ function BackpackPanel({
                 'relative ml-0.5 inline-flex shrink-0 items-center rounded-full transition',
                 isPrivateBackpack ? 'bg-brand-600' : 'bg-slate-300'
               )}
-              style={{ boxSizing: 'border-box', height: 16, padding: 2, width: 28 }}
+              style={{
+                boxSizing: 'border-box',
+                height: 16,
+                padding: 2,
+                width: 28
+              }}
               aria-hidden="true"
             >
               <span
@@ -7591,6 +7615,17 @@ function BackpackPanel({
                         : enabledApps.has(item.name)
                           ? '停用'
                           : '启动'}
+                    </button>
+                  )}
+                  {!item.valid && (
+                    <button
+                      className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md border border-red-200 px-2.5 text-xs font-semibold text-red-700 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
+                      disabled={busy}
+                      onClick={() => void onRemove(item.name)}
+                      title="删除安装失败遗留的目录"
+                    >
+                      <Trash2 className="size-3.5" />
+                      删除
                     </button>
                   )}
                 </div>
@@ -7731,7 +7766,7 @@ function BackpackPackageManager({
             onClick={() => void onRemove(item.name)}
           >
             <Trash2 className="size-4" />
-            卸载
+            {item.valid ? '卸载' : '删除目录'}
           </button>
         </>
       }
@@ -9352,18 +9387,20 @@ function RuntimePanel({
               className="primary-button gap-1.5"
               disabled={busy || !persistentReady}
               title={
-                localRunning
-                  ? '启动会自动停止当前正在运行的进程。'
-                  : !persistentReady
-                    ? '补齐 start 脚本和 PM2 配置后可使用。'
-                    : ''
+                pm2Running
+                  ? '重新加载 pm2.config（pm2 reload），使配置改动生效且尽量不中断服务。'
+                  : localRunning
+                    ? '启动会自动停止当前正在运行的进程。'
+                    : !persistentReady
+                      ? '补齐 start 脚本和 PM2 配置后可使用。'
+                      : ''
               }
               onClick={() =>
                 void askStart(
                   pm2Running ? 'pm2-reload' : 'pm2',
-                  pm2Running ? '应用服务设置' : '启动服务',
+                  pm2Running ? '重载配置' : '启动服务',
                   pm2Running
-                    ? '会尽量不中断服务地应用最新设置。'
+                    ? '会重新加载 pm2.config（pm2 reload），使配置改动生效且尽量不中断正在运行的机器人。'
                     : '会在后台启动机器人。'
                 )
               }
@@ -9373,7 +9410,7 @@ function RuntimePanel({
               ) : (
                 <Play className="size-4" />
               )}
-              {pm2Running ? '应用设置' : '启动服务'}
+              {pm2Running ? '重载配置' : '启动服务'}
             </button>
           </header>
           <div className="flex flex-wrap items-center justify-end gap-2 px-4 py-3">
@@ -9410,8 +9447,10 @@ function RuntimePanel({
                   className="secondary-button gap-1.5"
                   disabled={busy}
                   onClick={() =>
-                    ask('更新服务', '会尽量不中断服务地应用最新设置。', () =>
-                      onRun('pm2-reload')
+                    ask(
+                      '重载配置',
+                      '会重新加载 pm2.config（pm2 reload），使配置改动生效且尽量不中断正在运行的机器人。',
+                      () => onRun('pm2-reload')
                     )
                   }
                 >
@@ -10143,7 +10182,20 @@ function ReadonlyConsole({
     const parts = shellCommand.split(/(\s+)/)
     const tokenIndex = parts.length - 1
     const token = parts[tokenIndex] ?? ''
-    const commandNames = ['cd', 'clear', 'cls', 'dir', 'git', 'go', 'ls', 'npm', 'node', 'pnpm', 'pwd', 'yarn']
+    const commandNames = [
+      'cd',
+      'clear',
+      'cls',
+      'dir',
+      'git',
+      'go',
+      'ls',
+      'npm',
+      'node',
+      'pnpm',
+      'pwd',
+      'yarn'
+    ]
     const completingCommand = parts.length === 1
     if (completingCommand) {
       const matches = commandNames.filter(name => name.startsWith(token))
@@ -10151,14 +10203,16 @@ function ReadonlyConsole({
       return
     }
     const normalizedToken = token.replace(/\\/g, '/')
-    if (normalizedToken.split('/').includes('..') || normalizedToken.startsWith('/'))
+    if (
+      normalizedToken.split('/').includes('..') ||
+      normalizedToken.startsWith('/')
+    )
       return
     const separator = normalizedToken.lastIndexOf('/')
     const base = separator >= 0 ? normalizedToken.slice(0, separator + 1) : ''
-    const prefix = separator >= 0 ? normalizedToken.slice(separator + 1) : normalizedToken
-    const directory = [root, shellDirectory, base]
-      .filter(Boolean)
-      .join('/')
+    const prefix =
+      separator >= 0 ? normalizedToken.slice(separator + 1) : normalizedToken
+    const directory = [root, shellDirectory, base].filter(Boolean).join('/')
     try {
       const response = await fetch(
         `/api/v1/directories?${new URLSearchParams({ path: directory, files: 'true' })}`
@@ -10178,22 +10232,18 @@ function ReadonlyConsole({
           directory: false
         }))
       ].filter(item => item.name.startsWith(prefix))
-      const names = candidates
-        .map(item => item.name)
+      const names = candidates.map(item => item.name)
       if (names.length === 1) {
         const match = candidates[0]
         parts[tokenIndex] = base + names[0] + (match?.directory ? '/' : '')
         setShellCommand(parts.join(''))
         return
       }
-      const commonPrefix = names.reduce(
-        (shared, name) => {
-          let index = 0
-          while (index < shared.length && shared[index] === name[index]) index++
-          return shared.slice(0, index)
-        },
-        names[0] ?? ''
-      )
+      const commonPrefix = names.reduce((shared, name) => {
+        let index = 0
+        while (index < shared.length && shared[index] === name[index]) index++
+        return shared.slice(0, index)
+      }, names[0] ?? '')
       if (commonPrefix.length > prefix.length) {
         parts[tokenIndex] = base + commonPrefix
         setShellCommand(parts.join(''))
@@ -10543,7 +10593,8 @@ function PM2LogsPanel({
         days?: PM2LogDay[]
         error?: string
       }
-      if (!response.ok) throw new Error(result.error || '无法读取 PM2 日志日期。')
+      if (!response.ok)
+        throw new Error(result.error || '无法读取 PM2 日志日期。')
       setDays(result.days ?? [])
     } catch {
       setDays([])
@@ -10637,13 +10688,15 @@ function PM2LogsPanel({
     const el = outputRef.current
     if (!el || !followLatest.current) return
     const frame = window.requestAnimationFrame(() => {
-      if (outputRef.current) outputRef.current.scrollTop = outputRef.current.scrollHeight
+      if (outputRef.current)
+        outputRef.current.scrollTop = outputRef.current.scrollHeight
     })
     return () => window.cancelAnimationFrame(frame)
   }, [open, visibleLines])
 
   const dayIndex = days.findIndex(day => day.date === date)
-  const olderDay = dayIndex >= 0 && dayIndex + 1 < days.length ? days[dayIndex + 1].date : ''
+  const olderDay =
+    dayIndex >= 0 && dayIndex + 1 < days.length ? days[dayIndex + 1].date : ''
   const newerDay = dayIndex > 0 ? days[dayIndex - 1].date : ''
   const selectDay = (target: string) => {
     setDate(target)
@@ -10725,11 +10778,7 @@ function PM2LogsPanel({
             onClick={toggleLive}
             title={live ? '暂停实时跟随' : '实时跟随最新记录'}
           >
-            {live ? (
-              <Pause className="size-3" />
-            ) : (
-              <Radio className="size-3" />
-            )}
+            {live ? <Pause className="size-3" /> : <Radio className="size-3" />}
             {live ? '跟随中' : '实时'}
           </button>
           <select
@@ -10782,7 +10831,10 @@ function PM2LogsPanel({
             ].map(([value, label]) => (
               <button
                 key={value}
-                className={cn('pm2-audit-source-btn', source === value && 'active')}
+                className={cn(
+                  'pm2-audit-source-btn',
+                  source === value && 'active'
+                )}
                 onClick={() => {
                   setSource(value)
                   setPage(1)
@@ -10825,9 +10877,7 @@ function PM2LogsPanel({
             更新
           </button>
           <span className="pm2-audit-page">
-            {live
-              ? '实时'
-              : `第 ${data?.page ?? page} 页`}
+            {live ? '实时' : `第 ${data?.page ?? page} 页`}
             {data ? ` · 共 ${data.total} 条匹配` : ''}
             {data?.truncated ? ' · 已截断' : ''}
           </span>
