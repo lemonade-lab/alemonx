@@ -19,6 +19,7 @@ import (
 	"golang.org/x/mod/semver"
 
 	"alemonx/internal/catalog"
+	"alemonx/internal/resources"
 	"alemonx/internal/system"
 )
 
@@ -54,7 +55,8 @@ func (Manager) StreamPM2Logs(ctx context.Context, root string, onLine func(strin
 	if err != nil {
 		return err
 	}
-	command := exec.CommandContext(ctx, nodeToolPath("npx"), "--yes", "pm2", "logs", "--raw", "--lines", "0")
+	name, args := pm2Launcher(path)
+	command := exec.CommandContext(ctx, name, append(args, "logs", "--raw", "--lines", "0")...)
 	command.Dir = path
 	applyManagedNodeEnvironment(command)
 	stdout, err := command.StdoutPipe()
@@ -951,7 +953,8 @@ func (Manager) PM2Logs(root string, page int) (PM2LogPage, error) {
 	}
 	const pageSize = 120
 	requested := page * pageSize
-	output, err := run(root, "npx", "--yes", "pm2", "logs", "--lines", strconv.Itoa(requested), "--nostream")
+	pm2Name, pm2Args := pm2Launcher(root)
+	output, err := run(root, pm2Name, append(pm2Args, "logs", "--lines", strconv.Itoa(requested), "--nostream")...)
 	if err != nil {
 		return PM2LogPage{}, fmt.Errorf("无法读取 PM2 日志：%w", err)
 	}
@@ -970,6 +973,7 @@ type PM2Process struct {
 	Namespace string  `json:"namespace"`
 	Status    string  `json:"status"`
 	PID       int     `json:"pid"`
+	CWD       string  `json:"cwd"`
 	Memory    int64   `json:"memory"`
 	CPU       float64 `json:"cpu"`
 	Uptime    int64   `json:"uptime"`
@@ -999,10 +1003,11 @@ func (Manager) PM2Processes(root string) ([]PM2Process, error) {
 // well, so before returning we strip everything before the JSON array so the
 // caller always sees a parseable payload.
 func pm2JList(root string) (string, error) {
-	timeout := commandTimeout("npx", "pm2", "jlist")
+	name, args := pm2Launcher(root)
+	timeout := commandTimeout(name, args...)
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, nodeToolPath("npx"), "--yes", "pm2", "jlist")
+	cmd := exec.CommandContext(ctx, name, append(args, "jlist")...)
 	cmd.Dir = root
 	cmd.Env = os.Environ()
 	applyManagedNodeEnvironment(cmd)
@@ -1023,11 +1028,101 @@ func pm2JList(root string) (string, error) {
 	return stripPM2Banner(text), nil
 }
 
+// pm2Launcher resolves how to run PM2. Project-local installations are
+// preferred because their version matches the project lockfile; otherwise the
+// bundled PM2 keeps the workbench usable offline; npx remains the last resort
+// and downloads only when nothing else is available.
+func pm2Launcher(root string) (string, []string) {
+	if localPM2(root) {
+		return nodeToolPath("npx"), []string{"--no-install", "pm2"}
+	}
+	if command, args, ok := resources.ToolCommand("pm2"); ok {
+		return command, args
+	}
+	return nodeToolPath("npx"), []string{"--yes", "pm2"}
+}
+
+func localPM2(root string) bool {
+	_, err := os.Stat(filepath.Join(root, "node_modules", "pm2"))
+	return err == nil
+}
+
+var pm2ConfigNamePattern = regexp.MustCompile("name:\\s*[`\"]([^`\"]+)[`\"]")
+
+// pm2ConfigAppName extracts the application name declared in a generated
+// pm2.config.cjs. The name embeds a digest of the original project path, so it
+// is the only stable identity that survives the directory being moved. Custom
+// configs that cannot be parsed are left alone (empty result).
+func pm2ConfigAppName(root string) string {
+	data, err := os.ReadFile(filepath.Join(root, "pm2.config.cjs"))
+	if err != nil {
+		return ""
+	}
+	match := pm2ConfigNamePattern.FindSubmatch(data)
+	if len(match) < 2 {
+		return ""
+	}
+	return string(match[1])
+}
+
+// pm2StaleRegistration reports whether a registered PM2 app for the given
+// config name points at a different working directory than the project root.
+func pm2StaleRegistration(processes []PM2Process, appName, root string) bool {
+	for _, process := range processes {
+		if process.Name != appName {
+			continue
+		}
+		return !sameWorkspacePath(process.CWD, root)
+	}
+	return false
+}
+
+// reconcilePM2Registration deletes a stale PM2 registration whose recorded
+// working directory no longer matches the project root, so the next
+// start/restart registers the process at the current location instead of
+// resurrecting the old path. It reports whether a stale registration was
+// removed. jlist failures are ignored so a broken daemon never blocks startup.
+func reconcilePM2Registration(root string) (bool, error) {
+	appName := pm2ConfigAppName(root)
+	if appName == "" {
+		return false, nil
+	}
+	output, err := pm2JList(root)
+	if err != nil {
+		return false, nil
+	}
+	processes, err := parsePM2Processes(output)
+	if err != nil {
+		return false, nil
+	}
+	if !pm2StaleRegistration(processes, appName, root) {
+		return false, nil
+	}
+	command, args := pm2Launcher(root)
+	args = append(args, "delete", appName)
+	if _, deleteErr := run(root, command, args...); deleteErr != nil {
+		return true, fmt.Errorf("清理旧 PM2 登记失败（目录已移动）：%w", deleteErr)
+	}
+	return true, nil
+}
+
 // stripPM2Banner removes any non-JSON prefix (PM2 banner/notice) so the caller
 // parses only the JSON array or object that follows.
 func stripPM2Banner(text string) string {
-	if start := strings.IndexByte(text, '['); start >= 0 {
-		return text[start:]
+	// PM2 prints banners and daemon-spawn notices such as "[PM2] Spawning
+	// PM2 daemon ..." to stdout on first run. Only a real JSON array start
+	// ("[{...}]" or "[]") marks the payload.
+	for index := 0; index < len(text); index++ {
+		if text[index] != '[' {
+			continue
+		}
+		next := byte(0)
+		if index+1 < len(text) {
+			next = text[index+1]
+		}
+		if next == '{' || next == ']' {
+			return text[index:]
+		}
 	}
 	if start := strings.IndexByte(text, '{'); start >= 0 {
 		return text[start:]
@@ -1048,6 +1143,7 @@ func parsePM2Processes(output string) ([]PM2Process, error) {
 			Uptime    int64  `json:"pm_uptime"`
 			ErrorLog  string `json:"pm_err_log_path"`
 			OutputLog string `json:"pm_out_log_path"`
+			CWD       string `json:"pm_cwd"`
 		} `json:"pm2_env"`
 		Monit struct {
 			Memory int64   `json:"memory"`
@@ -1065,6 +1161,7 @@ func parsePM2Processes(output string) ([]PM2Process, error) {
 			Namespace: p.PM2Env.Namespace,
 			Status:    strings.ToLower(p.Status),
 			PID:       p.PID,
+			CWD:       p.PM2Env.CWD,
 			Memory:    p.Monit.Memory,
 			CPU:       p.Monit.CPU,
 			Uptime:    p.PM2Env.Uptime,
@@ -1297,6 +1394,18 @@ func (m Manager) Run(root, action, message, packageName, version, tag, token str
 			return Result{Path: root, Output: dependencyOutput}, dependencyErr
 		}
 	}
+	// A robot directory may have been moved since the last PM2 start. The PM2
+	// daemon keeps the old absolute cwd in its registration, so delete a stale
+	// registration before start/restart/reload re-registers it here.
+	if map[string]bool{"pm2": true, "pm2-restart": true, "pm2-reload": true}[action] {
+		relocated, relocateErr := reconcilePM2Registration(root)
+		if relocateErr != nil {
+			return Result{Path: root, Output: dependencyOutput}, relocateErr
+		}
+		if relocated {
+			dependencyOutput = strings.TrimSpace(dependencyOutput + "\n检测到机器人目录已移动，已重新登记 PM2 进程。")
+		}
+	}
 	manager := projectPackageManager(root)
 	var name string
 	var args []string
@@ -1367,15 +1476,20 @@ func (m Manager) Run(root, action, message, packageName, version, tag, token str
 	case "pm2-stop":
 		name, args = manager, []string{"run", "stop"}
 	case "pm2-restart":
-		name, args = "npx", []string{"--yes", "pm2", "restart", "pm2.config.cjs", "--update-env"}
+		name, args = pm2Launcher(root)
+		args = append(args, "restart", "pm2.config.cjs", "--update-env")
 	case "pm2-reload":
-		name, args = "npx", []string{"--yes", "pm2", "reload", "pm2.config.cjs", "--update-env"}
+		name, args = pm2Launcher(root)
+		args = append(args, "reload", "pm2.config.cjs", "--update-env")
 	case "pm2-delete":
-		name, args = "npx", []string{"--yes", "pm2", "delete", "pm2.config.cjs"}
+		name, args = pm2Launcher(root)
+		args = append(args, "delete", "pm2.config.cjs")
 	case "pm2-status":
-		name, args = "npx", []string{"--yes", "pm2", "list"}
+		name, args = pm2Launcher(root)
+		args = append(args, "list")
 	case "pm2-logs":
-		name, args = "npx", []string{"--yes", "pm2", "logs", "--lines", "120", "--nostream"}
+		name, args = pm2Launcher(root)
+		args = append(args, "logs", "--lines", "120", "--nostream")
 	case "install-package":
 		if !allowedInstallPackage(packageName) {
 			return Result{}, errors.New("不支持的 AlemonJS 包")
@@ -1449,7 +1563,8 @@ func (m Manager) Run(root, action, message, packageName, version, tag, token str
 		output, runErr = run(root, name, args...)
 	}
 	if runErr == nil && (action == "pm2" || action == "pm2-restart" || action == "pm2-reload") {
-		saved, saveErr := run(root, "npx", "--yes", "pm2", "save")
+		saveName, saveArgs := pm2Launcher(root)
+		saved, saveErr := run(root, saveName, append(saveArgs, "save")...)
 		output = strings.TrimSpace(output + "\n" + saved)
 		if saveErr != nil {
 			return Result{Path: root, Output: output}, fmt.Errorf("PM2 已启动，但保存重启恢复清单失败：%w", saveErr)
@@ -1670,6 +1785,15 @@ func packageManagerCommand(root, manager string, args ...string) (*exec.Cmd, str
 		HideWindow(command)
 		return command, ""
 	}
+	if manager == "yarn" {
+		if command, prefix, ok := resources.ToolCommand("yarn"); ok {
+			executable := exec.Command(command, append(prefix, args...)...)
+			executable.Dir = root
+			applyManagedNodeEnvironment(executable)
+			HideWindow(executable)
+			return executable, "使用内置 Yarn 运行"
+		}
+	}
 	packageName := ""
 	switch manager {
 	case "yarn":
@@ -1853,6 +1977,12 @@ func commandTimeout(name string, args ...string) time.Duration {
 		}
 	}
 	if base == "npm" || base == "yarn" || base == "pnpm" || base == "npx" {
+		return 20 * time.Minute
+	}
+	// Bundled tools run through `node <workspace>/packages/<name>/...` and
+	// should keep the generous package-manager timeout instead of the generic
+	// command timeout.
+	if base == "node" && len(args) > 0 && strings.Contains(filepath.ToSlash(args[0]), "/packages/") {
 		return 20 * time.Minute
 	}
 	return 2 * time.Minute

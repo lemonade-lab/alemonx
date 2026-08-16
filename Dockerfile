@@ -9,12 +9,22 @@ RUN corepack enable && yarn install --frozen-lockfile --non-interactive
 COPY frontend/ ./
 RUN yarn build
 
+# Install the embedded Yarn with its locked dependency tree so the Go binary
+# always ships a package manager that never relies on npm. Optional tools such
+# as PM2 are provisioned on demand with this Yarn at runtime instead of being
+# embedded.
+FROM node:22-bookworm-slim AS resources
+WORKDIR /out
+COPY resources/packages/yarn/package.json resources/packages/yarn/package-lock.json ./yarn/
+RUN (cd yarn && npm ci --no-bin-links --ignore-scripts --no-audit --no-fund)
+
 FROM golang:1.23-bookworm AS builder
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . ./
 COPY --from=frontend /src/dist ./dist
+COPY --from=resources /out ./resources/packages
 
 ARG TARGETOS=linux
 ARG TARGETARCH=amd64
@@ -34,14 +44,16 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates curl git lsof openssh-client tini \
   && rm -rf /var/lib/apt/lists/* \
   && corepack enable \
-  && mkdir -p /app /data /workspace \
-  && chown -R node:node /app /data /workspace
+  && mkdir -p /app /app/workspace /data \
+  && chown -R node:node /app /data
 WORKDIR /app
 COPY --from=builder /out/alx /app/alx
 USER node
 ENV HOME=/data \
     XDG_CONFIG_HOME=/data/config \
     XDG_CACHE_HOME=/data/cache \
+    ALX_WORKSPACE=/app/workspace \
+    ALEMONJS_SETUP_ROOTS=/app/workspace \
     NODE_ENV=production
 EXPOSE 17390
 ENTRYPOINT ["/usr/bin/tini", "--", "/app/alx"]

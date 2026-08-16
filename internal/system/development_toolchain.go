@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"alemonx/internal/resources"
 )
 
 var (
@@ -28,6 +30,13 @@ func PrepareDevelopmentCommand(program string, args []string) (string, []string,
 	}
 	if program != "yarn" && program != "pnpm" {
 		return program, append([]string(nil), args...), environment, ""
+	}
+	// The bundled Yarn works offline, so it outranks Corepack/npx which may
+	// need the registry on first use.
+	if program == "yarn" {
+		if command, prefix, ok := resources.ToolCommand("yarn"); ok {
+			return command, append(prefix, args...), environment, "未找到独立的 Yarn，已使用内置 Yarn。"
+		}
 	}
 	if corepack, err := ResolveDevelopmentCommand("corepack"); err == nil {
 		return corepack, append([]string{program}, args...), environment, "未找到独立的 " + program + "，已使用 Node.js 自带的 Corepack。"

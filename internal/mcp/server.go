@@ -25,20 +25,22 @@ import (
 	"alemonx/internal/robot"
 	"alemonx/internal/setupplugin"
 	"alemonx/internal/system"
+	"alemonx/internal/workspace"
 )
 
 const protocolVersion = "2025-06-18"
 
 type Server struct {
-	version   string
-	templates fs.FS
-	robots    robot.Manager
-	policy    Policy
-	mu        sync.RWMutex
-	tasks     map[string]operationTask
-	processes map[string]*exec.Cmd
-	stopping  map[string]bool
-	taskID    atomic.Uint64
+	version       string
+	templates     fs.FS
+	workspaceRoot string
+	robots        robot.Manager
+	policy        Policy
+	mu            sync.RWMutex
+	tasks         map[string]operationTask
+	processes     map[string]*exec.Cmd
+	stopping      map[string]bool
+	taskID        atomic.Uint64
 }
 
 // Policy limits which local filesystem roots this MCP process may manage.
@@ -67,6 +69,26 @@ func NewServer(version string, templates fs.FS) *Server {
 
 func NewServerWithPolicy(version string, templates fs.FS, policy Policy) *Server {
 	return &Server{version: version, templates: templates, policy: policy, tasks: map[string]operationTask{}, processes: map[string]*exec.Cmd{}, stopping: map[string]bool{}}
+}
+
+// NewServerWithPolicyAndWorkspace is NewServerWithPolicy plus an explicit
+// workspace root used as the default destination for new projects.
+func NewServerWithPolicyAndWorkspace(version string, templates fs.FS, policy Policy, workspaceRoot string) *Server {
+	server := NewServerWithPolicy(version, templates, policy)
+	server.workspaceRoot = workspaceRoot
+	return server
+}
+
+func (s *Server) botsDir() (string, error) {
+	root := s.workspaceRoot
+	if root == "" {
+		resolved, err := workspace.ResolveRoot("")
+		if err != nil {
+			return "", fmt.Errorf("无法解析工作区目录：%w", err)
+		}
+		root = resolved
+	}
+	return filepath.Join(root, "bots"), nil
 }
 
 // HTTPHandler exposes the Streamable HTTP MCP transport at /mcp. The caller
@@ -452,10 +474,10 @@ func (s *Server) execute(name string, arguments json.RawMessage) (string, error)
 		return encodeResult(config)
 	case "alemonjs_save_package_runtime_config":
 		var input struct {
-			Root    string            `json:"root"`
-			Package string            `json:"package"`
-			Values  map[string]any    `json:"values"`
-			Confirm bool              `json:"confirm"`
+			Root    string         `json:"root"`
+			Package string         `json:"package"`
+			Values  map[string]any `json:"values"`
+			Confirm bool           `json:"confirm"`
 		}
 		if err := decodeArguments(arguments, &input); err != nil {
 			return "", err
@@ -672,13 +694,21 @@ func (s *Server) execute(name string, arguments json.RawMessage) (string, error)
 		if !input.Confirm {
 			return "", fmt.Errorf("创建项目会写入磁盘并安装依赖；请在用户明确确认后传 confirm=true")
 		}
-		if err := s.authorizeDestination(input.Config.Destination); err != nil {
-			return "", err
-		}
 		if s.templates == nil {
 			return "", fmt.Errorf("当前运行包未包含项目模板")
 		}
-		result, err := project.NewCreator(s.templates).Create(input.Config)
+		botsDir, err := s.botsDir()
+		if err != nil {
+			return "", err
+		}
+		destination := input.Config.Destination
+		if input.Config.DestinationMode != "custom" {
+			destination = filepath.Join(botsDir, input.Config.Name)
+		}
+		if err := s.authorizeDestination(destination); err != nil {
+			return "", err
+		}
+		result, err := project.NewCreatorForWorkspace(s.templates, botsDir).Create(input.Config)
 		text, marshalErr := encodeResult(result)
 		if marshalErr != nil {
 			return "", marshalErr
@@ -937,7 +967,12 @@ func (s *Server) readResource(id json.RawMessage, params json.RawMessage) rpcRes
 	if err := json.Unmarshal(params, &input); err != nil || input.URI != "alemonjs://mcp/capabilities" {
 		return errorResponse(id, -32602, "资源不存在")
 	}
-	text, err := encodeResult(map[string]any{"version": s.version, "transport": "stdio or protected local Streamable HTTP", "scopes": []string{"project-status", "project-files", "local-packages", "confirmed-project-actions"}, "allowedRoots": s.policy.AllowedRoots, "blocked": []string{"arbitrary shell", "secret files", "git metadata", "dependency directories", "symbolic links"}, "confirmation": "任何写入、项目命令或对外发布都需要 confirm=true；NPM 发布和 GIT 发布还应先执行预检。"})
+	workspaceInfo := map[string]any{}
+	if root, resolveErr := workspace.ResolveRoot(s.workspaceRoot); resolveErr == nil {
+		layout := workspace.Layout{Root: root}
+		workspaceInfo = map[string]any{"root": layout.Root, "templates": layout.Templates(), "bots": layout.Bots()}
+	}
+	text, err := encodeResult(map[string]any{"version": s.version, "transport": "stdio or protected local Streamable HTTP", "workspace": workspaceInfo, "scopes": []string{"project-status", "project-files", "local-packages", "confirmed-project-actions"}, "allowedRoots": s.policy.AllowedRoots, "blocked": []string{"arbitrary shell", "secret files", "git metadata", "dependency directories", "symbolic links"}, "confirmation": "任何写入、项目命令或对外发布都需要 confirm=true；NPM 发布和 GIT 发布还应先执行预检。"})
 	if err != nil {
 		return errorResponse(id, -32603, "资源编码失败")
 	}

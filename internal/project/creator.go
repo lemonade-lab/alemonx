@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"alemonx/internal/pm2config"
+	"alemonx/internal/resources"
 	"alemonx/internal/system"
 )
 
@@ -40,9 +41,19 @@ type Result struct {
 	Logs   []string `json:"logs"`
 }
 
-type Creator struct{ templates fs.FS }
+type Creator struct {
+	templates   fs.FS
+	defaultBots string
+}
 
 func NewCreator(templates fs.FS) *Creator { return &Creator{templates: templates} }
+
+// NewCreatorForWorkspace creates a creator whose "current" destination mode
+// saves new projects into the workspace bots directory instead of the process
+// working directory.
+func NewCreatorForWorkspace(templates fs.FS, botsDir string) *Creator {
+	return &Creator{templates: templates, defaultBots: botsDir}
+}
 
 var validName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$`)
 
@@ -50,7 +61,7 @@ func (c *Creator) Create(config Config) (Result, error) {
 	if err := validate(config); err != nil {
 		return Result{}, err
 	}
-	destination, fallbackNote, err := resolveDestination(config)
+	destination, fallbackNote, err := resolveDestination(config, c.defaultBots)
 	if err != nil {
 		return Result{}, err
 	}
@@ -103,23 +114,31 @@ func (c *Creator) Create(config Config) (Result, error) {
 
 	packageCommand := config.PackageManager
 	packageName := ""
+	packagePrefix := []string{}
 	if !projectCommandAvailable(config.PackageManager) {
+		if config.PackageManager == "yarn" {
+			if command, prefix, ok := resources.ToolCommand("yarn"); ok {
+				log("未找到独立的 Yarn，已使用内置 Yarn 运行（无需联网下载）。")
+				packageCommand = command
+				packagePrefix = prefix
+			}
+		}
 		// Do not try `npm install --global`: that commonly needs administrator
 		// rights. npx is scoped to this one command and keeps a new machine
 		// usable without modifying its global package directory.
-		switch config.PackageManager {
-		case "yarn":
-			packageName = "yarn@1.22.22"
-		case "pnpm":
-			packageName = "pnpm@latest"
-		}
-		if packageName != "" {
+		if len(packagePrefix) == 0 && (config.PackageManager == "yarn" || config.PackageManager == "pnpm") {
+			if config.PackageManager == "yarn" {
+				packageName = "yarn@1.22.22"
+			} else {
+				packageName = "pnpm@latest"
+			}
 			log("未找到 " + strings.ToUpper(config.PackageManager) + "，临时使用 npm 下载并执行；不会修改电脑的全局安装。")
 			packageCommand = "npx"
 		}
 	}
 	log("正在安装项目依赖…")
 	install := map[string][]string{"yarn": {"install"}, "npm": {"install"}, "pnpm": {"install"}}[config.PackageManager]
+	install = append(append([]string{}, packagePrefix...), install...)
 	if packageCommand == "npx" {
 		install = append([]string{"--yes", packageName}, install...)
 	}
@@ -511,6 +530,9 @@ func createCommandTimeout(name string, args ...string) time.Duration {
 	if base == "npm" || base == "yarn" || base == "pnpm" || base == "npx" {
 		return 20 * time.Minute
 	}
+	if base == "node" && len(args) > 0 && strings.Contains(filepath.ToSlash(args[0]), "/packages/") {
+		return 20 * time.Minute
+	}
 	return 5 * time.Minute
 }
 
@@ -574,14 +596,29 @@ func projectCommandAvailable(name string) bool {
 	return err == nil
 }
 
-// resolveDestination returns the effective save destination. In "current" mode
-// the process working directory is used; when it is not writable (for example
-// the read-only /app directory inside container images) the first writable
-// ALEMONJS_SETUP_ROOTS entry becomes the fallback so deployments like Docker
-// can still create projects in their mounted workspace.
-func resolveDestination(config Config) (string, string, error) {
+// resolveDestination returns the effective save destination. In "current"
+// mode the workspace bots directory is used when one is configured; otherwise
+// the process working directory is used with the first writable
+// ALEMONJS_SETUP_ROOTS entry as a fallback (for example the read-only /app
+// directory inside container images).
+func resolveDestination(config Config, defaultBots string) (string, string, error) {
 	if config.DestinationMode != "current" {
 		return config.Destination, "", nil
+	}
+	if strings.TrimSpace(defaultBots) != "" {
+		if err := os.MkdirAll(defaultBots, 0o755); err != nil {
+			if isPermissionError(err) {
+				return "", "", permissionAdvice("在工作区创建机器人目录")
+			}
+			return "", "", fmt.Errorf("无法创建工作区机器人目录 %s：%w", defaultBots, err)
+		}
+		if err := ensureWritableDirectory(defaultBots); err != nil {
+			if isPermissionError(err) {
+				return "", "", permissionAdvice("在工作区创建机器人")
+			}
+			return "", "", err
+		}
+		return defaultBots, "", nil
 	}
 	current, err := os.Getwd()
 	if err != nil {

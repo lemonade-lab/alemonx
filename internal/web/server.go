@@ -42,10 +42,12 @@ import (
 	"alemonx/internal/project"
 	"alemonx/internal/redis"
 	"alemonx/internal/releases"
+	"alemonx/internal/resources"
 	"alemonx/internal/robot"
 	"alemonx/internal/setupplugin"
 	"alemonx/internal/system"
 	"alemonx/internal/systemnetwork"
+	"alemonx/internal/workspace"
 )
 
 var systemPickerIDPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{1,63}$`)
@@ -323,6 +325,8 @@ type server struct {
 	checker            *system.Checker
 	network            *systemnetwork.Manager
 	creator            *project.Creator
+	workspace          workspace.Layout
+	workspaceRequested string
 	robots             robot.Manager
 	plugins            *setupplugin.Registry
 	pluginWatcher      *setupplugin.Watcher
@@ -659,6 +663,9 @@ type ServerOptions struct {
 	RedisPort int
 	// RedisDisabled forbids starting the temporary Redis.
 	RedisDisabled bool
+	// WorkspaceRoot overrides the runtime workspace directory (--workspace or
+	// ALX_WORKSPACE). When empty the workspace package resolves a default.
+	WorkspaceRoot string
 }
 
 func NewServerRuntime(version string, staticFiles fs.FS, templateFiles ...fs.FS) *ServerRuntime {
@@ -981,12 +988,27 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 		}
 	}
 	if len(templateFiles) > 0 {
-		templates, err := fs.Sub(templateFiles[0], "templates")
+		// The embedded resources root contains the directory named "resources"
+		// itself, so templates live at "resources/templates".
+		resourcesRoot, resourcesErr := fs.Sub(templateFiles[0], "resources")
+		templates, err := fs.Sub(templateFiles[0], "resources/templates")
 		if err != nil {
 			panic(err)
 		}
-		s.creator = project.NewCreator(templates)
+		if resourcesErr != nil {
+			panic(resourcesErr)
+		}
+		layout, workspaceErr := workspace.Ensure(options.WorkspaceRoot, templates)
+		if workspaceErr != nil {
+			log.Printf("工作区初始化失败，项目模板回退为内嵌只读模板：%v", workspaceErr)
+			s.creator = project.NewCreator(templates)
+		} else {
+			s.workspace = layout
+			resources.Init(resourcesRoot, layout)
+			s.creator = project.NewCreatorForWorkspace(os.DirFS(layout.Templates()), layout.Bots())
+		}
 	}
+	s.workspaceRequested = options.WorkspaceRoot
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.health)
 	mux.HandleFunc("/api/v1/auth/status", s.authStatusHandler)
@@ -1049,6 +1071,7 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	mux.HandleFunc("/api/v1/system/privileged/preflight", s.privilegedPreflightHandler)
 	mux.HandleFunc("/api/v1/system/privileged/audit", s.privilegedAuditHandler)
 	mux.HandleFunc("/api/v1/directories", s.directoryHandler)
+	mux.HandleFunc("/api/v1/workspace", s.workspaceHandler)
 	mux.HandleFunc("/api/v1/catalog", s.catalogHandler)
 	mux.HandleFunc("/api/v1/catalog/versions", s.catalogVersionsHandler)
 	mux.HandleFunc("/api/v1/catalog/document", s.catalogDocumentHandler)
@@ -3075,7 +3098,7 @@ func (s *server) directoryHandler(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"path": path, "parent": parent, "roots": roots, "locations": directoryLocations(roots), "directories": directories, "files": files})
+	writeJSON(w, http.StatusOK, map[string]any{"path": path, "parent": parent, "roots": roots, "locations": s.directoryLocations(roots), "directories": directories, "files": files})
 }
 
 func managedDirectoryRoots() []string {
@@ -3194,14 +3217,63 @@ func directoryLocation(root, home, goos string) (string, string) {
 }
 
 func (s *server) currentDirectoryRoots() []string {
-	if os.Getenv("ALEMONJS_SETUP_ROOTS") != "" {
-		return s.directoryRoots
+	roots := s.directoryRoots
+	if os.Getenv("ALEMONJS_SETUP_ROOTS") == "" {
+		roots = managedDirectoryRoots()
 	}
-	return managedDirectoryRoots()
+	if s.workspace.Root != "" {
+		clean := filepath.Clean(s.workspace.Root)
+		exists := false
+		for _, root := range roots {
+			if filepath.Clean(root) == clean {
+				exists = true
+				break
+			}
+		}
+		if !exists {
+			roots = append([]string{s.workspace.Root}, roots...)
+		}
+	}
+	return roots
 }
 
 func (s *server) managedDirectory(requested string) (string, error) {
 	return managedDirectory(requested, s.currentDirectoryRoots())
+}
+
+func (s *server) workspaceHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
+		return
+	}
+	root := s.workspace.Root
+	if root == "" {
+		resolved, err := workspace.ResolveRoot(s.workspaceRequested)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "无法解析工作区目录："+err.Error())
+			return
+		}
+		root = resolved
+	}
+	layout := workspace.Layout{Root: root}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"name":      "工作区",
+		"root":      layout.Root,
+		"templates": layout.Templates(),
+		"bots":      layout.Bots(),
+		"packages":  layout.Packages(),
+	})
+}
+
+// directoryLocations prepends the workspace root so the picker surfaces the
+// unified working directory before the whole machine.
+func (s *server) directoryLocations(roots []string) []map[string]string {
+	items := directoryLocations(roots)
+	if s.workspace.Root == "" {
+		return items
+	}
+	workspaceItem := map[string]string{"name": "工作区", "path": s.workspace.Root, "kind": "workspace"}
+	return append([]map[string]string{workspaceItem}, items...)
 }
 
 func managedDirectory(requested string, roots []string) (string, error) {

@@ -1,6 +1,6 @@
 # Docker 部署
 
-ALemonX 的 Docker 镜像包含工作台、Node.js、Corepack、Git 与 SSH 客户端，可管理挂载到容器内 `/workspace` 的 AlemonJS 项目。它不挂载 Docker socket，也不会获得宿主机 sudo 或桌面权限。
+ALemonX 的 Docker 镜像包含工作台、Node.js、Corepack、Git 与 SSH 客户端，可管理挂载到容器内 `/app/workspace` 的 AlemonJS 项目。它不挂载 Docker socket，也不会获得宿主机 sudo 或桌面权限。
 
 ## 快速启动
 
@@ -18,11 +18,11 @@ sh docker-install.sh up
 
 ```sh
 cp .env.example .env
-mkdir workspace
+mkdir data workspace
 docker compose up -d
 ```
 
-容器内程序运行目录 `/app` 是只读的；创建机器人项目时如果选择了“当前目录”，程序会自动回退到可写的 `ALEMONJS_SETUP_ROOTS`（Docker 默认为挂载的 `/workspace`），因此项目默认会保存到 `/workspace`。
+容器内程序运行目录 `/app` 是只读的，但其中的 `/app/workspace` 是独立挂载、可写；创建机器人项目时如果选择了“当前目录”，程序会自动回退到可写的 `ALEMONJS_SETUP_ROOTS`（Docker 默认指向挂载的 `/app/workspace`），因此项目默认会保存到该工作区。
 
 ## 配置与数据
 
@@ -32,12 +32,24 @@ docker compose up -d
 | --- | --- | --- |
 | `ALX_IMAGE` | `ccr.ccs.tencentyun.com/ningmengchongshui/alemonx:latest` | 腾讯云默认镜像；本地构建使用 `alx:local`。 |
 | `ALX_PORT` | `17390` | 工作台暴露到宿主机的端口。 |
-| `ALX_WORKSPACE` | `./workspace` | 宿主机机器人项目目录；容器只允许管理该目录。 |
 | `ALX_DEPLOYMENT` | `production` | 生产模式：SQLite 与本地认证未配置时仅提示，不拦截启动；可在引导页创建管理员。 |
 
-工作台状态、账户、Agent 任务、插件和缓存保存在 Docker 命名卷 `alx-data` 中；机器人源码在 `ALX_WORKSPACE` 指向的宿主机目录中。执行 `docker compose down` 不会删除它们；只有 `docker compose down -v` 才会删除工作台状态卷。
+运行数据不放在命名卷，而是放在 compose 文件旁的宿主机目录中：
 
-容器进程以非 root 的 `node` 用户运行。若绑定目录在 Linux 上不可写，请让目录归当前 Docker 用户或调整其权限；不要为了方便把容器改成 privileged，也不要挂载 `/var/run/docker.sock`。
+| 宿主目录 | 容器路径 | 内容 |
+| --- | --- | --- |
+| `./data` | `/data` | 工作台状态：账户、配置、SQLite、缓存、插件 |
+| `./workspace` | `/app/workspace` | 统一工作区：模板、机器人、内置工具 |
+
+容器内统一工作区为 `/app/workspace`：首次启动会把内嵌模板物化到其中的 `templates/`（可编辑，持久保存在宿主机 `./workspace`），新建机器人默认落在 `bots/`。内置 Yarn 物化到 `packages/yarn`；PM2 不随镜像嵌入，首次需要时用内置 Yarn 安装到 `packages/pm2`（位置固定，持久保存在宿主机目录）。
+
+容器进程以非 root 的 `node` 用户（uid 1000）运行。Linux 上 bind 挂载保留宿主目录属主，如果 `./data` 或 `./workspace` 对 uid 1000 不可写，容器会报只读/权限错误，请执行：
+
+```sh
+chown -R 1000:1000 ./data ./workspace
+```
+
+不要为了方便把容器改成 privileged，也不要挂载 `/var/run/docker.sock`。`docker compose down` 不会删除 `./data` 与 `./workspace`；只有手动删除这两个目录才会清除数据。
 
 ## 日常运维
 
@@ -51,7 +63,7 @@ sh docker-install.sh down
 
 镜像更新使用 `pull` 后的 `restart`，不要在容器里执行 `alx update`。容器内的自更新无法安全替换只读镜像层。
 
-MCP 的 stdio 连接可通过 `docker compose exec -T alx /app/alx mcp` 启动；如需限制它能访问的项目，设置 `MCP_ALLOWED_ROOTS=/workspace`。
+MCP 的 stdio 连接可通过 `docker compose exec -T alx /app/alx mcp` 启动；如需限制它能访问的项目，设置 `MCP_ALLOWED_ROOTS=/app/workspace`。
 
 ## 从源码构建
 

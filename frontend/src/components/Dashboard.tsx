@@ -2599,9 +2599,26 @@ export function Dashboard({
 
   function confirmRemoveProject() {
     if (!pendingProjectRemoval) return
-    dispatch(removeWorkspaceProject(pendingProjectRemoval))
+    const removedPath = pendingProjectRemoval
+    dispatch(removeWorkspaceProject(removedPath))
     setPendingProjectRemoval(null)
     setOutput('')
+    // The URL root is the durable navigation contract: leaving it in place
+    // makes the URL restoration effect re-validate and re-add the directory
+    // immediately after it is removed from the management list.
+    if (navigationFromURL.root === removedPath) {
+      const parameters = new URLSearchParams(location.search)
+      parameters.delete('root')
+      const search = parameters.toString()
+      navigate(
+        {
+          pathname: location.pathname,
+          search: search ? `?${search}` : '',
+          hash: location.hash
+        },
+        { replace: true }
+      )
+    }
   }
 
   // AI is a content page, not an overlay. Any normal navigation must leave it

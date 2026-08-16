@@ -144,6 +144,32 @@ func newTestServer() http.Handler {
 	return NewServer("test", fstest.MapFS{"dist/index.html": &fstest.MapFile{Data: []byte("<!doctype html>")}})
 }
 
+func TestWorkspaceEndpointExposesUnifiedLayout(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/workspace", nil)
+	response := httptest.NewRecorder()
+	newTestServer().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	var payload struct {
+		Root      string `json:"root"`
+		Templates string `json:"templates"`
+		Bots      string `json:"bots"`
+		Packages  string `json:"packages"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Root == "" || !strings.HasSuffix(payload.Root, string(filepath.Separator)+"workspace") {
+		t.Fatalf("unexpected workspace root: %q", payload.Root)
+	}
+	if payload.Templates != filepath.Join(payload.Root, "templates") ||
+		payload.Bots != filepath.Join(payload.Root, "bots") ||
+		payload.Packages != filepath.Join(payload.Root, "packages") {
+		t.Fatalf("workspace layout = %+v", payload)
+	}
+}
+
 // TestLoggableRequestBodyRedactsSecretsAndRestoresStream ensures the request
 // logger prints the action for the console while redacting tokens/passwords
 // and keeping the body readable by the downstream handler.

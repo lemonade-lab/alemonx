@@ -63,11 +63,15 @@ prepare() {
     cp .env.example .env
     info '已创建 .env；请按需修改镜像、端口和机器人工作区。'
   fi
-  workspace_path="${ALX_WORKSPACE:-}"
-  if [ -z "$workspace_path" ] && [ -f .env ]; then
-    workspace_path="$(sed -n 's/^[[:space:]]*ALX_WORKSPACE[[:space:]]*=[[:space:]]*//p' .env | sed -n '1p' | sed "s/^['\"]//;s/['\"]$//")"
-  fi
-  mkdir -p "${workspace_path:-./workspace}"
+  # Runtime data directories are fixed relative to the compose file:
+  # ./data holds workbench state (accounts, config, SQLite), ./workspace is the
+  # robot workspace mounted at /app/workspace inside the container.
+  mkdir -p ./data ./workspace
+  case "$(uname -s 2>/dev/null || printf unknown)" in
+    Linux)
+      info '容器以非 root 用户（uid 1000）运行；如遇权限错误，请执行：chown -R 1000:1000 ./data ./workspace'
+      ;;
+  esac
 }
 
 run_compose() {

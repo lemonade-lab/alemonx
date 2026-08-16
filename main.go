@@ -4,6 +4,7 @@ import (
 	"context"
 	"embed"
 	"fmt"
+	"io/fs"
 	"log"
 	"net"
 	"net/http"
@@ -18,10 +19,12 @@ import (
 	"alemonx/internal/logging"
 	"alemonx/internal/mcp"
 	"alemonx/internal/releases"
+	"alemonx/internal/resources"
 	"alemonx/internal/robot"
 	"alemonx/internal/setupplugin"
 	"alemonx/internal/system"
 	"alemonx/internal/web"
+	"alemonx/internal/workspace"
 )
 
 //go:embed all:dist
@@ -29,8 +32,8 @@ var staticFiles embed.FS
 
 // 前端页面
 
-//go:embed all:templates
-var templateFiles embed.FS
+//go:embed all:resources
+var resourceFiles embed.FS
 
 // 开发模板文件 + 机器人启动目录
 
@@ -68,6 +71,10 @@ func main() {
 		log.Fatal(err)
 	}
 	cwd, arguments, err := option(arguments, "--cwd", ".")
+	if err != nil {
+		log.Fatal(err)
+	}
+	workspaceRoot, arguments, err := option(arguments, "--workspace", env("ALX_WORKSPACE", ""))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -109,14 +116,16 @@ func main() {
 			if token == "" {
 				log.Fatal("请设置 MCP_TOKEN 后再启动 HTTP MCP 服务")
 			}
-			serveMCPHTTP(mcpPort, token, mcpPolicy())
+			templates, root := mcpTemplateSource(workspaceRoot)
+			serveMCPHTTP(mcpPort, token, mcpPolicy(), templates, root)
 			return
 		case "mcp":
 			if len(arguments) != 1 {
 				usage()
 				return
 			}
-			if err := mcp.NewServerWithPolicy(Version, templateFiles, mcpPolicy()).Serve(os.Stdin, os.Stdout); err != nil {
+			templates, root := mcpTemplateSource(workspaceRoot)
+			if err := mcp.NewServerWithPolicyAndWorkspace(Version, templates, mcpPolicy(), root).Serve(os.Stdin, os.Stdout); err != nil {
 				log.Printf("MCP 服务已停止：%v", err)
 			}
 			return
@@ -285,7 +294,7 @@ func main() {
 	if err := system.ConfigurePrivilegedMode(host, strings.EqualFold(strings.TrimSpace(os.Getenv("ALX_DEPLOYMENT")), "production")); err != nil {
 		log.Fatal(err)
 	}
-	serve(host, port, redisPort, redisOff)
+	serve(host, port, redisPort, redisOff, workspaceRoot)
 }
 
 func authCommand(arguments []string, confirmed bool, account, password, confirmation string) {
@@ -326,14 +335,14 @@ func authCommand(arguments []string, confirmed bool, account, password, confirma
 	usage()
 }
 
-func serve(host, port, redisPort string, redisOff bool) {
-	options := web.ServerOptions{RedisDisabled: redisOff}
+func serve(host, port, redisPort string, redisOff bool, workspaceRoot string) {
+	options := web.ServerOptions{RedisDisabled: redisOff, WorkspaceRoot: workspaceRoot}
 	if strings.TrimSpace(redisPort) != "" {
 		if value, err := strconv.Atoi(strings.TrimSpace(redisPort)); err == nil {
 			options.RedisPort = value
 		}
 	}
-	runtime := web.NewServerRuntimeWithOptions(Version, staticFiles, options, templateFiles)
+	runtime := web.NewServerRuntimeWithOptions(Version, staticFiles, options, resourceFiles)
 	listener, err := net.Listen("tcp", host+":"+port)
 	if err != nil {
 		log.Fatal(err)
@@ -414,16 +423,39 @@ func startupMessage(version, host, port string) string {
 `, version, address)
 }
 
-func serveMCPHTTP(port, token string, policy mcp.Policy) {
+func serveMCPHTTP(port, token string, policy mcp.Policy, templates fs.FS, workspaceRoot string) {
 	server := &http.Server{
 		Addr:              "127.0.0.1:" + port,
-		Handler:           mcp.NewServerWithPolicy(Version, templateFiles, policy).HTTPHandler(token),
+		Handler:           mcp.NewServerWithPolicyAndWorkspace(Version, templates, policy, workspaceRoot).HTTPHandler(token),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	log.Printf("AlemonJS MCP HTTP 已启动：http://127.0.0.1:%s/mcp", port)
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
+}
+
+// mcpTemplateSource materializes the bundled templates into the workspace and
+// returns the disk-backed template FS plus the workspace root. When the
+// workspace is unavailable the embedded read-only templates are used and the
+// workspace root is left empty so the MCP server resolves its own default.
+func mcpTemplateSource(workspaceRoot string) (fs.FS, string) {
+	templates, err := fs.Sub(resourceFiles, "resources/templates")
+	if err != nil {
+		return resourceFiles, workspaceRoot
+	}
+	resourcesRoot, resourcesErr := fs.Sub(resourceFiles, "resources")
+	if resourcesErr != nil {
+		log.Printf("无法读取嵌入资源根目录：%v", resourcesErr)
+		return templates, ""
+	}
+	layout, workspaceErr := workspace.Ensure(workspaceRoot, templates)
+	if workspaceErr != nil {
+		log.Printf("工作区初始化失败，MCP 使用内嵌模板：%v", workspaceErr)
+		return templates, ""
+	}
+	resources.Init(resourcesRoot, layout)
+	return os.DirFS(layout.Templates()), layout.Root
 }
 
 func mcpPolicy() mcp.Policy {
@@ -585,6 +617,7 @@ func usage() {
   alx [serve] --port 17390           启动浏览器引导（默认监听 0.0.0.0，请先 alx auth enable）
       --host 127.0.0.1               仅本机可访问
       --host 0.0.0.0                 监听所有网卡（默认，局域网/公网可直接访问）
+      --workspace <目录>             指定统一工作区（模板与新建机器人；默认 <运行目录>/workspace 或 ALEMONJS_SETUP_ROOTS）
       --redis-port <端口>             调整内置 Redis 端口（默认 6379，会持久化到配置）
       --redis-off                     禁止启动内置 Redis
 

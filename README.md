@@ -6,6 +6,23 @@
 
 ![ALemonX 工作台：多机器人项目管理、运行配置与 Agent 协作](docs/images/alemonx-workbench.png)
 
+## 目录布局
+
+ALemonX 使用单一运行期工作区收敛所有用户数据，前端构建产物与运行期资源只作为内嵌文件存在：
+
+```text
+dist/                     前端构建产物（构建时嵌入 alx 二进制，不参与运行期布局）
+resources/                运行期资源（构建时嵌入 alx 二进制）
+├── templates/            项目模板源（bot/、dev/）
+└── packages/             内置工具包（Yarn 嵌入；PM2 等按需用 Yarn 安装）
+workspace/                统一工作区（默认 <运行目录>/workspace，可用 --workspace 或 ALX_WORKSPACE 指定）
+├── templates/            项目模板（首次启动从内嵌模板物化，可编辑）
+├── packages/             工具目录（Yarn 物化副本；PM2 首次使用安装到这里，位置固定）
+└── bots/                 新建机器人的默认落点
+```
+
+模板与工具包文件只会在缺失时复制；已存在文件不会被覆盖，因此可以安全地自定义模板。Yarn 由构建流程安装并嵌入二进制，创建项目与安装依赖从不依赖 npm 拉取；PM2 不随包嵌入，首次需要时用内置 Yarn 安装到 `<workspace>/packages/pm2`（位置固定、可复用），不会依赖 npx 或临时缓存。项目本地已安装 PM2 时，优先使用项目内的版本。
+
 ## 一行安装
 
 macOS、Linux 或 FreeBSD 在终端执行：

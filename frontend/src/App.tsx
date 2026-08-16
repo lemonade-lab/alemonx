@@ -24,6 +24,7 @@ import { clampWindowRectToViewport } from './lib/windowRect'
 import {
   workspaceApi,
   useGoalsQuery,
+  useWorkspaceQuery,
   useLazyEnvironmentReportQuery,
   useReleasesQuery,
   useLazySetupUpdateQuery
@@ -940,6 +941,7 @@ function FlowView({
   const navigate = useNavigate()
   const location = useLocation()
   const dispatch = useDispatch()
+  const { data: workspace } = useWorkspaceQuery()
   const config = useSelector((state: RootState) => state.guide.developer)
   const project = useSelector((state: RootState) => state.guide.project)
   const routedStep = Number(location.pathname.match(/\/step\/(\d+)/)?.[1] ?? 0)
@@ -1206,8 +1208,12 @@ function FlowView({
                     dispatch(setProject({ destinationMode: 'current' }))
                   }
                 >
-                  <strong>当前运行目录（推荐）</strong>
-                  <small>直接在启动 alemonx 的文件夹里创建。</small>
+                  <strong>工作区（推荐）</strong>
+                  <small>
+                    {workspace
+                      ? `保存到 ${workspace.bots}`
+                      : '保存到工作区的 bots 目录。'}
+                  </small>
                 </button>
                 <button
                   className={
@@ -1440,9 +1446,11 @@ function FlowView({
             ) : (
               <div className="config-summary">
                 <span>
-                  位置：
+                 位置：
                   {project.destinationMode === 'current'
-                    ? `当前运行目录/${project.name}`
+                    ? workspace
+                      ? `${workspace.bots}/${project.name}`
+                      : `工作区/${project.name}`
                     : project.destination
                       ? `${project.destination}/${project.name}`
                       : '请返回填写保存位置'}
@@ -1527,8 +1535,12 @@ function FlowView({
                   dispatch(setProject({ destinationMode: 'current' }))
                 }
               >
-                <strong>当前运行目录（推荐）</strong>
-                <small>直接在启动 alemonx 的文件夹里安装。</small>
+                <strong>工作区（推荐）</strong>
+                <small>
+                  {workspace
+                    ? `保存到 ${workspace.bots}`
+                    : '保存到工作区的 bots 目录。'}
+                </small>
               </button>
               <button
                 className={
@@ -1582,7 +1594,9 @@ function FlowView({
               <span>
                 位置：
                 {project.destinationMode === 'current'
-                  ? `当前运行目录/${project.name}`
+                  ? workspace
+                    ? `${workspace.bots}/${project.name}`
+                    : `工作区/${project.name}`
                   : project.destination
                     ? `${project.destination}/${project.name}`
                     : '请返回填写保存位置'}

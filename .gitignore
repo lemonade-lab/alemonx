@@ -13,7 +13,8 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-node_modules
+/node_modules
+/frontend/node_modules
 dist
 dist-ssr
 dist-electron
@@ -48,6 +49,8 @@ pnpm-lock.yaml
 
 /alemonb
 /plugins
+/workspace
+/resources/packages/*/node_modules
 
 # ai gent
 /.claude

@@ -25,6 +25,12 @@ jobs:
         working-directory: frontend
       - run: yarn lint && yarn build
         working-directory: frontend
+      - name: Bundle embedded Yarn
+        run: |
+          for dir in resources/packages/*; do
+            [ -f "$dir/package.json" ] || continue
+            (cd "$dir" && npm ci --no-bin-links --ignore-scripts --no-audit --no-fund)
+          done
       - run: go test ./internal/... && go vet ./internal/... && go build -o /tmp/alemonx .
       # A release must retain one verified package for each primary desktop
       # system. Extra architectures are best-effort in the packaging matrix.
@@ -71,6 +77,12 @@ jobs:
           go-version: '1.23.x'
       - run: yarn install --frozen-lockfile --non-interactive && yarn build
         working-directory: frontend
+      - name: Bundle embedded Yarn
+        run: |
+          for dir in resources/packages/*; do
+            [ -f "$dir/package.json" ] || continue
+            (cd "$dir" && npm ci --no-bin-links --ignore-scripts --no-audit --no-fund)
+          done
       - run: |
           mkdir -p bundle release
           GOARM=${{ matrix.goarm }} CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -trimpath -ldflags "-s -w -X main.Version=${GITHUB_REF_NAME}" -o "bundle/${{ matrix.binary }}" .

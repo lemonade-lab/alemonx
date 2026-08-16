@@ -34,7 +34,7 @@ func TestZZGenerateCombinationsForLint(t *testing.T) {
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			t.Fatal(err)
 		}
-		if err := copyTemplate(os.DirFS("../../templates"), "dev", dir); err != nil {
+		if err := copyTemplate(os.DirFS("../../resources/templates"), "dev", dir); err != nil {
 			t.Fatalf("combo %d %s copy: %v", i, c.lang, err)
 		}
 		config := Config{Template: "dev", Language: c.lang, ImageMode: c.image, StyleMode: c.style, ESLint: true}

@@ -1,4 +1,4 @@
-.PHONY: help dev build test test-agent test-all test-sqlite test-space format lint dev-fe build-frontend test-sse verify-sse release-check docker-build docker-buildx docker-up docker-down docker-logs
+.PHONY: help dev bundle-resources build test test-agent test-all test-sqlite test-space format lint dev-fe build-frontend test-sse verify-sse release-check docker-build docker-buildx docker-up docker-down docker-logs
 
 .DEFAULT_GOAL := help
 
@@ -28,8 +28,15 @@ dev: ## Start the setup guide (replaces an older local ALemonX backend)
 	fi; \
 	go run .
 
-build: ## Build the production binary
-	$(MAKE) build-fe
+bundle-resources: ## Install the embedded Yarn package before building
+	@set -e; \
+	for dir in resources/packages/*; do \
+		[ -f "$$dir/package.json" ] || continue; \
+		echo "Bundling Yarn in $$dir"; \
+		(cd "$$dir" && npm ci --no-bin-links --ignore-scripts --no-audit --no-fund); \
+	done
+
+build: bundle-resources build-fe ## Build the production binary
 	go build -o app .
 
 test: ## Run Go tests

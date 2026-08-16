@@ -18,11 +18,14 @@ func TestNameIsStableAndSeparatesSameNamedProjects(t *testing.T) {
 	}
 }
 
-func TestConfigPinsNameNamespaceAndWorkingDirectory(t *testing.T) {
+func TestConfigPinsNameNamespaceAndSelfLocatedCWD(t *testing.T) {
 	config := Config("/robots/example")
-	for _, want := range []string{"name: \"alemonx-example-", "namespace: \"alemonx\"", "cwd: \"/robots/example\"", "script: './index.js'"} {
+	for _, want := range []string{"name: \"alemonx-example-", "namespace: \"alemonx\"", "cwd: __dirname", "script: './index.js'"} {
 		if !strings.Contains(config, want) {
 			t.Fatalf("config missing %q:\n%s", want, config)
 		}
+	}
+	if strings.Contains(config, "/robots/example") {
+		t.Fatalf("config must not embed the absolute project path:\n%s", config)
 	}
 }

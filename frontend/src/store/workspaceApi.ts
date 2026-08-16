@@ -362,6 +362,16 @@ export const workspaceApi = createApi({
   ],
   endpoints: build => ({
     goals: build.query<unknown[], void>({ query: () => 'goals' }),
+    workspace: build.query<
+      {
+        name: string
+        root: string
+        templates: string
+        bots: string
+        packages: string
+      },
+      void
+    >({ query: () => 'workspace' }),
     environmentReport: build.query<
       Record<string, unknown>,
       { goalId: string; variant: string }
@@ -975,6 +985,7 @@ export const workspaceApi = createApi({
 
 export const {
   useGoalsQuery,
+  useWorkspaceQuery,
   useLazyEnvironmentReportQuery,
   useReleasesQuery,
   useLazySetupUpdateQuery,

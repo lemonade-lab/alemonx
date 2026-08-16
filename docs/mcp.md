@@ -65,6 +65,8 @@ MCP_ALLOWED_ROOTS='/Users/me/robots:/Users/me/workspaces' alx mcp
 
 所有工具同时提供文本结果和 `structuredContent`，因此客户端既可向模型展示结果，也可稳定读取字段。
 
+`alemonjs://mcp/capabilities` 资源会返回工作区路径（`workspace.root`、`workspace.templates`、`workspace.bots`）。`alemonjs_create_project` 未指定自定义保存位置时，新项目默认创建在 `<workspace>/bots/<项目名>`。
+
 ## 与 Setup 机器人管理的对应关系
 
 | Setup 能力 | MCP 工具 |

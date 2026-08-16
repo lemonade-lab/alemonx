@@ -35,8 +35,9 @@ func Name(root string) string {
 	return fmt.Sprintf("%s-%s-%s", namespace, base, hex.EncodeToString(sum[:])[:8])
 }
 
-// Config returns a complete PM2 ecosystem config. cwd is explicit so PM2
-// status and lifecycle actions remain tied to this exact project directory.
+// Config returns a complete PM2 ecosystem config. cwd derives from the config
+// file's own location (__dirname), so moving or renaming the robot directory
+// does not leave PM2 pointing at a stale absolute path.
 func Config(root string) string {
 	path, err := filepath.Abs(root)
 	if err != nil {
@@ -47,7 +48,7 @@ func Config(root string) string {
 		"    {\n" +
 		"      name: " + strconv.Quote(Name(path)) + ",\n" +
 		"      namespace: " + strconv.Quote(namespace) + ",\n" +
-		"      cwd: " + strconv.Quote(path) + ",\n" +
+		"      cwd: __dirname,\n" +
 		"      script: './index.js',\n" +
 		"      env: {\n" +
 		"        NODE_ENV: 'production'\n" +

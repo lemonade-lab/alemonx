@@ -1,0 +1,9 @@
+{
+  "name": "@alemonx/bundled-yarn",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Bundled Yarn classic for offline project creation and management.",
+  "dependencies": {
+    "yarn": "1.22.22"
+  }
+}

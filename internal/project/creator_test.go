@@ -10,7 +10,7 @@ import (
 
 func TestDevelopmentTemplatePackagesFollowSelections(t *testing.T) {
 	root := t.TempDir()
-	if err := copyTemplate(os.DirFS("../../templates"), "dev", root); err != nil {
+	if err := copyTemplate(os.DirFS("../../resources/templates"), "dev", root); err != nil {
 		t.Fatal(err)
 	}
 	config := Config{
@@ -71,7 +71,24 @@ func TestDevelopmentTemplatePackagesFollowSelections(t *testing.T) {
 	}
 }
 
-func TestCurrentDestinationFallsBackToWritableSetupRoot(t *testing.T) {
+func TestCurrentDestinationUsesWorkspaceBots(t *testing.T) {
+	bots := filepath.Join(t.TempDir(), "workspace", "bots")
+	destination, note, err := resolveDestination(Config{DestinationMode: "current"}, bots)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if destination != bots {
+		t.Fatalf("destination = %q, want workspace bots %q", destination, bots)
+	}
+	if note != "" {
+		t.Errorf("workspace destination should not produce a fallback note: %q", note)
+	}
+	if info, err := os.Stat(bots); err != nil || !info.IsDir() {
+		t.Fatalf("workspace bots directory not created: %v", err)
+	}
+}
+
+func TestLegacyCurrentDestinationFallsBackToWritableSetupRoot(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root bypasses directory permission checks")
 	}
@@ -90,7 +107,7 @@ func TestCurrentDestinationFallsBackToWritableSetupRoot(t *testing.T) {
 	defer os.Chdir(original)
 	writable := t.TempDir()
 	t.Setenv("ALEMONJS_SETUP_ROOTS", writable)
-	destination, note, err := resolveDestination(Config{DestinationMode: "current"})
+	destination, note, err := resolveDestination(Config{DestinationMode: "current"}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +123,7 @@ func TestPM2TemplateGetsAnIsolatedProjectIdentity(t *testing.T) {
 	configs := make([]string, 0, 2)
 	for _, template := range []string{"dev", "bot"} {
 		root := filepath.Join(t.TempDir(), "same-name")
-		if err := copyTemplate(os.DirFS("../../templates"), template, root); err != nil {
+		if err := copyTemplate(os.DirFS("../../resources/templates"), template, root); err != nil {
 			t.Fatal(err)
 		}
 		if err := patchPackage(root, Config{Template: template, Language: "js", UsePM2: true, ImageMode: "none", StyleMode: "css"}); err != nil {
@@ -117,10 +134,13 @@ func TestPM2TemplateGetsAnIsolatedProjectIdentity(t *testing.T) {
 			t.Fatal(err)
 		}
 		content := string(config)
-		for _, want := range []string{"name: \"alemonx-", "namespace: \"alemonx\"", "cwd: \"" + root + "\""} {
+		for _, want := range []string{"name: \"alemonx-", "namespace: \"alemonx\"", "cwd: __dirname"} {
 			if !strings.Contains(content, want) {
 				t.Fatalf("%s generated PM2 config missing %q:\n%s", template, want, content)
 			}
+		}
+		if strings.Contains(content, root) {
+			t.Fatalf("%s generated PM2 config must not embed the absolute project path %q:\n%s", template, root, content)
 		}
 		configs = append(configs, content)
 	}
@@ -133,7 +153,7 @@ func TestDevelopmentTemplateReactDependenciesFollowLanguage(t *testing.T) {
 	for _, language := range []string{"js", "ts"} {
 		t.Run(language, func(t *testing.T) {
 			root := t.TempDir()
-			if err := copyTemplate(os.DirFS("../../templates"), "dev", root); err != nil {
+			if err := copyTemplate(os.DirFS("../../resources/templates"), "dev", root); err != nil {
 				t.Fatal(err)
 			}
 			config := Config{Template: "dev", Language: language, ImageMode: "react", StyleMode: "css"}
@@ -192,7 +212,7 @@ func TestDevelopmentTemplateKeepsOnlyChosenLanguageVariant(t *testing.T) {
 	run := func(t *testing.T, language string, wantExt string, dropExts []string) {
 		t.Helper()
 		root := t.TempDir()
-		if err := copyTemplate(os.DirFS("../../templates"), "dev", root); err != nil {
+		if err := copyTemplate(os.DirFS("../../resources/templates"), "dev", root); err != nil {
 			t.Fatal(err)
 		}
 		config := Config{Template: "dev", Language: language, ImageMode: "react", StyleMode: "css"}
@@ -226,7 +246,7 @@ func TestDevelopmentTemplateKeepsOnlyChosenLanguageVariant(t *testing.T) {
 // (absent in a JS project) and fails with TS18003.
 func TestJSLvyConfigDisablesTypeScriptPlugin(t *testing.T) {
 	root := t.TempDir()
-	if err := copyTemplate(os.DirFS("../../templates"), "dev", root); err != nil {
+	if err := copyTemplate(os.DirFS("../../resources/templates"), "dev", root); err != nil {
 		t.Fatal(err)
 	}
 	config := Config{Template: "dev", Language: "js", ImageMode: "none", StyleMode: "css"}
@@ -256,7 +276,7 @@ func TestJSLvyConfigDisablesTypeScriptPlugin(t *testing.T) {
 // JS variants really are plain JavaScript, so a JS project never parses TS.
 func TestDevelopmentTemplateJSFilesCarryNoTypeScriptSyntax(t *testing.T) {
 	for _, file := range []string{"src/store.js", "src/expose.js"} {
-		data, err := os.ReadFile(filepath.Join("../../templates/dev", file))
+		data, err := os.ReadFile(filepath.Join("../../resources/templates/dev", file))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -303,7 +323,7 @@ func TestWriteAgentsFileJSWithoutESLint(t *testing.T) {
 
 func TestPatchPackageDeclaresSelectedPackageManager(t *testing.T) {
 	root := t.TempDir()
-	if err := copyTemplate(os.DirFS("../../templates"), "bot", root); err != nil {
+	if err := copyTemplate(os.DirFS("../../resources/templates"), "bot", root); err != nil {
 		t.Fatal(err)
 	}
 	if err := patchPackage(root, Config{Name: "example", PackageManager: "pnpm", Language: "ts", ImageMode: "none", StyleMode: "css"}); err != nil {

@@ -269,3 +269,21 @@ func TestStripPM2BannerAndParse(t *testing.T) {
 		t.Fatalf("parsed = %#v, want one alemonb process", items)
 	}
 }
+
+// TestStripPM2BannerIgnoresDaemonSpawnNotices covers a fresh bundled PM2
+// daemon, which prints "[PM2] Spawning PM2 daemon ..." notices to stdout ahead
+// of the JSON array. Those notices must not be mistaken for the payload.
+func TestStripPM2BannerIgnoresDaemonSpawnNotices(t *testing.T) {
+	payload := "\n                        -------------\n\n__/\\\\\\\\\n[PM2] Spawning PM2 daemon with pm2_home=/tmp/x\n[PM2] PM2 Successfully daemonized\n[]"
+	stripped := stripPM2Banner(payload)
+	if stripped != "[]" {
+		t.Fatalf("stripped = %q, want []", stripped)
+	}
+	items, err := parsePM2Processes(stripped)
+	if err != nil {
+		t.Fatalf("parse empty list: %v", err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("parsed = %#v, want empty", items)
+	}
+}

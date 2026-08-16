@@ -34,6 +34,7 @@ alx doctor
 # 启动（前台）与监听设置
 alx --port 17390                        # 默认监听 0.0.0.0，局域网/公网可直接访问
 alx --host 127.0.0.1                    # 仅本机可访问
+alx --workspace /path/to/workspace      # 指定统一工作区（模板与新建机器人）
 alx --redis-port 6380                   # 调整内置 Redis 端口
 alx --redis-off                         # 禁止启动内置 Redis
 
@@ -53,6 +54,8 @@ alx logs --follow
 alx version
 alx update
 ```
+
+工作区默认取 `ALX_WORKSPACE` 环境变量，其次取 `ALEMONJS_SETUP_ROOTS` 中第一个可写目录，最后回退到 `<运行目录>/workspace`；`--workspace` 优先级最高。模板存放在 `<workspace>/templates`，新建机器人默认落在 `<workspace>/bots`，内置 Yarn 物化到 `<workspace>/packages/yarn`；PM2 不随包嵌入，首次需要时用内置 Yarn 安装到 `<workspace>/packages/pm2`（位置固定）。
 
 `alx health --port 17390` 只检查本机 `127.0.0.1` 的 `/healthz`，可用于确认服务是否已恢复。`alx doctor` 额外汇总后台服务、HTTP 健康、Node.js 与 Git 的环境状态。
 
