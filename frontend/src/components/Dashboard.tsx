@@ -54,6 +54,7 @@ import {
   FileText,
   FlaskConical,
   Folder,
+  FolderOpen,
   Gamepad2,
   GitBranch,
   Globe,
@@ -459,7 +460,7 @@ export function DirectoryPicker({
     locations: Array<{
       name: string
       path: string
-      kind: 'home' | 'disk' | 'volume'
+      kind: 'home' | 'disk' | 'volume' | 'workspace'
     }>
     directories: Directory[]
     files?: File[]
@@ -587,10 +588,15 @@ export function DirectoryPicker({
     )
   const home = data?.roots[0] ?? ''
   const favorites = [
-    { name: 'home', path: home },
-    ...['Desktop', 'Documents', 'Downloads', 'Pictures'].map(name => ({
+    { name: '主目录', path: home },
+    ...[
+      ['桌面', 'Desktop'],
+      ['文稿', 'Documents'],
+      ['下载', 'Downloads'],
+      ['图片', 'Pictures']
+    ].map(([name, folder]) => ({
       name,
-      path: `${home}/${name}`
+      path: `${home}/${folder}`
     }))
   ]
   const locations = data?.locations ?? []
@@ -775,7 +781,9 @@ export function DirectoryPicker({
                     onClick={() => selectSidebarLocation(location.path)}
                     title={location.path}
                   >
-                    {location.kind === 'home' ? (
+                    {location.kind === 'workspace' ? (
+                      <FolderOpen className="size-4 text-slate-500" />
+                    ) : location.kind === 'home' ? (
                       <Folder className="size-4 text-slate-500" />
                     ) : (
                       <HardDrive className="size-4 text-slate-500" />

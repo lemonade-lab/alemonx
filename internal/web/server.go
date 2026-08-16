@@ -3318,8 +3318,14 @@ func (s *server) directoryLocations(roots []string) []map[string]string {
 	if s.workspace.Root == "" {
 		return items
 	}
-	workspaceItem := map[string]string{"name": "工作区", "path": s.workspace.Root, "kind": "workspace"}
-	return append([]map[string]string{workspaceItem}, items...)
+	workspaceClean := filepath.Clean(s.workspace.Root)
+	for index, item := range items {
+		if filepath.Clean(item["path"]) == workspaceClean {
+			items[index] = map[string]string{"name": "工作区", "path": s.workspace.Root, "kind": "workspace"}
+			return items
+		}
+	}
+	return append([]map[string]string{{"name": "工作区", "path": s.workspace.Root, "kind": "workspace"}}, items...)
 }
 
 func managedDirectory(requested string, roots []string) (string, error) {

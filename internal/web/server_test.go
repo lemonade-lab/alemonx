@@ -31,6 +31,7 @@ import (
 	"alemonx/internal/setupplugin"
 	"alemonx/internal/system"
 	"alemonx/internal/systemnetwork"
+	"alemonx/internal/workspace"
 
 	"golang.org/x/net/websocket"
 )
@@ -191,6 +192,24 @@ func TestWorkspaceOpenRejectsPathsOutsideRoot(t *testing.T) {
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("GET status = %d", response.Code)
+	}
+}
+
+func TestDirectoryLocationsReplacesWorkspaceEntry(t *testing.T) {
+	root := t.TempDir()
+	s := &server{workspace: workspace.Layout{Root: root}}
+	items := s.directoryLocations([]string{root, string(filepath.Separator)})
+	count := 0
+	for _, item := range items {
+		if item["path"] == root {
+			count++
+			if item["name"] != "工作区" || item["kind"] != "workspace" {
+				t.Fatalf("workspace entry = %#v", item)
+			}
+		}
+	}
+	if count != 1 {
+		t.Fatalf("workspace path appears %d times in %#v", count, items)
 	}
 }
 
