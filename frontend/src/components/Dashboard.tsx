@@ -587,8 +587,17 @@ export function DirectoryPicker({
         : [itemPath]
     )
   const home = data?.roots[0] ?? ''
-  const favorites = [
-    { name: '主目录', path: home },
+  const workspacePath =
+    data?.locations?.find(location => location.kind === 'workspace')?.path ?? ''
+  const favorites: Array<{
+    name: string
+    path: string
+    kind: 'home' | 'workspace' | 'folder'
+  }> = [
+    { name: '主目录', path: home, kind: 'home' },
+    ...(workspacePath
+      ? [{ name: '工作区', path: workspacePath, kind: 'workspace' as const }]
+      : []),
     ...[
       ['桌面', 'Desktop'],
       ['文稿', 'Documents'],
@@ -596,10 +605,15 @@ export function DirectoryPicker({
       ['图片', 'Pictures']
     ].map(([name, folder]) => ({
       name,
-      path: `${home}/${folder}`
+      path: `${home}/${folder}`,
+      kind: 'folder' as const
     }))
   ]
-  const locations = data?.locations ?? []
+  // The disk list only shows real disks/volumes; home and the workspace live
+  // in the favorites section above.
+  const locations = (data?.locations ?? []).filter(
+    location => location.kind === 'disk' || location.kind === 'volume'
+  )
   // Finder sidebars represent directories too. In a directory picker, picking
   // one should both navigate there and make it immediately confirmable.
   const selectSidebarLocation = (nextPath: string) => {
@@ -760,14 +774,18 @@ export function DirectoryPicker({
                 key={item.path}
                 onClick={() => selectSidebarLocation(item.path)}
               >
-                <Folder className="size-4 text-slate-500" />
+                {item.kind === 'workspace' ? (
+                  <FolderOpen className="size-4 text-slate-500" />
+                ) : (
+                  <Folder className="size-4 text-slate-500" />
+                )}
                 {item.name}
               </button>
             ))}
             {locations.length > 0 && (
               <>
                 <small className="mb-1 mt-3 px-2 text-[11px] font-semibold text-slate-400">
-                  磁盘与位置
+                  磁盘
                 </small>
                 {locations.map(location => (
                   <button
