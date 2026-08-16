@@ -15,7 +15,8 @@ dist/                     前端构建产物（构建时嵌入 alx 二进制，�
 resources/                运行期资源（构建时嵌入 alx 二进制）
 ├── templates/            项目模板源（bot/、dev/）
 └── packages/             内置工具包（Yarn 嵌入；PM2 等按需用 Yarn 安装）
-workspace/                统一工作区（默认 <运行目录>/workspace，可用 --workspace 或 ALX_WORKSPACE 指定）
+plugins/                  系统插件目录 (拖入插件即可自动加载)
+workspace/                统一工作区（默认 <运行目录>/workspace）
 ├── templates/            项目模板（首次启动从内嵌模板物化，可编辑）
 ├── packages/             工具目录（Yarn 物化副本；PM2 首次使用安装到这里，位置固定）
 └── bots/                 新建机器人的默认落点
