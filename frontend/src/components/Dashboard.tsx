@@ -4808,23 +4808,6 @@ function ProjectItem({
       <div className="absolute right-1.5 top-2 flex items-center gap-0.5">
         <button
           className={cn(
-            'inline-flex size-7 items-center justify-center rounded transition-colors',
-            project.pinned
-              ? 'bg-slate-200/60 text-brand-600 dark:bg-slate-700 dark:text-brand-300'
-              : 'text-slate-400 hover:bg-slate-200/60 hover:text-slate-600 dark:text-slate-500 dark:hover:bg-slate-700 dark:hover:text-slate-300'
-          )}
-          onClick={() => onPin(project.id)}
-          aria-label={
-            project.pinned
-              ? `${project.name} 取消置顶`
-              : `${project.name} 置顶`
-          }
-          title={project.pinned ? '取消置顶' : '置顶'}
-        >
-          <Pin className="size-3.5" />
-        </button>
-        <button
-          className={cn(
             'inline-flex size-7 items-center justify-center rounded text-slate-400 transition-colors hover:bg-slate-200/60 hover:text-slate-600 dark:text-slate-500 dark:hover:bg-slate-700 dark:hover:text-slate-300',
             recordsOpen &&
               'bg-slate-200/60 text-slate-600 dark:bg-slate-700 dark:text-slate-300'
