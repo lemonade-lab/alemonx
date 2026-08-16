@@ -64,16 +64,33 @@ func TestPM2ConfigAppNameToleratesTemplateStyleName(t *testing.T) {
 	}
 }
 
-func TestStalePM2SameProjectPicksStoppedSameCWDApps(t *testing.T) {
+func TestStalePM2SameProjectPicksSameCWDAndMovedLeftovers(t *testing.T) {
+	current := t.TempDir()
+	otherProject := t.TempDir()
+	movedAway := filepath.Join(t.TempDir(), "moved-away")
 	processes := []PM2Process{
-		{Name: "alemonx-bot-11111111", Namespace: "alemonx", CWD: "/robots/current", Status: "stopped"},
-		{Name: "alemonx-bot-22222222", Namespace: "alemonx", CWD: "/robots/current", Status: "online"},
-		{Name: "alemonx-bot-33333333", Namespace: "alemonx", CWD: "/robots/other", Status: "stopped"},
-		{Name: "other-app", Namespace: "default", CWD: "/robots/current", Status: "stopped"},
+		// Identity rewrite leftover at the same cwd.
+		{Name: "alemonx-bot-11111111", Namespace: "alemonx", CWD: current, Status: "stopped"},
+		// Running app at the same cwd must survive.
+		{Name: "alemonx-bot-22222222", Namespace: "alemonx", CWD: current, Status: "online"},
+		// Another existing project with the same readable name must survive.
+		{Name: "alemonx-bot-33333333", Namespace: "alemonx", CWD: otherProject, Status: "stopped"},
+		// Moved-directory leftover: recorded cwd no longer exists.
+		{Name: "alemonx-bot-44444444", Namespace: "alemonx", CWD: movedAway, Status: "stopped"},
+		// Different readable name, even with a missing cwd, is not ours.
+		{Name: "alemonx-other-99999999", Namespace: "alemonx", CWD: movedAway, Status: "stopped"},
+		// Other namespace is never touched.
+		{Name: "other-app", Namespace: "default", CWD: current, Status: "stopped"},
 	}
-	stale := stalePM2SameProject(processes, "alemonx-bot-84673d56", "/robots/current")
-	if len(stale) != 1 || stale[0] != "alemonx-bot-11111111" {
-		t.Fatalf("stale = %#v, want only the stopped same-cwd alemonx app", stale)
+	stale := stalePM2SameProject(processes, "alemonx-bot-84673d56", current)
+	want := []string{"alemonx-bot-11111111", "alemonx-bot-44444444"}
+	if len(stale) != len(want) {
+		t.Fatalf("stale = %#v, want %#v", stale, want)
+	}
+	for index := range want {
+		if stale[index] != want[index] {
+			t.Fatalf("stale = %#v, want %#v", stale, want)
+		}
 	}
 }
 

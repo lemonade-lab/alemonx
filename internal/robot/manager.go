@@ -1125,25 +1125,40 @@ func reconcilePM2Registration(root string) (bool, error) {
 	return true, nil
 }
 
-// stalePM2SameProject returns stopped/errored PM2 app names registered in the
-// alemonx namespace at the project root whose name differs from the current
-// config name. They are leftovers of an identity change and safe to remove.
+// stalePM2SameProject returns PM2 app names registered in the alemonx
+// namespace that are leftovers of this project and safe to remove: either a
+// stopped/errored registration at the current root with a different name
+// (identity rewrite), or a stopped/errored registration whose recorded cwd no
+// longer exists and whose readable name matches the current config (directory
+// moved before the identity file existed).
 func stalePM2SameProject(processes []PM2Process, appName, root string) []string {
 	var names []string
+	readablePrefix := ""
+	if dash := strings.LastIndex(appName, "-"); dash > 0 {
+		readablePrefix = appName[:dash]
+	}
 	for _, process := range processes {
 		if process.Name == appName || process.Namespace != "alemonx" {
-			continue
-		}
-		if !sameWorkspacePath(process.CWD, root) {
 			continue
 		}
 		status := strings.ToLower(process.Status)
 		if status == "online" || status == "launching" {
 			continue
 		}
-		names = append(names, process.Name)
+		if sameWorkspacePath(process.CWD, root) {
+			names = append(names, process.Name)
+			continue
+		}
+		if readablePrefix != "" && strings.HasPrefix(process.Name, readablePrefix+"-") && !pathExists(process.CWD) {
+			names = append(names, process.Name)
+		}
 	}
 	return names
+}
+
+func pathExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 // stripPM2Banner removes any non-JSON prefix (PM2 banner/notice) so the caller

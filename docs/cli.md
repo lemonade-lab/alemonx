@@ -98,3 +98,5 @@ loginctl enable-linger "$(id -un)"
 PM2 应用名使用**稳定的项目身份**：机器人根目录的 `.alemonx-id` 与 `package.json` 名称共同决定，移动或改名目录不会改变身份；存量项目没有该文件时沿用旧路径摘要名，直到配置被重写（重写时工作台会自动清理旧 PM2 登记）。生成的 `pm2.config.cjs` 使用 `cwd: __dirname`（配置随目录自定位）并内置重启退避字段。
 
 生成的 start/stop 脚本直接调用 `pm2`（不再经过 npx），避免 npm 解析项目 `.npmrc` 并把异常配置值打印进日志；`npm run`/`yarn run` 会自动把项目 `node_modules/.bin` 加入 PATH。
+
+如果移动机器人目录后仍看到指向旧路径的 `MODULE_NOT_FOUND`（如 `Cannot find module '.../pm2/lib/ProcessContainerFork.js'`），说明 PM2 守护进程里还保留着旧登记。从工作台重新启动一次会自动清理（登记路径已不存在且应用名匹配的旧应用），或手动执行 `pm2 delete <旧应用名>` 后再启动。
