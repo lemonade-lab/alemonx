@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Download, Power, RotateCcw, Server, ShieldCheck } from 'lucide-react'
 import { Button } from './Button'
 import { ConfirmDialog } from './ConfirmDialog'
+import { SettingsCard, SettingsMessage, SettingsPage } from './SettingsCard'
 
 type ServiceAction = 'install' | 'stop' | 'restart' | 'enable-linger'
 
@@ -127,29 +128,30 @@ export function ServiceControlCard() {
   }
 
   return (
-    <div className="settings-panel-content grid gap-4">
-      <section className="settings-service-card">
-        <header>
-          <i>
-            <Server className="size-4" />
-          </i>
-          <span>
-            <strong>AlemonX 服务</strong>
-            <small>工作台后台进程</small>
-          </span>
-          <button
-            className="text-button settings-service-refresh"
+    <SettingsPage
+      title="服务"
+      description="管理 AlemonX 后台服务进程、开机保活与无登录运行。"
+    >
+      <SettingsCard
+        icon={<Server className="size-4" />}
+        title="AlemonX 服务"
+        description="工作台后台进程"
+        actions={
+          <Button
+            variant="ghost"
+            className="gap-1"
             onClick={() => void loadServiceStatus()}
             disabled={busy}
           >
             刷新状态
-          </button>
-        </header>
+          </Button>
+        }
+      >
         <div className="settings-service-status" aria-live="polite">
           <span className={serviceStatusTone} aria-hidden="true" />
           <small>{serviceStatus || '正在读取服务状态…'}</small>
         </div>
-        <footer>
+        <div className="settings-card-actions settings-card-actions-end">
           {serviceInstalled === false && (
             <Button
               variant="primary"
@@ -178,16 +180,15 @@ export function ServiceControlCard() {
           >
             <Power className="size-3.5" /> 停止
           </Button>
-        </footer>
-      </section>
-      <section className="grid gap-2 rounded-xl border border-(--theme-border-default) bg-(--theme-surface-panel) p-3 text-xs text-(--theme-text-muted)">
-        <header className="flex items-center gap-2 text-(--theme-text-primary)">
-          <ShieldCheck className="size-4" />
-          <strong>保活与开机恢复</strong>
-        </header>
-        <p>{resilience?.summary || '正在读取保活配置…'}</p>
+        </div>
+      </SettingsCard>
+      <SettingsCard
+        icon={<ShieldCheck className="size-4" />}
+        title="保活与开机恢复"
+        description={resilience?.summary || '正在读取保活配置…'}
+      >
         {serviceInstalled && resilience && (
-          <div className="grid gap-1 text-[11px]">
+          <div className="grid gap-1.5 text-xs text-(--theme-text-secondary)">
             <span>登录/开机启动：{resilience.startupEnabled ? '已配置' : '未配置'}</span>
             <span>异常退出自动拉起：{resilience.keepAlive ? '已配置' : '未配置'}</span>
             {resilience.lingerKnown && (
@@ -205,11 +206,17 @@ export function ServiceControlCard() {
             <ShieldCheck className="size-3.5" /> 启用无登录运行
           </Button>
         )}
-      </section>
+      </SettingsCard>
       {message && (
-        <small className="rounded-md bg-slate-50 p-2 text-[11px] leading-4 text-slate-500">
+        <SettingsMessage
+          tone={
+            message.includes('失败') || message.includes('超时')
+              ? 'error'
+              : 'info'
+          }
+        >
           {message}
-        </small>
+        </SettingsMessage>
       )}
       <ConfirmDialog
         open={serviceAction !== null}
@@ -260,6 +267,6 @@ export function ServiceControlCard() {
           void manageService(action)
         }}
       />
-    </div>
+    </SettingsPage>
   )
 }

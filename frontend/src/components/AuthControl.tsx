@@ -2,6 +2,7 @@ import { useStoreState } from '../store/guideStore'
 import { useCallback, useEffect, type ReactNode } from 'react'
 import { LockKeyhole, LogOut, UserRound, X } from 'lucide-react'
 import { Button } from './Button'
+import { SettingsCard, SettingsMessage, SettingsPage } from './SettingsCard'
 
 type AuthStatus = { enabled: boolean; authenticated: boolean; account?: string }
 
@@ -207,6 +208,75 @@ export function AuthControl({ embedded = false }: { embedded?: boolean }) {
     notifyAuthChanged()
     refresh()
   }
+  const content = status?.enabled ? (
+    <>
+      <p className="m-0 text-xs leading-5 text-(--theme-text-secondary)">
+        当前账户：
+        <b className="text-(--theme-text-strong)">
+          {status.account || '已登录'}
+        </b>
+      </p>
+      <div className="settings-card-actions">
+        <Button
+          variant="secondary"
+          className="gap-1.5"
+          onClick={() => void logout()}
+        >
+          <LogOut className="size-3.5" />
+          退出登录
+        </Button>
+      </div>
+    </>
+  ) : (
+    <>
+      <p className="m-0 text-xs leading-5 text-(--theme-text-secondary)">
+        开启后，访问本机管理 API 前必须登录。
+      </p>
+      <label className="grid gap-1.5 text-xs font-semibold text-(--theme-text-secondary)">
+        账户
+        <input
+          className="settings-input"
+          autoComplete="username"
+          value={account}
+          onChange={event => setAccount(event.target.value)}
+        />
+      </label>
+      <label className="grid gap-1.5 text-xs font-semibold text-(--theme-text-secondary)">
+        密码
+        <input
+          className="settings-input"
+          autoComplete="new-password"
+          type="password"
+          value={password}
+          onChange={event => setPassword(event.target.value)}
+        />
+      </label>
+      <label className="grid gap-1.5 text-xs font-semibold text-(--theme-text-secondary)">
+        确认密码
+        <input
+          className="settings-input"
+          autoComplete="new-password"
+          type="password"
+          value={confirmation}
+          onChange={event => setConfirmation(event.target.value)}
+        />
+      </label>
+      {error && <SettingsMessage tone="error">{error}</SettingsMessage>}
+      <div className="settings-card-actions settings-card-actions-end">
+        <Button
+          variant="primary"
+          className="gap-1.5"
+          loading={busy}
+          loadingLabel="正在开启…"
+          disabled={!account || !password || !confirmation}
+          onClick={() => void enable()}
+        >
+          <UserRound className="size-3.5" />
+          开启身份认证
+        </Button>
+      </div>
+    </>
+  )
   return (
     <div className={embedded ? 'settings-auth-panel' : 'relative'}>
       {!embedded && (
@@ -233,33 +303,42 @@ export function AuthControl({ embedded = false }: { embedded?: boolean }) {
         </Button>
       )}
       {open && (
-        <section
-          className={
-            embedded
-              ? 'settings-panel-content grid gap-4'
-              : 'topbar-popover absolute right-0 top-[calc(100%+8px)] z-50 grid w-[min(22.5rem,calc(100vw-2rem))] max-h-[calc(100vh-5rem)] gap-2.5 overflow-y-auto rounded-xl border border-slate-200 bg-white p-3 shadow-[0_18px_42px_rgb(28_26_23/0.13)]'
-          }
-          role={embedded ? undefined : 'dialog'}
-          aria-label="身份认证"
-          onKeyDown={event => {
-            if (event.key === 'Escape') setOpen(false)
-          }}
-        >
-          <header className="flex items-center justify-between gap-3">
-            <div className="flex min-w-0 items-center gap-2">
-              <strong className="text-xs text-slate-800">
-                {status?.enabled ? '身份认证已开启' : '开启身份认证'}
-              </strong>
-              {error && !status?.enabled && (
-                <small
-                  className="truncate text-[11px] text-amber-700"
-                  title={error}
-                >
-                  操作失败
-                </small>
-              )}
-            </div>
-            {!embedded && (
+        embedded ? (
+          <SettingsPage
+            title="认证"
+            description="控制本机管理 API 的账户保护。"
+          >
+            <SettingsCard
+              icon={<LockKeyhole className="size-4" />}
+              title={status?.enabled ? '身份认证已开启' : '开启身份认证'}
+              description="开启后，访问本机管理 API 前必须登录。"
+            >
+              {content}
+            </SettingsCard>
+          </SettingsPage>
+        ) : (
+          <section
+            className="topbar-popover absolute right-0 top-[calc(100%+8px)] z-50 grid w-[min(22.5rem,calc(100vw-2rem))] max-h-[calc(100vh-5rem)] gap-2.5 overflow-y-auto rounded-xl border border-slate-200 bg-white p-3 shadow-[0_18px_42px_rgb(28_26_23/0.13)]"
+            role="dialog"
+            aria-label="身份认证"
+            onKeyDown={event => {
+              if (event.key === 'Escape') setOpen(false)
+            }}
+          >
+            <header className="flex items-center justify-between gap-3">
+              <div className="flex min-w-0 items-center gap-2">
+                <strong className="text-xs text-slate-800">
+                  {status?.enabled ? '身份认证已开启' : '开启身份认证'}
+                </strong>
+                {error && !status?.enabled && (
+                  <small
+                    className="truncate text-[11px] text-amber-700"
+                    title={error}
+                  >
+                    操作失败
+                  </small>
+                )}
+              </div>
               <Button
                 variant="icon"
                 className="topbar-popover-close size-6"
@@ -268,71 +347,10 @@ export function AuthControl({ embedded = false }: { embedded?: boolean }) {
               >
                 <X className="size-4" />
               </Button>
-            )}
-          </header>
-          {status?.enabled ? (
-            <>
-              <p className="m-0 text-xs leading-5 text-slate-500">
-                当前账户：
-                <b className="text-slate-700">{status.account || '已登录'}</b>
-              </p>
-              <Button
-                variant="secondary"
-                className="gap-1.5 justify-self-start"
-                onClick={() => void logout()}
-              >
-                <LogOut className="size-3.5" />
-                退出登录
-              </Button>
-            </>
-          ) : (
-            <>
-              <p className="m-0 text-xs leading-5 text-slate-500">
-                开启后，访问本机管理 API 前必须登录。
-              </p>
-              <label className="grid gap-1 text-[11px] font-semibold text-slate-600">
-                账户
-                <input
-                  className="min-h-8 w-full rounded-md border border-slate-300 px-2 font-normal"
-                  autoComplete="username"
-                  value={account}
-                  onChange={event => setAccount(event.target.value)}
-                />
-              </label>
-              <label className="grid gap-1 text-[11px] font-semibold text-slate-600">
-                密码
-                <input
-                  className="min-h-8 w-full rounded-md border border-slate-300 px-2 font-normal"
-                  autoComplete="new-password"
-                  type="password"
-                  value={password}
-                  onChange={event => setPassword(event.target.value)}
-                />
-              </label>
-              <label className="grid gap-1 text-[11px] font-semibold text-slate-600">
-                确认密码
-                <input
-                  className="min-h-8 w-full rounded-md border border-slate-300 px-2 font-normal"
-                  autoComplete="new-password"
-                  type="password"
-                  value={confirmation}
-                  onChange={event => setConfirmation(event.target.value)}
-                />
-              </label>
-              <Button
-                variant="primary"
-                className="gap-1.5"
-                loading={busy}
-                loadingLabel="正在开启…"
-                disabled={!account || !password || !confirmation}
-                onClick={() => void enable()}
-              >
-                <UserRound className="size-3.5" />
-                开启身份认证
-              </Button>
-            </>
-          )}
-        </section>
+            </header>
+            {content}
+          </section>
+        )
       )}
     </div>
   )

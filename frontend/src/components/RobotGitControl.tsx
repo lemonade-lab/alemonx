@@ -1,5 +1,5 @@
 import { useStoreState } from '../store/guideStore'
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   ChevronDown,
   CloudDownload,
@@ -12,12 +12,14 @@ import {
   Plus,
   RefreshCw,
   Tags,
-  Trash2
+  Trash2,
+  X
 } from 'lucide-react'
 import { ConfirmDialog } from './ConfirmDialog'
 import { DesktopWindow } from './DesktopWindow'
 import { Tabs } from './Tabs'
 import {
+  useGitDiffQuery,
   useInitializeGitMutation,
   useGitWorkspaceActionMutation,
   useGitWorkspaceQuery
@@ -123,7 +125,15 @@ function buildChangeTree(changes: Change[]) {
   return [...root.children.values()]
 }
 
-function ChangeTree({ nodes }: { nodes: ChangeTreeNode[] }) {
+function ChangeTree({
+  nodes,
+  selectedPath,
+  onSelect
+}: {
+  nodes: ChangeTreeNode[]
+  selectedPath: string | null
+  onSelect: (path: string) => void
+}) {
   return (
     <ul className="grid min-w-0 gap-0.5 pl-4 first:pl-0">
       {nodes.map(node => {
@@ -144,10 +154,24 @@ function ChangeTree({ nodes }: { nodes: ChangeTreeNode[] }) {
                     </code>
                   )}
                 </summary>
-                <ChangeTree nodes={[...node.children.values()]} />
+                <ChangeTree
+                  nodes={[...node.children.values()]}
+                  selectedPath={selectedPath}
+                  onSelect={onSelect}
+                />
               </details>
             ) : (
-              <div className="flex min-w-0 items-center gap-1.5 rounded px-1.5 py-1 text-xs text-slate-600 hover:bg-slate-50">
+              <button
+                type="button"
+                disabled={!node.change}
+                onClick={() => node.change && onSelect(node.path)}
+                title={
+                  node.change
+                    ? `查看 ${node.path} 的变更对比`
+                    : undefined
+                }
+                className={`flex min-w-0 w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-xs text-slate-600 hover:bg-slate-100 disabled:cursor-default disabled:opacity-60 ${selectedPath === node.path ? 'bg-brand-50 text-brand-700' : ''}`}
+              >
                 {folder ? (
                   <Folder className="size-3.5 shrink-0 text-slate-400" />
                 ) : (
@@ -159,12 +183,42 @@ function ChangeTree({ nodes }: { nodes: ChangeTreeNode[] }) {
                 >
                   {node.change ? changeStatusLabel(node.change.status) : '变更'}
                 </code>
-              </div>
+              </button>
             )}
           </li>
         )
       })}
     </ul>
+  )
+}
+
+function DiffView({ diff, untracked }: { diff: string; untracked: boolean }) {
+  const lines = useMemo(() => diff.split('\n'), [diff])
+  return (
+    <pre className="git-diff-body">
+      {lines.map((line, index) => {
+        let className = 'git-diff-line'
+        if (line.startsWith('@@')) className += ' git-diff-hunk'
+        else if (
+          line.startsWith('diff --git') ||
+          line.startsWith('index ') ||
+          line.startsWith('--- ') ||
+          line.startsWith('+++ ') ||
+          line.startsWith('new file') ||
+          line.startsWith('deleted file') ||
+          line.startsWith('similarity') ||
+          line.startsWith('rename ')
+        )
+          className += ' git-diff-meta'
+        else if (line.startsWith('+')) className += ' git-diff-add'
+        else if (line.startsWith('-')) className += ' git-diff-del'
+        return (
+          <div key={index} className={className}>
+            {line || (untracked ? '\u00a0' : ' ')}
+          </div>
+        )
+      })}
+    </pre>
   )
 }
 
@@ -193,6 +247,14 @@ export function RobotGitControl({
     error,
     refetch
   } = useGitWorkspaceQuery(gitQueryArgs, { skip: !root })
+  const [diffPath, setDiffPath] = useState<string | null>(null)
+  const diffQuery = useGitDiffQuery(
+    { root, path: diffPath ?? '' },
+    { skip: !root || !diffPath }
+  )
+  useEffect(() => {
+    setDiffPath(null)
+  }, [tab])
   const [run, { isLoading }] = useGitWorkspaceActionMutation()
   const [initializeGit, { isLoading: isInitializing }] =
     useInitializeGitMutation()
@@ -218,13 +280,25 @@ export function RobotGitControl({
   const [initialMessage, setInitialMessage] = useStoreState(
     'chore: initialize project'
   )
+  const commitTextareaRef = useRef<HTMLTextAreaElement>(null)
+  // 提交说明框默认与按钮同高（单行），内容换行时才自动增高。
+  useEffect(() => {
+    const textarea = commitTextareaRef.current
+    if (!textarea) return
+    textarea.style.height = 'auto'
+    const border = textarea.offsetHeight - textarea.clientHeight
+    textarea.style.height = `${textarea.scrollHeight + border}px`
+  }, [commitMessage])
   if (!project) return null
 
   const execute = async (request: NonNullable<Pending>) => {
     try {
       const result = await run({ root, ...request }).unwrap()
       setOutput(result.output || 'Git 操作已完成。')
-      if (request.action === 'commit') setCommitMessage('')
+      if (request.action === 'commit') {
+        setCommitMessage('')
+        setDiffPath(null)
+      }
       if (request.action === 'branch-create') setBranchName('')
       if (request.action === 'tag-create') {
         setTagName('')
@@ -262,21 +336,18 @@ export function RobotGitControl({
   const confirm = pending ? actionCopy[pending.action] : null
 
   const commitPanel = (
-    <section className="git-tab-panel grid content-start gap-3 rounded-lg border border-slate-200 bg-white p-4">
-      <div className="git-tab-heading git-commit-heading grid items-center gap-3 border-b border-slate-200 pb-3">
-        <label className="git-commit-summary grid gap-0.5">
-          <small className="text-xs text-slate-500">
-            {changes.length} 项待提交
-          </small>
-        </label>
-        <input
-          className="h-9 min-w-0 rounded-md border border-slate-300 bg-white px-2.5 text-xs text-slate-800 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
+    <section className="git-tab-panel git-commit-panel grid content-start gap-3 rounded-lg border border-slate-200 bg-white p-4">
+      <div className="git-tab-heading git-commit-heading flex gap-3 border-b border-slate-200 pb-3">
+        <textarea
+          ref={commitTextareaRef}
+          className="max-h-40 flex-1 min-h-9 min-w-0 resize-none overflow-y-auto rounded-md border border-slate-300 bg-white px-2.5 py-2 text-xs text-slate-800 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
           value={commitMessage}
           onChange={event => setCommitMessage(event.target.value)}
           placeholder="例如：修复登录配置"
+          rows={1}
         />
         <button
-          className="primary-button shrink-0"
+          className="primary-button shrink-0 max-w-60"
           disabled={isLoading || !changes.length || !commitMessage.trim()}
           onClick={() => request('commit', undefined, commitMessage)}
           title={
@@ -290,13 +361,67 @@ export function RobotGitControl({
           提交全部变更
         </button>
       </div>
-      {changes.length ? (
-        <ChangeTree nodes={changeTree} />
-      ) : (
-        <p className="grid min-h-24 place-items-center text-xs text-slate-500">
-          工作区很干净，没有需要提交的改动。
-        </p>
-      )}
+      <div className="git-commit-workspace">
+        <div className="git-commit-tree">
+          {changes.length ? (
+            <ChangeTree
+              nodes={changeTree}
+              selectedPath={diffPath}
+              onSelect={setDiffPath}
+            />
+          ) : (
+            <p className="grid min-h-24 place-items-center text-xs text-slate-500">
+              工作区很干净，没有需要提交的改动。
+            </p>
+          )}
+        </div>
+        {diffPath && (
+          <div className="git-diff-panel">
+            <div className="git-diff-head">
+              <div className="flex min-w-0 flex-1 items-center gap-2">
+                <code className="min-w-0 flex-1 truncate font-mono text-xs text-slate-700">
+                  {diffPath}
+                </code>
+                {diffQuery.data?.status && (
+                  <code className="shrink-0 rounded bg-brand-50 px-1 text-[10px] font-medium text-brand-700">
+                    {changeStatusLabel(diffQuery.data.status)}
+                  </code>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => setDiffPath(null)}
+                className="grid size-6 shrink-0 place-items-center rounded text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                aria-label="关闭变更对比"
+                title="关闭对比"
+              >
+                <X className="size-3.5" />
+              </button>
+            </div>
+            {diffQuery.isLoading ? (
+              <p className="git-diff-hint">正在读取变更对比…</p>
+            ) : diffQuery.isError || !diffQuery.data ? (
+              <p className="git-diff-hint">无法读取变更对比。</p>
+            ) : diffQuery.data.missing || diffQuery.data.binary ? (
+              <p className="git-diff-hint">{diffQuery.data.diff}</p>
+            ) : diffQuery.data.diff ? (
+              <>
+                <DiffView
+                  diff={diffQuery.data.diff}
+                  untracked={diffQuery.data.untracked}
+                />
+                {diffQuery.data.truncated && (
+                  <p className="git-diff-hint">diff 过长，已截断显示。</p>
+                )}
+              </>
+            ) : (
+              <p className="git-diff-hint">
+                该文件当前与 HEAD 没有差异（可能已提交或变更已撤销），请刷新变更列表后重试。
+              </p>
+            )}
+          </div>
+        )}
+      </div>
     </section>
   )
 

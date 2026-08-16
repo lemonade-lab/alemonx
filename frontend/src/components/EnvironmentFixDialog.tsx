@@ -14,43 +14,33 @@ type Props = {
 
 const links: Record<
   string,
-  Array<{ label: string; note: string; href: string }>
+  Array<{ label: string; href: string }>
 > = {
   node: [
     {
-      label: 'Node.js LTS（推荐）',
-      note: '官方安装页会自动提供适合当前系统的安装包。',
+      label: 'Node.js 官方下载',
       href: 'https://nodejs.org/en/download'
-    },
-    {
-      label: '全部 Node.js 版本',
-      note: '需要指定旧版本或特殊架构时使用。',
-      href: 'https://nodejs.org/dist/'
     }
   ],
   git: [
     {
       label: 'Git 官方下载',
-      note: '选择 Windows、macOS 或 Linux 的对应安装包。',
       href: 'https://git-scm.com/downloads'
     }
   ],
   docker: [
     {
       label: 'Docker Desktop',
-      note: 'Docker 官方会按当前系统提供安装包。',
       href: 'https://www.docker.com/products/docker-desktop/'
     }
   ],
   browser: [
     {
       label: 'Google Chrome',
-      note: '适用于 Puppeteer 等浏览器自动化工具。',
       href: 'https://www.google.com/chrome/'
     },
     {
       label: 'Chromium',
-      note: 'Chrome 的开源版本，也可供 Puppeteer 使用。',
       href: 'https://www.chromium.org/getting-involved/download-chromium/'
     }
   ]
@@ -129,12 +119,12 @@ export function EnvironmentFixDialog({
               <strong className="text-sm text-brand-900">在工作台内安装</strong>
               <small className="text-xs leading-5 text-brand-800/75">
                 {isManagedNode
-                  ? 'Node.js 会使用“网络与镜像”中的 Node.js 环境包配置下载 LTS 版本，并校验 SHA-256 后缓存安装；不依赖 npm、Homebrew、WinGet 或系统包管理器。'
+                  ? '自动下载 Node.js LTS 并校验安装。'
                   : isMacOS
-                  ? '工作台会使用当前 macOS 服务账户的 Homebrew 安装固定依赖，不会打开浏览器。Docker 会安装 CLI 与无桌面运行时 Colima。'
+                  ? '使用 Homebrew 自动安装。'
                   : isWindows
-                    ? '工作台会使用当前 Windows 主机的 WinGet（或 Chocolatey）静默安装固定依赖，不会打开浏览器或外部下载页。'
-                    : '工作台会在当前 Linux 服务器执行固定的包管理安装，不会打开浏览器，也不会传输 sudo 密码。'}
+                    ? '使用 WinGet 或 Chocolatey 自动安装。'
+                    : '使用系统包管理器自动安装。'}
               </small>
             </div>
             <button
@@ -150,22 +140,9 @@ export function EnvironmentFixDialog({
             {installing && (
               <DownloadProgress
                 label={`正在安装 ${check.name}`}
-                detail={
-                  isManagedNode
-                    ? '正在下载、校验并安装环境包。'
-                    : '正在执行系统安装；下载安装过程可能需要一些时间。'
-                }
+                detail={isManagedNode ? '正在下载并安装 LTS 环境包。' : '正在安装，请稍候。'}
               />
             )}
-            <small className="text-xs leading-5 text-slate-500">
-              {isManagedNode
-                ? <>可在“设置 → 网络与镜像 → Node.js 环境包”切换镜像、直连或自定义镜像。Linux/macOS 安装在 AlemonX 缓存目录；Windows 使用已校验的 MSI 静默安装。</>
-                : isMacOS
-                ? <>需要预先安装 Homebrew，且 AlemonX 必须以实际 macOS 用户运行，不能使用 root。</>
-                : isWindows
-                  ? <>需要预先安装 WinGet 或 Chocolatey，并以管理员账户运行服务。Docker Desktop 仅适用于带图形桌面的 Windows；Windows Server/Core 不会自动部署 Docker Desktop。</>
-                  : <>服务进程需以 root 运行，或已配置无交互的 <code>sudo -n</code>。若服务器要求输入密码，请由管理员配置后重试。</>}
-            </small>
           </div>
         ) : (
           <div className="mt-5 grid gap-2">
@@ -178,17 +155,14 @@ export function EnvironmentFixDialog({
               key={option.href}
               onClick={() =>
                 setBrowserDownloadNotice(
-                  '下载已交给浏览器，请在浏览器下载栏查看实际进度。'
+                  '已交给浏览器下载，完成后回到这里继续。'
                 )
               }
             >
-              <span className="grid min-w-0 gap-1">
+              <span className="min-w-0">
                 <strong className="text-sm font-semibold">
                   {option.label}
                 </strong>
-                <small className="text-xs leading-5 text-slate-500">
-                  {option.note}
-                </small>
               </span>
               <ArrowUpRight className="size-4 shrink-0 text-slate-400" />
             </a>

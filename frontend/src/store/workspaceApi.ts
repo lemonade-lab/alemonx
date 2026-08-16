@@ -199,6 +199,15 @@ export type GitWorkspace = {
   tags: Array<{ name: string; subject?: string; createdAt?: string }>
   remotes: Array<{ name: string; url: string }>
 }
+export type GitDiff = {
+  path: string
+  status: string
+  diff: string
+  binary: boolean
+  untracked: boolean
+  missing: boolean
+  truncated: boolean
+}
 export type RuntimePreflight = {
   login: string
   package?: string
@@ -882,6 +891,10 @@ export const workspaceApi = createApi({
         { type: 'GitStatus', id: body.root }
       ]
     }),
+    gitDiff: build.query<GitDiff, { root: string; path: string }>({
+      query: ({ root, path }) =>
+        `robot/git/diff?${new URLSearchParams({ root, path })}`
+    }),
     startRobotTask: build.mutation<RobotTask, Record<string, string>>({
       query: body => ({ url: 'robot/tasks', method: 'POST', body }),
       invalidatesTags: (_result, _error, body) => [
@@ -1037,6 +1050,7 @@ export const {
   useGitStatusQuery,
   useGitWorkspaceQuery,
   useGitWorkspaceActionMutation,
+  useGitDiffQuery,
   useNpmStatusQuery,
   useLazyNpmPackQuery,
   useRobotOperationMutation,

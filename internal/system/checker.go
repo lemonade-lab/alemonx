@@ -34,7 +34,7 @@ type Checker struct{ timeout time.Duration }
 func NewChecker() *Checker { return &Checker{timeout: 5 * time.Second} }
 
 func (c *Checker) CheckGoal(goalID, variant string) Report {
-	checks := []Check{c.platform(), c.browser()}
+	checks := []Check{c.browser()}
 	switch goalID {
 	case "install", "develop":
 		checks = append(checks, c.command("node", "Node.js", "--version", "请安装 Node.js LTS 版本后重新检查。"), c.command("git", "Git", "--version", "请安装 Git 后重新检查。"))
@@ -56,7 +56,7 @@ func (c *Checker) CheckGoal(goalID, variant string) Report {
 			checks = append(checks, c.command("node", "Node.js", "--version", "请安装 Node.js LTS 版本后重新检查。"), c.command("npm", "npm", "--version", "请随 Node.js 一并安装 npm 后重新检查。"))
 		}
 	}
-	ready := checksAreUsable(checks)
+	ready := platformSupported() && checksAreUsable(checks)
 	return Report{goalID, ready, runtime.GOOS + "/" + runtime.GOARCH, checks, time.Now().Format(time.RFC3339)}
 }
 
@@ -73,13 +73,15 @@ func checksAreUsable(checks []Check) bool {
 	return true
 }
 
-func (c *Checker) platform() Check {
+// platformSupported gates unsupported operating systems without exposing a
+// redundant “当前系统” row: the user already knows their own OS. The report
+// still carries the platform string for internal install-plan decisions.
+func platformSupported() bool {
 	switch runtime.GOOS {
 	case "darwin", "windows", "linux", "freebsd":
-		return Check{ID: "platform", Name: "当前系统", Status: "ready", Detail: runtime.GOOS + "（" + runtime.GOARCH + "）"}
-	default:
-		return Check{ID: "platform", Name: "当前系统", Status: "missing", Detail: "暂未支持 " + runtime.GOOS, Suggestion: "请在 Windows、macOS、Linux 或 FreeBSD 上运行此工具。"}
+		return true
 	}
+	return false
 }
 
 func (c *Checker) command(id, name, argument, suggestion string) Check {

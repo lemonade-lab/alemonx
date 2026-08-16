@@ -1124,13 +1124,21 @@ export function Dashboard({
   }, [])
   // Plugin list changes arrive over SSE (setup/plugins/events), so the query
   // only refetches when the registry actually changes instead of polling.
-  const { data: setupPluginsData, refetch: refetchSetupPlugins } =
-    useSetupPluginsQuery(undefined, {
-      refetchOnMountOrArgChange: true
-    })
+  const {
+    data: setupPluginsData,
+    refetch: refetchSetupPlugins,
+    isLoading: isPluginsLoading,
+    isFetching: isPluginsFetching
+  } = useSetupPluginsQuery(undefined, {
+    refetchOnMountOrArgChange: true
+  })
   const pluginMarketOpen =
     Boolean(systemWindows.plugins) || systemFeature === 'plugins'
-  const { data: setupPluginMarketData } = useSetupPluginMarketQuery(undefined, {
+  const {
+    data: setupPluginMarketData,
+    isLoading: isPluginMarketLoading,
+    isFetching: isPluginMarketFetching
+  } = useSetupPluginMarketQuery(undefined, {
     skip: !pluginMarketOpen,
     refetchOnMountOrArgChange: true
   })
@@ -2985,6 +2993,8 @@ export function Dashboard({
       <SystemPluginCenter
         plugins={setupPlugins}
         marketPlugins={setupPluginMarket}
+        marketLoading={isPluginMarketLoading || isPluginMarketFetching}
+        pluginsLoading={isPluginsLoading || isPluginsFetching}
         sidebarLayout={sidebarLayout}
         onOpen={id => selectSystemFeature(`setup:${id}`)}
         onRefresh={() => void refetchSetupPlugins()}
@@ -3021,6 +3031,8 @@ export function Dashboard({
       <SystemPluginCenter
         plugins={setupPlugins}
         marketPlugins={setupPluginMarket}
+        marketLoading={isPluginMarketLoading || isPluginMarketFetching}
+        pluginsLoading={isPluginsLoading || isPluginsFetching}
         onOpen={id => selectSystemFeature(`setup:${id}`)}
         onRefresh={() => void refetchSetupPlugins()}
       />
@@ -5645,12 +5657,16 @@ function InvalidDirectoryDialog({
 function SystemPluginCenter({
   plugins,
   marketPlugins,
+  marketLoading,
+  pluginsLoading,
   onOpen,
   onRefresh,
   sidebarLayout = false
 }: {
   plugins: SetupPlugin[]
   marketPlugins: SetupPlugin[]
+  marketLoading: boolean
+  pluginsLoading: boolean
   onOpen: (id: string) => void
   onRefresh: () => void
   sidebarLayout?: boolean
@@ -5660,8 +5676,10 @@ function SystemPluginCenter({
     useInstallSetupPluginMutation()
   const [uninstallPlugin, { isLoading: uninstalling }] =
     useUninstallSetupPluginMutation()
-  const [loadReleases] = useLazySetupPluginReleasesQuery()
-  const [loadVersions] = useLazySetupPluginVersionsQuery()
+  const [loadReleases, { isFetching: releasesFetching }] =
+    useLazySetupPluginReleasesQuery()
+  const [loadVersions, { isFetching: versionsFetching }] =
+    useLazySetupPluginVersionsQuery()
   const [switchVersion, { isLoading: switching }] =
     useSwitchSetupPluginVersionMutation()
   const [deleteVersion] = useDeleteSetupPluginVersionMutation()
@@ -5672,8 +5690,12 @@ function SystemPluginCenter({
     usePluginDownloadCacheQuery()
   const [clearDownloadCache, { isLoading: clearingDownloadCache }] =
     useClearPluginDownloadCacheMutation()
-  const { data: developmentData, refetch: refetchDevelopment } =
-    useSetupPluginDevelopmentQuery()
+  const {
+    data: developmentData,
+    refetch: refetchDevelopment,
+    isLoading: isDevelopmentLoading,
+    isFetching: isDevelopmentFetching
+  } = useSetupPluginDevelopmentQuery()
   const [registerDevelopment, { isLoading: registeringDevelopment }] =
     useRegisterSetupPluginDevelopmentMutation()
   const [runDevelopment, { isLoading: runningDevelopment }] =
@@ -5841,6 +5863,10 @@ function SystemPluginCenter({
   }
   const install = async (plugin: SetupPlugin) => {
     setVersionTarget(null)
+    setInstallTarget(plugin)
+    setReleaseOptions([])
+    setSelectedVersion('')
+    setSelectedAsset('')
     try {
       const releases = await loadReleases(plugin.id).unwrap()
       setReleaseOptions(releases)
@@ -5851,7 +5877,6 @@ function SystemPluginCenter({
           asset => asset.compatible && /\.(zip|tar\.gz|tgz)$/i.test(asset.name)
         )?.name ?? ''
       )
-      setInstallTarget(plugin)
     } catch (reason) {
       setMessage(operationErrorMessage(reason, '插件版本读取失败。'))
     }
@@ -5871,10 +5896,11 @@ function SystemPluginCenter({
     }
   }
   const manageVersions = async (plugin: SetupPlugin) => {
+    setVersionItems([])
+    setVersionTarget(plugin)
     try {
       const versions = await loadVersions(plugin.id).unwrap()
       setVersionItems(versions)
-      setVersionTarget(plugin)
     } catch (reason) {
       setMessage(operationErrorMessage(reason, '插件版本读取失败。'))
     }
@@ -6412,6 +6438,17 @@ function SystemPluginCenter({
               )
             })}
           </div>
+        ) : (pluginView === 'market' && marketLoading) ||
+          (pluginView === 'mine' && pluginsLoading) ? (
+          <EmptyState
+            icon={
+              <Loader2 className="size-6 animate-spin text-slate-400 dark:text-slate-500" />
+            }
+            title={
+              pluginView === 'market' ? '正在加载插件市场…' : '正在加载插件列表…'
+            }
+            description="正在获取最新数据，请稍候。"
+          />
         ) : (
           /* 空状态 */
           <EmptyState
@@ -6435,11 +6472,23 @@ function SystemPluginCenter({
           />
         ))}
       {isDevelopmentView && developmentItems.length === 0 && (
-        <EmptyState
-          icon={<Code2 className="size-6 text-slate-400 dark:text-slate-500" />}
-          title="还没有已登记的源码"
-          description="点击上方“添加新源码”，选择本地插件目录开始开发。"
-        />
+        isDevelopmentLoading || isDevelopmentFetching ? (
+          <EmptyState
+            icon={
+              <Loader2 className="size-6 animate-spin text-slate-400 dark:text-slate-500" />
+            }
+            title="正在加载已登记的源码…"
+            description="正在获取开发插件列表，请稍候。"
+          />
+        ) : (
+          <EmptyState
+            icon={
+              <Code2 className="size-6 text-slate-400 dark:text-slate-500" />
+            }
+            title="还没有已登记的源码"
+            description="点击上方“添加新源码”，选择本地插件目录开始开发。"
+          />
+        )
       )}
 
       {/* 消息提示 */}
@@ -6461,28 +6510,37 @@ function SystemPluginCenter({
             </strong>
             <label className="grid gap-1 text-xs font-semibold text-slate-500">
               版本
-              <select
-                className="rounded-md border border-slate-200 bg-white px-2 py-2 text-sm font-normal dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
-                value={selectedVersion}
-                onChange={event => {
-                  const next = event.target.value
-                  const release = releaseOptions.find(item => item.tag === next)
-                  setSelectedVersion(next)
-                  setSelectedAsset(
-                    release?.assets.find(
-                      asset =>
-                        asset.compatible &&
-                        /\.(zip|tar\.gz|tgz)$/i.test(asset.name)
-                    )?.name ?? ''
-                  )
-                }}
-              >
-                {releaseOptions.map(item => (
-                  <option key={item.tag} value={item.tag}>
-                    {item.name || item.tag} ({item.tag})
-                  </option>
-                ))}
-              </select>
+              {releasesFetching && releaseOptions.length === 0 ? (
+                <span className="flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2 py-2 text-sm font-normal text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+                  <Loader2 className="size-3.5 animate-spin" />
+                  正在加载可用版本…
+                </span>
+              ) : (
+                <select
+                  className="rounded-md border border-slate-200 bg-white px-2 py-2 text-sm font-normal dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                  value={selectedVersion}
+                  onChange={event => {
+                    const next = event.target.value
+                    const release = releaseOptions.find(
+                      item => item.tag === next
+                    )
+                    setSelectedVersion(next)
+                    setSelectedAsset(
+                      release?.assets.find(
+                        asset =>
+                          asset.compatible &&
+                          /\.(zip|tar\.gz|tgz)$/i.test(asset.name)
+                      )?.name ?? ''
+                    )
+                  }}
+                >
+                  {releaseOptions.map(item => (
+                    <option key={item.tag} value={item.tag}>
+                      {item.name || item.tag} ({item.tag})
+                    </option>
+                  ))}
+                </select>
+              )}
             </label>
             <label className="grid gap-1 text-xs font-semibold text-slate-500">
               当前系统安装包
@@ -6502,7 +6560,7 @@ function SystemPluginCenter({
                 ))}
               </select>
             </label>
-            {archiveAssets.length === 0 && (
+            {archiveAssets.length === 0 && !releasesFetching && (
               <p className="m-0 text-xs text-amber-600">
                 该版本没有可用的 zip / tar.gz 插件包。
               </p>
@@ -6600,7 +6658,12 @@ function SystemPluginCenter({
               )}
             </div>
             <div className="grid gap-2">
-              {versionItems.length ? (
+              {versionsFetching && versionItems.length === 0 ? (
+                <p className="m-0 flex items-center gap-1.5 text-xs text-slate-500">
+                  <Loader2 className="size-3 animate-spin" />
+                  正在加载版本列表…
+                </p>
+              ) : versionItems.length ? (
                 versionItems.map(item => (
                   <div
                     key={`${item.tag}:${item.asset}`}

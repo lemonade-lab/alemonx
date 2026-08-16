@@ -78,12 +78,12 @@ func TestBrowserInstallPlanForRPMUsesFirstAvailableBrowser(t *testing.T) {
 	}
 }
 
-func TestRPMBrowserInstallFallsBackWhenBrowserPackageFails(t *testing.T) {
+func TestRPMBrowserInstallReportsUnavailableBrowserPackage(t *testing.T) {
 	originalRun := runPackageCommand
 	var calls [][]string
 	runPackageCommand = func(_ context.Context, _ string, args []string) (string, error) {
 		calls = append(calls, args)
-		if len(calls) == 2 {
+		if slices.Contains(args, "chromium") {
 			return "Error: Problem installing chromium", errors.New("exit status 1")
 		}
 		return "", nil
@@ -95,16 +95,11 @@ func TestRPMBrowserInstallFallsBackWhenBrowserPackageFails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(calls) != 2 {
-		t.Fatalf("install calls = %d, want 2: %#v", len(calls), calls)
+	wantCalls := 1 + len(browserDependencyPackageCandidates()) + 1
+	if len(calls) != wantCalls {
+		t.Fatalf("install calls = %d, want %d: %#v", len(calls), wantCalls, calls)
 	}
-	if !slices.Contains(calls[0], "alsa-lib") || slices.Contains(calls[0], "chromium") {
-		t.Fatalf("dependency install args = %#v", calls[0])
-	}
-	if !slices.Contains(calls[1], "chromium") {
-		t.Fatalf("browser install args = %#v", calls[1])
-	}
-	if !strings.Contains(message, "运行库") || !strings.Contains(message, "自带") {
+	if !strings.Contains(message, "chromium") || !strings.Contains(message, "自带") {
 		t.Fatalf("fallback message = %q", message)
 	}
 }
@@ -123,8 +118,9 @@ func TestRPMBrowserInstallSucceedsWithBrowserPackage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(calls) != 2 {
-		t.Fatalf("install calls = %d, want 2: %#v", len(calls), calls)
+	wantCalls := 1 + len(browserDependencyPackageCandidates()) + 1
+	if len(calls) != wantCalls {
+		t.Fatalf("install calls = %d, want %d: %#v", len(calls), wantCalls, calls)
 	}
 	if !strings.Contains(message, "google-chrome-stable") {
 		t.Fatalf("success message = %q", message)
@@ -145,25 +141,120 @@ func TestRPMBrowserInstallOnlyInstallsDepsWithoutBrowserPackage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(calls) != 1 {
-		t.Fatalf("install calls = %d, want 1: %#v", len(calls), calls)
+	wantCalls := 1 + len(browserDependencyPackageCandidates())
+	if len(calls) != wantCalls {
+		t.Fatalf("install calls = %d, want %d: %#v", len(calls), wantCalls, calls)
 	}
 	if !strings.Contains(message, "未提供") {
 		t.Fatalf("deps-only message = %q", message)
 	}
 }
 
-func TestRPMBrowserInstallFailsWhenDependenciesFail(t *testing.T) {
+func TestRPMBrowserInstallRunsMakecacheFirst(t *testing.T) {
+	originalRun := runPackageCommand
+	var calls [][]string
+	runPackageCommand = func(_ context.Context, _ string, args []string) (string, error) {
+		calls = append(calls, args)
+		return "", nil
+	}
+	defer func() { runPackageCommand = originalRun }()
+
+	plan := EnvironmentInstallPlan{CheckID: "browser", Name: "浏览器及依赖包", PackageManager: "dnf"}
+	if _, err := installRPMBrowserEnvironment(context.Background(), plan); err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) == 0 || len(calls[0]) != 1 || calls[0][0] != "makecache" {
+		t.Fatalf("first call must be makecache, got %#v", calls)
+	}
+}
+
+func TestRPMBrowserInstallTriesAlternativeCandidate(t *testing.T) {
+	originalRun := runPackageCommand
+	var calls [][]string
+	runPackageCommand = func(_ context.Context, _ string, args []string) (string, error) {
+		calls = append(calls, args)
+		if slices.Contains(args, "wqy-microhei-fonts") {
+			return "Error: No match for argument: wqy-microhei-fonts", errors.New("exit status 1")
+		}
+		return "", nil
+	}
+	defer func() { runPackageCommand = originalRun }()
+
+	plan := EnvironmentInstallPlan{CheckID: "browser", Name: "浏览器及依赖包", PackageManager: "dnf"}
+	message, err := installRPMBrowserEnvironment(context.Background(), plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(message, "未能安装") {
+		t.Fatalf("alternative candidate should have succeeded: %q", message)
+	}
+	seenAlternative := false
+	for _, args := range calls {
+		if slices.Contains(args, "wqy-zenhei-fonts") {
+			seenAlternative = true
+		}
+	}
+	if !seenAlternative {
+		t.Fatalf("alternative candidate was never attempted: %#v", calls)
+	}
+}
+
+func TestRPMBrowserInstallSkipsUnavailableDependency(t *testing.T) {
+	originalRun := runPackageCommand
+	var calls [][]string
+	runPackageCommand = func(_ context.Context, _ string, args []string) (string, error) {
+		calls = append(calls, args)
+		if slices.Contains(args, "xorg-x11-fonts-cyrillic") {
+			return "Error: No match for argument: xorg-x11-fonts-cyrillic", errors.New("exit status 1")
+		}
+		return "", nil
+	}
+	defer func() { runPackageCommand = originalRun }()
+
+	plan := EnvironmentInstallPlan{CheckID: "browser", Name: "浏览器及依赖包", PackageManager: "dnf"}
+	message, err := installRPMBrowserEnvironment(context.Background(), plan)
+	if err != nil {
+		t.Fatalf("partial failure should not abort: %v", err)
+	}
+	if !strings.Contains(message, "xorg-x11-fonts-cyrillic") || !strings.Contains(message, "未能安装") {
+		t.Fatalf("partial failure message = %q", message)
+	}
+	// Every dnf invocation installs exactly one package.
+	for _, args := range calls {
+		if args[0] == "makecache" {
+			continue
+		}
+		if len(args) != 4 || args[0] != "install" || args[1] != "-y" || args[2] != "--allowerasing" {
+			t.Fatalf("per-package install args = %#v", args)
+		}
+	}
+}
+
+func TestRPMBrowserInstallFailsWhenNothingInstalls(t *testing.T) {
 	originalRun := runPackageCommand
 	runPackageCommand = func(_ context.Context, _ string, _ []string) (string, error) {
 		return "Error: Could not find package", errors.New("exit status 1")
 	}
 	defer func() { runPackageCommand = originalRun }()
 
-	plan := EnvironmentInstallPlan{CheckID: "browser", Name: "浏览器及依赖包", PackageManager: "dnf", BrowserPackage: "chromium"}
+	plan := EnvironmentInstallPlan{CheckID: "browser", Name: "浏览器及依赖包", PackageManager: "dnf"}
 	_, err := installRPMBrowserEnvironment(context.Background(), plan)
-	if err == nil || !strings.Contains(err.Error(), "失败") {
-		t.Fatalf("dependency failure error = %v", err)
+	if err == nil || !strings.Contains(err.Error(), "均未安装") {
+		t.Fatalf("all-failed error = %v", err)
+	}
+}
+
+func TestRPMBrowserInstallAbortsOnSudoFailure(t *testing.T) {
+	originalRun := runPackageCommand
+	runPackageCommand = func(_ context.Context, _ string, _ []string) (string, error) {
+		return "sudo: a password is required", errors.New("exit status 1")
+	}
+	defer func() { runPackageCommand = originalRun }()
+
+	plan := EnvironmentInstallPlan{CheckID: "browser", Name: "浏览器及依赖包", PackageManager: "dnf"}
+	_, err := installRPMBrowserEnvironment(context.Background(), plan)
+	if err == nil || !strings.Contains(err.Error(), "管理员授权") {
+		t.Fatalf("sudo failure error = %v", err)
 	}
 }
 

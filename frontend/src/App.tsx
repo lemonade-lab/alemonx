@@ -1172,7 +1172,7 @@ function FlowView({
       case 0:
         return (
           <EnvironmentCheckPanel
-            title="检查开发环境"
+            title="你的环境都准备好了吗"
             report={report}
             checking={checking}
             onCheck={() => onCheck()}
@@ -1491,7 +1491,7 @@ function FlowView({
     if (flowStep === 0)
       return (
         <EnvironmentCheckPanel
-          title="检查安装环境"
+          title="你的环境都准备好了吗"
           report={report}
           checking={checking}
           onCheck={() => onCheck()}
@@ -1634,7 +1634,7 @@ function FlowView({
     if (flowStep === 1)
       return (
         <EnvironmentCheckPanel
-          title={webEdition === 'clean' ? '检查运行环境' : '检查 Docker'}
+          title="你的环境都准备好了吗"
           report={report}
           checking={checking}
           onCheck={() => onCheck(webEdition ?? undefined)}
@@ -1721,7 +1721,7 @@ function FlowView({
     if (flowStep === 1)
       return (
         <EnvironmentCheckPanel
-          title="检查构建环境"
+          title="你的环境都准备好了吗"
           report={report}
           checking={checking}
           onCheck={() => onCheck(buildMode ?? undefined)}

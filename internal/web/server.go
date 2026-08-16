@@ -1117,6 +1117,7 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	mux.HandleFunc("/api/v1/robot/manifest", s.robotManifestHandler)
 	mux.HandleFunc("/api/v1/robot/git-init", s.robotGitInitHandler)
 	mux.HandleFunc("/api/v1/robot/git", s.robotGitHandler)
+	mux.HandleFunc("/api/v1/robot/git/diff", s.robotGitDiffHandler)
 	mux.HandleFunc("/api/v1/robot/git-clone", s.robotGitCloneHandler)
 	mux.HandleFunc("/api/v1/robot/git-clone/check", s.robotGitCloneCheckHandler)
 	mux.HandleFunc("/api/v1/robot/git-clone/branches", s.robotGitCloneBranchesHandler)
@@ -7048,6 +7049,25 @@ func (s *server) robotGitHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	result, err := robot.GitWorkspaceAction(input.Root, input.Action, input.Value, input.Message)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *server) robotGitDiffHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
+		return
+	}
+	root := r.URL.Query().Get("root")
+	path := r.URL.Query().Get("path")
+	if root == "" || path == "" {
+		writeError(w, http.StatusBadRequest, "缺少机器人目录或文件路径。")
+		return
+	}
+	result, err := robot.GitDiff(root, path)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return

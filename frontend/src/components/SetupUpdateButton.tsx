@@ -18,6 +18,7 @@ import {
   useReleasesQuery
 } from '../store/workspaceApi'
 import { Button } from './Button'
+import { SettingsMessage } from './SettingsCard'
 
 type Release = {
   tag: string
@@ -308,7 +309,7 @@ export function SetupUpdateButton({ embedded = false }: { embedded?: boolean }) 
   }
 
   return (
-    <div className={embedded ? 'settings-update-panel' : 'relative'}>
+    <div className={embedded ? 'settings-update-panel grid gap-4' : 'relative'}>
       {!embedded && (
         <button
         className={`inline-flex size-8 items-center justify-center rounded-md border transition disabled:cursor-wait disabled:opacity-70 ${
@@ -334,27 +335,38 @@ export function SetupUpdateButton({ embedded = false }: { embedded?: boolean }) 
         )}
         </button>
       )}
+      {embedded && open && (
+        <header className="settings-page-head">
+          <h2 className="settings-page-title">更新</h2>
+          <p className="settings-page-desc">
+            检查并安装 AlemonX 新版本。
+          </p>
+        </header>
+      )}
       {open && (
         <section
           className={
             embedded
-              ? 'settings-panel-content grid gap-4'
+              ? 'settings-card grid gap-4'
               : 'topbar-popover absolute left-0 top-[calc(100%+8px)] z-50 grid w-80 gap-2.5 rounded-xl border border-slate-200 bg-white p-3 shadow-[0_18px_42px_rgb(28_26_23/0.13)]'
           }
           role={embedded ? undefined : 'dialog'}
           aria-label="应用更新"
         >
-          <header className="flex items-start justify-between gap-3">
-            <div className="flex items-center gap-2.5">
-              <i className="inline-flex size-8 items-center justify-center rounded-lg bg-brand-50 text-brand-600">
+          <header className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex min-w-0 items-center gap-2.5">
+              <i className="settings-card-icon">
                 <RefreshCw className="size-4" />
               </i>
-              <span className="grid gap-0.5">
-                <strong className="text-sm text-ink-950">应用更新</strong>
-                <small className="text-[11px] text-slate-400">
-                  当前版本 {data?.current ?? '—'}
-                </small>
-              </span>
+              <strong className="settings-card-title">应用更新</strong>
+            </div>
+            <div className="settings-card-actions flex-wrap">
+              <span className="settings-pill">当前 {data?.current ?? '—'}</span>
+              {data?.available && (
+                <span className="settings-pill is-success">
+                  最新 {data.latest}
+                </span>
+              )}
             </div>
             {!embedded && (
               <button
@@ -389,45 +401,41 @@ export function SetupUpdateButton({ embedded = false }: { embedded?: boolean }) 
           {mode === 'now' && (
             <section className="grid gap-2.5">
               {isFetching ? (
-                <p className="rounded-lg border border-slate-200 bg-slate-50 p-2.5 text-xs leading-5 text-slate-500">
-                  正在检查更新…
-                </p>
+                <SettingsMessage>正在检查更新…</SettingsMessage>
               ) : error ? (
-                <p className="rounded-lg border border-slate-200 bg-slate-50 p-2.5 text-xs leading-5 text-slate-500">
+                <SettingsMessage tone="error">
                   暂时无法检查更新，请稍后重试。
-                </p>
+                </SettingsMessage>
               ) : data?.available ? (
                 <>
-                  <div className="flex items-center gap-2.5 rounded-lg border border-brand-100 bg-brand-50 p-3">
-                    <i className="inline-flex size-8 items-center justify-center rounded-md bg-white text-brand-600">
-                      <Download className="size-4" />
-                    </i>
-                    <span className="grid gap-0.5">
-                      <small className="text-[11px] text-brand-700/70">
-                        发现新版本
-                      </small>
-                      <strong className="text-sm text-brand-700">
-                        {data.latest}
-                      </strong>
-                    </span>
-                  </div>
+                  <p className="m-0 text-xs leading-5 text-(--theme-text-secondary)">
+                    发现新版本，可立即更新。
+                  </p>
                   {data.platformMatched && data.integrityReady ? (
                     <>
-                      <Button
-                        className="inline-flex min-h-9 justify-self-end rounded-md bg-brand-600 px-3 text-xs font-semibold text-white transition hover:bg-brand-700 disabled:opacity-60"
-                        disabled={busy}
-                        onClick={() => {
-                          setFile(null)
-                          if (data.downloadReady) setConfirmRestart(true)
-                          else void download()
-                        }}
-                      >
-                        {busy
-                          ? '正在下载…'
-                          : data.downloadReady
-                            ? '更新并重启'
-                            : '下载更新'}
-                      </Button>
+                      <div className="settings-card-actions settings-card-actions-end">
+                        <Button
+                          variant="primary"
+                          className="gap-1.5"
+                          disabled={busy}
+                          onClick={() => {
+                            setFile(null)
+                            if (data.downloadReady) setConfirmRestart(true)
+                            else void download()
+                          }}
+                        >
+                          {busy ? (
+                            <RefreshCw className="size-3.5 animate-spin" />
+                          ) : (
+                            <Download className="size-3.5" />
+                          )}
+                          {busy
+                            ? '正在下载…'
+                            : data.downloadReady
+                              ? '更新并重启'
+                              : '下载更新'}
+                        </Button>
+                      </div>
                       {busy && !data.downloadReady && (
                         <DownloadProgress
                           label="正在下载并校验更新包"
@@ -436,42 +444,33 @@ export function SetupUpdateButton({ embedded = false }: { embedded?: boolean }) 
                       )}
                     </>
                   ) : (
-                    <p className="rounded-lg border border-amber-200 bg-amber-50 p-2.5 text-xs leading-5 text-amber-800">
+                    <SettingsMessage tone="error">
                       {data.platformMatched
                         ? data.integrityError
                           ? `暂时无法读取发布校验文件：${data.integrityError}`
                           : '该版本未提供校验文件，无法自动更新；请切换到「手动安装」。'
                         : '当前系统没有匹配的更新包，无法自动更新；请切换到「手动安装」。'}
-                    </p>
+                    </SettingsMessage>
                   )}
                 </>
               ) : (
-                <div className="flex items-center gap-2.5 rounded-lg border border-slate-200 bg-slate-50 p-3">
-                  <i className="inline-flex size-8 items-center justify-center rounded-md bg-white text-slate-500">
-                    <CheckCircle2 className="size-4" />
-                  </i>
-                  <span className="grid gap-0.5 leading-tight">
-                    <small className="text-[11px] text-slate-500">
-                      已是最新 · 最新版本 {data?.latest ?? data?.current ?? '—'}
-                    </small>
-                    <strong className="text-sm text-slate-700">
-                      当前 {data?.current ?? '—'}
-                    </strong>
-                  </span>
-                </div>
+                <p className="m-0 flex items-center gap-2 text-xs text-(--theme-text-muted)">
+                  <CheckCircle2 className="size-4 shrink-0 text-(--theme-success)" />
+                  已是最新
+                </p>
               )}
             </section>
           )}
           {mode === 'manual' && (
             <section className="grid gap-2.5">
               {releasesLoading ? (
-                <small className="rounded-md bg-slate-50 p-2 text-[11px] leading-4 text-slate-500">
+                <SettingsMessage>
                   正在读取可用发布版本…
-                </small>
+                </SettingsMessage>
               ) : releasesError ? (
-                <small className="rounded-md border border-amber-200 bg-amber-50 p-2 text-[11px] leading-4 text-amber-800">
+                <SettingsMessage tone="error">
                   暂时无法读取 GitHub 发布列表；你仍可直接选择已下载的本地安装包。
-                </small>
+                </SettingsMessage>
               ) : (
                 <>
                   <label className="grid gap-1 text-[11px] font-semibold text-slate-500">
@@ -575,9 +574,9 @@ export function SetupUpdateButton({ embedded = false }: { embedded?: boolean }) 
                   </div>
                 )}
                 {uploadError && (
-                  <small className="rounded-md border border-amber-200 bg-amber-50 p-2 text-[11px] leading-4 text-amber-800">
+                  <SettingsMessage tone="error">
                     {uploadError}
-                  </small>
+                  </SettingsMessage>
                 )}
                 <Button
                   disabled={!staged || busy}
@@ -586,20 +585,20 @@ export function SetupUpdateButton({ embedded = false }: { embedded?: boolean }) 
                   {busy ? '正在重启…' : '确认安装并重启'}
                 </Button>
                 {message && (
-                  <small className="rounded-md bg-slate-50 p-2 text-[11px] leading-4 text-slate-500">
+                  <SettingsMessage>
                     {message}
-                  </small>
+                  </SettingsMessage>
                 )}
               </section>
             </section>
           )}
           {mode === 'now' && message && (
-            <small className="rounded-md bg-slate-50 p-2 text-[11px] leading-4 text-slate-500">
+            <SettingsMessage>
               {message}
-            </small>
+            </SettingsMessage>
           )}
           {transaction && (
-            <small className="rounded-md bg-slate-50 p-2 text-[11px] leading-4 text-slate-500">
+            <SettingsMessage>
               {updatePhaseLabels[transaction.phase] ?? '正在处理更新…'}
               {transaction.targetVersion
                 ? ` 目标 ${transaction.targetVersion}`
@@ -608,7 +607,7 @@ export function SetupUpdateButton({ embedded = false }: { embedded?: boolean }) 
               {transaction.pluginError
                 ? ` 插件同步：${transaction.pluginError}`
                 : ''}
-            </small>
+            </SettingsMessage>
           )}
           {data?.releaseUrl && (
             <a

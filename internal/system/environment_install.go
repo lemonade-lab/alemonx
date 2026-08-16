@@ -161,11 +161,42 @@ func browserDependencyPackages(manager string) []string {
 	if manager != "dnf" && manager != "yum" {
 		return nil
 	}
-	return []string{
-		"alsa-lib", "atk", "cups-libs", "gtk3", "libXcomposite", "libXcursor", "libXdamage",
-		"libXext", "libXi", "libXrandr", "libXScrnSaver", "libXtst", "pango", "mesa-libgbm",
-		"ipa-gothic-fonts", "xorg-x11-fonts-100dpi", "xorg-x11-fonts-75dpi", "xorg-x11-utils",
-		"xorg-x11-fonts-cyrillic", "xorg-x11-fonts-Type1", "xorg-x11-fonts-misc", "wqy-microhei-fonts",
+	packages := make([]string, 0, len(browserDependencyPackageCandidates()))
+	for _, group := range browserDependencyPackageCandidates() {
+		packages = append(packages, group[0])
+	}
+	return packages
+}
+
+// browserDependencyPackageCandidates lists every required runtime library and
+// font with alternative names, because repository package names differ across
+// RHEL-family distros and occasionally get renamed. The workbench installs the
+// first available candidate in each group; a group is reported as failed only
+// when every candidate is unavailable.
+func browserDependencyPackageCandidates() [][]string {
+	return [][]string{
+		{"alsa-lib"},
+		{"atk", "at-spi2-atk", "at-spi2-core"},
+		{"cups-libs"},
+		{"gtk3"},
+		{"libXcomposite"},
+		{"libXcursor"},
+		{"libXdamage"},
+		{"libXext"},
+		{"libXi"},
+		{"libXrandr"},
+		{"libXScrnSaver", "libXss"},
+		{"libXtst"},
+		{"pango"},
+		{"mesa-libgbm"},
+		{"ipa-gothic-fonts", "vlgothic-fonts"},
+		{"xorg-x11-fonts-100dpi", "xorg-x11-fonts-ISO8859-1-100dpi"},
+		{"xorg-x11-fonts-75dpi", "xorg-x11-fonts-ISO8859-1-75dpi"},
+		{"xorg-x11-utils"},
+		{"xorg-x11-fonts-cyrillic"},
+		{"xorg-x11-fonts-Type1"},
+		{"xorg-x11-fonts-misc"},
+		{"wqy-microhei-fonts", "wqy-zenhei-fonts", "google-noto-sans-cjk-fonts"},
 	}
 }
 
@@ -220,35 +251,86 @@ func InstallEnvironment(ctx context.Context, checkID string) (string, error) {
 }
 
 // installRPMBrowserEnvironment installs the fixed runtime libraries and fonts
-// first, then optionally the system browser binary. The browser binary is a
-// convenience: Puppeteer downloads its own browser per project, so a failure
-// there falls back to a completed dependency installation instead of failing
-// the whole environment.
+// one package group at a time, then optionally the system browser binary.
+// Repository metadata is refreshed first (makecache), each group tries its
+// candidate names in order, and only a group where every candidate fails is
+// reported at the end — one unavailable package never aborts the rest.
 func installRPMBrowserEnvironment(ctx context.Context, plan EnvironmentInstallPlan) (string, error) {
-	depsOutput, depsErr := runPackageCommand(ctx, plan.PackageManager, installArguments(plan.PackageManager, browserDependencyPackages(plan.PackageManager)))
-	if depsErr != nil {
-		return "", packageInstallFailure(plan.Name, depsOutput, depsErr, ctx)
+	manager := plan.PackageManager
+	groups := browserDependencyPackageCandidates()
+	// Precondition: a stale or incomplete metadata cache is a common cause of
+	// "No match for argument". makecache is best-effort; if it fails (network
+	// or repository config) the per-package attempts still run and the summary
+	// reports what could not be found.
+	makecacheOutput, makecacheErr := runPackageCommand(ctx, manager, []string{"makecache"})
+	if makecacheErr != nil {
+		if ctx.Err() != nil {
+			return "", errors.New("服务器安装超时，请检查网络与包管理器状态后重试")
+		}
+		if fatalPackageError(makecacheOutput) {
+			return "", packageInstallFailure(plan.Name, makecacheOutput, makecacheErr, ctx)
+		}
 	}
-	if plan.BrowserPackage == "" {
-		RefreshCommandEnvironment(plan.CheckID)
-		return "已在当前主机安装浏览器运行库与字体；当前软件源未提供 Chromium、Chrome 或 Edge 软件包，Puppeteer 将使用项目自带的浏览器。请重新检查环境确认。", nil
+	total := len(groups)
+	if plan.BrowserPackage != "" {
+		total++
 	}
-	browserOutput, browserErr := runPackageCommand(ctx, plan.PackageManager, installArguments(plan.PackageManager, []string{plan.BrowserPackage}))
+	failed := make([]string, 0, 2)
+	for _, group := range groups {
+		installed := false
+		for _, candidate := range group {
+			output, runErr := runPackageCommand(ctx, manager, installArguments(manager, []string{candidate}))
+			if runErr == nil {
+				installed = true
+				break
+			}
+			if ctx.Err() != nil {
+				return "", errors.New("服务器安装超时，请检查网络与包管理器状态后重试")
+			}
+			if fatalPackageError(output) {
+				return "", packageInstallFailure(plan.Name, output, runErr, ctx)
+			}
+		}
+		if !installed {
+			failed = append(failed, group[0])
+		}
+	}
+	if plan.BrowserPackage != "" {
+		output, runErr := runPackageCommand(ctx, manager, installArguments(manager, []string{plan.BrowserPackage}))
+		if runErr != nil {
+			if ctx.Err() != nil {
+				return "", errors.New("服务器安装超时，请检查网络与包管理器状态后重试")
+			}
+			if fatalPackageError(output) {
+				return "", packageInstallFailure(plan.Name, output, runErr, ctx)
+			}
+			failed = append(failed, plan.BrowserPackage)
+		}
+	}
 	RefreshCommandEnvironment(plan.CheckID)
-	if browserErr == nil {
+	if len(failed) == 0 {
+		if plan.BrowserPackage == "" {
+			return "已在当前主机安装浏览器运行库与字体；当前软件源未提供 Chromium、Chrome 或 Edge 软件包，Puppeteer 将使用项目自带的浏览器。请重新检查环境确认。", nil
+		}
 		return fmt.Sprintf("已在当前主机安装浏览器及依赖包（%s）。请重新检查环境确认版本。", plan.BrowserPackage), nil
 	}
-	if ctx.Err() != nil {
-		return "", errors.New("服务器安装超时，请检查网络与包管理器状态后重试")
+	if len(failed) == total {
+		return "", fmt.Errorf("服务器安装 %s 失败：以下软件包均未安装：%s。请检查软件源或网络后重试", plan.Name, strings.Join(failed, "、"))
 	}
-	note := strings.TrimSpace(browserOutput)
-	if note == "" {
-		note = browserErr.Error()
+	return fmt.Sprintf("已在当前主机安装浏览器运行库与字体；以下软件包未能安装：%s。Puppeteer 将使用项目自带的浏览器，缺失包可能影响部分自动化功能；如软件源确实缺少这些包，可启用 EPEL 等仓库后重试。请重新检查环境确认。", strings.Join(failed, "、")), nil
+}
+
+// fatalPackageError reports whether a package-manager failure is environmental
+// (authorization/privilege) and must abort instead of being skipped like an
+// ordinary unavailable package.
+func fatalPackageError(text string) bool {
+	lower := strings.ToLower(text)
+	if runtime.GOOS == "windows" && (strings.Contains(lower, "access is denied") || strings.Contains(lower, "administrator")) {
+		return true
 	}
-	if len(note) > 200 {
-		note = note[:200] + "…"
-	}
-	return fmt.Sprintf("已在当前主机安装浏览器运行库与字体；系统 %s 安装未完成（%s），Puppeteer 将使用项目自带的浏览器。请重新检查环境确认。", plan.BrowserPackage, note), nil
+	return strings.Contains(lower, "a password is required") ||
+		strings.Contains(lower, "no tty present") ||
+		strings.Contains(lower, "not in the sudoers")
 }
 
 // runPackageCommand executes one fixed package-manager command with the same

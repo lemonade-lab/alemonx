@@ -15,6 +15,12 @@ import {
   useSystemRedisQuery
 } from '../store/workspaceApi'
 import { Button } from './Button'
+import {
+  SettingsCard,
+  SettingsMessage,
+  SettingsPage,
+  SettingsSwitch
+} from './SettingsCard'
 
 function messageFrom(error: unknown, fallback: string) {
   if (typeof error === 'object' && error && 'data' in error) {
@@ -103,23 +109,24 @@ export function RedisSettingsPanel() {
   }
 
   return (
-    <div className="settings-panel-content grid gap-4">
-      <section className="settings-service-card">
-        <header>
-          <i>
-            <Database className="size-4" />
-          </i>
-          <span>
-            <strong>Redis 内置服务</strong>
-          </span>
-          <button
-            className="text-button settings-service-refresh"
+    <SettingsPage
+      title="Redis"
+      description="工作台内置的持久化 Redis 服务，供机器人与插件使用。"
+    >
+      <SettingsCard
+        icon={<Database className="size-4" />}
+        title="Redis 内置服务"
+        actions={
+          <Button
+            variant="ghost"
+            className="gap-1"
             onClick={() => void refetch()}
             disabled={controlling}
           >
             刷新状态
-          </button>
-        </header>
+          </Button>
+        }
+      >
         <div className="settings-service-status" aria-live="polite">
           <span className={statusTone} aria-hidden="true" />
           <small>
@@ -145,7 +152,7 @@ export function RedisSettingsPanel() {
             {copied ? '已复制' : '复制'}
           </button>
         </div>
-        <footer>
+        <div className="settings-card-actions settings-card-actions-end">
           <Button
             variant="primary"
             className="gap-1.5"
@@ -170,18 +177,14 @@ export function RedisSettingsPanel() {
           >
             <Power className="size-3.5" /> 停止
           </Button>
-        </footer>
-      </section>
+        </div>
+      </SettingsCard>
 
-      <section className="settings-service-card">
-        <header>
-          <i>
-            <RefreshCw className="size-4" />
-          </i>
-          <span>
-            <strong>服务配置</strong>
-          </span>
-        </header>
+      <SettingsCard
+        icon={<RefreshCw className="size-4" />}
+        title="服务配置"
+        description="端口与自启策略"
+      >
         <div className="settings-redis-form">
           <label className="settings-redis-field">
             <span>端口</span>
@@ -197,36 +200,6 @@ export function RedisSettingsPanel() {
               }}
             />
           </label>
-          <label className="settings-redis-toggle">
-            <input
-              type="checkbox"
-              checked={!disabled}
-              onChange={event => {
-                setDisabled(!event.target.checked)
-                setChanged(true)
-                setMessage('')
-              }}
-            />
-            <span>
-              <strong>启用内置 Redis 服务</strong>
-              <small>关闭后不会启动；可用 alx --redis-off 快速禁用</small>
-            </span>
-          </label>
-          <label className="settings-redis-toggle">
-            <input
-              type="checkbox"
-              checked={autoStart}
-              onChange={event => {
-                setAutoStart(event.target.checked)
-                setChanged(true)
-                setMessage('')
-              }}
-            />
-            <span>
-              <strong>工作台启动时自动开启</strong>
-              <small>默认开启；端口已有 Redis 时自动复用该服务</small>
-            </span>
-          </label>
           <Button
             variant="secondary"
             className="gap-1.5"
@@ -235,14 +208,34 @@ export function RedisSettingsPanel() {
           >
             <Save className="size-3.5" /> 保存配置
           </Button>
+          <SettingsSwitch
+            checked={!disabled}
+            onChange={checked => {
+              setDisabled(!checked)
+              setChanged(true)
+              setMessage('')
+            }}
+            label="启用内置 Redis 服务"
+            hint="关闭后不会启动；可用 alx --redis-off 快速禁用"
+          />
+          <SettingsSwitch
+            checked={autoStart}
+            onChange={checked => {
+              setAutoStart(checked)
+              setChanged(true)
+              setMessage('')
+            }}
+            label="工作台启动时自动开启"
+            hint="默认开启；端口已有 Redis 时自动复用该服务"
+          />
         </div>
-      </section>
+      </SettingsCard>
 
       {message && (
-        <small className="rounded-md bg-slate-50 p-2 text-[11px] leading-4 text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+        <SettingsMessage tone={message.includes('失败') ? 'error' : 'info'}>
           {message}
-        </small>
+        </SettingsMessage>
       )}
-    </div>
+    </SettingsPage>
   )
 }

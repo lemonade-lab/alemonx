@@ -91,6 +91,32 @@
     margin-top: 4px;
   }
 
+  /* Environment check rows — read-only status rows that reuse the guide
+     question/choice visual language instead of separate status cards. */
+  .check-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: var(--theme-surface-panel);
+    border: 1px solid var(--theme-border-default);
+    border-radius: 10px;
+    padding: 14px 16px;
+    text-align: left;
+  }
+
+  .check-row .check-main {
+    min-width: 0;
+    flex: 1;
+  }
+
+  .check-row small {
+    color: var(--theme-text-muted);
+    display: block;
+    font-size: 0.8rem;
+    line-height: 1.5;
+    margin-top: 4px;
+  }
+
   /* Guide form fields and summary blocks. */
   .project-fields {
     display: grid;
@@ -1611,6 +1637,9 @@ button {
   gap: 12px;
   grid-template-columns: minmax(0, 1fr) auto;
 }
+.settings-redis-form .settings-switch-row {
+  grid-column: 1 / -1;
+}
 
 .settings-redis-field {
   color: var(--theme-text-secondary);
@@ -1952,11 +1981,6 @@ button {
 
 .settings-network-message.is-success {
   color: var(--theme-success);
-}
-
-.settings-update-panel .settings-panel-content > header,
-.settings-auth-panel .settings-panel-content > header {
-  display: none;
 }
 
 @container desktop-window (max-width: 759px) {
@@ -7079,10 +7103,6 @@ button > svg,
   justify-content: space-between;
   padding: 10px 12px;
 }
-.git-tab-heading:has(> input) {
-  display: grid;
-  justify-content: initial;
-}
 .git-tab-heading > div {
   display: grid;
   gap: 3px;
@@ -8345,6 +8365,7 @@ button > svg,
 /* Keep these declarations last: the legacy stylesheet was assembled in
  * feature order, while container queries must win over its viewport rules. */
 .git-commit-heading {
+  align-items: start;
   grid-template-columns: auto minmax(0, 1fr) auto;
 }
 
@@ -8867,4 +8888,310 @@ button > svg,
   color: #64748b;
   font-size: 0.7rem;
   padding: 6px 0 0;
+}
+
+/* Git 变更对比 */
+.git-diff-panel {
+  border: 1px solid var(--theme-border-default);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.git-diff-head {
+  align-items: center;
+  background: var(--theme-surface-raised);
+  border-bottom: 1px solid var(--theme-border-default);
+  display: flex;
+  gap: 8px;
+  min-height: 34px;
+  padding: 6px 8px 6px 10px;
+}
+.git-diff-body {
+  background: var(--theme-surface-code);
+  color: var(--theme-text-secondary);
+  font:
+    0.72rem/1.55 ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+  margin: 0;
+  max-height: 300px;
+  overflow: auto;
+  padding: 8px 0;
+}
+.git-diff-line {
+  padding: 0 12px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.git-diff-add {
+  background: rgba(34, 197, 94, 0.12);
+  color: #16a34a;
+}
+.git-diff-del {
+  background: rgba(239, 68, 68, 0.12);
+  color: #dc2626;
+}
+.git-diff-hunk {
+  background: rgba(59, 130, 246, 0.1);
+  color: #2563eb;
+  font-weight: 600;
+}
+.git-diff-meta {
+  color: var(--theme-text-faint);
+}
+.git-diff-hint {
+  color: var(--theme-text-muted);
+  font-size: 0.72rem;
+  margin: 0;
+  padding: 12px;
+}
+
+/* Git 提交面板：够宽时变更树与 diff 左右并排，窄时纵向堆叠。 */
+.git-commit-panel {
+  container-name: git-commit-panel;
+  container-type: inline-size;
+}
+.git-commit-workspace {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+.git-commit-tree {
+  min-width: 0;
+}
+@container git-commit-panel (min-width: 640px) {
+  .git-commit-workspace {
+    align-items: start;
+    grid-template-columns: minmax(200px, 280px) minmax(0, 1fr);
+  }
+  .git-commit-tree {
+    max-height: 420px;
+    overflow-y: auto;
+    padding-right: 2px;
+  }
+  .git-diff-panel .git-diff-body {
+    max-height: 360px;
+  }
+}
+
+/* 设置窗口统一骨架 */
+.settings-page {
+  display: grid;
+  gap: 16px;
+  margin: 0 auto;
+  max-width: 720px;
+}
+.settings-page-head {
+  display: grid;
+  gap: 4px;
+}
+.settings-page-title {
+  color: var(--theme-text-strong);
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.35;
+  margin: 0;
+}
+.settings-page-desc {
+  color: var(--theme-text-muted);
+  font-size: 12.5px;
+  line-height: 1.6;
+  margin: 0;
+}
+.settings-card {
+  background: var(--theme-surface-panel);
+  border: 1px solid var(--theme-border-default);
+  border-radius: 12px;
+  box-shadow: 0 1px 2px rgb(28 26 23 / 0.05);
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  padding: 16px;
+}
+.settings-card-head {
+  align-items: flex-start;
+  display: flex;
+  gap: 10px;
+  min-width: 0;
+}
+.settings-card-icon {
+  align-items: center;
+  background: var(--theme-accent-soft);
+  border: 1px solid var(--theme-accent-soft-border);
+  border-radius: 9px;
+  color: var(--theme-accent-text);
+  display: inline-flex;
+  flex: 0 0 auto;
+  font-style: normal;
+  height: 34px;
+  justify-content: center;
+  width: 34px;
+}
+.settings-card-icon svg {
+  height: 17px;
+  width: 17px;
+}
+.settings-card-copy {
+  display: grid;
+  flex: 1 1 auto;
+  gap: 3px;
+  min-width: 0;
+}
+.settings-card-title {
+  color: var(--theme-text-strong);
+  font-size: 13.5px;
+  font-weight: 700;
+  line-height: 1.45;
+}
+.settings-card-desc {
+  color: var(--theme-text-muted);
+  font-size: 12px;
+  line-height: 1.6;
+  margin: 0;
+}
+.settings-card-actions {
+  align-items: center;
+  display: flex;
+  flex: 0 0 auto;
+  gap: 8px;
+}
+.settings-card-actions-end {
+  justify-content: flex-end;
+}
+.settings-card-body {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+.settings-card input[type='checkbox'] {
+  accent-color: var(--theme-accent);
+}
+.settings-message {
+  border: 1px solid var(--theme-border-default);
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.55;
+  margin: 0;
+  padding: 9px 11px;
+}
+.settings-message.is-info {
+  background: var(--theme-surface-raised);
+  color: var(--theme-text-secondary);
+}
+.settings-message.is-success {
+  background: var(--theme-success-soft);
+  border-color: color-mix(
+    in srgb,
+    var(--theme-success) 30%,
+    var(--theme-border-default)
+  );
+  color: var(--theme-success-text);
+}
+.settings-message.is-error {
+  background: var(--theme-danger-soft);
+  border-color: color-mix(
+    in srgb,
+    var(--theme-danger) 30%,
+    var(--theme-border-default)
+  );
+  color: var(--theme-danger-text);
+}
+.settings-pill {
+  align-items: center;
+  background: var(--theme-surface-raised);
+  border: 1px solid var(--theme-border-default);
+  border-radius: 999px;
+  color: var(--theme-text-secondary);
+  display: inline-flex;
+  font-size: 11px;
+  font-weight: 600;
+  gap: 5px;
+  padding: 4px 9px;
+  white-space: nowrap;
+}
+.settings-pill.is-success {
+  background: var(--theme-success-soft);
+  border-color: color-mix(
+    in srgb,
+    var(--theme-success) 30%,
+    var(--theme-border-default)
+  );
+  color: var(--theme-success-text);
+}
+.settings-input,
+.settings-select {
+  background: var(--theme-surface-input);
+  border: 1px solid var(--theme-border-default);
+  border-radius: 8px;
+  color: var(--theme-text-primary);
+  font-size: 12.5px;
+  min-height: 34px;
+  padding: 0 10px;
+  width: 100%;
+}
+.settings-input:focus-visible,
+.settings-select:focus-visible {
+  outline: 2px solid var(--theme-accent);
+  outline-offset: 1px;
+}
+.settings-switch-row {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  min-height: 34px;
+}
+.settings-switch {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+.settings-switch input {
+  appearance: none;
+  background: var(--theme-border-strong);
+  border: 0;
+  border-radius: 999px;
+  cursor: pointer;
+  height: 20px;
+  margin: 0;
+  outline: 0;
+  position: relative;
+  transition: background 0.15s ease;
+  width: 36px;
+}
+.settings-switch input::after {
+  background: #fff;
+  border-radius: 50%;
+  box-shadow: 0 1px 2px rgb(28 26 23 / 0.25);
+  content: '';
+  height: 16px;
+  left: 2px;
+  position: absolute;
+  top: 2px;
+  transition: transform 0.15s ease;
+  width: 16px;
+}
+.settings-switch input:checked {
+  background: var(--theme-accent);
+}
+.settings-switch input:checked::after {
+  transform: translateX(16px);
+}
+.settings-switch input:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+.settings-switch-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.settings-switch-copy strong {
+  color: var(--theme-text-strong);
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.settings-switch-copy small {
+  color: var(--theme-text-muted);
+  font-size: 11.5px;
+  line-height: 1.5;
 }

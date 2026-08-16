@@ -20,6 +20,7 @@ import {
   type SystemNetworkRouteSettings
 } from '../store/workspaceApi'
 import { Button } from './Button'
+import { SettingsMessage, SettingsPage } from './SettingsCard'
 
 const defaultRoutes: Record<SystemNetworkRoute, SystemNetworkRouteSettings> = {
   github: { mode: 'mirror', mirrorUrl: 'https://ghfast.top/{url}' },
@@ -131,7 +132,10 @@ export function NetworkSettingsPanel() {
   const mirrorPresets = data.mirrorPresets ?? {}
 
   return (
-    <section className="settings-network-panel settings-panel-content">
+    <SettingsPage
+      title="网络"
+      description="控制系统联网资源（GitHub、NPM、Node、CDN 等）的访问方式与镜像。"
+    >
       <header className="settings-network-toolbar">
         <span>系统内容网络</span>
         <div className="settings-network-toolbar-actions">
@@ -245,11 +249,11 @@ export function NetworkSettingsPanel() {
       </fieldset>
 
       {message && (
-        <p className={success ? 'settings-network-message is-success' : 'settings-network-message'}>
+        <SettingsMessage tone={success ? 'success' : 'info'}>
           {success && <CheckCircle2 className="size-3.5" />}
           {message}
-        </p>
+        </SettingsMessage>
       )}
-    </section>
+    </SettingsPage>
   )
 }

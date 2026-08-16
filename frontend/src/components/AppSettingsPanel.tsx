@@ -99,7 +99,6 @@ export function AppSettingsPanel({
       items={sections}
       onActiveItemChange={setActive}
       sidebarAriaLabel="设置页面"
-      bodyClassName="[&_.account-management]:mx-auto [&_.account-management]:max-w-190 [&_.account-management_[data-robot-panel-header]]:hidden"
       sidebarFooter={
         <>
           <button

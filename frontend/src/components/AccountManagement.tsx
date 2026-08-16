@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
-import { ShieldCheck, Trash2, UserPlus } from 'lucide-react'
+import { ShieldCheck, Trash2, UserPlus, UsersRound } from 'lucide-react'
 import { Button } from './Button'
-import { RobotPanel } from './RobotPanel'
+import { SettingsCard, SettingsMessage, SettingsPage } from './SettingsCard'
 
 type Role = { id: string; name: string; permissions: string[] }
 type Account = {
@@ -128,45 +128,32 @@ export function AccountManagementPage() {
     }
   }
   return (
-    <RobotPanel
-      className="account-management max-w-250"
-      icon={<ShieldCheck className="size-4" />}
-      title="账户"
-      description="管理登录账户、角色及系统权限"
-    >
-      {loading && <p className="text-sm text-slate-500">正在读取账户配置…</p>}
-      {error && (
-        <p className="rounded-md bg-red-50 px-3 py-2 text-xs text-red-700">
-          {error}
-        </p>
-      )}
+    <SettingsPage title="账户" description="管理登录账户、角色及系统权限">
+      {loading && <SettingsMessage>正在读取账户配置…</SettingsMessage>}
+      {error && <SettingsMessage tone="error">{error}</SettingsMessage>}
       {data && (
-        <div className="grid gap-5">
-          <section className="grid gap-3 rounded-lg border border-slate-200 bg-slate-50/60 p-4">
-            <div>
-              <strong className="text-sm text-slate-800">
-                新增非超级管理员账户
-              </strong>
-              <p className="mt-1 text-xs text-slate-500">
-                新账户必须归属至少一个已创建的角色。
-              </p>
-            </div>
+        <>
+          <SettingsCard
+            icon={<UserPlus className="size-4" />}
+            title="新增非超级管理员账户"
+            description="新账户必须归属至少一个已创建的角色。"
+          >
             <div className="account-create-fields grid gap-3">
               <input
-                className="min-h-9 rounded-md border border-slate-300 px-2.5 text-sm"
+                className="settings-input"
                 placeholder="账户名"
                 value={account}
                 onChange={event => setAccount(event.target.value)}
               />
               <input
-                className="min-h-9 rounded-md border border-slate-300 px-2.5 text-sm"
+                className="settings-input"
                 placeholder="密码"
                 type="password"
                 value={password}
                 onChange={event => setPassword(event.target.value)}
               />
               <input
-                className="min-h-9 rounded-md border border-slate-300 px-2.5 text-sm"
+                className="settings-input"
                 placeholder="确认密码"
                 type="password"
                 value={confirmation}
@@ -178,62 +165,62 @@ export function AccountManagementPage() {
               selected={accountRoles}
               onChange={setAccountRoles}
             />
-            <Button
-              variant="primary"
-              className="justify-self-start gap-1.5"
-              disabled={
-                !account ||
-                !password ||
-                !confirmation ||
-                accountRoles.length === 0 ||
-                busy
-              }
-              onClick={() =>
-                void run(async () => {
-                  await request('accounts', {
-                    method: 'POST',
-                    body: JSON.stringify({
-                      account,
-                      password,
-                      confirmation,
-                      roles: accountRoles
+            <div className="settings-card-actions settings-card-actions-end">
+              <Button
+                variant="primary"
+                className="gap-1.5"
+                disabled={
+                  !account ||
+                  !password ||
+                  !confirmation ||
+                  accountRoles.length === 0 ||
+                  busy
+                }
+                onClick={() =>
+                  void run(async () => {
+                    await request('accounts', {
+                      method: 'POST',
+                      body: JSON.stringify({
+                        account,
+                        password,
+                        confirmation,
+                        roles: accountRoles
+                      })
                     })
+                    setAccount('')
+                    setPassword('')
+                    setConfirmation('')
+                    setAccountRoles([])
                   })
-                  setAccount('')
-                  setPassword('')
-                  setConfirmation('')
-                  setAccountRoles([])
-                })
-              }
-            >
-              <UserPlus className="size-3.5" />
-              新增账户
-            </Button>
-          </section>
-
-          <section className="grid gap-3">
-            <div>
-              <strong className="text-sm text-slate-800">账户列表</strong>
-              <p className="mt-1 text-xs text-slate-500">
-                超级管理员拥有全部权限，不能被此处删除或降权。
-              </p>
+                }
+              >
+                <UserPlus className="size-3.5" />
+                新增账户
+              </Button>
             </div>
+          </SettingsCard>
+
+          <SettingsCard
+            icon={<UsersRound className="size-4" />}
+            title="账户列表"
+            description="超级管理员拥有全部权限，不能被此处删除或降权。"
+          >
             <div className="grid gap-2">
               {data.accounts.map(item => (
                 <article
-                  className="account-row grid gap-2 rounded-lg border border-slate-200 p-3"
+                  className="account-row grid gap-2 rounded-lg border border-(--theme-border-default) bg-(--theme-surface-raised) p-3"
                   key={item.account}
                 >
-                  <div>
-                    <strong className="text-sm text-slate-800">
+                  <div className="flex items-center gap-2">
+                    <strong className="text-sm text-(--theme-text-strong)">
                       {item.account}
                     </strong>
-                    <small className="ml-2 text-xs text-slate-500">
+                    <small className="text-xs text-(--theme-text-muted)">
                       {item.superAdmin ? '超级管理员' : '普通账户'}
                     </small>
                   </div>
                   {item.superAdmin ? (
-                    <span className="text-xs text-slate-500">
+                    <span className="text-xs text-(--theme-text-muted)">
                       拥有系统全部权限
                     </span>
                   ) : (
@@ -254,7 +241,7 @@ export function AccountManagementPage() {
                   {!item.superAdmin && (
                     <Button
                       variant="icon"
-                      className="justify-self-start text-red-600"
+                      className="justify-self-start text-(--theme-danger)"
                       aria-label={`删除 ${item.account}`}
                       title="删除账户"
                       disabled={busy}
@@ -273,24 +260,22 @@ export function AccountManagementPage() {
                 </article>
               ))}
             </div>
-          </section>
+          </SettingsCard>
 
-          <section className="grid gap-3 rounded-lg border border-slate-200 p-4">
-            <div>
-              <strong className="text-sm text-slate-800">新建角色与权限</strong>
-              <p className="mt-1 text-xs text-slate-500">
-                一个账户可以同时拥有多个角色，最终权限为各角色权限的并集。
-              </p>
-            </div>
+          <SettingsCard
+            icon={<ShieldCheck className="size-4" />}
+            title="新建角色与权限"
+            description="一个账户可以同时拥有多个角色，最终权限为各角色权限的并集。"
+          >
             <div className="account-role-fields grid gap-3">
               <input
-                className="min-h-9 rounded-md border border-slate-300 px-2.5 text-sm"
+                className="settings-input"
                 placeholder="角色标识，例如 release-manager"
                 value={roleID}
                 onChange={event => setRoleID(event.target.value)}
               />
               <input
-                className="min-h-9 rounded-md border border-slate-300 px-2.5 text-sm"
+                className="settings-input"
                 placeholder="角色名称，例如 发布管理员"
                 value={roleName}
                 onChange={event => setRoleName(event.target.value)}
@@ -301,38 +286,43 @@ export function AccountManagementPage() {
               selected={rolePermissions}
               onChange={setRolePermissions}
             />
-            <Button
-              variant="primary"
-              className="justify-self-start"
-              disabled={!roleID || !roleName || busy}
-              onClick={() =>
-                void run(async () => {
-                  await request('roles', {
-                    method: 'POST',
-                    body: JSON.stringify({
-                      id: roleID,
-                      name: roleName,
-                      permissions: rolePermissions
+            <div className="settings-card-actions settings-card-actions-end">
+              <Button
+                variant="primary"
+                className="gap-1.5"
+                disabled={!roleID || !roleName || busy}
+                onClick={() =>
+                  void run(async () => {
+                    await request('roles', {
+                      method: 'POST',
+                      body: JSON.stringify({
+                        id: roleID,
+                        name: roleName,
+                        permissions: rolePermissions
+                      })
                     })
+                    setRoleID('')
+                    setRoleName('')
+                    setRolePermissions([])
                   })
-                  setRoleID('')
-                  setRoleName('')
-                  setRolePermissions([])
-                })
-              }
-            >
-              新建角色
-            </Button>
+                }
+              >
+                新建角色
+              </Button>
+            </div>
             {data.roles.length > 0 && (
-              <div className="grid gap-2 border-t border-slate-100 pt-3">
+              <div className="grid gap-2 border-t border-(--theme-border-subtle) pt-3">
                 {data.roles.map(role => (
                   <div
                     className="flex items-center justify-between gap-3 text-xs"
                     key={role.id}
                   >
                     <span>
-                      <b className="text-slate-700">{role.name}</b>{' '}
-                      <span className="text-slate-400">({role.id})</span> ·{' '}
+                      <b className="text-(--theme-text-strong)">{role.name}</b>{' '}
+                      <span className="text-(--theme-text-muted)">
+                        ({role.id})
+                      </span>{' '}
+                      ·{' '}
                       {role.permissions
                         .map(
                           permission =>
@@ -342,7 +332,7 @@ export function AccountManagementPage() {
                     </span>
                     <Button
                       variant="icon"
-                      className="size-7 text-red-600"
+                      className="size-7 text-(--theme-danger)"
                       title="删除角色"
                       aria-label={`删除角色 ${role.name}`}
                       disabled={busy}
@@ -360,10 +350,10 @@ export function AccountManagementPage() {
                 ))}
               </div>
             )}
-          </section>
-        </div>
+          </SettingsCard>
+        </>
       )}
-    </RobotPanel>
+    </SettingsPage>
   )
 }
 
@@ -379,14 +369,20 @@ function RolePicker({
   compact?: boolean
 }) {
   if (roles.length === 0)
-    return <span className="text-xs text-amber-700">请先新建角色</span>
+    return (
+      <span className="text-xs text-(--theme-warning-text)">请先新建角色</span>
+    )
   return (
     <div
-      className={`flex flex-wrap gap-2 ${compact ? '' : 'rounded-md border border-slate-200 bg-white p-2'}`}
+      className={`flex flex-wrap gap-2 ${
+        compact
+          ? ''
+          : 'rounded-md border border-(--theme-border-default) bg-(--theme-surface-panel) p-2'
+      }`}
     >
       {roles.map(role => (
         <label
-          className="inline-flex cursor-pointer items-center gap-1.5 text-xs text-slate-600"
+          className="inline-flex cursor-pointer items-center gap-1.5 text-xs text-(--theme-text-secondary)"
           key={role.id}
         >
           <input
@@ -417,10 +413,10 @@ function PermissionPicker({
   onChange: (permissions: string[]) => void
 }) {
   return (
-    <div className="account-permission-grid grid gap-2 rounded-md border border-slate-200 bg-slate-50 p-3">
+    <div className="account-permission-grid grid gap-2 rounded-md border border-(--theme-border-default) bg-(--theme-surface-raised) p-3">
       {permissions.map(permission => (
         <label
-          className="flex cursor-pointer items-center gap-2 text-xs text-slate-700"
+          className="flex cursor-pointer items-center gap-2 text-xs text-(--theme-text-secondary)"
           key={permission}
         >
           <input
