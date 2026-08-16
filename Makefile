@@ -32,6 +32,7 @@ bundle-resources: ## Install the embedded Yarn package before building
 	@set -e; \
 	for dir in resources/packages/*; do \
 		[ -f "$$dir/package.json" ] || continue; \
+		[ -f "$$dir/package-lock.json" ] || { echo "缺少 $$dir/package-lock.json：请先执行 npm install --package-lock-only 并提交锁文件" >&2; exit 1; }; \
 		echo "Bundling Yarn in $$dir"; \
 		(cd "$$dir" && npm ci --no-bin-links --ignore-scripts --no-audit --no-fund); \
 	done

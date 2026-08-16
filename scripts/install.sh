@@ -1,19 +1,34 @@
 #!/bin/sh
 # Install the latest ALemonX release for macOS, Linux, or FreeBSD.
 # Usage: curl -fsSL https://raw.githubusercontent.com/lemonade-lab/alemonx/main/scripts/install.sh | sh
+# Env:
+#   ALX_PREFER_MIRROR=1   prefer domestic mirrors (ghfast.top / ghproxy.net / gh-proxy.com)
+#   ALX_DOWNLOAD_BASE=    override the download base URL (must be HTTPS)
 
 set -eu
 
 repository="${ALX_REPOSITORY:-lemonade-lab/alemonx}"
 install_dir="${ALX_INSTALL_DIR:-$HOME/.local/bin}"
 official_download_base="https://github.com/${repository}/releases/latest/download"
-download_sources="
-${ALX_DOWNLOAD_BASE:-}
-${official_download_base}
+mirror_download_base="
 https://ghfast.top/https://github.com/${repository}/releases/latest/download
 https://ghproxy.net/https://github.com/${repository}/releases/latest/download
 https://gh-proxy.com/https://github.com/${repository}/releases/latest/download
 "
+if [ "${ALX_PREFER_MIRROR:-0}" = "1" ]; then
+  printf '%s\n' '国内镜像优先模式：将优先尝试 ghfast.top 等镜像源，官方源作为兜底。'
+  download_sources="
+${ALX_DOWNLOAD_BASE:-}
+${mirror_download_base}
+${official_download_base}
+"
+else
+  download_sources="
+${ALX_DOWNLOAD_BASE:-}
+${official_download_base}
+${mirror_download_base}
+"
+fi
 
 fail() {
   printf '%s\n' "安装失败：$*" >&2

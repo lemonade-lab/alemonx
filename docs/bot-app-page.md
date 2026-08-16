@@ -1,5 +1,7 @@
 # ALemonX 机器人应用页规范
 
+> 本页还有 [English version](en/bot-app-page.md)。
+
 Setup 会把当前机器人的插件页面嵌入后台。机器人应用页是插件自己的前端，不是 Setup 的管理页面，也不会获得系统命令、文件系统或 Setup 登录态。
 
 机器人应用页与系统插件的**系统面板页**是两套机制：应用页注入 `window.__alxWebview`，只能访问当前机器人的 `./api/*`；系统面板页注入 `ALXHost`，可调用宿主能力与动作转发。系统插件请见[系统插件开发与接入](plugin-development.md)。

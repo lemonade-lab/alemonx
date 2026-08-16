@@ -1,5 +1,7 @@
 # ALemonX Agent 发布验收报告
 
+> 本页还有 [English version](en/agent-release-report.md)。
+
 ## 当前能力
 
 - TaskService 统一任务创建、启动、等待、取消和恢复入口。

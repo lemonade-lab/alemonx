@@ -29,6 +29,7 @@ jobs:
         run: |
           for dir in resources/packages/*; do
             [ -f "$dir/package.json" ] || continue
+            [ -f "$dir/package-lock.json" ] || { echo "缺少 $dir/package-lock.json：请提交内置包的锁文件" >&2; exit 1; }
             (cd "$dir" && npm ci --no-bin-links --ignore-scripts --no-audit --no-fund)
           done
       - run: go test ./internal/... && go vet ./internal/... && go build -o /tmp/alemonx .
@@ -81,6 +82,7 @@ jobs:
         run: |
           for dir in resources/packages/*; do
             [ -f "$dir/package.json" ] || continue
+            [ -f "$dir/package-lock.json" ] || { echo "缺少 $dir/package-lock.json：请提交内置包的锁文件" >&2; exit 1; }
             (cd "$dir" && npm ci --no-bin-links --ignore-scripts --no-audit --no-fund)
           done
       - run: |
@@ -123,3 +125,11 @@ jobs:
           gh release create "${GITHUB_REF_NAME}" release/* --generate-notes
         env:
           GH_TOKEN: ${{ github.token }}
+      # Keep a permanent `latest` git tag pointing at the newest release so
+      # third-party scripts can consume refs/tags/latest (for example
+      # releases/download/latest/alx-update-index.json) without knowing the
+      # version. The tag is force-moved on every release.
+      - name: Move latest tag to this release
+        run: |
+          git tag -f latest "$GITHUB_SHA"
+          git push origin refs/tags/latest --force

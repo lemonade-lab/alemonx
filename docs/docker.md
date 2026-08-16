@@ -1,5 +1,7 @@
 # Docker 部署
 
+> 本页还有 [English version](en/docker.md)。
+
 ALemonX 的 Docker 镜像包含工作台、Node.js、Corepack、Git 与 SSH 客户端，可管理挂载到容器内 `/app/workspace` 的 AlemonJS 项目。它不挂载 Docker socket，也不会获得宿主机 sudo 或桌面权限。
 
 ## 快速启动
@@ -13,6 +15,12 @@ sh docker-install.sh up
 ```
 
 脚本会下载 `docker-compose.yml` 和 `.env.example`，复制后生成可编辑的 `.env`。首次启动后打开 `http://localhost:17390`，按引导创建管理员账户。
+
+国内用户可通过镜像获取部署脚本：把命令中的 `raw.githubusercontent.com` 前缀替换为镜像即可，例如 `https://ghfast.top/https://raw.githubusercontent.com/lemonade-lab/alemonx/main/scripts/docker-install.sh`。脚本支持 `ALX_RAW_BASE` 指向镜像源，例如：
+
+```sh
+ALX_RAW_BASE=https://ghfast.top/https://raw.githubusercontent.com/lemonade-lab/alemonx/main sh docker-install.sh up
+```
 
 没有网络脚本时，也可直接使用仓库文件：
 

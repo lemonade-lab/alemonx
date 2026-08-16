@@ -2,13 +2,13 @@
 
 > 在一个本地工作台中创建、运行、管理和扩展 AlemonJS 机器人；也可以让 AI Agent 在你的确认下协助维护项目。
 
+[English](README.en.md) · 中文
+
 [一行安装](#一行安装) · [Docker 部署](docs/docker.md) · [命令行](docs/cli.md) · [MCP 文档](docs/mcp.md) · [系统插件开发](docs/plugin-development.md)
 
 ![ALemonX 工作台：多机器人项目管理、运行配置与 Agent 协作](docs/images/alemonx-workbench.png)
 
 ## 目录布局
-
-ALemonX 使用单一运行期工作区收敛所有用户数据，前端构建产物与运行期资源只作为内嵌文件存在：
 
 ```text
 dist/                     前端构建产物（构建时嵌入 alx 二进制，不参与运行期布局）
@@ -20,8 +20,6 @@ workspace/                统一工作区（默认 <运行目录>/workspace，�
 ├── packages/             工具目录（Yarn 物化副本；PM2 首次使用安装到这里，位置固定）
 └── bots/                 新建机器人的默认落点
 ```
-
-模板与工具包文件只会在缺失时复制；已存在文件不会被覆盖，因此可以安全地自定义模板。Yarn 由构建流程安装并嵌入二进制，创建项目与安装依赖从不依赖 npm 拉取；PM2 不随包嵌入，首次需要时用内置 Yarn 安装到 `<workspace>/packages/pm2`（位置固定、可复用），不会依赖 npx 或临时缓存。项目本地已安装 PM2 时，优先使用项目内的版本。
 
 ## 一行安装
 
@@ -36,6 +34,24 @@ Windows 在 PowerShell 执行：
 ```powershell
 irm https://raw.githubusercontent.com/lemonade-lab/alemonx/main/scripts/install.ps1 | iex
 ```
+
+### 国内用户安装（镜像加速）
+
+`raw.githubusercontent.com` 与 GitHub Releases 在国内可能不稳定。国内用户推荐通过镜像获取安装脚本，并让脚本优先尝试镜像下载源：
+
+macOS、Linux 或 FreeBSD 在终端执行：
+
+```sh
+curl -fsSL https://ghfast.top/https://raw.githubusercontent.com/lemonade-lab/alemonx/main/scripts/install.sh | ALX_PREFER_MIRROR=1 sh
+```
+
+Windows 在 PowerShell 执行：
+
+```powershell
+$env:ALX_PREFER_MIRROR='1'; irm https://ghfast.top/https://raw.githubusercontent.com/lemonade-lab/alemonx/main/scripts/install.ps1 | iex
+```
+
+`ghfast.top` 不可用时，把命令里的域名换成 `ghproxy.net` 或 `gh-proxy.com` 即可。安装脚本本身支持 `ALX_DOWNLOAD_BASE` 环境变量指向自建镜像，并会在当前源失败后自动尝试下一个源。
 
 ### 手动安装
 
@@ -54,6 +70,8 @@ irm https://raw.githubusercontent.com/lemonade-lab/alemonx/main/scripts/install.
 | Linux 32 位 x86                 | `alx-linux-386.zip`             |
 | Linux ppc64le / s390x / riscv64 | 对应的 `alx-linux-<架构>.zip`   |
 | FreeBSD x64 / ARM64             | 对应的 `alx-freebsd-<架构>.zip` |
+
+国内下载较慢时，可在 GitHub 地址前加镜像前缀，例如 `https://ghfast.top/https://github.com/lemonade-lab/alemonx/releases/latest`。
 
 Windows 直接运行 `alx.exe`。macOS / Linux / FreeBSD：
 

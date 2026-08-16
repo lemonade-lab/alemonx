@@ -10,7 +10,8 @@ irm https://raw.githubusercontent.com/lemonade-lab/alemonx/main/scripts/install.
 param(
     [string]$Repository = $(if ($env:ALX_REPOSITORY) { $env:ALX_REPOSITORY } else { 'lemonade-lab/alemonx' }),
     [string]$InstallDir = $(if ($env:ALX_INSTALL_DIR) { $env:ALX_INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA 'Programs\ALemonX' }),
-    [string]$DownloadBase = $env:ALX_DOWNLOAD_BASE
+    [string]$DownloadBase = $env:ALX_DOWNLOAD_BASE,
+    [bool]$PreferMirror = ($env:ALX_PREFER_MIRROR -eq '1')
 )
 
 Set-StrictMode -Version Latest
@@ -40,13 +41,17 @@ function Add-UserPath([string]$Directory) {
 $architecture = Get-Architecture
 $asset = "alx-windows-$architecture.zip"
 $officialDownloadBase = "https://github.com/$Repository/releases/latest/download"
-$downloadSources = @(
-    if ($DownloadBase) { $DownloadBase.TrimEnd('/') }
-    $officialDownloadBase
+$mirrorDownloadBases = @(
     "https://ghfast.top/https://github.com/$Repository/releases/latest/download"
     "https://ghproxy.net/https://github.com/$Repository/releases/latest/download"
     "https://gh-proxy.com/https://github.com/$Repository/releases/latest/download"
+)
+$downloadSources = @(
+    if ($DownloadBase) { $DownloadBase.TrimEnd('/') }
+    if ($PreferMirror) { $mirrorDownloadBases; $officialDownloadBase }
+    else { $officialDownloadBase; $mirrorDownloadBases }
 ) | Select-Object -Unique
+if ($PreferMirror) { Write-Host '国内镜像优先模式：将优先尝试 ghfast.top 等镜像源，官方源作为兜底。' }
 
 foreach ($downloadSource in $downloadSources) {
     try {

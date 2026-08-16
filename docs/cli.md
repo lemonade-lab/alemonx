@@ -1,5 +1,7 @@
 # AlemonX 命令行
 
+> 本页还有 [English version](en/cli.md)。
+
 工作台提供同名的 `alx` 命令，用于在浏览器不可用或需要远程排障时完成常见操作。后台安装后命令会位于用户目录的本地命令目录；若终端尚未找到它，请按安装结果将该目录加入 `PATH`。
 
 尚未安装时，不必前往 GitHub Releases。macOS、Linux、FreeBSD 可执行：
@@ -16,13 +18,19 @@ irm https://raw.githubusercontent.com/lemonade-lab/alemonx/main/scripts/install.
 
 脚本会下载当前系统对应的最新正式包并校验 SHA-256；完成后重新打开终端即可运行 `alx`。
 
-服务器无法直连 GitHub 时，脚本会自动依次尝试 `ghfast.top`、`ghproxy.net` 和 `gh-proxy.com`。若 GitHub Raw 也无法访问，可通过镜像取得脚本本身：
+服务器无法直连 GitHub 时，脚本会自动依次尝试 `ghfast.top`、`ghproxy.net` 和 `gh-proxy.com`。国内用户可设置 `ALX_PREFER_MIRROR=1` 让镜像源优先于官方源，并可通过镜像取得脚本本身：
 
 ```sh
-curl -fsSL https://ghfast.top/https://raw.githubusercontent.com/lemonade-lab/alemonx/main/scripts/install.sh | sh
+curl -fsSL https://ghfast.top/https://raw.githubusercontent.com/lemonade-lab/alemonx/main/scripts/install.sh | ALX_PREFER_MIRROR=1 sh
 ```
 
-也可设置 HTTPS 的 `ALX_DOWNLOAD_BASE` 来优先使用自建镜像；内置下载源会在它失败后继续尝试。
+Windows PowerShell：
+
+```powershell
+$env:ALX_PREFER_MIRROR='1'; irm https://ghfast.top/https://raw.githubusercontent.com/lemonade-lab/alemonx/main/scripts/install.ps1 | iex
+```
+
+也可设置 HTTPS 的 `ALX_DOWNLOAD_BASE` 指向自建镜像；内置下载源会在它失败后继续尝试。
 
 ```bash
 # 打开与状态
