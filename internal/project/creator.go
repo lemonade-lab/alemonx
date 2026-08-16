@@ -660,7 +660,7 @@ func ensureWritableDirectory(directory string) error {
 			return errors.New("保存位置当前不可写，需要申请系统权限")
 		}
 		if isReadonlyFilesystem(err) {
-			return errors.New("保存位置是只读文件系统，请选择可写目录（Docker 部署请使用 /workspace）")
+			return errors.New("保存位置是只读文件系统，请选择可写目录（Docker 部署请确认工作区卷已挂载且可写，容器内默认路径为 /app/workspace）")
 		}
 		return fmt.Errorf("无法写入保存位置：%w", err)
 	}
