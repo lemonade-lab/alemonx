@@ -942,6 +942,13 @@ function FlowView({
   const location = useLocation()
   const dispatch = useDispatch()
   const { data: workspace } = useWorkspaceQuery()
+  // A previously chosen "custom folder" is persisted by redux-persist and
+  // would otherwise silently divert every new robot away from the workspace
+  // bots directory. Reset to the workspace option each time the wizard opens.
+  useEffect(() => {
+    dispatch(setProject({ destinationMode: 'current', destination: '' }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
   const config = useSelector((state: RootState) => state.guide.developer)
   const project = useSelector((state: RootState) => state.guide.project)
   const routedStep = Number(location.pathname.match(/\/step\/(\d+)/)?.[1] ?? 0)
