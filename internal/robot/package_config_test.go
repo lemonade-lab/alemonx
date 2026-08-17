@@ -453,3 +453,36 @@ func TestDefaultEnableLocalPackageAddsToApps(t *testing.T) {
 		t.Fatalf("enabled = %#v, want demo-pkg", enabled)
 	}
 }
+
+func TestInstallLocalPackageDefaultsEnabledEndToEnd(t *testing.T) {
+	root := t.TempDir()
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
+	source := filepath.Join(t.TempDir(), "market-plugin")
+	if err := os.MkdirAll(source, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeAppPageFixture(t, filepath.Join(source, "package.json"), `{
+  "name":"market-plugin",
+  "version":"1.0.0",
+  "alemonjs":{"config":[{"name":"key","type":"string","description":"key"}]}
+}`)
+	writeAppPageFixture(t, filepath.Join(source, "index.js"), "module.exports = {};\n")
+
+	result, err := installLocalPackage(root, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result.Output, "已默认启用") {
+		t.Fatalf("install output = %q, want default-enable note", result.Output)
+	}
+	if _, err := os.Stat(filepath.Join(root, "packages", "market-plugin", "package.json")); err != nil {
+		t.Fatalf("package did not enter backpack: %v", err)
+	}
+	enabled, err := (Manager{}).EnabledApps(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(enabled) != 1 || enabled[0] != "market-plugin" {
+		t.Fatalf("enabled = %#v, want market-plugin", enabled)
+	}
+}
