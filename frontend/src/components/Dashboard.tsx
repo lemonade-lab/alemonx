@@ -3235,7 +3235,7 @@ export function Dashboard({
                 <Code2 className="size-4" />
               </Button>
               <GitHubAuthControl />
-              <SSHControl />
+              {developerMode && <SSHControl />}
               <Button
                 variant="icon"
                 onClick={() => setRobotNavigationHidden(value => !value)}
