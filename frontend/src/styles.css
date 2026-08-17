@@ -9096,6 +9096,32 @@ button > svg,
   );
   color: var(--theme-danger-text);
 }
+.operation-log {
+  border: 1px solid var(--theme-border-default);
+  background: var(--theme-surface-raised);
+}
+.operation-log.is-success {
+  background: var(--theme-success-soft);
+  border-color: color-mix(
+    in srgb,
+    var(--theme-success) 30%,
+    var(--theme-border-default)
+  );
+}
+.operation-log.is-error {
+  background: var(--theme-danger-soft);
+  border-color: color-mix(
+    in srgb,
+    var(--theme-danger) 30%,
+    var(--theme-border-default)
+  );
+}
+.operation-log.is-success .operation-log-badge {
+  background: var(--theme-success);
+}
+.operation-log.is-error .operation-log-badge {
+  background: var(--theme-danger);
+}
 .settings-pill {
   align-items: center;
   background: var(--theme-surface-raised);

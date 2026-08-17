@@ -8371,7 +8371,7 @@ function CurrentProjectConfigPanel({
         <PlatformLogo logo={config?.logo} className="size-4" />
         <strong>项目扩展配置</strong>
         <span className="truncate text-[11px] font-medium text-slate-400">
-          {config?.package ?? ''} · {config?.namespace ?? ''}
+          {config?.package ?? ''}
         </span>
         <span className="ml-auto flex items-center gap-2">
           <ConfigSourceLinks source={config?.configSource} />
@@ -8390,21 +8390,6 @@ function CurrentProjectConfigPanel({
               values={values}
               onChange={updateValue}
             />
-            {config?.commands?.length ? (
-              <div className="grid gap-1.5 border-t border-slate-100 pt-3">
-                <strong className="text-xs font-semibold text-slate-600">
-                  桌面命令
-                </strong>
-                {config?.commands.map(command => (
-                  <code
-                    key={command.command}
-                    className="rounded-md bg-slate-100 px-2 py-1 text-[11px] text-slate-600"
-                  >
-                    {command.name} · {command.command}
-                  </code>
-                ))}
-              </div>
-            ) : null}
           </div>
         )}
       </div>
@@ -11261,14 +11246,14 @@ function OperationLog({
     failed && /没有权限|访问权限|permission denied|eacces/i.test(output)
   return (
     <aside
-      className={`fixed bottom-5.5 right-5.5 z-80 grid max-h-[min(240px,38vh)] w-[min(420px,calc(100vw-44px))] gap-2 overflow-auto rounded-panel border p-3 text-(--theme-text-primary) shadow-[0_16px_38px_rgb(28_26_23/0.13)] ${failed ? 'border-(--theme-danger) bg-(--theme-danger-soft)' : 'border-(--theme-accent-soft-border) bg-(--theme-success-soft)'}`}
+      className={`operation-log fixed bottom-5.5 right-5.5 z-80 grid max-h-[min(240px,38vh)] w-[min(420px,calc(100vw-44px))] gap-2 overflow-auto rounded-panel p-3 text-(--theme-text-primary) shadow-[0_16px_38px_rgb(28_26_23/0.13)] ${failed ? 'is-error' : 'is-success'}`}
       aria-live="polite"
       aria-label="最近操作结果"
     >
       <header className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <i
-            className={`inline-flex size-5 items-center justify-center rounded-full text-xs not-italic font-bold ${failed ? 'bg-(--theme-danger) text-white' : 'bg-(--theme-success-soft) text-(--theme-success-text)'}`}
+            className="operation-log-badge inline-flex size-5 items-center justify-center rounded-full text-xs font-bold not-italic text-white"
           >
             {failed ? '!' : '✓'}
           </i>
