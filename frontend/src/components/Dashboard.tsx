@@ -10598,6 +10598,15 @@ function PM2LogsPanel({
   onActivate: () => void
 }) {
   type PM2AuditLine = { source: string; text: string }
+  type PM2LogDiagnostic = {
+    code: string
+    severity: 'error' | 'warning' | 'info'
+    title: string
+    summary: string
+    suggestion: string
+    count: number
+    lastSeen?: string
+  }
   type PM2AuditPage = {
     lines: PM2AuditLine[]
     page: number
@@ -10609,6 +10618,7 @@ function PM2LogsPanel({
     sources: string[]
     date?: string
     query?: string
+    diagnostics?: PM2LogDiagnostic[]
   }
   type PM2LogDay = {
     date: string
@@ -10760,6 +10770,7 @@ function PM2LogsPanel({
     })
     return [...snapshot, ...streamed]
   }, [committedQuery, data, live, liveLines, source])
+  const diagnostics = data?.diagnostics ?? []
 
   useEffect(() => {
     if (!open) return
@@ -10849,7 +10860,14 @@ function PM2LogsPanel({
         </button>
       }
     >
-      <div className="pm2-audit">
+      <div
+        className="pm2-audit"
+        style={
+          diagnostics.length > 0
+            ? { gridTemplateRows: 'auto auto auto minmax(0, 1fr)' }
+            : undefined
+        }
+      >
         <div className="pm2-audit-toolbar">
           <button
             className={cn('pm2-audit-live', live && 'active')}
@@ -10985,6 +11003,46 @@ function PM2LogsPanel({
             导出
           </button>
         </div>
+        {diagnostics.length > 0 && (
+          <div className="max-h-[190px] overflow-auto border-b border-[var(--theme-border-default)] bg-[var(--theme-surface-raised)]">
+            <div className="flex items-center gap-1.5 px-2.5 pb-[5px] pt-[7px] text-[0.72rem] text-[var(--theme-text-secondary)]">
+              <AlertTriangle className="size-3.5" />
+              <strong>当前日志诊断</strong>
+              <span className="ml-auto text-[var(--theme-text-muted)]">
+                {diagnostics.length} 项
+              </span>
+            </div>
+            <div className="grid">
+              {diagnostics.map(item => (
+                <div
+                  key={item.code}
+                  className={cn(
+                    'grid gap-0.5 border-l-[3px] border-t border-t-[var(--theme-border-default)] px-2.5 py-[7px]',
+                    item.severity === 'error' && 'border-l-[#dc2626]',
+                    item.severity === 'warning' && 'border-l-[#d97706]',
+                    item.severity === 'info' && 'border-l-[#0284c7]'
+                  )}
+                >
+                  <div className="flex items-baseline gap-2">
+                    <strong className="text-[0.73rem] text-[var(--theme-text-primary)]">
+                      {item.title}
+                    </strong>
+                    <span className="ml-auto whitespace-nowrap text-[0.66rem] text-[var(--theme-text-muted)]">
+                      {item.count > 1 ? `${item.count} 次 · ` : ''}
+                      {item.lastSeen || '当前日志'}
+                    </span>
+                  </div>
+                  <p className="m-0 text-[0.69rem] leading-[1.4] text-[var(--theme-text-secondary)]">
+                    {item.summary}
+                  </p>
+                  <small className="m-0 text-[0.66rem] leading-[1.4] text-[var(--theme-text-muted)]">
+                    {item.suggestion}
+                  </small>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
         <div
           className="pm2-audit-body"
           ref={outputRef}

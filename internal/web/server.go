@@ -4919,7 +4919,7 @@ func (s *server) robotTasksHandler(w http.ResponseWriter, r *http.Request) {
 		// forwards full-receive browser Actions to WebSocket platform clients.
 		// Apply the guarded compatibility bridge before booting the robot so the
 		// running adapter can actually receive and answer tool requests.
-		if _, patchErr := robot.EnsureCBPIPCActionBridge(input.Root); patchErr != nil {
+		if _, patchErr := robot.EnsureRuntimeCompatibility(input.Root); patchErr != nil {
 			writeError(w, http.StatusBadRequest, patchErr.Error())
 			return
 		}
