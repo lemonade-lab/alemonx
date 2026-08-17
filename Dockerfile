@@ -58,13 +58,10 @@ RUN  (apt-get update || (sleep 3 && apt-get update)) \
   && mkdir -p /app /app/workspace /data \
   && mkdir -p ~/.ssh \
   && chmod 700 ~/.ssh \
-  && ssh-keyscan github.com >> ~/.ssh/known_hosts \
-  && chown -R node:node /app /data
+  && ssh-keyscan github.com >> ~/.ssh/known_hosts
 
 WORKDIR /app
 COPY --from=builder /out/alx /app/alx
-
-USER node
 
 # 设置环境变量
 ENV HOME=/data \

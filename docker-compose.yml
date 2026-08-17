@@ -12,6 +12,7 @@ services:
       XDG_CACHE_HOME: /data/cache
       ALX_DEPLOYMENT: ${ALX_DEPLOYMENT:-production}
       ALX_OPS_STORAGE: sqlite
+      ALX_CONTAINER: "1"
       ALX_WORKSPACE: /app/workspace
       ALEMONJS_SETUP_ROOTS: /app/workspace
       ALX_PRIVILEGED_MODE: disabled

@@ -205,6 +205,16 @@ func TestPermissionAdviceStaysInWebOperationFlow(t *testing.T) {
 	}
 }
 
+func TestPermissionAdviceContainerMode(t *testing.T) {
+	t.Setenv("ALX_CONTAINER", "1")
+	message := permissionAdvice("执行 yarn").Error()
+	for _, expected := range []string{"没有权限", "容器", "root", "Docker Desktop"} {
+		if !strings.Contains(message, expected) {
+			t.Fatalf("container permission advice = %q, missing %q", message, expected)
+		}
+	}
+}
+
 func TestPM2LogPaginationStartsWithNewestPage(t *testing.T) {
 	lines := make([]string, 241)
 	for index := range lines {

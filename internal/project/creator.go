@@ -688,6 +688,9 @@ func isPermissionError(err error) bool {
 }
 
 func permissionAdvice(action string) error {
+	if system.InContainer() {
+		return fmt.Errorf("没有权限%s。当前运行在容器内：官方镜像以 root 运行，请确认宿主机挂载目录未被设为只读、Docker Desktop 已共享该目录；若你自定义为非 root 用户运行，请确保挂载目录对该用户（uid 1000）可写", action)
+	}
 	return fmt.Errorf("没有权限%s。请在系统设置中为 alx 授予该磁盘或文件夹的访问权限，或选择当前登录账户可读写的保存位置后重试", action)
 }
 

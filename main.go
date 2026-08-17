@@ -295,9 +295,6 @@ func main() {
 		}
 	}
 	if strings.EqualFold(strings.TrimSpace(os.Getenv("ALX_DEPLOYMENT")), "production") {
-		if !strings.EqualFold(strings.TrimSpace(os.Getenv("ALX_OPS_STORAGE")), "sqlite") {
-			fmt.Println("提示：生产模式未设置 ALX_OPS_STORAGE=sqlite，AI 运维将回退为 JSON 存储。")
-		}
 		if manager, authErr := access.New(); authErr != nil {
 			log.Fatalf("生产模式无法加载身份认证配置：%v", authErr)
 		} else if status, statusErr := manager.Status(""); statusErr != nil {

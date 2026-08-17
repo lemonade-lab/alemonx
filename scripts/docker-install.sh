@@ -67,11 +67,6 @@ prepare() {
   # ./data holds workbench state (accounts, config, SQLite), ./workspace is the
   # robot workspace mounted at /app/workspace inside the container.
   mkdir -p ./data ./workspace
-  case "$(uname -s 2>/dev/null || printf unknown)" in
-    Linux)
-      info '容器以非 root 用户（uid 1000）运行；如遇权限错误，请执行：chown -R 1000:1000 ./data ./workspace'
-      ;;
-  esac
 }
 
 run_compose() {

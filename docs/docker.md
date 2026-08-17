@@ -30,7 +30,7 @@ mkdir data workspace
 docker compose up -d
 ```
 
-容器内程序运行目录 `/app` 是只读的，但其中的 `/app/workspace` 是独立挂载、可写；创建机器人项目时如果选择了“当前目录”，程序会自动回退到可写的 `ALEMONJS_SETUP_ROOTS`（Docker 默认指向挂载的 `/app/workspace`），因此项目默认会保存到该工作区。
+容器内程序运行目录 `/app` 与持久工作区 `/app/workspace` 分开；创建机器人项目时即使选择了“当前目录”，程序也会自动保存到可写的 `ALEMONJS_SETUP_ROOTS`（Docker 默认指向挂载的 `/app/workspace`），因此项目始终位于宿主机持久化的工作区中。
 
 ## 配置与数据
 
@@ -52,11 +52,9 @@ docker compose up -d
 
 容器内统一工作区为 `/app/workspace`：首次启动会把内嵌模板物化到其中的 `templates/`（可编辑，持久保存在宿主机 `./workspace`），新建机器人默认落在 `bots/`。内置 Yarn 物化到 `packages/yarn`；PM2 不随镜像嵌入，首次需要时用内置 Yarn 安装到 `packages/pm2`（位置固定，持久保存在宿主机目录）。
 
-容器进程以非 root 的 `node` 用户（uid 1000）运行。Linux 上 bind 挂载保留宿主目录属主，如果 `./data` 或 `./workspace` 对 uid 1000 不可写，容器会报只读/权限错误，请执行：
+容器进程以 root 运行，挂载目录开箱即用，无需在宿主机执行 `chown`/`chmod`。
 
-```sh
-chown -R 1000:1000 ./data ./workspace
-```
+macOS（Docker Desktop）上唯一的宿主侧要求是让 Docker Desktop 能访问部署目录：先在“系统设置 → 隐私与安全 → 文件与文件夹”（必要时“完全磁盘访问”）中允许 Docker Desktop，并在 Docker Desktop 的 “Settings → Resources → File sharing” 中包含部署目录；若目录位于“桌面/文稿”等受保护位置仍无法挂载，把目录移到普通位置（如 `~/alx-docker`）即可。
 
 不要为了方便把容器改成 privileged，也不要挂载 `/var/run/docker.sock`。`docker compose down` 不会删除 `./data` 与 `./workspace`；只有手动删除这两个目录才会清除数据。
 

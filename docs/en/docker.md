@@ -30,7 +30,7 @@ mkdir data workspace
 docker compose up -d
 ```
 
-The container's `/app` directory is read-only, but `/app/workspace` is a separate writable mount. When creating a robot project with "current directory" selected, the program automatically falls back to the writable `ALEMONJS_SETUP_ROOTS` (Docker defaults it to the mounted `/app/workspace`), so projects are saved there by default.
+The container's `/app` directory is separate from the persistent `/app/workspace` mount. When creating a robot project with "current directory" selected, the program automatically saves into the writable `ALEMONJS_SETUP_ROOTS` (Docker defaults it to the mounted `/app/workspace`), so projects always live in the host-persisted workspace.
 
 ## Configuration and data
 
@@ -52,11 +52,7 @@ Runtime data is not kept in a named volume but in host directories next to the c
 
 The unified workspace inside the container is `/app/workspace`: on first start the embedded templates are materialized into its `templates/` directory (editable and persisted on the host under `./workspace`), and new robots land in `bots/` by default. The built-in Yarn is materialized into `packages/yarn`; PM2 is not embedded in the image and is installed with the built-in Yarn into `packages/pm2` on first use (a stable location persisted on the host).
 
-The container runs as the non-root `node` user (uid 1000). On Linux, bind mounts keep the host directory ownership; if `./data` or `./workspace` is not writable by uid 1000, the container reports read-only/permission errors. Fix it with:
-
-```sh
-chown -R 1000:1000 ./data ./workspace
-```
+The container runs as root, so the mounted directories work out of the box without any `chown`/`chmod` on the host. On macOS, the only host-side requirement is letting Docker Desktop access the deployment directory (System Settings → Privacy & Security → Files and Folders, and Docker Desktop → Settings → Resources → File sharing).
 
 Do not switch the container to privileged for convenience, and do not mount `/var/run/docker.sock`. `docker compose down` does not delete `./data` or `./workspace`; only deleting these directories manually removes the data.
 
