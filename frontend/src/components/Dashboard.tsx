@@ -3281,16 +3281,23 @@ export function Dashboard({
             onConfirm={() => {
               const packageName = pendingBackpackRemoval
               if (!packageName) return
+              // Close immediately: the removal runs asynchronously and the
+              // task poll may outlive the dialog, leaving it stuck open after
+              // the plugin is already gone.
+              setPendingBackpackRemoval('')
               void (async () => {
-                if (
-                  await api('POST', {
-                    root,
-                    action: 'remove-local-package',
-                    package: packageName
-                  })
+                await api('POST', {
+                  root,
+                  action: 'remove-local-package',
+                  package: packageName
+                })
+                void refetchPackages()
+                dispatch(
+                  workspaceApi.util.invalidateTags([
+                    { type: 'LocalPackages', id: root },
+                    { type: 'PackageConfig', id: root }
+                  ])
                 )
-                  void refetchPackages()
-                setPendingBackpackRemoval('')
               })()
             }}
           />
@@ -7658,8 +7665,8 @@ function BackpackPanel({
                 <div className="flex justify-end shrink-0 items-center gap-2 border-t border-slate-100 px-3 py-2">
                   <span className="text-[11px] text-slate-400">
                     {enabledApps.has(item.name)
-                      ? '已加入 apps，机器人启动时会加载'
-                      : '未加入 apps'}
+                      ? '已启用,机器人启动时会加载'
+                      : '未启用,机器人启动将不会加载'}
                   </span>
                   {item.valid && (
                     <button
