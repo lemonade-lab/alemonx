@@ -5733,6 +5733,9 @@ function SystemPluginCenter({
   onRefresh: () => void
   sidebarLayout?: boolean
 }) {
+  const developerMode = useSelector(
+    (state: RootState) => state.workspace.developerMode
+  )
   const [setEnabled, { isLoading }] = useSetSetupPluginEnabledMutation()
   const [installPlugin, { isLoading: installing }] =
     useInstallSetupPluginMutation()
@@ -5790,6 +5793,9 @@ function SystemPluginCenter({
   const [pluginView, setPluginView] = useStoreState<
     'market' | 'mine' | 'development'
   >('market')
+  useEffect(() => {
+    if (!developerMode && pluginView === 'development') setPluginView('mine')
+  }, [developerMode, pluginView, setPluginView])
   const developmentItems = developmentData?.items ?? []
   const isDevelopmentView = sidebarLayout && pluginView === 'development'
   const visiblePlugins = !sidebarLayout
@@ -6070,13 +6076,15 @@ function SystemPluginCenter({
           >
             <HardDrive className="size-4" /> 我的
           </button>
-          <button
-            type="button"
-            aria-current={pluginView === 'development' ? 'page' : undefined}
-            onClick={() => setPluginView('development')}
-          >
-            <Code2 className="size-4" /> 开发
-          </button>
+          {developerMode && (
+            <button
+              type="button"
+              aria-current={pluginView === 'development' ? 'page' : undefined}
+              onClick={() => setPluginView('development')}
+            >
+              <Code2 className="size-4" /> 开发
+            </button>
+          )}
         </SidebarWindowSectionNav>
       )}
       {sidebarLayout ? (
@@ -6100,7 +6108,7 @@ function SystemPluginCenter({
           </div>
           <div className="flex gap-2">
             {persistentActions}
-            {developmentAction}
+            {developerMode && developmentAction}
           </div>
         </header>
       )}
@@ -6122,7 +6130,8 @@ function SystemPluginCenter({
           </span>
         </button>
       )}
-      {(!sidebarLayout || pluginView === 'development') &&
+      {developerMode &&
+        (!sidebarLayout || pluginView === 'development') &&
         developmentItems.length > 0 && (
           <section
             className="setup-plugin-development-list"
@@ -9182,7 +9191,7 @@ function RuntimePanel({
                 </strong>
                 <span className="block text-xs text-slate-500">
                   {overview?.dependenciesComplete
-                    ? '依赖完整；可只升级 AlemonJS 相关依赖，或重新安装全部依赖。'
+                    ? '依赖完整；遇到模块/依赖异常时,多尝试点点'
                     : '依赖未安装或缺失；启动、构建和后台运行时会自动同步。'}
                 </span>
               </div>
