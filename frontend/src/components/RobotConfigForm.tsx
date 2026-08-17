@@ -1,6 +1,7 @@
 import { useStoreState } from '../store/guideStore'
-import { useEffect, type ReactNode } from 'react'
-import { Settings } from 'lucide-react'
+import { useEffect, useState, type ReactNode } from 'react'
+import { Settings, SlidersHorizontal } from 'lucide-react'
+import cn from 'classnames'
 import { RobotPanel } from './RobotPanel'
 
 type Props = {
@@ -233,6 +234,7 @@ function mergeConfig(existing: string, generated: string) {
 
 export function RobotConfigForm({ content, toolbar, onChange, extensionConfig }: Props) {
   const [values, setValues] = useStoreState<Values>(empty)
+  const [advanced, setAdvanced] = useState(false)
   useEffect(() => {
     const next = readValues(content)
     setValues(current => (sameValues(current, next) ? current : next))
@@ -281,13 +283,50 @@ export function RobotConfigForm({ content, toolbar, onChange, extensionConfig }:
       </div>
     </details>
   )
+  const advancedSwitch = (
+    <button
+      type="button"
+      className={cn(
+        'secondary-button min-h-9 gap-1.5',
+        advanced && 'border-brand-300 bg-brand-50 text-brand-700'
+      )}
+      onClick={() => setAdvanced(value => !value)}
+      aria-pressed={advanced}
+      title={advanced ? '收起高级参数' : '展开高级参数'}
+    >
+      <SlidersHorizontal className="size-3.5" />
+      高级
+      <span
+        className={cn(
+          'relative ml-0.5 inline-flex shrink-0 items-center rounded-full transition',
+          advanced ? 'bg-brand-600' : 'bg-slate-300'
+        )}
+        style={{ boxSizing: 'border-box', height: 16, padding: 2, width: 28 }}
+        aria-hidden="true"
+      >
+        <span
+          className="block shrink-0 rounded-full bg-white shadow-sm transition-transform"
+          style={{
+            height: 12,
+            transform: `translateX(${advanced ? 12 : 0}px)`,
+            width: 12
+          }}
+        />
+      </span>
+    </button>
+  )
   return (
     <RobotPanel
       className="robot-config-form max-w-190"
       icon={<Settings className="size-4" />}
       title="机器人配置"
       description="管理当前机器人的运行与连接参数"
-      actions={toolbar}
+      actions={
+        <>
+          {toolbar}
+          {advancedSwitch}
+        </>
+      }
     >
       {extensionConfig}
       {group(
@@ -320,7 +359,8 @@ export function RobotConfigForm({ content, toolbar, onChange, extensionConfig }:
           )}
         </>
       )}
-      {group(
+      {advanced &&
+        group(
         'CBP 运行',
         '常用',
         <>
@@ -346,7 +386,7 @@ export function RobotConfigForm({ content, toolbar, onChange, extensionConfig }:
             </select>
           </label>
         </>
-      )}
+        )}
       {group(
         '身份与权限',
         '按需',
@@ -357,7 +397,8 @@ export function RobotConfigForm({ content, toolbar, onChange, extensionConfig }:
           {field('botKey', '机器人 Key', '多个用逗号分隔')}
         </>
       )}
-      {group(
+      {advanced &&
+        group(
         '消息规则',
         '高级',
         <>
@@ -374,8 +415,9 @@ export function RobotConfigForm({ content, toolbar, onChange, extensionConfig }:
           {field('mappingRegular', '映射匹配文本', '/帮助')}
           {field('mappingTarget', '映射替换文本', '/help')}
         </>
-      )}
-      {group(
+        )}
+      {advanced &&
+        group(
         '运行与模块',
         '高级',
         <>
@@ -383,8 +425,9 @@ export function RobotConfigForm({ content, toolbar, onChange, extensionConfig }:
           {field('repeatedUserTime', '重复用户窗口（毫秒）', '1000')}
           {field('apps', '启用模块', 'alemonjs-openai, alemonjs-xianyu')}
         </>
-      )}
-      {group(
+        )}
+      {advanced &&
+        group(
         'CBP 高级参数',
         '高级',
         <>
@@ -407,7 +450,7 @@ export function RobotConfigForm({ content, toolbar, onChange, extensionConfig }:
             </select>
           </label>
         </>
-      )}
+        )}
     </RobotPanel>
   )
 }
