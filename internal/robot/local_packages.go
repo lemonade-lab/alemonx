@@ -44,7 +44,7 @@ func installLocalPackage(root, source string) (Result, error) {
 		if ref != "" {
 			version = "（" + ref + "）"
 		}
-		return Result{Path: target, Output: "已安装到 packages/" + name + version + "。\n" + output}, nil
+		return Result{Path: target, Output: "已安装到 packages/" + name + version + "。" + defaultEnableLocalPackage(root, target) + "\n" + output}, nil
 	}
 	temporary, err := os.MkdirTemp("", "alx-package-")
 	if err != nil {
@@ -69,7 +69,29 @@ func installLocalPackage(root, source string) (Result, error) {
 	if err := copyPath(filepath.Join(extracted, "package"), target); err != nil {
 		return Result{}, fmt.Errorf("写入本地插件包失败：%w", err)
 	}
-	return Result{Path: target, Output: "已安装到 packages/" + name + "。"}, nil
+	return Result{Path: target, Output: "已安装到 packages/" + name + "。" + defaultEnableLocalPackage(root, target)}, nil
+}
+
+// defaultEnableLocalPackage adds a freshly installed backpack package to the
+// alemon.config.yaml apps array so anything that enters the backpack starts
+// enabled. Failures are non-fatal: the package stays installed either way.
+func defaultEnableLocalPackage(root, target string) string {
+	name := ""
+	if data, err := os.ReadFile(filepath.Join(target, "package.json")); err == nil {
+		var manifest struct {
+			Name string `json:"name"`
+		}
+		if json.Unmarshal(data, &manifest) == nil && manifest.Name != "" {
+			name = manifest.Name
+		}
+	}
+	if name == "" {
+		return ""
+	}
+	if _, err := (Manager{}).SetAppEnabled(root, name, true); err != nil {
+		return ""
+	}
+	return "，并已默认启用（加入 apps）"
 }
 
 // Connection packages are normal project dependencies. They must not be

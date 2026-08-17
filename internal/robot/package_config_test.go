@@ -412,3 +412,44 @@ func TestResolveRuntimePlatformsMergesDeclaredOverBuiltin(t *testing.T) {
 		t.Fatalf("builtin candidates must remain: %#v", qqBot)
 	}
 }
+
+func TestPackageConfigsOnlyEnabledBackpackPackages(t *testing.T) {
+	root := t.TempDir()
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
+	for _, name := range []string{"alpha", "beta"} {
+		writeAppPageFixture(t, filepath.Join(root, "packages", name, "package.json"), `{
+  "name":"`+name+`",
+  "alemonjs":{
+    "config":[{"name":"token","type":"string","description":"token"}]
+  }
+}`)
+	}
+	writeAppPageFixture(t, filepath.Join(root, "alemon.config.yaml"), "apps:\n  - alpha\n")
+
+	items, err := (Manager{}).PackageConfigs(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].Package != "alpha" {
+		t.Fatalf("items = %#v, want only enabled backpack package alpha", items)
+	}
+}
+
+func TestDefaultEnableLocalPackageAddsToApps(t *testing.T) {
+	root := t.TempDir()
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
+	target := filepath.Join(root, "packages", "demo")
+	writeAppPageFixture(t, filepath.Join(target, "package.json"), `{"name":"demo-pkg"}`)
+
+	note := defaultEnableLocalPackage(root, target)
+	if !strings.Contains(note, "已默认启用") {
+		t.Fatalf("note = %q, want default-enable note", note)
+	}
+	enabled, err := (Manager{}).EnabledApps(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(enabled) != 1 || enabled[0] != "demo-pkg" {
+		t.Fatalf("enabled = %#v, want demo-pkg", enabled)
+	}
+}

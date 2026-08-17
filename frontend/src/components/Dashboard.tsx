@@ -156,6 +156,7 @@ import {
   useLocalPackageReadmeQuery,
   usePackageManifestQuery,
   usePackageConfigQuery,
+  usePackageConfigsQuery,
   useRobotRuntimeQuery,
   useRobotPM2StatusQuery,
   useRobotPM2ProcessesQuery,
@@ -1497,14 +1498,13 @@ export function Dashboard({
     refetchOnMountOrArgChange: true
   })
   const {
-    data: currentPackageConfig,
-    // Keep the form mounted while an automatic save refreshes its data.
-    // `isFetching` also becomes true for that background refresh.
-    isLoading: currentPackageConfigLoading
-  } = usePackageConfigQuery(
-    { root, package: '' },
+    data: extensionConfigsData,
+    isLoading: extensionConfigsLoading
+  } = usePackageConfigsQuery(
+    root,
     { skip: !root || section !== 'config' || configEditor !== 'visual' }
   )
+  const extensionConfigs = extensionConfigsData?.items ?? []
   const watchDevelopmentTask = page === 'robot' && section === 'runtime'
   const { data: operationTasksData } = useRobotTasksQuery(undefined, {
     skip: !watchDevelopmentTask,
@@ -2837,10 +2837,10 @@ export function Dashboard({
                   />
                 }
                 extensionConfig={
-                  <CurrentProjectConfigPanel
-                    config={currentPackageConfig}
-                    loading={currentPackageConfigLoading}
-                    onSave={values => savePackageConfig('', values)}
+                  <ProjectExtensionConfigsPanel
+                    configs={extensionConfigs}
+                    loading={extensionConfigsLoading}
+                    onSave={(pkg, values) => savePackageConfig(pkg, values)}
                   />
                 }
               />
@@ -8330,13 +8330,55 @@ function PackageConfigPanel({
     </div>
   )
 }
-function CurrentProjectConfigPanel({
-  config,
+function ProjectExtensionConfigsPanel({
+  configs,
   loading,
   onSave
 }: {
-  config?: PackageConfig
+  configs: PackageConfig[]
   loading: boolean
+  onSave: (pkg: string, values: Record<string, unknown>) => Promise<boolean>
+}) {
+  // A config declaration is optional. Do not turn its absence into an error
+  // for ordinary robots that do not expose project-specific settings.
+  if (!loading && configs.length === 0) return null
+  return (
+    <details
+      className="project-config-panel group overflow-hidden rounded-xl border border-slate-200 bg-white"
+      open={false}
+    >
+      <summary className="flex min-h-12 cursor-pointer list-none flex-wrap items-center gap-2 px-3 py-2 text-sm font-semibold text-slate-700 marker:content-none [&::-webkit-details-marker]:hidden">
+        <Package className="size-4" />
+        <strong>项目扩展配置</strong>
+        <span className="text-[11px] font-medium text-slate-400">
+          {loading ? '识别中…' : `${configs.length} 项`}
+        </span>
+        <i className="ml-auto text-lg font-normal text-slate-400 transition-transform group-open:rotate-90">
+          ›
+        </i>
+      </summary>
+      <div className="grid gap-3 border-t border-slate-100 p-3">
+        {loading ? (
+          <p className="text-sm text-slate-500">正在识别当前项目的扩展配置…</p>
+        ) : (
+          configs.map(config => (
+            <PackageConfigFieldsItem
+              key={config.package}
+              config={config}
+              onSave={values => onSave(config.package, values)}
+            />
+          ))
+        )}
+      </div>
+    </details>
+  )
+}
+
+function PackageConfigFieldsItem({
+  config,
+  onSave
+}: {
+  config: PackageConfig
   onSave: (values: Record<string, unknown>) => Promise<boolean>
 }) {
   const [values, setValues] = useStoreState<Record<string, unknown>>({})
@@ -8347,51 +8389,37 @@ function CurrentProjectConfigPanel({
     scheduleSave(next)
   }
   useEffect(() => {
-    if (config) {
-      const next: Record<string, unknown> = {}
-      for (const field of config.fields ?? []) {
-        if (field.name in config.values) {
-          next[field.name] = config.values[field.name]
-        } else if (field.default !== undefined && field.default !== null) {
-          next[field.name] = field.default
-        }
+    const next: Record<string, unknown> = {}
+    for (const field of config.fields ?? []) {
+      if (field.name in config.values) {
+        next[field.name] = config.values[field.name]
+      } else if (field.default !== undefined && field.default !== null) {
+        next[field.name] = field.default
       }
-      setValues(current => (sameConfigValues(current, next) ? current : next))
     }
+    setValues(current => (sameConfigValues(current, next) ? current : next))
   }, [config, setValues])
-  // A config declaration is optional. Do not turn its absence into an error
-  // for ordinary robots that do not expose project-specific settings.
-  if (!loading && !config?.fields?.length) return null
   return (
     <details
-      className="project-config-panel group overflow-hidden rounded-xl border border-slate-200 bg-white"
+      className="group overflow-hidden rounded-lg border border-slate-200 bg-white"
       open={false}
     >
-      <summary className="flex min-h-12 cursor-pointer list-none flex-wrap items-center gap-2 px-3 py-2 text-sm font-semibold text-slate-700 marker:content-none [&::-webkit-details-marker]:hidden">
-        <PlatformLogo logo={config?.logo} className="size-4" />
-        <strong>项目扩展配置</strong>
-        <span className="truncate text-[11px] font-medium text-slate-400">
-          {config?.package ?? ''}
+      <summary className="flex min-h-10 cursor-pointer list-none flex-wrap items-center gap-2 px-3 py-1.5 text-xs font-semibold text-slate-700 marker:content-none [&::-webkit-details-marker]:hidden">
+        <PlatformLogo logo={config.logo} className="size-4" />
+        <strong>{config.package}</strong>
+        <span className="text-[11px] font-medium text-slate-400">
+          {config.namespace}
         </span>
-        <span className="ml-auto flex items-center gap-2">
-          <ConfigSourceLinks source={config?.configSource} />
-          <i className="text-lg font-normal text-slate-400 transition-transform group-open:rotate-90">
-            ›
-          </i>
-        </span>
+        <i className="ml-auto text-base font-normal text-slate-400 transition-transform group-open:rotate-90">
+          ›
+        </i>
       </summary>
-      <div className="border-t border-slate-100 p-4">
-        {loading ? (
-          <p className="text-sm text-slate-500">正在识别当前项目的扩展配置…</p>
-        ) : (
-          <div className="grid gap-4">
-            <ConfigFieldsEditor
-              fields={config?.fields ?? []}
-              values={values}
-              onChange={updateValue}
-            />
-          </div>
-        )}
+      <div className="grid gap-3 border-t border-slate-100 p-3">
+        <ConfigFieldsEditor
+          fields={config.fields ?? []}
+          values={values}
+          onChange={updateValue}
+        />
       </div>
     </details>
   )

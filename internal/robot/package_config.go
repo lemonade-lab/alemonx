@@ -97,6 +97,53 @@ func (m Manager) CurrentPackageConfig(root string) (PackageConfig, error) {
 	return packageConfigFromManifest(path, data, "当前项目")
 }
 
+// PackageConfigs returns config declarations for backpack packages that are
+// currently enabled in alemon.config.yaml (the apps array). Packages without
+// a config declaration are omitted.
+func (m Manager) PackageConfigs(root string) ([]PackageConfig, error) {
+	path, err := projectPath(root)
+	if err != nil {
+		return nil, err
+	}
+	enabledNames := map[string]bool{}
+	if enabled, enabledErr := (Manager{}).EnabledApps(path); enabledErr == nil {
+		for _, name := range enabled {
+			enabledNames[name] = true
+		}
+	}
+	backpackNames := []string{}
+	if entries, readErr := os.ReadDir(filepath.Join(path, "packages")); readErr == nil {
+		for _, entry := range entries {
+			if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
+				continue
+			}
+			candidate, candidateErr := os.ReadFile(filepath.Join(path, "packages", entry.Name(), "package.json"))
+			if candidateErr != nil {
+				continue
+			}
+			var manifest struct {
+				Name string `json:"name"`
+			}
+			if json.Unmarshal(candidate, &manifest) == nil && manifest.Name != "" {
+				backpackNames = append(backpackNames, manifest.Name)
+			}
+		}
+	}
+	sort.Strings(backpackNames)
+	items := []PackageConfig{}
+	for _, name := range backpackNames {
+		if !enabledNames[name] {
+			continue
+		}
+		config, configErr := m.PackageConfig(path, name)
+		if configErr != nil || len(config.Fields) == 0 {
+			continue
+		}
+		items = append(items, config)
+	}
+	return items, nil
+}
+
 func packageConfigFromManifest(path string, data []byte, subject string) (PackageConfig, error) {
 	declaration, err := packageschema.Parse(data)
 	if err != nil {

@@ -1130,6 +1130,7 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	mux.HandleFunc("/api/v1/robot/webview/", s.botAppPageHandler)
 	mux.HandleFunc("/api/v1/robot/apps", s.robotAppsHandler)
 	mux.HandleFunc("/api/v1/robot/package-config", s.robotPackageConfigHandler)
+	mux.HandleFunc("/api/v1/robot/package-configs", s.robotPackageConfigsHandler)
 	mux.HandleFunc("/api/v1/robot/login", s.robotLoginHandler)
 	mux.HandleFunc("/api/v1/robot/onebot-sync", s.robotOneBotSyncHandler)
 	mux.HandleFunc("/api/v1/github/auth/status", s.githubAuthStatusHandler)
@@ -6934,6 +6935,19 @@ func (s *server) robotPackageConfigHandler(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *server) robotPackageConfigsHandler(w http.ResponseWriter, r *http.Request) {
+	root := r.URL.Query().Get("root")
+	items, err := s.robots.PackageConfigs(root)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if items == nil {
+		items = []robot.PackageConfig{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
 func (s *server) robotLoginHandler(w http.ResponseWriter, r *http.Request) {

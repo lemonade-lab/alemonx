@@ -648,6 +648,11 @@ export const workspaceApi = createApi({
         { type: 'PackageConfig', id: `${arg.root}:${arg.package}` }
       ]
     }),
+    packageConfigs: build.query<{ items: PackageConfig[] }, string>({
+      query: root =>
+        `robot/package-configs?${new URLSearchParams({ root })}`,
+      providesTags: ['PackageConfig']
+    }),
     localPackages: build.query<LocalPackages, string>({
       query: root => `robot/packages?${new URLSearchParams({ root })}`,
       providesTags: (_result, _error, root) => [
@@ -1028,6 +1033,7 @@ export const {
   useCatalogDocumentQuery,
   useCatalogPackageConfigQuery,
   usePackageConfigQuery,
+  usePackageConfigsQuery,
   useLazyPackageConfigQuery,
   useLocalPackagesQuery,
   useUploadRobotPackageMutation,
