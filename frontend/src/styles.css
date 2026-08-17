@@ -1488,10 +1488,8 @@ button {
   --sidebar-window-content-inline: 24px;
   --sidebar-window-content-block-start: 20px;
   --sidebar-window-content-block-end: 24px;
-  padding:
-    var(--sidebar-window-content-block-start)
-    var(--sidebar-window-content-inline)
-    var(--sidebar-window-content-block-end);
+  padding: var(--sidebar-window-content-block-start)
+    var(--sidebar-window-content-inline) var(--sidebar-window-content-block-end);
 }
 
 [data-sidebar-window-body] > .workspace-content {
@@ -2554,6 +2552,22 @@ button {
   font: inherit;
   padding: 0 3px;
 }
+.qq9-image-message img {
+  background: var(--theme-surface-hover);
+  border: 1px solid var(--theme-border-subtle);
+  border-radius: 8px;
+  display: block;
+  max-height: 280px;
+  max-width: min(320px, 100%);
+  object-fit: contain;
+}
+.qq9-image-fallback {
+  text-decoration: none;
+}
+.qq9-image-fallback:hover {
+  background: var(--theme-surface-hover);
+  color: var(--theme-text-secondary);
+}
 .qq9-message-badge,
 .qq9-reaction-chip {
   display: inline-flex;
@@ -2584,12 +2598,15 @@ button {
 }
 .qq9-popover-menu button,
 .qq9-mention-menu button {
+  align-items: center;
   background: transparent;
   border: 0;
   border-radius: 5px;
   color: var(--theme-text-secondary);
   cursor: pointer;
+  display: flex;
   font-size: 11px;
+  gap: 7px;
   padding: 7px 8px;
   text-align: left;
   white-space: nowrap;

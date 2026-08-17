@@ -210,6 +210,7 @@ import {
 import {
   addProjects,
   removeProject as removeWorkspaceProject,
+  removeProjects,
   reorderProjects,
   selectProject,
   pinProject as pinWorkspaceProject,
@@ -1294,6 +1295,34 @@ export function Dashboard({
   const activeProjectID = useSelector(
     (state: RootState) => state.workspace.activeProjectID
   )
+  const projectValidationSignature = projects
+    .map(project => project.path)
+    .join('\x00')
+  useEffect(() => {
+    if (!projectValidationSignature) return
+    let disposed = false
+    void (async () => {
+      const staleIDs: string[] = []
+      await Promise.all(
+        projects.map(async project => {
+          try {
+            const response = await fetch(
+              `/api/v1/robot/validate?${new URLSearchParams({ root: project.path })}`
+            )
+            const data = (await response.json()) as { valid?: boolean }
+            if (!response.ok || data.valid !== true) staleIDs.push(project.id)
+          } catch {
+            // Keep local project entries when the backend is briefly
+            // unreachable; a later successful validation can prune them.
+          }
+        })
+      )
+      if (!disposed && staleIDs.length) dispatch(removeProjects(staleIDs))
+    })()
+    return () => {
+      disposed = true
+    }
+  }, [dispatch, projectValidationSignature, projects])
   const developerMode = useSelector(
     (state: RootState) => state.workspace.developerMode
   )

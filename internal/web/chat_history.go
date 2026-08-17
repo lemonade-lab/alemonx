@@ -59,6 +59,7 @@ type chatRecordSummary struct {
 // production images without a system sqlite3 binary.
 type chatHistoryStore struct {
 	path      string
+	mediaDir  string
 	db        *sql.DB
 	mu        sync.Mutex
 	retention time.Duration
@@ -75,7 +76,12 @@ func openChatHistoryStore(path string) (*chatHistoryStore, error) {
 	if err != nil {
 		return nil, err
 	}
-	store := &chatHistoryStore{path: path, db: db, retention: retentionDaysFromEnv("ALX_CHAT_RETENTION_DAYS", defaultChatHistoryRetention)}
+	store := &chatHistoryStore{
+		path:      path,
+		mediaDir:  filepath.Join(filepath.Dir(path), "chat-media"),
+		db:        db,
+		retention: retentionDaysFromEnv("ALX_CHAT_RETENTION_DAYS", defaultChatHistoryRetention),
+	}
 	if _, err := db.Exec(`PRAGMA journal_mode=WAL;
 CREATE TABLE IF NOT EXISTS chat_events(root TEXT NOT NULL, event_id TEXT NOT NULL, created_at INTEGER NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(root, event_id));
 CREATE TABLE IF NOT EXISTS chat_tools(root TEXT NOT NULL, tool_id TEXT NOT NULL, created_at INTEGER NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(root, tool_id));
@@ -256,7 +262,7 @@ func (s *chatHistoryStore) PruneExpired(now time.Time) error {
 			return err
 		}
 	}
-	return nil
+	return s.pruneMediaExpired(now.Add(-retention))
 }
 
 // Load returns the persisted snapshot for one robot, or nil when nothing has
@@ -413,7 +419,10 @@ func (s *chatHistoryStore) Delete(root string) error {
 			return err
 		}
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	return os.RemoveAll(s.mediaRootPath(root))
 }
 
 func (s *chatHistoryStore) DeleteAll() error {
@@ -424,7 +433,7 @@ func (s *chatHistoryStore) DeleteAll() error {
 			return err
 		}
 	}
-	return nil
+	return os.RemoveAll(s.mediaDir)
 }
 
 func eventCreatedAt(raw json.RawMessage, fallback int64) int64 {

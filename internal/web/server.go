@@ -1118,6 +1118,7 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	mux.HandleFunc("/api/v1/robot/packages/upload", s.robotPackageUploadHandler)
 	mux.HandleFunc("/api/v1/robot/packages/git-clone", s.robotPackageGitCloneHandler)
 	mux.HandleFunc("/api/v1/robot/packages/git-clone/check", s.robotPackageGitCloneCheckHandler)
+	mux.HandleFunc("/api/v1/robot/chat/media", s.robotChatMediaHandler)
 	mux.HandleFunc("/api/v1/robot/chat/history", s.robotChatHistoryHandler)
 	mux.HandleFunc("/api/v1/robot/chat/summary", s.robotChatSummaryHandler)
 	mux.HandleFunc("/api/v1/robot/testone/chat", s.robotTestoneChatHandler)
