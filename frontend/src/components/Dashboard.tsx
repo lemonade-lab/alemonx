@@ -2836,11 +2836,13 @@ export function Dashboard({
                     onText={openTextConfig}
                   />
                 }
-              />
-              <CurrentProjectConfigPanel
-                config={currentPackageConfig}
-                loading={currentPackageConfigLoading}
-                onSave={values => savePackageConfig('', values)}
+                extensionConfig={
+                  <CurrentProjectConfigPanel
+                    config={currentPackageConfig}
+                    loading={currentPackageConfigLoading}
+                    onSave={values => savePackageConfig('', values)}
+                  />
+                }
               />
             </>
           ) : (
@@ -3216,6 +3218,7 @@ export function Dashboard({
             </div>
             <div className="ml-auto flex min-w-0 items-center gap-1">
               {developerMode && <McpControl />}
+              {developerMode && <SSHControl />}
               <Button
                 variant="secondary"
                 className={cn(
@@ -3235,7 +3238,6 @@ export function Dashboard({
                 <Code2 className="size-4" />
               </Button>
               <GitHubAuthControl />
-              {developerMode && <SSHControl />}
               <Button
                 variant="icon"
                 onClick={() => setRobotNavigationHidden(value => !value)}
@@ -7909,21 +7911,6 @@ function BackpackPackageManager({
                 values={values}
                 onChange={updateValue}
               />
-              {data.commands?.length ? (
-                <div className="grid gap-1.5 border-t border-slate-100 pt-3">
-                  <strong className="text-xs font-semibold text-slate-600">
-                    桌面命令
-                  </strong>
-                  {data.commands.map(command => (
-                    <code
-                      key={command.command}
-                      className="rounded-md bg-slate-100 px-2 py-1 text-[11px] text-slate-600"
-                    >
-                      {command.name} · {command.command}
-                    </code>
-                  ))}
-                </div>
-              ) : null}
             </div>
           )
         ) : versionsFetching ? (
@@ -8374,51 +8361,54 @@ function CurrentProjectConfigPanel({
   }, [config, setValues])
   // A config declaration is optional. Do not turn its absence into an error
   // for ordinary robots that do not expose project-specific settings.
-  if (loading)
-    return (
-      <section className="project-config-panel rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-500">
-        <p>正在识别当前项目的扩展配置…</p>
-      </section>
-    )
-  if (!config?.fields?.length) return null
+  if (!loading && !config?.fields?.length) return null
   return (
-    <section className="project-config-panel grid gap-4 rounded-xl border border-slate-200 bg-white p-4">
-      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3">
-        <div className="grid gap-1">
-          <strong className="flex items-center gap-2 text-sm font-semibold text-slate-800">
-            <PlatformLogo logo={config.logo} className="size-4" />
-            项目扩展配置
-          </strong>
-          <span className="text-xs text-slate-500">
-            {config.package} · 保存至 alemon.config.yaml 的 {config.namespace}{' '}
-            区域
-          </span>
-        </div>
-        <div className="flex items-center gap-3">
-          <ConfigSourceLinks source={config.configSource} />
-        </div>
-      </header>
-      <ConfigFieldsEditor
-        fields={config.fields ?? []}
-        values={values}
-        onChange={updateValue}
-      />
-      {config.commands?.length ? (
-        <div className="grid gap-1.5 border-t border-slate-100 pt-3">
-          <strong className="text-xs font-semibold text-slate-600">
-            桌面命令
-          </strong>
-          {config.commands.map(command => (
-            <code
-              key={command.command}
-              className="rounded-md bg-slate-100 px-2 py-1 text-[11px] text-slate-600"
-            >
-              {command.name} · {command.command}
-            </code>
-          ))}
-        </div>
-      ) : null}
-    </section>
+    <details
+      className="project-config-panel group overflow-hidden rounded-xl border border-slate-200 bg-white"
+      open={false}
+    >
+      <summary className="flex min-h-12 cursor-pointer list-none flex-wrap items-center gap-2 px-3 py-2 text-sm font-semibold text-slate-700 marker:content-none [&::-webkit-details-marker]:hidden">
+        <PlatformLogo logo={config?.logo} className="size-4" />
+        <strong>项目扩展配置</strong>
+        <span className="truncate text-[11px] font-medium text-slate-400">
+          {config?.package ?? ''} · {config?.namespace ?? ''}
+        </span>
+        <span className="ml-auto flex items-center gap-2">
+          <ConfigSourceLinks source={config?.configSource} />
+          <i className="text-lg font-normal text-slate-400 transition-transform group-open:rotate-90">
+            ›
+          </i>
+        </span>
+      </summary>
+      <div className="border-t border-slate-100 p-4">
+        {loading ? (
+          <p className="text-sm text-slate-500">正在识别当前项目的扩展配置…</p>
+        ) : (
+          <div className="grid gap-4">
+            <ConfigFieldsEditor
+              fields={config?.fields ?? []}
+              values={values}
+              onChange={updateValue}
+            />
+            {config?.commands?.length ? (
+              <div className="grid gap-1.5 border-t border-slate-100 pt-3">
+                <strong className="text-xs font-semibold text-slate-600">
+                  桌面命令
+                </strong>
+                {config?.commands.map(command => (
+                  <code
+                    key={command.command}
+                    className="rounded-md bg-slate-100 px-2 py-1 text-[11px] text-slate-600"
+                  >
+                    {command.name} · {command.command}
+                  </code>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        )}
+      </div>
+    </details>
   )
 }
 function MarkdownPage({ markdown }: { markdown: string }) {

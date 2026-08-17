@@ -6,6 +6,7 @@ import { RobotPanel } from './RobotPanel'
 type Props = {
   content: string
   toolbar?: ReactNode
+  extensionConfig?: ReactNode
   onChange: (content: string) => void
 }
 type Values = Record<string, string>
@@ -230,7 +231,7 @@ function mergeConfig(existing: string, generated: string) {
   return `${kept.length && generated ? `${kept.join('\n')}\n\n` : kept.join('\n')}${generated}`
 }
 
-export function RobotConfigForm({ content, toolbar, onChange }: Props) {
+export function RobotConfigForm({ content, toolbar, onChange, extensionConfig }: Props) {
   const [values, setValues] = useStoreState<Values>(empty)
   useEffect(() => {
     const next = readValues(content)
@@ -288,6 +289,7 @@ export function RobotConfigForm({ content, toolbar, onChange }: Props) {
       description="管理当前机器人的运行与连接参数"
       actions={toolbar}
     >
+      {extensionConfig}
       {group(
         '常规运行',
         '常用',
@@ -316,8 +318,7 @@ export function RobotConfigForm({ content, toolbar, onChange }: Props) {
             '如 discord',
             '推荐在“运行”页直接选择已安装的平台。'
           )}
-        </>,
-        true
+        </>
       )}
       {group(
         'CBP 运行',
