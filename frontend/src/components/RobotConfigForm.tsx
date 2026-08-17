@@ -323,8 +323,8 @@ export function RobotConfigForm({ content, toolbar, onChange, extensionConfig }:
       description="管理当前机器人的运行与连接参数"
       actions={
         <>
-          {toolbar}
           {advancedSwitch}
+          {toolbar}
         </>
       }
     >
