@@ -10,6 +10,7 @@ import {
   Bot,
   Bell,
   ContactRound,
+  Copy,
   FileImage,
   Heart,
   History,
@@ -23,6 +24,7 @@ import {
   Trash2,
   Undo2,
   UsersRound,
+  Wrench,
   X
 } from 'lucide-react'
 import * as flattedJSON from 'flatted'
@@ -45,7 +47,11 @@ import {
 } from './qqChatStorage'
 import {
   collectActionDirectory,
+  extractQQGroupIdentity,
+  findIdentityRecord,
   mergeDirectory,
+  qqConversationAvatarSource,
+  qqGroupAvatarSource,
   recordText,
   resultItems
 } from './qqChatDirectory'
@@ -56,9 +62,20 @@ import {
   useSaveRobotChatHistoryMutation
 } from '../store/workspaceApi'
 import { ConfirmDialog } from './ConfirmDialog'
+import { QQArkCardSegment } from './QQArkCard'
+import { QQFaceSegment } from './QQFace'
 import { createRandomID } from '../lib/randomId'
-
-type Segment = { type: string; value?: unknown }
+import {
+  parseQQInlineSegments,
+  parseQQArkCard,
+  qqFaceLabel,
+  qqImageFailureAttempts,
+  recordQQImageFailure,
+  resolveQQAttachmentReferences,
+  resolveQQFaceAttachments,
+  type QQArkCard,
+  type QQMessageSegment as Segment
+} from './qqMessageMedia'
 type LiveEvent = {
   name?: string
   Platform?: string
@@ -75,7 +92,7 @@ type LiveEvent = {
   MessageId?: string
   MessageText?: string
   CreateAt?: number
-  value?: Segment[]
+  value?: Segment[] | Record<string, unknown>
   _tag?: string
   senderType?: 'bot' | 'user'
   delivery?: 'sending' | 'sent' | 'failed'
@@ -114,6 +131,7 @@ type PendingAction = {
   messageID?: string
   uploads?: Upload[]
   target?: string
+  quiet?: boolean
   onResult?: (
     results: ActionResult[],
     state: ActionState,
@@ -166,7 +184,12 @@ function chatErrorMessage(reason: unknown, fallback: string) {
     }
     const data = value.data
     if (typeof data === 'string' && data) return data
-    if (data && typeof data === 'object' && typeof data.error === 'string' && data.error)
+    if (
+      data &&
+      typeof data === 'object' &&
+      typeof data.error === 'string' &&
+      data.error
+    )
       return data.error
     if (typeof value.error === 'string' && value.error) return value.error
     if (typeof value.message === 'string' && value.message) return value.message
@@ -193,20 +216,509 @@ const uploadActions = new Set([
   'media.upload',
   'media.upload.chunked'
 ])
+const imageSourceKeys = new Set([
+  'fileUrl',
+  'FileUrl',
+  'file_url',
+  'downloadUrl',
+  'download_url',
+  'qbot_image_host_url',
+  'url',
+  'Url',
+  'URL',
+  'src',
+  'path',
+  'filePath',
+  'file_path',
+  'sourcePath',
+  'source_url',
+  'original_url',
+  'originImageUrl',
+  'origin_image_url',
+  'originalUrl',
+  'thumbUrl',
+  'thumbnailUrl',
+  'image_url',
+  'imageUrl',
+  'preview',
+  'source_logo',
+  'sourceLogo',
+  'pic_url',
+  'picUrl'
+])
+const mediaContainerKeys = [
+  'value',
+  'data',
+  'payload',
+  'content',
+  'msg',
+  'msg_data',
+  'attachments',
+  'attachment',
+  'media',
+  'medias',
+  'images',
+  'image',
+  'pics',
+  'pic',
+  'files',
+  'elements',
+  'msg_elements',
+  'message_elements',
+  'qbot_image_hosted_images',
+  'ark_data',
+  'fields',
+  'raw',
+  'd',
+  'message',
+  'Message'
+]
+const multimediaDownloadBase = 'https://multimedia.nt.qq.com.cn/'
 
-function eventText(event: LiveEvent) {
-  if (event.MessageText) return event.MessageText
-  if (Array.isArray(event.value))
-    return event.value
-      .filter(item => item.type === 'Text')
-      .map(item => String(item.value ?? ''))
-      .join('')
+function recordValue(value: unknown) {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined
+}
+
+function shortJSON(value: unknown) {
+  try {
+    const text = JSON.stringify(value)
+    return text.length > 160 ? `${text.slice(0, 157)}...` : text
+  } catch {
+    return String(value)
+  }
+}
+
+function normalizeImageSource(value: unknown, mime = 'image/png') {
+  if (typeof value !== 'string') return ''
+  const source = value.trim()
+  if (!source) return ''
+  if (/^base64:\/\//i.test(source)) return base64ImageSource(source, mime)
+  if (/^(?:https?:\/\/|data:image\/|blob:)/i.test(source)) return source
+  if (/^\/\//.test(source)) return `https:${source}`
+  if (/^\/?download\?/i.test(source))
+    return new URL(source.replace(/^\//, ''), multimediaDownloadBase).toString()
+  if (/^\/(?!\/)/.test(source)) return source
   return ''
 }
 
+function safeExternalURL(value: unknown) {
+  if (typeof value !== 'string' || !value.trim()) return ''
+  try {
+    const url = new URL(value.trim())
+    return url.protocol === 'http:' || url.protocol === 'https:'
+      ? url.toString()
+      : ''
+  } catch {
+    return ''
+  }
+}
+
+function isRenderableImageSource(value: unknown) {
+  return Boolean(normalizeImageSource(value))
+}
+
+function base64ImageSource(value: string, mime = 'image/png') {
+  const raw = value.replace(/^base64:\/\//i, '')
+  return `data:${mime};base64,${raw}`
+}
+
+function binaryImageSource(value: unknown, mime = 'image/png') {
+  if (!Array.isArray(value)) return ''
+  const bytes = value.filter(item => Number.isInteger(item)) as number[]
+  if (!bytes.length || bytes.length !== value.length) return ''
+  let binary = ''
+  for (let index = 0; index < bytes.length; index += 1)
+    binary += String.fromCharCode(bytes[index] & 255)
+  return `data:${mime};base64,${btoa(binary)}`
+}
+
+function imageSourceFromValue(
+  value: unknown,
+  options?: Record<string, unknown>
+) {
+  const mime =
+    recordText(options || {}, [
+      'mime',
+      'mimeType',
+      'MimeType',
+      'content_type'
+    ]) || 'image/png'
+  if (typeof value === 'string') {
+    const source = normalizeImageSource(value, mime)
+    if (!source) return ''
+    return source
+  }
+  const binary = binaryImageSource(value, mime)
+  if (binary) return binary
+  const record = recordValue(value)
+  if (!record) return ''
+  for (const key of imageSourceKeys) {
+    const source = recordText(record, [key])
+    if (isRenderableImageSource(source))
+      return normalizeImageSource(source, mime)
+  }
+  const hosted = record.qbot_image_host
+  if (hosted && typeof hosted === 'object' && !Array.isArray(hosted)) {
+    const source = recordText(hosted as Record<string, unknown>, ['url'])
+    if (isRenderableImageSource(source))
+      return normalizeImageSource(source, mime)
+  }
+  return ''
+}
+
+function fileDisplayName(segment: Segment) {
+  const value = segment.value
+  const record = recordValue(value)
+  const raw =
+    recordText(
+      {
+        ...(record || {}),
+        ...(segment.options || {}),
+        ...(segment as unknown as Record<string, unknown>)
+      },
+      [
+        'name',
+        'filename',
+        'fileName',
+        'FileName',
+        'file_name',
+        'alt',
+        'url',
+        'Url',
+        'path',
+        'src'
+      ]
+    ) || (typeof value === 'string' ? value : '')
+  const text = raw || (/Image/i.test(segment.type) ? '图片' : segment.type)
+  return text.split(/[\\/]/).pop() || text
+}
+
+function cardPlainText(card: QQArkCard) {
+  const heading = card.tag ? `[${card.tag}] ${card.title}` : card.title
+  return [heading, card.description, safeExternalURL(card.jumpURL)]
+    .filter(Boolean)
+    .join('\n')
+}
+
+function segmentPlainText(segment: Segment) {
+  if (segment.type === 'Text') return String(segment.value ?? '')
+  if (segment.type === 'Mention') return `@${String(segment.value ?? '成员')}`
+  if (segment.type === 'Face') return qqFaceLabel(segment.value)
+  const record = recordValue(segment.value)
+  if (segment.type === 'ArkCard')
+    return cardPlainText(segment.value as QQArkCard)
+  if (segment.type === 'Markdown')
+    return recordText(record || {}, ['content', 'markdown']) || '[Markdown]'
+  if (segment.type === 'Keyboard') return '[按钮]'
+  if (segment.type === 'QQFaceImage')
+    return recordText(segment.options || {}, ['alt']) || '[QQ表情]'
+  if (/Image/i.test(segment.type)) {
+    const name = fileDisplayName(segment)
+    return name && name !== '图片' ? `[图片 ${name}]` : '[图片]'
+  }
+  if (/Video/i.test(segment.type)) return `[视频 ${fileDisplayName(segment)}]`
+  if (/Audio|Voice/i.test(segment.type))
+    return `[语音 ${fileDisplayName(segment)}]`
+  if (/File|Media/i.test(segment.type))
+    return `[文件 ${fileDisplayName(segment)}]`
+  if (typeof segment.value === 'string' || typeof segment.value === 'number')
+    return String(segment.value)
+  return segment.value === undefined
+    ? `[${segment.type}]`
+    : shortJSON(segment.value)
+}
+
+function eventText(event: LiveEvent) {
+  return messageSegments(event).map(segmentPlainText).join('')
+}
+
+function imageSegmentsFromEvent(event: LiveEvent) {
+  const root = event as unknown as Record<string, unknown>
+  const segments: Segment[] = []
+  const seenObjects = new Set<object>()
+  const seenSources = new Set<string>()
+  const addSource = (source: string, label?: string) => {
+    const normalized = source.trim()
+    if (!normalized || seenSources.has(normalized)) return
+    seenSources.add(normalized)
+    segments.push({
+      type: 'ImageURL',
+      value: normalized,
+      options: { alt: label || '图片' }
+    })
+  }
+  const visit = (node: unknown) => {
+    if (!node || typeof node !== 'object') return
+    if (seenObjects.has(node)) return
+    seenObjects.add(node)
+    if (Array.isArray(node)) {
+      node.forEach(visit)
+      return
+    }
+    const record = node as Record<string, unknown>
+    const direct = imageSourceFromValue(record)
+    if (direct)
+      addSource(
+        direct,
+        recordText(record, ['filename', 'fileName', 'file_name', 'name', 'alt'])
+      )
+    for (const [key, value] of Object.entries(record)) {
+      if (imageSourceKeys.has(key) && isRenderableImageSource(value))
+        addSource(
+          normalizeImageSource(value),
+          recordText(record, [
+            'filename',
+            'fileName',
+            'file_name',
+            'name',
+            'alt'
+          ])
+        )
+      if (mediaContainerKeys.includes(key)) {
+        if (isRenderableImageSource(value))
+          addSource(
+            normalizeImageSource(value),
+            recordText(record, [
+              'filename',
+              'fileName',
+              'file_name',
+              'name',
+              'alt'
+            ])
+          )
+        visit(value)
+      }
+    }
+  }
+  visit(root)
+  for (const key of mediaContainerKeys) visit(root[key])
+  return segments
+}
+
+function nestedRecordValue(
+  root: Record<string, unknown>,
+  path: string[]
+): unknown {
+  let current: unknown = root
+  for (const key of path) {
+    const record = recordValue(current)
+    if (!record) return undefined
+    current = record[key]
+  }
+  return current
+}
+
+function indexedImageSegmentsFromEvent(event: LiveEvent) {
+  const root = event as unknown as Record<string, unknown>
+  const paths = [
+    ['value', 'attachments'],
+    ['attachments'],
+    ['raw_message', 'attachments'],
+    ['raw_message', 'd', 'attachments'],
+    ['raw', 'attachments'],
+    ['raw', 'd', 'attachments'],
+    ['d', 'attachments'],
+    ['MessageMedia'],
+    ['value', 'qbot_image_hosted_images'],
+    ['qbot_image_hosted_images'],
+    ['raw_message', 'qbot_image_hosted_images'],
+    ['raw_message', 'd', 'qbot_image_hosted_images'],
+    ['raw', 'qbot_image_hosted_images'],
+    ['raw', 'd', 'qbot_image_hosted_images'],
+    ['d', 'qbot_image_hosted_images']
+  ]
+  for (const path of paths) {
+    const items = nestedRecordValue(root, path)
+    if (!Array.isArray(items) || !items.length) continue
+    const indexed = items.map(item => {
+      const source = imageSourceFromValue(item)
+      if (!source) return undefined
+      const record = recordValue(item) || {}
+      return {
+        type: 'ImageURL',
+        value: source,
+        options: {
+          alt:
+            recordText(record, [
+              'filename',
+              'fileName',
+              'FileName',
+              'file_name',
+              'name',
+              'alt'
+            ]) || '图片',
+          mime:
+            recordText(record, [
+              'mime',
+              'mimeType',
+              'MimeType',
+              'content_type'
+            ]) || 'image/png'
+        }
+      } satisfies Segment
+    })
+    if (indexed.some(Boolean)) return indexed
+  }
+  return imageSegmentsFromEvent(event)
+}
+
+function isTemporaryQQImageSource(source: string) {
+  try {
+    const host = new URL(source).hostname.toLowerCase()
+    return (
+      host === 'multimedia.nt.qq.com.cn' ||
+      host === 'qpic.cn' ||
+      host.endsWith('.qpic.cn') ||
+      host === 'qq.com' ||
+      host.endsWith('.qq.com') ||
+      host === 'qq.com.cn' ||
+      host.endsWith('.qq.com.cn')
+    )
+  } catch {
+    return false
+  }
+}
+
+function replaceEventImageSources(
+  event: LiveEvent,
+  replacements: Map<string, string>
+) {
+  const cloned = flattedJSON.parse(
+    flattedJSON.stringify(event)
+  ) as unknown as LiveEvent
+  const visited = new Set<object>()
+  const visit = (node: unknown) => {
+    if (!node || typeof node !== 'object' || visited.has(node)) return
+    visited.add(node)
+    if (Array.isArray(node)) {
+      for (let index = 0; index < node.length; index += 1) {
+        const value = node[index]
+        if (typeof value === 'string' && replacements.has(value))
+          node[index] = replacements.get(value)
+        else visit(value)
+      }
+      return
+    }
+    const record = node as Record<string, unknown>
+    for (const [key, value] of Object.entries(record)) {
+      if (typeof value === 'string' && replacements.has(value))
+        record[key] = replacements.get(value)
+      else visit(value)
+    }
+  }
+  visit(cloned)
+  return cloned
+}
+
+async function cacheIncomingQQImages(root: string, event: LiveEvent) {
+  const sources = [
+    ...new Set(
+      imageSegmentsFromEvent(event)
+        .map(segment => imageSourceFromValue(segment.value, segment.options))
+        .filter(source => source && isTemporaryQQImageSource(source))
+    )
+  ]
+  if (!sources.length) return undefined
+  const replacements = new Map<string, string>()
+  await Promise.all(
+    sources.map(async source => {
+      try {
+        const response = await fetch('/api/v1/robot/chat/media', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ root, url: source })
+        })
+        if (!response.ok) return
+        const payload = (await response.json()) as { url?: unknown }
+        if (typeof payload.url === 'string' && payload.url)
+          replacements.set(source, payload.url)
+      } catch {
+        // The original URL remains available for the current render attempt.
+      }
+    })
+  )
+  return replacements.size
+    ? replaceEventImageSources(event, replacements)
+    : undefined
+}
+
 function messageSegments(event: LiveEvent) {
-  if (Array.isArray(event.value)) return event.value
-  return event.MessageText ? [{ type: 'Text', value: event.MessageText }] : []
+  const card = parseQQArkCard(event)
+  const rawText = recordText(event as unknown as Record<string, unknown>, [
+    'MessageText',
+    'display_content',
+    'displayContent',
+    'content',
+    'message'
+  ])
+  const sourceSegments = Array.isArray(event.value)
+    ? event.value.flatMap(segment =>
+        segment.type === 'Text'
+          ? parseQQInlineSegments(String(segment.value ?? ''))
+          : [segment]
+      )
+    : []
+  const hasTextSegment = sourceSegments.some(
+    segment => segment.type === 'Text' || segment.type === 'Face'
+  )
+  const textSegments = card
+    ? []
+    : rawText && !hasTextSegment
+      ? parseQQInlineSegments(rawText)
+      : Array.isArray(event.value)
+        ? []
+        : parseQQInlineSegments(rawText)
+  const unresolvedSegments = [...textSegments, ...sourceSegments].filter(
+    segment =>
+      segment.type !== 'ArkCard' &&
+      (!card || segment.type !== 'Text') &&
+      (segment.type !== 'Text' || String(segment.value ?? ''))
+  )
+  const indexedImages = indexedImageSegmentsFromEvent(event)
+  const attachmentResolution = resolveQQAttachmentReferences(
+    unresolvedSegments,
+    indexedImages
+  )
+  const { segments } = resolveQQFaceAttachments(
+    attachmentResolution.segments,
+    indexedImages,
+    attachmentResolution.usedIndexes
+  )
+  const cardImageSources = new Set(
+    card
+      ? [card.imageURL, card.sourceLogoURL]
+          .map(source => normalizeImageSource(source))
+          .filter(Boolean)
+      : []
+  )
+  const images = imageSegmentsFromEvent(event).filter(image => {
+    const source = imageSourceFromValue(image.value, image.options)
+    return (
+      !cardImageSources.has(source) &&
+      !segments.some(
+        segment =>
+          imageSourceFromValue(segment.value, segment.options) === source
+      )
+    )
+  })
+  return [
+    ...(card ? [{ type: 'ArkCard', value: card } satisfies Segment] : []),
+    ...segments,
+    ...images
+  ]
+}
+
+function hasSelectedTextIn(node: HTMLElement | null) {
+  const selection = window.getSelection()
+  if (!selection || selection.isCollapsed || !selection.toString()) return false
+  if (!node) return true
+  const anchor = selection.anchorNode
+  const focus = selection.focusNode
+  return Boolean(
+    (anchor && node.contains(anchor)) || (focus && node.contains(focus))
+  )
 }
 
 function isMessage(event: LiveEvent) {
@@ -315,74 +827,192 @@ function contactFromEvent(event: LiveEvent): QQContact | undefined {
 
 type QQIdentity = { name: string; avatar?: string }
 
+function qqLogoID(value: string) {
+  const trimmed = value.trim()
+  return /^\d{5,}$/.test(trimmed) ? trimmed : ''
+}
+
+function groupAvatarFromRecord(record: Record<string, unknown>) {
+  return extractQQGroupIdentity(record).avatar || ''
+}
+
+function safeGroupAvatarSource(value: unknown) {
+  const source = normalizeImageSource(value)
+  return qqGroupAvatarSource(source)
+}
+
+function botAvatarFromRecord(record: Record<string, unknown>) {
+  const uin = qqLogoID(
+    recordText(record, ['uin', 'qq', 'qq_number', 'self_id', 'selfId'])
+  )
+  if (uin)
+    return `https://q.qlogo.cn/headimg_dl?dst_uin=${uin}&spec=640&img_type=png`
+  const appID = recordText(record, ['appid', 'app_id', 'bot_appid', 'botAppid'])
+  const userID = recordText(record, [
+    'openid',
+    'open_id',
+    'user_openid',
+    'user_id',
+    'bot_openid',
+    'bot_id'
+  ])
+  return appID && userID ? `https://q.qlogo.cn/qqapp/${appID}/${userID}/0` : ''
+}
+
 function identityRecord(data: unknown) {
-  const record = resultItems(data)[0]
-  if (!record) return undefined
-  for (const key of [
-    'data',
-    'bot',
-    'user',
-    'profile',
-    'group',
-    'guild',
-    'channel'
-  ]) {
-    const nested = record[key]
-    if (nested && typeof nested === 'object' && !Array.isArray(nested))
-      return nested as Record<string, unknown>
-  }
-  return record
+  return findIdentityRecord(data, [
+    'group_name',
+    'group_num',
+    'nick',
+    'nickname',
+    'display_name',
+    'username',
+    'user_name',
+    'bot_name',
+    'guild_name',
+    'channel_name',
+    'avatar',
+    'avatar_url',
+    'openid',
+    'user_id',
+    'uin',
+    'qq'
+  ])
 }
 
 function profileIdentity(data: unknown, fallback: QQIdentity): QQIdentity {
   const record = identityRecord(data)
   if (!record) return fallback
-  return {
-    name:
-      recordText(record, [
-        'nick',
-        'nickname',
-        'username',
-        'user_name',
-        'bot_name',
-        'name'
-      ]) || fallback.name,
-    avatar:
+  const avatar =
+    normalizeImageSource(
       recordText(record, [
         'avatar',
         'avatar_url',
         'head_url',
         'headurl',
-        'user_avatar'
-      ]) || fallback.avatar
+        'user_avatar',
+        'portrait'
+      ])
+    ) ||
+    botAvatarFromRecord(record) ||
+    fallback.avatar
+  return {
+    name:
+      recordText(record, [
+        'nick',
+        'nickname',
+        'display_name',
+        'username',
+        'user_name',
+        'bot_name',
+        'botName',
+        'name'
+      ]) || fallback.name,
+    avatar
   }
 }
 
 function spaceIdentity(data: unknown, fallback: QQSpace): QQSpace {
   const record = identityRecord(data)
-  if (!record) return fallback
+  if (!record)
+    return {
+      ...fallback,
+      avatar:
+        fallback.scope === 'group'
+          ? safeGroupAvatarSource(fallback.avatar) || undefined
+          : fallback.avatar
+    }
+  const groupIdentity =
+    fallback.scope === 'group' ? extractQQGroupIdentity(data) : undefined
+  const explicitAvatar = recordText(record, [
+    'avatar',
+    'avatar_url',
+    'icon',
+    'icon_url',
+    'group_avatar',
+    'guild_icon',
+    'channel_avatar'
+  ])
+  const avatar =
+    fallback.scope === 'group'
+      ? groupIdentity?.avatar ||
+        groupAvatarFromRecord(record) ||
+        safeGroupAvatarSource(explicitAvatar) ||
+        safeGroupAvatarSource(fallback.avatar)
+      : normalizeImageSource(explicitAvatar) || fallback.avatar
   return {
     ...fallback,
     label:
+      groupIdentity?.name ||
       recordText(record, [
         'name',
+        'groupName',
         'group_name',
+        'group_num',
+        'group_number',
         'guild_name',
+        'guildName',
         'channel_name',
+        'channelName',
         'title'
-      ]) || fallback.label,
-    avatar:
-      recordText(record, [
-        'avatar',
-        'avatar_url',
-        'icon',
-        'icon_url',
-        'group_avatar',
-        'guild_icon',
-        'channel_avatar'
-      ]) || fallback.avatar,
+      ]) ||
+      fallback.label,
+    avatar,
     updatedAt: Date.now()
   }
+}
+
+function spaceTargetID(space: QQSpace) {
+  return space.id.replace(/^channel:(?:group|channel|direct):/, '')
+}
+
+function isPlaceholderSpace(space: QQSpace) {
+  const targetID = spaceTargetID(space)
+  const label = space.label.trim()
+  return (
+    !label ||
+    label === targetID ||
+    label === `${scopeName(space.scope)} ${targetID}` ||
+    (space.scope === 'group' && /^[A-Za-z0-9_-]{20,}$/.test(label))
+  )
+}
+
+function mergeSpaces(current: QQSpace[], incoming: QQSpace[]) {
+  const normalizeSpace = (space: QQSpace): QQSpace => ({
+    ...space,
+    avatar:
+      space.scope === 'group'
+        ? safeGroupAvatarSource(space.avatar) || undefined
+        : space.avatar
+  })
+  const merged = new Map(current.map(item => [item.id, normalizeSpace(item)]))
+  for (const item of incoming) {
+    const space = normalizeSpace(item)
+    const old = merged.get(space.id)
+    if (!old) {
+      merged.set(space.id, space)
+      continue
+    }
+    const oldPlaceholder = isPlaceholderSpace(old)
+    const nextPlaceholder = isPlaceholderSpace(space)
+    if (!nextPlaceholder && oldPlaceholder) {
+      merged.set(space.id, space)
+      continue
+    }
+    if (!oldPlaceholder && nextPlaceholder) {
+      merged.set(space.id, {
+        ...space,
+        label: old.label,
+        avatar: old.avatar || space.avatar,
+        source: old.source
+      })
+      continue
+    }
+    if (old.updatedAt <= space.updatedAt) merged.set(space.id, space)
+  }
+  return [...merged.values()]
+    .sort((left, right) => right.updatedAt - left.updatedAt)
+    .slice(0, 200)
 }
 
 function messageFormat(text: string, contacts: QQContact[]) {
@@ -520,6 +1150,58 @@ async function fileData(file: File) {
   return `base64://${btoa(text)}`
 }
 
+async function writeClipboardText(value: string) {
+  try {
+    await navigator.clipboard.writeText(value)
+    return true
+  } catch {
+    const textarea = document.createElement('textarea')
+    textarea.value = value
+    textarea.style.position = 'fixed'
+    textarea.style.left = '-9999px'
+    textarea.style.top = '0'
+    document.body.appendChild(textarea)
+    textarea.focus()
+    textarea.select()
+    const copied = document.execCommand('copy')
+    textarea.remove()
+    return copied
+  }
+}
+
+function parseJSONValue(value: unknown, label: string) {
+  if (!value || typeof value !== 'string') return value
+  const text = value.trim()
+  if (!text) return undefined
+  try {
+    return JSON.parse(text)
+  } catch {
+    throw new Error(`${label} 不是有效 JSON。`)
+  }
+}
+
+function keyboardPayload(value: unknown) {
+  if (!value) return undefined
+  if (typeof value === 'string') {
+    const text = value.trim()
+    if (!text) return undefined
+    if (!/^[{[]/.test(text)) return { content: text }
+    const parsed = parseJSONValue(text, '按钮 Keyboard JSON')
+    if (!parsed || typeof parsed !== 'object') return { content: parsed }
+    const record = parsed as Record<string, unknown>
+    return 'content' in record || 'id' in record || 'template_id' in record
+      ? record
+      : { content: record }
+  }
+  if (typeof value === 'object') {
+    const record = value as Record<string, unknown>
+    return 'content' in record || 'id' in record || 'template_id' in record
+      ? record
+      : { content: record }
+  }
+  return { content: value }
+}
+
 function initialValues(action: QQActionDefinition, event?: LiveEvent) {
   const values: Record<string, unknown> = {}
   for (const field of action.fields) {
@@ -554,7 +1236,33 @@ function valuesToInput(
     if (raw === undefined || raw === '') continue
     if (field.kind === 'file') continue
     if (field.key === 'formatText') {
+      params.content = String(raw)
       params.format = [{ type: 'Text', value: String(raw) }]
+      continue
+    }
+    if (field.key === 'markdown') {
+      const markdown = String(raw).trim()
+      if (markdown) {
+        params.markdown = /^[{[]/.test(markdown)
+          ? parseJSONValue(markdown, field.label)
+          : { content: markdown }
+        if (!params.msg_type) params.msg_type = 2
+      }
+      continue
+    }
+    if (field.key === 'keyboard') {
+      const keyboard = keyboardPayload(raw)
+      if (keyboard) {
+        params.keyboard = keyboard
+        if (!params.msg_type) params.msg_type = 2
+      }
+      continue
+    }
+    if (field.key === 'replyId') {
+      params.message_reference = {
+        message_id: String(raw),
+        ignore_get_message_error: true
+      }
       continue
     }
     if (field.key === 'targetId' || field.key === 'targetScope') continue
@@ -723,6 +1431,13 @@ export function LiveChat({ root }: { root: string }) {
   >({})
   const [typing, setTyping] = useState(false)
   const typingTimer = useRef<number | null>(null)
+  const prefetchedGroupInfo = useRef<Record<string, true>>({})
+  const groupInfoAttempts = useRef<Record<string, number>>({})
+  const groupInfoRetryTimers = useRef<Record<string, number>>({})
+  const queuedGroupInfo = useRef<Record<string, true>>({})
+  const groupInfoQueue = useRef<LiveEvent[]>([])
+  const groupInfoTimer = useRef<number | null>(null)
+  const queueGroupInfoReadRef = useRef<(event: LiveEvent) => void>(() => {})
   const [connectionAttempt, setConnectionAttempt] = useState(0)
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null)
   const [loadRobotChatHistory] = useLazyRobotChatHistoryQuery()
@@ -739,15 +1454,17 @@ export function LiveChat({ root }: { root: string }) {
 
   const addSystemNotification = useCallback(
     (title: string, message: string) => {
-      setSystemNotifications(current => [
-        {
-          id: createRandomID(),
-          title,
-          message,
-          createdAt: Date.now()
-        },
-        ...current
-      ].slice(0, 50))
+      setSystemNotifications(current =>
+        [
+          {
+            id: createRandomID(),
+            title,
+            message,
+            createdAt: Date.now()
+          },
+          ...current
+        ].slice(0, 50)
+      )
     },
     []
   )
@@ -808,33 +1525,29 @@ export function LiveChat({ root }: { root: string }) {
     []
   )
 
-  const applyStoredHistory = useCallback(
-    (parsed: StoredHistory) => {
-      if (!parsed || Date.now() - parsed.savedAt >= historyDays * 86_400_000)
-        return
-      setEvents(parsed.events.map(event => ({ ...event })))
-      setTools(
-        parsed.tools.filter(
-          item => Date.now() - item.at < historyDays * 86_400_000
-        )
+  const applyStoredHistory = useCallback((parsed: StoredHistory) => {
+    if (!parsed || Date.now() - parsed.savedAt >= historyDays * 86_400_000)
+      return
+    setEvents(parsed.events.map(event => ({ ...event })))
+    setTools(
+      parsed.tools.filter(
+        item => Date.now() - item.at < historyDays * 86_400_000
       )
-      setDrafts(parsed.drafts || {})
-      setFavorites(parsed.favorites || [])
-      setContacts(parsed.contacts || [])
-      setSpaces(parsed.spaces || [])
-      setOpenedConversationIDs(parsed.openedConversationIds || [])
-      setPreferences(parsed.preferences)
-      // “会话资料”和“机器人能力”曾是持久化的侧栏页。
-      // 聊天窗口现在只保留社交场景中的操作，旧状态回到消息页。
-      setActiveNav(
-        ['profile', 'tools'].includes(parsed.preferences.activeNav)
-          ? 'messages'
-          : parsed.preferences.activeNav
-      )
-      setRightOpen(parsed.preferences.rightPanelOpen)
-    },
-    []
-  )
+    )
+    setDrafts(parsed.drafts || {})
+    setFavorites(parsed.favorites || [])
+    setContacts(parsed.contacts || [])
+    setSpaces(mergeSpaces([], parsed.spaces || []))
+    setOpenedConversationIDs(parsed.openedConversationIds || [])
+    setPreferences(parsed.preferences)
+    // “会话资料”曾是持久化侧栏页，现在改为会话抽屉。
+    setActiveNav(
+      parsed.preferences.activeNav === 'profile'
+        ? 'messages'
+        : parsed.preferences.activeNav
+    )
+    setRightOpen(parsed.preferences.rightPanelOpen)
+  }, [])
 
   useEffect(() => {
     if (!root) return
@@ -852,6 +1565,17 @@ export function LiveChat({ root }: { root: string }) {
     setUnreadConversationIDs({})
     setBotProfile({ status: 'idle' })
     setUserProfile({ status: 'idle' })
+    prefetchedGroupInfo.current = {}
+    groupInfoAttempts.current = {}
+    for (const timer of Object.values(groupInfoRetryTimers.current))
+      window.clearTimeout(timer)
+    groupInfoRetryTimers.current = {}
+    queuedGroupInfo.current = {}
+    groupInfoQueue.current = []
+    if (groupInfoTimer.current) {
+      window.clearTimeout(groupInfoTimer.current)
+      groupInfoTimer.current = null
+    }
     try {
       const parsed = readQQChatStore<
         Array<Omit<LiveEvent, 'context'>>,
@@ -1037,23 +1761,16 @@ export function LiveChat({ root }: { root: string }) {
             )
           )
         if (directory.spaces.length)
-          setSpaces(current =>
-            mergeDirectory(
-              current,
-              directory.spaces,
-              item => item.id,
-              item => item.updatedAt
-            )
-          )
+          setSpaces(current => mergeSpaces(current, directory.spaces))
       }
-      if (request.kind !== 'send')
+      if (request.kind !== 'send' && !request.quiet)
         addToolRecord(
           request.action,
           request.target || scopeName('global'),
           result.state,
           result.summary
         )
-      if (result.state !== 'success') setError(result.summary)
+      if (result.state !== 'success' && !request.quiet) setError(result.summary)
     },
     [addToolRecord, cleanupUpload]
   )
@@ -1094,6 +1811,14 @@ export function LiveChat({ root }: { root: string }) {
         if (event && isMessage(event)) {
           const received = { ...event, context: event }
           setEvents(current => [...current.slice(-499), received])
+          void cacheIncomingQQImages(root, event).then(cachedEvent => {
+            if (!cachedEvent) return
+            const cached = { ...cachedEvent, context: cachedEvent }
+            setEvents(current =>
+              current.map(item => (item === received ? cached : item))
+            )
+          })
+          queueGroupInfoReadRef.current(received)
           const receivedConversationID = conversationID(received)
           if (
             !isBotMessage(received) &&
@@ -1130,6 +1855,10 @@ export function LiveChat({ root }: { root: string }) {
         window.clearTimeout(timer)
       )
       pendingTimers.current = {}
+      if (groupInfoTimer.current) {
+        window.clearTimeout(groupInfoTimer.current)
+        groupInfoTimer.current = null
+      }
       connection.close(1000, 'window closed')
       if (socket.current === connection) socket.current = null
     }
@@ -1154,6 +1883,7 @@ export function LiveChat({ root }: { root: string }) {
       // or the contacts list.
       if (privateChat && !openedConversationIDs.includes(id)) continue
       const previous = all.get(id)
+      const scope = qqTarget(event).scope
       // Delivery records are authored by the robot, but their target still
       // identifies the person / group / channel. Resolve that identity from
       // the local directory so an outgoing message cannot turn a chat into
@@ -1213,7 +1943,11 @@ export function LiveChat({ root }: { root: string }) {
           knownContact?.avatar ||
           knownSpace?.avatar ||
           previous?.avatar ||
-          (privateChat ? event.UserAvatar : event.ChannelAvatar),
+          (privateChat
+            ? event.UserAvatar
+            : scope !== 'group'
+              ? event.ChannelAvatar
+              : undefined),
         lastEvent: latest,
         updatedAt:
           latest?.CreateAt || previous?.updatedAt || event.CreateAt || 0
@@ -1237,25 +1971,18 @@ export function LiveChat({ root }: { root: string }) {
           id: `channel:${target.scope}:${target.targetId}`,
           label:
             event.ChannelName ||
-            event.GuildId ||
-            event.ChannelId ||
+            (target.scope === 'group'
+              ? target.targetId
+              : event.GuildId || event.ChannelId) ||
             target.targetId,
-          avatar: event.ChannelAvatar,
+          avatar: target.scope === 'group' ? undefined : event.ChannelAvatar,
           scope: target.scope as QQSpace['scope'],
           source: 'conversation' as const,
           updatedAt: event.CreateAt || Date.now()
         }
       ]
     })
-    if (learned.length)
-      setSpaces(current =>
-        mergeDirectory(
-          current,
-          learned,
-          item => item.id,
-          item => item.updatedAt
-        )
-      )
+    if (learned.length) setSpaces(current => mergeSpaces(current, learned))
   }, [events])
 
   const [openedConversations, setOpenedConversations] = useState<
@@ -1269,11 +1996,15 @@ export function LiveChat({ root }: { root: string }) {
       // chosen contact/space identity instead of renaming the chat to bot.
       if (opened && isBotMessage(conversation.event)) {
         const unresolved = /^(群|频道|私聊|频道私信) /.test(conversation.label)
+        const openedAvatar =
+          qqTarget(conversation.event).scope === 'group'
+            ? safeGroupAvatarSource(opened.avatar) || undefined
+            : opened.avatar
         merged.set(conversation.id, {
           ...conversation,
           event: opened.event,
           label: unresolved ? opened.label : conversation.label,
-          avatar: conversation.avatar || opened.avatar,
+          avatar: conversation.avatar || openedAvatar,
           private: conversation.private
         })
       } else {
@@ -1378,6 +2109,111 @@ export function LiveChat({ root }: { root: string }) {
     [cleanupUpload, resolvePending]
   )
 
+  const runGroupInfoQueue = useCallback(() => {
+    if (groupInfoTimer.current) return
+    const runNext = () => {
+      groupInfoTimer.current = null
+      const event = groupInfoQueue.current.shift()
+      if (!event) return
+      const target = qqTarget(event)
+      delete queuedGroupInfo.current[target.targetId]
+      if (
+        !target.targetId ||
+        target.scope !== 'group' ||
+        prefetchedGroupInfo.current[target.targetId] ||
+        (groupInfoAttempts.current[target.targetId] || 0) >= 3
+      ) {
+        if (groupInfoQueue.current.length)
+          groupInfoTimer.current = window.setTimeout(runNext, 2000)
+        return
+      }
+      if (socket.current?.readyState !== WebSocket.OPEN) {
+        groupInfoQueue.current.unshift(event)
+        queuedGroupInfo.current[target.targetId] = true
+        return
+      }
+      const definition = qqActionCatalog.find(item => item.id === 'group.info')
+      if (!definition) return
+      groupInfoAttempts.current[target.targetId] =
+        (groupInfoAttempts.current[target.targetId] || 0) + 1
+      callAction(
+        'group.info',
+        valuesToInput(definition, initialValues(definition, event), event),
+        {
+          kind: 'profile',
+          action: 'group.info',
+          target: `群 ${target.targetId}`,
+          quiet: true,
+          onResult: (results, nextState) => {
+            const retry = () => {
+              if (
+                groupInfoAttempts.current[target.targetId] >= 3 ||
+                groupInfoRetryTimers.current[target.targetId]
+              )
+                return
+              groupInfoRetryTimers.current[target.targetId] = window.setTimeout(
+                () => {
+                  delete groupInfoRetryTimers.current[target.targetId]
+                  queueGroupInfoReadRef.current(event.context ?? event)
+                },
+                10_000
+              )
+            }
+            if (nextState !== 'success') {
+              retry()
+              return
+            }
+            const hydrated = spaceIdentity(results, {
+              id: `channel:group:${target.targetId}`,
+              label: event.ChannelName || `群 ${target.targetId}`,
+              scope: 'group',
+              source: 'conversation',
+              updatedAt: Date.now()
+            })
+            setSpaces(current => mergeSpaces(current, [hydrated]))
+            if (!isPlaceholderSpace(hydrated) && hydrated.avatar) {
+              prefetchedGroupInfo.current[target.targetId] = true
+              delete groupInfoAttempts.current[target.targetId]
+              return
+            }
+            retry()
+          }
+        }
+      )
+      if (groupInfoQueue.current.length)
+        groupInfoTimer.current = window.setTimeout(runNext, 2000)
+    }
+    runNext()
+  }, [callAction])
+
+  const queueGroupInfoRead = useCallback(
+    (event: LiveEvent) => {
+      if (event.Platform !== 'qq-bot') return
+      const target = qqTarget(event)
+      if (
+        target.scope !== 'group' ||
+        !target.targetId ||
+        prefetchedGroupInfo.current[target.targetId] ||
+        (groupInfoAttempts.current[target.targetId] || 0) >= 3 ||
+        queuedGroupInfo.current[target.targetId]
+      )
+        return
+      queuedGroupInfo.current[target.targetId] = true
+      groupInfoQueue.current.push(event.context ?? event)
+      runGroupInfoQueue()
+    },
+    [runGroupInfoQueue]
+  )
+
+  useEffect(() => {
+    queueGroupInfoReadRef.current = queueGroupInfoRead
+  }, [queueGroupInfoRead])
+
+  useEffect(() => {
+    if (state !== 'connected') return
+    for (const event of events) queueGroupInfoRead(event)
+  }, [events, queueGroupInfoRead, state])
+
   const requestAutoRead = useCallback(() => {
     if (socket.current?.readyState !== WebSocket.OPEN) return
     const request = (action: 'me.info' | 'me.guilds' | 'guild.list') => {
@@ -1416,8 +2252,7 @@ export function LiveChat({ root }: { root: string }) {
 
   const uploadFile = useCallback(
     async (file: File) => {
-      if (file.size === 0)
-        throw new Error('所选文件为空，请重新选择后发送。')
+      if (file.size === 0) throw new Error('所选文件为空，请重新选择后发送。')
       const body = new FormData()
       body.append('root', root)
       body.append('deviceId', deviceID)
@@ -1461,7 +2296,9 @@ export function LiveChat({ root }: { root: string }) {
                 ? 'message.send.channel'
                 : 'message.send.target'
       const format = [
-        ...(value ? messageFormat(value, target.scope === 'group' ? contacts : []) : []),
+        ...(value
+          ? messageFormat(value, target.scope === 'group' ? contacts : [])
+          : []),
         ...(upload
           ? [
               {
@@ -1700,7 +2537,37 @@ export function LiveChat({ root }: { root: string }) {
         uploads,
         target: target
           ? `${scopeName(target.scope)} ${target.targetId}`
-          : '全局'
+          : '全局',
+        onResult: (results, nextState) => {
+          if (
+            nextState !== 'success' ||
+            !target ||
+            !['group.info', 'channel.info', 'guild.info'].includes(
+              activeDefinition.id
+            )
+          )
+            return
+          const hydrated = spaceIdentity(results, {
+            id: `channel:${target.scope}:${target.targetId}`,
+            label:
+              currentEvent?.ChannelName ||
+              `${scopeName(target.scope)} ${target.targetId}`,
+            avatar:
+              target.scope === 'group'
+                ? undefined
+                : currentEvent?.ChannelAvatar,
+            scope: target.scope as QQSpace['scope'],
+            source: 'conversation',
+            updatedAt: Date.now()
+          })
+          setSpaces(current => mergeSpaces(current, [hydrated]))
+          if (
+            target.scope === 'group' &&
+            !isPlaceholderSpace(hydrated) &&
+            hydrated.avatar
+          )
+            prefetchedGroupInfo.current[target.targetId] = true
+        }
       })
       if (!requestID) return
       setError('')
@@ -1801,24 +2668,26 @@ export function LiveChat({ root }: { root: string }) {
         onResult: (results, nextState, summary) => {
           if (nextState === 'success') {
             const target = qqTarget(currentEvent)
-            const hydrated = spaceIdentity(results[0]?.data, {
+            const hydrated = spaceIdentity(results, {
               id: `channel:${target.scope}:${target.targetId}`,
               label:
                 currentEvent.ChannelName ||
                 `${scopeName(target.scope)} ${target.targetId}`,
-              avatar: currentEvent.ChannelAvatar,
+              avatar:
+                target.scope === 'group'
+                  ? undefined
+                  : currentEvent.ChannelAvatar,
               scope: target.scope as QQSpace['scope'],
               source: 'conversation',
               updatedAt: Date.now()
             })
-            setSpaces(current =>
-              mergeDirectory(
-                current,
-                [hydrated],
-                item => item.id,
-                item => item.updatedAt
-              )
+            setSpaces(current => mergeSpaces(current, [hydrated]))
+            if (
+              target.scope === 'group' &&
+              !isPlaceholderSpace(hydrated) &&
+              hydrated.avatar
             )
+              prefetchedGroupInfo.current[target.targetId] = true
             setProfile({
               status: 'ready',
               data: results[0]?.data,
@@ -2726,7 +3595,8 @@ function QQ9ChatShell(props: QQ9ShellProps) {
     ['messages', '消息', MessageCircle],
     ['contacts', '联系人', ContactRound],
     ['spaces', '群/频道', UsersRound],
-    ['favorites', '收藏', Heart]
+    ['favorites', '收藏', Heart],
+    ['tools', '工具', Wrench]
   ] as const
   const density = props.preferences.density === 'compact' ? 'py-2' : 'py-3'
   const font =
@@ -2750,6 +3620,7 @@ function QQ9ChatShell(props: QQ9ShellProps) {
       spaces: '群 / 频道',
       favorites: '收藏',
       profile: '会话资料',
+      tools: '机器人能力',
       audit: '操作记录',
       settings: '聊天设置'
     } as Record<string, string>
@@ -2794,6 +3665,12 @@ function QQ9ChatShell(props: QQ9ShellProps) {
   )
   const showProfileDrawer =
     hasConversationProfile && (profileOpen || wideProfile)
+  const conversationAvatar = qqConversationAvatarSource(
+    props.currentScope,
+    normalizeImageSource(props.currentConversation?.avatar),
+    normalizeImageSource(props.currentEvent?.ChannelAvatar),
+    normalizeImageSource(props.currentEvent?.UserAvatar)
+  )
   return (
     <div
       ref={chatShell}
@@ -2836,7 +3713,9 @@ function QQ9ChatShell(props: QQ9ShellProps) {
             <button
               className={`flex h-10 w-full flex-col items-center justify-center gap-0.5 rounded-[9px] border-0 bg-transparent text-[9px] text-(--theme-text-muted) transition hover:bg-(--theme-accent-soft) hover:text-(--theme-accent-text) ${props.activeNav === 'notifications' ? 'bg-(--theme-accent-soft) text-(--theme-accent-text)' : ''}`}
               aria-label="系统通知"
-              aria-current={props.activeNav === 'notifications' ? 'page' : undefined}
+              aria-current={
+                props.activeNav === 'notifications' ? 'page' : undefined
+              }
               onClick={() => {
                 props.setActiveNav('notifications')
                 props.setRightOpen(true)
@@ -3052,6 +3931,20 @@ function QQ9ChatShell(props: QQ9ShellProps) {
           <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
             {profilePanel}
           </div>
+        ) : props.activeNav === 'tools' ? (
+          <QQ9Tools
+            groups={props.groups}
+            showUnavailable={props.showUnavailable}
+            setShowUnavailable={props.setShowUnavailable}
+            activeDefinition={props.activeDefinition}
+            activeAction={props.activeAction}
+            chooseAction={props.chooseAction}
+            currentScopeForActions={props.currentScopeForActions}
+            formValues={props.formValues}
+            setFormValues={props.setFormValues}
+            busy={props.busy}
+            executeTool={props.executeTool}
+          />
         ) : props.activeNav === 'audit' ? (
           <QQ9Audit tools={props.tools} clear={props.clearAudit} />
         ) : (
@@ -3079,17 +3972,8 @@ function QQ9ChatShell(props: QQ9ShellProps) {
               onClick={() => setConversationInfoOpen(open => !open)}
             >
               <span className="inline-flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-full border border-(--theme-border-default) bg-(--theme-surface-active) text-xs font-bold text-(--theme-text-secondary) [&_img]:size-full [&_img]:object-cover">
-                {props.currentConversation?.avatar ||
-                props.currentEvent?.ChannelAvatar ||
-                props.currentEvent?.UserAvatar ? (
-                  <img
-                    src={
-                      props.currentConversation?.avatar ||
-                      props.currentEvent?.ChannelAvatar ||
-                      props.currentEvent?.UserAvatar
-                    }
-                    alt=""
-                  />
+                {conversationAvatar ? (
+                  <img src={conversationAvatar} alt="" />
                 ) : (
                   (props.currentConversation?.label || 'Q').slice(0, 1)
                 )}
@@ -3143,22 +4027,22 @@ function QQ9ChatShell(props: QQ9ShellProps) {
             ) : null}
             <div className="flex gap-1">
               {hasConversationProfile && !wideProfile && (
-              <button
-                className="inline-flex size-7.5 items-center justify-center rounded-md border-0 bg-transparent text-(--theme-text-muted) hover:bg-(--theme-surface-hover) hover:text-(--theme-text-secondary) disabled:cursor-not-allowed disabled:opacity-40"
-                title="打开会话资料"
-                aria-label="打开会话资料抽屉"
-                disabled={!props.currentEvent}
-                onClick={() => {
-                  if (window.matchMedia('(max-width: 759px)').matches) {
-                    props.setActiveNav('profile')
-                    props.setRightOpen(true)
-                  } else {
-                    setProfileOpen(true)
-                  }
-                }}
-              >
-                <Menu className="size-4" />
-              </button>
+                <button
+                  className="inline-flex size-7.5 items-center justify-center rounded-md border-0 bg-transparent text-(--theme-text-muted) hover:bg-(--theme-surface-hover) hover:text-(--theme-text-secondary) disabled:cursor-not-allowed disabled:opacity-40"
+                  title="打开会话资料"
+                  aria-label="打开会话资料抽屉"
+                  disabled={!props.currentEvent}
+                  onClick={() => {
+                    if (window.matchMedia('(max-width: 759px)').matches) {
+                      props.setActiveNav('profile')
+                      props.setRightOpen(true)
+                    } else {
+                      setProfileOpen(true)
+                    }
+                  }}
+                >
+                  <Menu className="size-4" />
+                </button>
               )}
             </div>
           </header>
@@ -3262,7 +4146,9 @@ function QQ9ChatShell(props: QQ9ShellProps) {
                 <X className="size-4" />
               </button>
             )}
-            <div className={`min-h-0 flex-1 overflow-y-auto overscroll-contain ${wideProfile ? 'pt-3' : 'pt-8'}`}>
+            <div
+              className={`min-h-0 flex-1 overflow-y-auto overscroll-contain ${wideProfile ? 'pt-3' : 'pt-8'}`}
+            >
               {profilePanel}
             </div>
           </aside>
@@ -3303,6 +4189,7 @@ function QQ9Message({
   onMention: (contact: QQContact) => void
   onReadProfile: () => void
 }) {
+  const articleRef = useRef<HTMLElement | null>(null)
   const [menuOpen, setMenuOpen] = useState(false)
   const [avatarMenuOpen, setAvatarMenuOpen] = useState(false)
   const contact = contactFromEvent(event)
@@ -3322,12 +4209,22 @@ function QQ9Message({
     setMenuOpen(false)
     setAvatarMenuOpen(false)
   }
+  const copyMessage = () => {
+    const value = eventText(event)
+    if (value) void writeClipboardText(value)
+    closeMenus()
+  }
+  const segments = messageSegments(event)
+  const arkCardOnly = segments.length === 1 && segments[0]?.type === 'ArkCard'
   return (
     <article
-      className={`mb-4.5 flex max-w-[82%] items-start gap-2 ${mine ? 'ml-auto flex-row-reverse' : ''}`}
+      ref={articleRef}
+      className={`relative mb-4.5 flex max-w-[82%] items-start gap-2 select-text ${mine ? 'ml-auto flex-row-reverse' : ''}`}
       onContextMenu={contextEvent => {
+        if (hasSelectedTextIn(articleRef.current)) return
         contextEvent.preventDefault()
         setMenuOpen(true)
+        setAvatarMenuOpen(false)
       }}
     >
       <button
@@ -3392,30 +4289,24 @@ function QQ9Message({
         </header>
         <div
           onContextMenu={contextEvent => {
+            if (hasSelectedTextIn(articleRef.current)) return
             contextEvent.preventDefault()
             setMenuOpen(true)
+            setAvatarMenuOpen(false)
           }}
-          className={`border border-(--theme-border-default) px-3 py-2 text-[length:inherit] leading-relaxed shadow-[0_1px_2px_var(--theme-shadow-soft)] ${mine ? 'rounded-[11px_5px_11px_11px] border-(--theme-accent-soft-border) bg-(--theme-accent-soft) text-(--theme-accent-soft-text)' : 'rounded-[5px_11px_11px_11px] bg-(--theme-surface-panel)'}`}
+          className={
+            arkCardOnly
+              ? 'text-[length:inherit] leading-relaxed'
+              : `border border-(--theme-border-default) px-3 py-2 text-[length:inherit] leading-relaxed shadow-[0_1px_2px_var(--theme-shadow-soft)] ${mine ? 'rounded-[11px_5px_11px_11px] border-(--theme-accent-soft-border) bg-(--theme-accent-soft) text-(--theme-accent-soft-text)' : 'rounded-[5px_11px_11px_11px] bg-(--theme-surface-panel)'}`
+          }
         >
-          <p className="m-0 wrap-anywhere whitespace-pre-wrap">
-            {messageSegments(event).length
-              ? messageSegments(event).map((segment, index) =>
-                  segment.type === 'Mention' ? (
-                    <mark className="qq9-mention-chip" key={index}>
-                      @
-                      {String(
-                        (segment as Segment & { options?: { name?: string } })
-                          .options?.name ||
-                          segment.value ||
-                          '成员'
-                      )}
-                    </mark>
-                  ) : (
-                    <span key={index}>{String(segment.value ?? '')}</span>
-                  )
-                )
+          <div className="m-0 wrap-anywhere whitespace-pre-wrap">
+            {segments.length
+              ? segments.map((segment, index) => (
+                  <QQ9Segment segment={segment} key={index} />
+                ))
               : '（非文本消息）'}
-          </p>
+          </div>
         </div>
         {decoration?.pinned ? (
           <span className="qq9-message-badge">已设为精华</span>
@@ -3432,6 +4323,10 @@ function QQ9Message({
         ))}
         {menuOpen ? (
           <div className="qq9-popover-menu qq9-message-menu" role="menu">
+            <button onClick={copyMessage}>
+              <Copy className="size-3.5" aria-hidden="true" />
+              复制消息
+            </button>
             <button
               onClick={() => {
                 onFavorite()
@@ -3513,6 +4408,121 @@ function QQ9Message({
         </footer>
       </div>
     </article>
+  )
+}
+
+function QQ9Segment({ segment }: { segment: Segment }) {
+  if (segment.type === 'Text') return <span>{String(segment.value ?? '')}</span>
+  if (segment.type === 'Mention')
+    return (
+      <mark className="qq9-mention-chip">
+        @
+        {String(
+          (segment as Segment & { options?: { name?: string } }).options
+            ?.name ||
+            segment.value ||
+            '成员'
+        )}
+      </mark>
+    )
+  if (segment.type === 'Face') return <QQFaceSegment value={segment.value} />
+  if (segment.type === 'ArkCard')
+    return (
+      <QQArkCardSegment
+        card={segment.value as QQArkCard}
+        resolveImageSource={normalizeImageSource}
+      />
+    )
+  if (segment.type === 'Markdown')
+    return (
+      <span className="my-1 inline-block rounded-md border border-(--theme-border-subtle) bg-(--theme-surface-panel) px-2 py-1 text-[length:inherit]">
+        <b className="mr-1 text-[10px] text-(--theme-text-muted)">MD</b>
+        {segmentPlainText(segment).replace(/^\[Markdown\]$/, 'Markdown 消息')}
+      </span>
+    )
+  if (segment.type === 'Keyboard')
+    return (
+      <span className="my-1 inline-flex items-center rounded-md border border-(--theme-border-subtle) bg-(--theme-surface-panel) px-2 py-1 text-[11px] text-(--theme-text-muted)">
+        按钮
+      </span>
+    )
+  if (/Image/i.test(segment.type)) return <QQ9ImageSegment segment={segment} />
+  if (/File|Video|Audio|Voice|Media/i.test(segment.type))
+    return (
+      <span className="my-1 inline-flex max-w-full items-center gap-1 rounded-md border border-(--theme-border-subtle) bg-(--theme-surface-panel) px-2 py-1 text-[11px] text-(--theme-text-muted)">
+        <Paperclip className="size-3.5 shrink-0" />
+        <span className="truncate">{fileDisplayName(segment)}</span>
+      </span>
+    )
+  return <span>{segmentPlainText(segment)}</span>
+}
+
+function QQ9ImageSegment({ segment }: { segment: Segment }) {
+  const [failure, setFailure] = useState({ source: '', attempts: 0 })
+  const source = imageSourceFromValue(segment.value, segment.options)
+  const label = fileDisplayName(segment)
+  const isQQFace =
+    segment.type === 'QQFaceImage' || segment.options?.qqFace === true
+  const failureAttempts = qqImageFailureAttempts(failure, source)
+  if (source && failureAttempts < 2)
+    return (
+      <a
+        className={
+          isQQFace
+            ? 'my-0.5 inline-block max-w-full align-middle'
+            : 'qq9-image-message my-1 inline-block max-w-full'
+        }
+        href={source}
+        target="_blank"
+        rel="noreferrer"
+        title={label}
+      >
+        <img
+          key={`${source}:${failureAttempts}`}
+          className={
+            isQQFace
+              ? 'block max-h-24 max-w-24 rounded-md object-contain'
+              : undefined
+          }
+          src={source}
+          alt={label}
+          loading="lazy"
+          decoding="async"
+          onLoad={() => {
+            if (failureAttempts) setFailure({ source: '', attempts: 0 })
+          }}
+          onError={() =>
+            setFailure(current => recordQQImageFailure(current, source))
+          }
+        />
+      </a>
+    )
+  const content = source
+    ? `${isQQFace ? 'QQ表情' : '图片'}加载失败，点击重试`
+    : label
+  const body = (
+    <>
+      <FileImage className="size-3.5 shrink-0" />
+      <span className="truncate">{content}</span>
+    </>
+  )
+  if (source)
+    return (
+      <a
+        className="qq9-image-fallback my-1 inline-flex max-w-full items-center gap-1 rounded-md border border-(--theme-border-subtle) bg-(--theme-surface-panel) px-2 py-1 text-[11px] text-(--theme-text-muted)"
+        href={source}
+        target="_blank"
+        rel="noreferrer"
+        title={label}
+        onClick={() => setFailure({ source: '', attempts: 0 })}
+      >
+        {body}
+      </a>
+    )
+  return (
+    <span className="my-1 inline-flex max-w-full items-center gap-1 rounded-md border border-(--theme-border-subtle) bg-(--theme-surface-panel) px-2 py-1 text-[11px] text-(--theme-text-muted)">
+      {body}
+    </span>
   )
 }
 
@@ -3970,7 +4980,11 @@ function QQ9Notifications({
   return (
     <div className="h-full min-h-0 overflow-auto px-1 py-3">
       <header className="mb-2 flex items-center justify-between px-1 text-[11px] text-(--theme-text-muted)">
-        <span>{notifications.length ? `${notifications.length} 条系统通知` : '暂无系统通知'}</span>
+        <span>
+          {notifications.length
+            ? `${notifications.length} 条系统通知`
+            : '暂无系统通知'}
+        </span>
         {notifications.length ? (
           <button
             className="rounded-md border-0 bg-transparent px-1.5 py-1 text-[11px] text-(--theme-text-muted) hover:bg-(--theme-surface-hover) hover:text-(--theme-text-primary)"
@@ -3987,7 +5001,10 @@ function QQ9Notifications({
         >
           <header className="flex items-center gap-2">
             <Bell className="size-3.5 shrink-0 text-(--theme-text-muted)" />
-            <b className="min-w-0 flex-1 truncate text-xs" title={notification.title}>
+            <b
+              className="min-w-0 flex-1 truncate text-xs"
+              title={notification.title}
+            >
               {notification.title}
             </b>
             <time className="shrink-0 text-[10px] text-(--theme-text-muted)">
@@ -4169,6 +5186,200 @@ function QQ9Favorites({
   )
 }
 
+function QQ9Tools({
+  groups,
+  showUnavailable,
+  setShowUnavailable,
+  activeDefinition,
+  activeAction,
+  chooseAction,
+  currentScopeForActions,
+  formValues,
+  setFormValues,
+  busy,
+  executeTool
+}: Pick<
+  QQ9ShellProps,
+  | 'groups'
+  | 'showUnavailable'
+  | 'setShowUnavailable'
+  | 'activeDefinition'
+  | 'activeAction'
+  | 'chooseAction'
+  | 'currentScopeForActions'
+  | 'formValues'
+  | 'setFormValues'
+  | 'busy'
+  | 'executeTool'
+>) {
+  const updateField = (key: string, value: unknown) =>
+    setFormValues(current => ({ ...current, [key]: value }))
+  return (
+    <div className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)_auto] gap-2 overflow-hidden px-1 py-3">
+      <header className="px-1">
+        <strong className="block text-[13px]">机器人能力</strong>
+        <small className="mt-0.5 block text-[10px] text-(--theme-text-muted)">
+          当前上下文：{scopeName(currentScopeForActions)}
+        </small>
+        <label className="mt-2 flex items-center gap-1.5 text-[11px] text-(--theme-text-muted)">
+          <input
+            type="checkbox"
+            checked={showUnavailable}
+            onChange={event => setShowUnavailable(event.target.checked)}
+          />
+          显示当前会话不可用的动作
+        </label>
+      </header>
+      <div className="min-h-0 overflow-auto">
+        {groups.map(group => {
+          const actions = qqActionCatalog.filter(action => {
+            if (action.group !== group) return false
+            return (
+              showUnavailable ||
+              isActionAvailable(action, currentScopeForActions)
+            )
+          })
+          if (!actions.length) return null
+          return (
+            <section className="mb-3" key={group}>
+              <b className="mb-1 block px-1 text-[11px] text-(--theme-text-muted)">
+                {group}
+              </b>
+              <div className="grid gap-1">
+                {actions.map(action => {
+                  const available = isActionAvailable(
+                    action,
+                    currentScopeForActions
+                  )
+                  return (
+                    <button
+                      key={action.id}
+                      className={`rounded-md border px-2 py-1.5 text-left text-[11px] transition ${activeAction === action.id ? 'border-(--theme-accent-soft-border) bg-(--theme-accent-soft) text-(--theme-accent-text)' : 'border-(--theme-border-subtle) bg-(--theme-surface-raised) text-(--theme-text-secondary) hover:border-(--theme-accent-soft-border)'} ${available ? '' : 'opacity-55'}`}
+                      onClick={() => chooseAction(action)}
+                      title={action.description || action.id}
+                    >
+                      <span className="flex items-center justify-between gap-2">
+                        <span className="truncate">{action.title}</span>
+                        <code className="shrink-0 text-[9px] text-(--theme-text-muted)">
+                          {action.id}
+                        </code>
+                      </span>
+                    </button>
+                  )
+                })}
+              </div>
+            </section>
+          )
+        })}
+      </div>
+      <section className="max-h-[46%] min-h-0 overflow-auto rounded-lg border border-(--theme-border-default) bg-(--theme-surface-raised) p-2">
+        {activeDefinition ? (
+          <>
+            <header className="mb-2">
+              <strong className="block truncate text-xs">
+                {activeDefinition.title}
+              </strong>
+              <small className="mt-0.5 block wrap-anywhere text-[10px] text-(--theme-text-muted)">
+                {activeDefinition.description || activeDefinition.id}
+              </small>
+            </header>
+            <div className="grid gap-2">
+              {activeDefinition.fields.map(field => (
+                <label
+                  key={field.key}
+                  className="grid gap-1 text-[11px] text-(--theme-text-secondary)"
+                >
+                  <span>
+                    {field.label}
+                    {field.required ? (
+                      <span className="text-(--theme-danger-text)"> *</span>
+                    ) : null}
+                  </span>
+                  {field.kind === 'textarea' ? (
+                    <textarea
+                      className="qq9-text-input min-h-16 rounded-md border border-(--theme-border-default) bg-(--theme-surface-input) px-2 py-1.5 text-[11px] text-(--theme-text-primary)"
+                      value={String(formValues[field.key] ?? '')}
+                      placeholder={field.placeholder}
+                      onChange={event =>
+                        updateField(field.key, event.target.value)
+                      }
+                    />
+                  ) : field.kind === 'select' ? (
+                    <select
+                      className="rounded-md border border-(--theme-border-default) bg-(--theme-surface-input) px-2 py-1.5 text-[11px]"
+                      value={String(formValues[field.key] ?? '')}
+                      onChange={event =>
+                        updateField(field.key, event.target.value)
+                      }
+                    >
+                      <option value="">默认</option>
+                      {(field.options || []).map(([value, label]) => (
+                        <option key={value} value={value}>
+                          {label}
+                        </option>
+                      ))}
+                    </select>
+                  ) : field.kind === 'boolean' ? (
+                    <span className="flex items-center gap-1.5 text-(--theme-text-muted)">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(formValues[field.key])}
+                        onChange={event =>
+                          updateField(field.key, event.target.checked)
+                        }
+                      />
+                      {field.help || '启用'}
+                    </span>
+                  ) : field.kind === 'file' ? (
+                    <input
+                      className="text-[11px]"
+                      type="file"
+                      onChange={event =>
+                        updateField(field.key, event.target.files?.[0])
+                      }
+                    />
+                  ) : (
+                    <input
+                      className="qq9-text-input rounded-md border border-(--theme-border-default) bg-(--theme-surface-input) px-2 py-1.5 text-[11px] text-(--theme-text-primary)"
+                      type={field.kind === 'number' ? 'number' : 'text'}
+                      value={String(formValues[field.key] ?? '')}
+                      placeholder={field.placeholder}
+                      onChange={event =>
+                        updateField(field.key, event.target.value)
+                      }
+                    />
+                  )}
+                </label>
+              ))}
+              {!activeDefinition.fields.length ? (
+                <p className="rounded-md border border-(--theme-border-subtle) bg-(--theme-surface-panel) px-2 py-2 text-[11px] text-(--theme-text-muted)">
+                  此动作不需要额外参数。
+                </p>
+              ) : null}
+              <button
+                className="mt-1 inline-flex items-center justify-center gap-1 rounded-md border-0 bg-(--theme-accent) px-2.5 py-2 text-xs text-(--theme-accent-contrast) disabled:cursor-not-allowed disabled:opacity-45"
+                disabled={busy}
+                onClick={() => void executeTool()}
+              >
+                {busy ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <Send className="size-4" />
+                )}
+                执行动作
+              </button>
+            </div>
+          </>
+        ) : (
+          <p className="px-2 py-3 text-center text-[11px] leading-relaxed text-(--theme-text-muted)">
+            选择一个动作后在这里填写参数。
+          </p>
+        )}
+      </section>
+    </div>
+  )
+}
+
 function QQ9Settings({
   preferences,
   setPreferences,
@@ -4275,7 +5486,9 @@ function QQ9Settings({
           </strong>
           <small className="text-[10px] leading-4 text-(--theme-text-muted)">
             已保存 {recordMessages} 条消息
-            {recordBytes > 0 ? `（约 ${(recordBytes / 1024).toFixed(1)} KB）` : ''}
+            {recordBytes > 0
+              ? `（约 ${(recordBytes / 1024).toFixed(1)} KB）`
+              : ''}
           </small>
           <button
             className="rounded-md border border-(--theme-border-default) bg-(--theme-surface-raised) p-2 text-left text-[11px] text-(--theme-danger-text) hover:border-(--theme-accent-soft-border)"

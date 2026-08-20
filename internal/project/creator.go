@@ -603,7 +603,8 @@ func projectCommandAvailable(name string) bool {
 // mode the workspace bots directory is used when one is configured; otherwise
 // the process working directory is used with the first writable
 // ALEMONJS_SETUP_ROOTS entry as a fallback (for example the read-only /app
-// directory inside container images).
+// directory inside container images). A writable user home is the final
+// fallback for background services whose working directory is read-only.
 func resolveDestination(config Config, defaultBots string) (string, string, error) {
 	if config.DestinationMode != "current" {
 		return config.Destination, "", nil
@@ -633,6 +634,9 @@ func resolveDestination(config Config, defaultBots string) (string, string, erro
 	if fallback, fallbackErr := firstWritableSetupRoot(); fallbackErr == nil {
 		return fallback, "当前运行目录不可写，已切换到可写保存位置：" + fallback, nil
 	}
+	if fallback, fallbackErr := writableHomeDirectory(); fallbackErr == nil {
+		return fallback, "当前运行目录不可写，已切换到用户主目录：" + fallback, nil
+	}
 	return current, "", nil
 }
 
@@ -651,6 +655,17 @@ func firstWritableSetupRoot() (string, error) {
 		}
 	}
 	return "", errors.New("没有可写的保存根目录")
+}
+
+func writableHomeDirectory() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(home) == "" {
+		return "", errors.New("无法读取用户主目录")
+	}
+	if err := ensureWritableDirectory(home); err != nil {
+		return "", err
+	}
+	return home, nil
 }
 
 func ensureWritableDirectory(directory string) error {

@@ -23,11 +23,21 @@ export type QQActionDefinition = {
 
 const text = (key: string, label: string, required = false, placeholder?: string): QQActionField => ({ key, label, required, placeholder })
 const number = (key: string, label: string, required = false, placeholder?: string): QQActionField => ({ key, label, kind: 'number', required, placeholder })
+const textarea = (key: string, label: string, required = false, placeholder?: string): QQActionField => ({ key, label, kind: 'textarea', required, placeholder })
 const csv = (key: string, label: string, required = false, placeholder?: string): QQActionField => ({ key, label, kind: 'csv', required, placeholder })
 const bool = (key: string, label: string, help?: string): QQActionField => ({ key, label, kind: 'boolean', help })
 const choice = (key: string, label: string, options: Array<[string, string]>, required = false): QQActionField => ({ key, label, kind: 'select', options, required })
 const file = (key: string, label: string, required = false): QQActionField => ({ key, label, kind: 'file', required })
 const url = (key: string, label: string, required = false): QQActionField => ({ key, label, kind: 'url', required, placeholder: 'https://…' })
+
+const officialSendFields = [
+  textarea('formatText', '文本内容', false),
+  textarea('markdown', 'Markdown 内容', false, '留空时按普通文本发送；填写后使用 msg_type=2。'),
+  textarea('keyboard', '按钮 Keyboard JSON', false, '{"content":{"rows":[...]}}'),
+  text('replyId', '回复的消息 ID'),
+  number('msg_seq', '消息序号'),
+  choice('msg_type', '消息类型', [['0', '文本'], ['2', 'Markdown'], ['7', '富媒体']])
+]
 
 // This registry is deliberately the sole source for the tool centre. It is
 // kept one-for-one with @alemonjs/qq-bot's registered onAction branches.
@@ -40,10 +50,10 @@ export const qqActionCatalog: QQActionDefinition[] = [
   { id: 'connection.status', title: '连接状态', group: '机器人状态', scopes: ['global'], fields: [] },
   { id: 'guild.list', title: '频道列表', group: '机器人状态', scopes: ['global'], fields: [] },
 
-  { id: 'message.send', title: '按当前会话发送', group: '消息与互动', scopes: ['group', 'channel', 'c2c', 'direct'], fields: [text('formatText', '文本内容', true)], description: '普通输入框发送时会使用此动作。' },
-  { id: 'message.send.channel', title: '向群/频道发送', group: '消息与互动', scopes: ['group', 'channel'], fields: [text('ChannelId', '目标群或频道 ID', true), text('formatText', '文本内容', true)] },
-  { id: 'message.send.user', title: '向用户发送', group: '消息与互动', scopes: ['c2c', 'direct'], fields: [text('UserId', '目标用户 ID', true), text('formatText', '文本内容', true)] },
-  { id: 'message.send.target', title: '向指定目标发送', group: '消息与互动', scopes: ['group', 'channel', 'c2c', 'direct'], fields: [text('targetId', '目标 ID', true), choice('targetScope', '目标类型', [['group', '群'], ['c2c', '私聊'], ['channel', '子频道'], ['direct', '频道私信']], true), text('formatText', '文本内容', true), text('replyId', '回复的消息 ID')] },
+  { id: 'message.send', title: '按当前会话发送', group: '消息与互动', scopes: ['group', 'channel', 'c2c', 'direct'], fields: officialSendFields, description: '普通输入框发送时会使用此动作；工具表单可发送 Markdown、按钮和回复。' },
+  { id: 'message.send.channel', title: '向群/频道发送', group: '消息与互动', scopes: ['group', 'channel'], fields: [text('ChannelId', '目标群或频道 ID', true), ...officialSendFields] },
+  { id: 'message.send.user', title: '向用户发送', group: '消息与互动', scopes: ['c2c', 'direct'], fields: [text('UserId', '目标用户 ID', true), ...officialSendFields] },
+  { id: 'message.send.target', title: '向指定目标发送', group: '消息与互动', scopes: ['group', 'channel', 'c2c', 'direct'], fields: [text('targetId', '目标 ID', true), choice('targetScope', '目标类型', [['group', '群'], ['c2c', '私聊'], ['channel', '子频道'], ['direct', '频道私信']], true), ...officialSendFields] },
   { id: 'message.delete', title: '撤回消息', group: '消息与互动', scopes: ['group', 'channel', 'c2c', 'direct'], fields: [text('MessageId', '消息 ID', true)], risk: 'high' },
   { id: 'message.get', title: '读取频道消息', group: '消息与互动', scopes: ['channel'], fields: [text('MessageId', '消息 ID', true)] },
   { id: 'message.pin', title: '设为精华', group: '消息与互动', scopes: ['channel'], fields: [text('MessageId', '消息 ID', true)] },

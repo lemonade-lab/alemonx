@@ -1118,6 +1118,7 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	mux.HandleFunc("/api/v1/robot/packages/upload", s.robotPackageUploadHandler)
 	mux.HandleFunc("/api/v1/robot/packages/git-clone", s.robotPackageGitCloneHandler)
 	mux.HandleFunc("/api/v1/robot/packages/git-clone/check", s.robotPackageGitCloneCheckHandler)
+	mux.HandleFunc("/api/v1/robot/chat/media", s.robotChatMediaHandler)
 	mux.HandleFunc("/api/v1/robot/chat/history", s.robotChatHistoryHandler)
 	mux.HandleFunc("/api/v1/robot/chat/summary", s.robotChatSummaryHandler)
 	mux.HandleFunc("/api/v1/robot/testone/chat", s.robotTestoneChatHandler)
@@ -4919,7 +4920,7 @@ func (s *server) robotTasksHandler(w http.ResponseWriter, r *http.Request) {
 		// forwards full-receive browser Actions to WebSocket platform clients.
 		// Apply the guarded compatibility bridge before booting the robot so the
 		// running adapter can actually receive and answer tool requests.
-		if _, patchErr := robot.EnsureCBPIPCActionBridge(input.Root); patchErr != nil {
+		if _, patchErr := robot.EnsureRuntimeCompatibility(input.Root); patchErr != nil {
 			writeError(w, http.StatusBadRequest, patchErr.Error())
 			return
 		}

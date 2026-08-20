@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -30,17 +31,18 @@ type PM2AuditQuery struct {
 
 // PM2AuditPage is one page of filtered PM2 output plus pagination metadata.
 type PM2AuditPage struct {
-	Output    string         `json:"output"`
-	Lines     []PM2AuditLine `json:"lines"`
-	Page      int            `json:"page"`
-	PerPage   int            `json:"perPage"`
-	HasOlder  bool           `json:"hasOlder"`
-	HasNewer  bool           `json:"hasNewer"`
-	Total     int            `json:"total"`
-	Truncated bool           `json:"truncated"`
-	Sources   []string       `json:"sources"`
-	Date      string         `json:"date,omitempty"`
-	Query     string         `json:"query,omitempty"`
+	Output      string             `json:"output"`
+	Lines       []PM2AuditLine     `json:"lines"`
+	Page        int                `json:"page"`
+	PerPage     int                `json:"perPage"`
+	HasOlder    bool               `json:"hasOlder"`
+	HasNewer    bool               `json:"hasNewer"`
+	Total       int                `json:"total"`
+	Truncated   bool               `json:"truncated"`
+	Sources     []string           `json:"sources"`
+	Date        string             `json:"date,omitempty"`
+	Query       string             `json:"query,omitempty"`
+	Diagnostics []PM2LogDiagnostic `json:"diagnostics,omitempty"`
 }
 
 // PM2AuditLine is one log line with its source stream ("out" or "err") so the
@@ -59,6 +61,18 @@ type PM2LogDay struct {
 	Err   int    `json:"err"`
 	First string `json:"first,omitempty"`
 	Last  string `json:"last,omitempty"`
+}
+
+// PM2LogDiagnostic is one known runtime issue detected after the latest
+// Yunzai worker start in the selected log view.
+type PM2LogDiagnostic struct {
+	Code       string `json:"code"`
+	Severity   string `json:"severity"`
+	Title      string `json:"title"`
+	Summary    string `json:"summary"`
+	Suggestion string `json:"suggestion"`
+	Count      int    `json:"count"`
+	LastSeen   string `json:"lastSeen,omitempty"`
 }
 
 const (
@@ -108,6 +122,105 @@ var pm2LogTimeLayouts = []string{
 	"2006-01-02 15:04:05 -0700",
 }
 
+var (
+	pm2SensitiveFieldNames = `token|access_token|refresh_token|cookie|authorization|aid|mid|account_name|email|unmasked_email|mobile|safe_mobile|rebind_mobile|identity_code|realname|union_id|sub_union_id|nickname`
+	pm2SensitiveJSONField  = regexp.MustCompile(`(?i)("(?:` + pm2SensitiveFieldNames + `)"\s*:\s*")([^"]*)(")`)
+	pm2SensitiveJSField    = regexp.MustCompile(`(?i)('(?:` + pm2SensitiveFieldNames + `)'\s*:\s*')([^']*)(')`)
+	pm2SensitiveTokenPair  = regexp.MustCompile(`(?i)((?:authorization|cookie|access[_-]?token|refresh[_-]?token)\s*[:=]\s*(?:bearer\s+)?)([A-Za-z0-9._~+/\-=]{8,})`)
+	pm2SensitiveDataPair   = regexp.MustCompile(`(?i)((?:aid|mid|account_name|email|unmasked_email|mobile|safe_mobile|rebind_mobile|identity_code|realname|union_id|sub_union_id|nickname)\s*[:=]\s*)([^,\s}\]]+)`)
+	pm2MissingModulePath   = regexp.MustCompile(`(?i)Cannot find module\s+['"]([^'"]+)['"]`)
+)
+
+type pm2DiagnosticRule struct {
+	code       string
+	severity   string
+	title      string
+	summary    string
+	suggestion string
+	match      func(string) bool
+	describe   func(string) string
+}
+
+var pm2DiagnosticRules = []pm2DiagnosticRule{
+	{
+		code:       "yunzai-forward-tojson",
+		severity:   "warning",
+		title:      "合并转发兼容方法缺失",
+		summary:    "Yunzai 插件访问 __forwardNodes.toJSON 时触发兼容警告，合并转发可能退化。",
+		suggestion: "重启机器人以应用 AlemonX 的 Yunzai 合并转发兼容补丁。",
+		match: func(text string) bool {
+			return strings.Contains(text, "__forwardNodes.toJSON") && strings.Contains(text, "缺失")
+		},
+	},
+	{
+		code:       "onebot-delete-failed",
+		severity:   "warning",
+		title:      "OneBot 消息撤回失败",
+		summary:    "OneBot 已收到撤回动作，但适配端未返回成功结果。",
+		suggestion: "重启后查看保留下来的 retcode 与 wording；同时确认协议端允许撤回该消息 ID。",
+		match: func(text string) bool {
+			return strings.Contains(text, "Delete not supported or failed") || strings.Contains(text, "message.delete")
+		},
+	},
+	{
+		code:       "plugin-module-missing",
+		severity:   "error",
+		title:      "插件运行模块缺失",
+		summary:    "插件引用的运行模块不存在，相关功能可能加载或执行失败。",
+		suggestion: "检查报错插件的依赖声明和安装状态，重新安装依赖或升级产生该引用的插件。",
+		match: func(text string) bool {
+			return strings.Contains(strings.ToLower(text), "cannot find module")
+		},
+		describe: func(text string) string {
+			matches := pm2MissingModulePath.FindStringSubmatch(text)
+			if len(matches) < 2 {
+				return ""
+			}
+			return "插件运行时缺少模块：" + matches[1]
+		},
+	},
+	{
+		code:       "puppeteer-navigation-timeout",
+		severity:   "warning",
+		title:      "Puppeteer 页面加载超时",
+		summary:    "帮助图页面在 30 秒内未完成导航，图片渲染已回退或失败。",
+		suggestion: "检查渲染页面依赖和外部资源连通性，并在插件侧放宽 navigation timeout。",
+		match: func(text string) bool {
+			return strings.Contains(text, "Navigation timeout") && strings.Contains(text, "exceeded")
+		},
+	},
+	{
+		code:       "moment-inverted-add",
+		severity:   "info",
+		title:      "Moment 参数顺序已弃用",
+		summary:    "插件仍在调用 moment().add(period, number)。",
+		suggestion: "在产生警告的插件中调整为 moment().add(number, period)。",
+		match: func(text string) bool {
+			return strings.Contains(text, "moment().add(period, number) is deprecated")
+		},
+	},
+	{
+		code:       "onebot-request-failed",
+		severity:   "error",
+		title:      "OneBot 消息发送失败",
+		summary:    "适配层只报告了“请求失败”，旧日志没有保留协议端的具体错误。",
+		suggestion: "重启机器人以启用详细错误日志，再根据 retcode、wording 和消息类型定位。",
+		match: func(text string) bool {
+			return strings.Contains(text, "code: 4000") && strings.Contains(text, "请求失败")
+		},
+	},
+	{
+		code:       "sensitive-login-data",
+		severity:   "error",
+		title:      "日志包含登录凭据或账户字段",
+		summary:    "PM2 原始日志中出现了登录 token 或账户隐私字段。",
+		suggestion: "刷新相关登录凭据并清理服务器上的原始日志；AlemonX 查看、实时流和导出会自动脱敏。",
+		match: func(text string) bool {
+			return redactPM2LogText(text) != text
+		},
+	},
+}
+
 func parsePM2LogTimestamp(line string) (time.Time, bool) {
 	candidate := line
 	if strings.HasPrefix(candidate, "[") {
@@ -121,6 +234,62 @@ func parsePM2LogTimestamp(line string) (time.Time, bool) {
 		}
 	}
 	return time.Time{}, false
+}
+
+func redactPM2LogText(text string) string {
+	text = pm2SensitiveJSONField.ReplaceAllString(text, `${1}[REDACTED]${3}`)
+	text = pm2SensitiveJSField.ReplaceAllString(text, `${1}[REDACTED]${3}`)
+	text = pm2SensitiveTokenPair.ReplaceAllString(text, `${1}[REDACTED]`)
+	return pm2SensitiveDataPair.ReplaceAllString(text, `${1}[REDACTED]`)
+}
+
+func diagnosePM2LogLines(lines []pm2AuditLogLine) []PM2LogDiagnostic {
+	// pm2AuditLines is newest-first. Restrict diagnostics to the latest Yunzai
+	// worker lifetime when its start marker is available.
+	scoped := lines
+	for index, line := range lines {
+		if strings.Contains(line.Text, "[Yunzai] Worker 启动") ||
+			strings.Contains(line.Text, "[Yunzai] Worker started") {
+			scoped = lines[:index+1]
+			break
+		}
+	}
+	result := make([]PM2LogDiagnostic, 0, len(pm2DiagnosticRules))
+	for _, rule := range pm2DiagnosticRules {
+		diagnostic := PM2LogDiagnostic{
+			Code:       rule.code,
+			Severity:   rule.severity,
+			Title:      rule.title,
+			Summary:    rule.summary,
+			Suggestion: rule.suggestion,
+		}
+		for _, line := range scoped {
+			if !rule.match(line.Text) {
+				continue
+			}
+			diagnostic.Count++
+			if diagnostic.LastSeen == "" {
+				if rule.describe != nil {
+					if summary := rule.describe(line.Text); summary != "" {
+						diagnostic.Summary = summary
+					}
+				}
+				if line.HasTime {
+					diagnostic.LastSeen = line.Timestamp.Format("2006-01-02 15:04:05")
+				} else {
+					diagnostic.LastSeen = "当前日志"
+				}
+			}
+		}
+		if diagnostic.Count > 0 {
+			result = append(result, diagnostic)
+		}
+	}
+	severityRank := map[string]int{"error": 0, "warning": 1, "info": 2}
+	sort.SliceStable(result, func(i, j int) bool {
+		return severityRank[result[i].Severity] < severityRank[result[j].Severity]
+	})
+	return result
 }
 
 // pm2LogFiles resolves the out/err log file paths belonging to the given
@@ -261,31 +430,66 @@ func parsePM2AuditTime(value string) (time.Time, error) {
 	return time.Time{}, fmt.Errorf("时间格式无效：%s", value)
 }
 
-// pm2AuditLines applies the query to every matching PM2 log file and returns
-// the matching lines sorted newest-first, the source names that were read and
-// whether any underlying file was truncated at the read limit.
-func (m Manager) pm2AuditLines(root string, q PM2AuditQuery) ([]pm2AuditLogLine, []string, bool, error) {
+// readPM2AuditLines reads every matching PM2 log file once and returns all
+// lines sorted newest-first. Keeping filtering separate lets diagnostics use
+// the full latest worker lifetime even while the viewer filters by source or
+// search text.
+func (m Manager) readPM2AuditLines(root string) ([]pm2AuditLogLine, []string, bool, error) {
+	files, err := m.pm2LogFiles(root)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	var lines []pm2AuditLogLine
+	sourceSet := make(map[string]bool)
+	truncated := false
+	for _, file := range files {
+		fileLines, cut, readErr := readPM2LogFile(file.Path, pm2LogMaxLines)
+		if readErr != nil {
+			if os.IsNotExist(readErr) {
+				continue
+			}
+			return nil, nil, false, fmt.Errorf("读取日志失败：%w", readErr)
+		}
+		truncated = truncated || cut
+		sourceSet[file.Source] = true
+		for i := range fileLines {
+			fileLines[i].Source = file.Source
+		}
+		lines = append(lines, fileLines...)
+	}
+	sort.SliceStable(lines, func(i, j int) bool {
+		a, b := lines[i], lines[j]
+		if a.HasTime && b.HasTime && !a.Timestamp.Equal(b.Timestamp) {
+			return a.Timestamp.After(b.Timestamp)
+		}
+		return a.HasTime && !b.HasTime
+	})
+	sources := make([]string, 0, len(sourceSet))
+	for source := range sourceSet {
+		sources = append(sources, source)
+	}
+	sort.Strings(sources)
+	return lines, sources, truncated, nil
+}
+
+func filterPM2AuditLines(lines []pm2AuditLogLine, q PM2AuditQuery) ([]pm2AuditLogLine, error) {
 	var since, until time.Time
 	var err error
 	if q.Since != "" {
 		if since, err = parsePM2AuditTime(q.Since); err != nil {
-			return nil, nil, false, err
+			return nil, err
 		}
 	}
 	if q.Until != "" {
 		if until, err = parsePM2AuditTime(q.Until); err != nil {
-			return nil, nil, false, err
+			return nil, err
 		}
 	}
 	var date time.Time
 	if q.Date != "" {
 		if date, err = time.ParseInLocation("2006-01-02", q.Date, time.Local); err != nil {
-			return nil, nil, false, fmt.Errorf("日期无效：%s", q.Date)
+			return nil, fmt.Errorf("日期无效：%s", q.Date)
 		}
-	}
-	files, err := m.pm2LogFiles(root)
-	if err != nil {
-		return nil, nil, false, err
 	}
 	lowerQuery := strings.ToLower(q.Query)
 	wantSource := func(source string) bool {
@@ -316,38 +520,27 @@ func (m Manager) pm2AuditLines(root string, q PM2AuditQuery) ([]pm2AuditLogLine,
 		}
 		return true
 	}
-	var matched []pm2AuditLogLine
-	sourceSet := make(map[string]bool)
-	truncated := false
-	for _, file := range files {
-		lines, cut, readErr := readPM2LogFile(file.Path, pm2LogMaxLines)
-		if readErr != nil {
-			if os.IsNotExist(readErr) {
-				continue
-			}
-			return nil, nil, false, fmt.Errorf("读取日志失败：%w", readErr)
-		}
-		truncated = truncated || cut
-		sourceSet[file.Source] = true
-		for i := range lines {
-			lines[i].Source = file.Source
-			if wantLine(lines[i]) {
-				matched = append(matched, lines[i])
-			}
+	matched := make([]pm2AuditLogLine, 0, len(lines))
+	for _, line := range lines {
+		if wantLine(line) {
+			matched = append(matched, line)
 		}
 	}
-	sort.SliceStable(matched, func(i, j int) bool {
-		a, b := matched[i], matched[j]
-		if a.HasTime && b.HasTime && !a.Timestamp.Equal(b.Timestamp) {
-			return a.Timestamp.After(b.Timestamp)
-		}
-		return a.HasTime && !b.HasTime
-	})
-	sources := make([]string, 0, len(sourceSet))
-	for source := range sourceSet {
-		sources = append(sources, source)
+	return matched, nil
+}
+
+// pm2AuditLines applies the query to every matching PM2 log file and returns
+// the matching lines sorted newest-first, the source names that were read and
+// whether any underlying file was truncated at the read limit.
+func (m Manager) pm2AuditLines(root string, q PM2AuditQuery) ([]pm2AuditLogLine, []string, bool, error) {
+	lines, sources, truncated, err := m.readPM2AuditLines(root)
+	if err != nil {
+		return nil, nil, false, err
 	}
-	sort.Strings(sources)
+	matched, err := filterPM2AuditLines(lines, q)
+	if err != nil {
+		return nil, nil, false, err
+	}
 	return matched, sources, truncated, nil
 }
 
@@ -362,23 +555,29 @@ func (m Manager) PM2AuditLogs(root string, q PM2AuditQuery) (PM2AuditPage, error
 	if q.PerPage > pm2LogMaxPageSize {
 		q.PerPage = pm2LogMaxPageSize
 	}
-	matched, sources, truncated, err := m.pm2AuditLines(root, q)
+	allLines, sources, truncated, err := m.readPM2AuditLines(root)
 	if err != nil {
 		return PM2AuditPage{}, err
 	}
+	matched, err := filterPM2AuditLines(allLines, q)
+	if err != nil {
+		return PM2AuditPage{}, err
+	}
+	diagnostics := diagnosePM2LogLines(allLines)
 	total := len(matched)
 	start := (q.Page - 1) * q.PerPage
 	if start >= total {
 		return PM2AuditPage{
-			Output:    "没有更早的 PM2 日志。",
-			Lines:     []PM2AuditLine{},
-			Page:      q.Page,
-			PerPage:   q.PerPage,
-			Total:     total,
-			Truncated: truncated,
-			Sources:   sources,
-			Date:      q.Date,
-			Query:     q.Query,
+			Output:      "没有更早的 PM2 日志。",
+			Lines:       []PM2AuditLine{},
+			Page:        q.Page,
+			PerPage:     q.PerPage,
+			Total:       total,
+			Truncated:   truncated,
+			Sources:     sources,
+			Date:        q.Date,
+			Query:       q.Query,
+			Diagnostics: diagnostics,
 		}, nil
 	}
 	end := start + q.PerPage
@@ -389,8 +588,9 @@ func (m Manager) PM2AuditLogs(root string, q PM2AuditQuery) (PM2AuditPage, error
 	var builder strings.Builder
 	lines := make([]PM2AuditLine, 0, len(pageLines))
 	for i := len(pageLines) - 1; i >= 0; i-- {
-		lines = append(lines, PM2AuditLine{Source: pageLines[i].Source, Text: pageLines[i].Text})
-		builder.WriteString(pageLines[i].Text)
+		text := redactPM2LogText(pageLines[i].Text)
+		lines = append(lines, PM2AuditLine{Source: pageLines[i].Source, Text: text})
+		builder.WriteString(text)
 		if i > 0 {
 			builder.WriteByte('\n')
 		}
@@ -399,17 +599,18 @@ func (m Manager) PM2AuditLogs(root string, q PM2AuditQuery) (PM2AuditPage, error
 		builder.WriteString("PM2 暂无可读取的日志。")
 	}
 	return PM2AuditPage{
-		Output:    builder.String(),
-		Lines:     lines,
-		Page:      q.Page,
-		PerPage:   q.PerPage,
-		HasOlder:  end < total,
-		HasNewer:  start > 0,
-		Total:     total,
-		Truncated: truncated,
-		Sources:   sources,
-		Date:      q.Date,
-		Query:     q.Query,
+		Output:      builder.String(),
+		Lines:       lines,
+		Page:        q.Page,
+		PerPage:     q.PerPage,
+		HasOlder:    end < total,
+		HasNewer:    start > 0,
+		Total:       total,
+		Truncated:   truncated,
+		Sources:     sources,
+		Date:        q.Date,
+		Query:       q.Query,
+		Diagnostics: diagnostics,
 	}, nil
 }
 
@@ -500,7 +701,7 @@ func (m Manager) PM2LogExport(root string, q PM2AuditQuery) (string, error) {
 		builder.WriteByte('[')
 		builder.WriteString(strings.ToUpper(line.Source))
 		builder.WriteString("] ")
-		builder.WriteString(line.Text)
+		builder.WriteString(redactPM2LogText(line.Text))
 		builder.WriteByte('\n')
 	}
 	if builder.Len() == 0 {
@@ -600,7 +801,7 @@ func (m Manager) StreamPM2LogFiles(ctx context.Context, root string, onLine func
 			defer group.Done()
 			tailPM2LogFile(ctx, file, func(source, text string) {
 				select {
-				case lines <- pm2LogStreamLine{Source: source, Text: text}:
+				case lines <- pm2LogStreamLine{Source: source, Text: redactPM2LogText(text)}:
 				case <-ctx.Done():
 				}
 			})

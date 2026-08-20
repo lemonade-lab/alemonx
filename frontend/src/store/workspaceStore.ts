@@ -82,6 +82,17 @@ const workspaceSlice = createSlice({
       if (state.activeProjectID === action.payload)
         state.activeProjectID = state.projects[0]?.id ?? ''
     },
+    removeProjects(state, action: PayloadAction<string[]>) {
+      const removed = new Set(action.payload)
+      if (!removed.size) return
+      state.projects = state.projects.filter(item => {
+        if (!removed.has(item.id)) return true
+        delete state.robotConfigs[item.path]
+        return false
+      })
+      if (removed.has(state.activeProjectID))
+        state.activeProjectID = state.projects[0]?.id ?? ''
+    },
     pinProject(state, action: PayloadAction<string>) {
       const target = state.projects.find(item => item.id === action.payload)
       if (!target) return
@@ -173,6 +184,7 @@ export const {
   addProjects,
   selectProject,
   removeProject,
+  removeProjects,
   pinProject,
   reorderProjects,
   setDraft,
