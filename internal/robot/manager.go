@@ -737,20 +737,28 @@ func (m Manager) EnsureRuntimeDependencies(root string) (string, error) {
 	if len(missing) == 0 {
 		return "", nil
 	}
+	prefix := "检测到依赖不完整（" + strings.Join(missing, "、") + "），正在自动同步依赖。"
+	output, installErr := m.installRuntimeDependencies(root, "自动同步依赖")
+	return prefix + "\n" + output, installErr
+}
+
+// installRuntimeDependencies verifies the package manager's result on disk so
+// an install command that exits successfully cannot be reported as complete
+// while direct project dependencies are still missing.
+func (m Manager) installRuntimeDependencies(root, action string) (string, error) {
 	removeYarnIntegrity(root)
 	output, installErr := runPackageManager(root, "install")
-	prefix := "检测到依赖不完整（" + strings.Join(missing, "、") + "），正在自动同步依赖。"
 	if installErr != nil {
-		return prefix + "\n" + output, buildDependencyError("自动同步依赖失败", output)
+		return output, buildDependencyError(action+"失败", output)
 	}
 	remaining, checkErr := m.RuntimeDependencies(root)
 	if checkErr != nil {
-		return prefix + "\n" + output, checkErr
+		return output, checkErr
 	}
 	if len(remaining) > 0 {
-		return prefix + "\n" + output, errors.New("自动同步后依赖仍不完整：" + strings.Join(remaining, "、"))
+		return output, errors.New(action + "后依赖仍不完整：" + strings.Join(remaining, "、"))
 	}
-	return prefix + "\n" + output + "\n依赖已同步。", nil
+	return strings.TrimSpace(output + "\n依赖已同步。"), nil
 }
 
 // SyncWorkspaceDependencies is used after changing packages/*, which is a
@@ -1521,10 +1529,8 @@ func (m Manager) Run(root, action, message, packageName, version, tag, token str
 		}
 		return Result{Path: root, Output: strings.Join(checks, "\n")}, nil
 	case "install":
-		if missing, checkErr := (Manager{}).RuntimeDependencies(root); checkErr == nil && len(missing) > 0 {
-			removeYarnIntegrity(root)
-		}
-		name, args = manager, []string{"install"}
+		output, installErr := m.installRuntimeDependencies(root, "安装依赖")
+		return Result{Path: root, Output: output}, installErr
 	case "upgrade-alemon":
 		return (Manager{}).UpgradeAlemonDependencies(root)
 	case "build":

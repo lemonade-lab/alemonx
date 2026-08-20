@@ -1,4 +1,4 @@
-const isDev = process.env.NODE_ENV !== 'production';
+const isDev = import.meta.env.DEV;
 export type LogMethod = (...args: any[]) => void;
 function create(method: keyof Console): LogMethod {
   if (!isDev) {

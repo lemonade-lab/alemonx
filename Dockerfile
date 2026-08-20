@@ -69,7 +69,6 @@ ENV HOME=/data \
     XDG_CACHE_HOME=/data/cache \
     ALX_WORKSPACE=/app/workspace \
     ALEMONJS_SETUP_ROOTS=/app/workspace \
-    NODE_ENV=production \
     YARN_CACHE_FOLDER=/app/.yarn_cache
 
 EXPOSE 17390

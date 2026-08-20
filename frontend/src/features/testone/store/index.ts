@@ -769,7 +769,7 @@ export const store = configureStore({
     getDefault({
       serializableCheck: false
     }).concat(listenerMiddleware.middleware, trimMiddleware, wsMiddleware),
-  devTools: process.env.NODE_ENV === 'development'
+  devTools: import.meta.env.DEV
 });
 
 // ---------------- 类型导出（供组件使用） ----------------
