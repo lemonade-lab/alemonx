@@ -737,6 +737,7 @@ func (m Manager) EnsureRuntimeDependencies(root string) (string, error) {
 	if len(missing) == 0 {
 		return "", nil
 	}
+	removeYarnIntegrity(root)
 	output, installErr := runPackageManager(root, "install")
 	prefix := "检测到依赖不完整（" + strings.Join(missing, "、") + "），正在自动同步依赖。"
 	if installErr != nil {
@@ -755,12 +756,25 @@ func (m Manager) EnsureRuntimeDependencies(root string) (string, error) {
 // SyncWorkspaceDependencies is used after changing packages/*, which is a
 // workspace topology change even if every root dependency was already present.
 func (Manager) SyncWorkspaceDependencies(root string) (string, error) {
+	removeYarnIntegrity(root)
 	output, err := runPackageManager(root, "install")
 	prefix := "本地插件工作区已变更，正在同步依赖。"
 	if err != nil {
 		return prefix + "\n" + output, buildDependencyError("同步本地插件依赖失败", output)
 	}
 	return prefix + "\n" + output + "\n本地插件依赖已同步。", nil
+}
+
+// removeYarnIntegrity clears node_modules/.yarn-integrity before an install.
+// Yarn v1 trusts that marker and answers "Already up-to-date" without checking
+// whether the declared packages actually exist on disk, so a partially missing
+// node_modules would otherwise never be repaired by a subsequent install.
+func removeYarnIntegrity(root string) {
+	path, err := projectPath(root)
+	if err != nil {
+		return
+	}
+	_ = os.Remove(filepath.Join(path, "node_modules", ".yarn-integrity"))
 }
 
 type alemonUpgradePlan struct {
@@ -1499,6 +1513,9 @@ func (m Manager) Run(root, action, message, packageName, version, tag, token str
 		}
 		return Result{Path: root, Output: strings.Join(checks, "\n")}, nil
 	case "install":
+		if missing, checkErr := (Manager{}).RuntimeDependencies(root); checkErr == nil && len(missing) > 0 {
+			removeYarnIntegrity(root)
+		}
 		name, args = manager, []string{"install"}
 	case "upgrade-alemon":
 		return (Manager{}).UpgradeAlemonDependencies(root)

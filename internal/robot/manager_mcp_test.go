@@ -215,6 +215,24 @@ func TestPermissionAdviceContainerMode(t *testing.T) {
 	}
 }
 
+func TestRemoveYarnIntegrityBeforeInstall(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "package.json"), []byte(`{"dependencies":{"left-pad":"^1.0.0"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "node_modules"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	integrity := filepath.Join(root, "node_modules", ".yarn-integrity")
+	if err := os.WriteFile(integrity, []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	removeYarnIntegrity(root)
+	if _, err := os.Stat(integrity); !os.IsNotExist(err) {
+		t.Fatalf("stale yarn integrity should be removed, stat err = %v", err)
+	}
+}
+
 func TestPM2LogPaginationStartsWithNewestPage(t *testing.T) {
 	lines := make([]string, 241)
 	for index := range lines {
