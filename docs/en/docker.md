@@ -38,7 +38,7 @@ The most common `.env` variables:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `ALX_IMAGE` | `ccr.ccs.tencentyun.com/ningmengchongshui/alemonx:latest` | Default Tencent Cloud image; use `alx:local` for local builds. |
+| `ALX_IMAGE` | `ccr.ccs.tencentyun.com/ningmengchongshui/alemonx:latest` | Default Tencent Cloud image; use `alemonx:local` for local builds. |
 | `ALX_PORT` | `17390` | Port exposed to the host. |
 | `ALX_CONTAINER_NAME` | `alx` | Container name shown by `docker ps`; customize for multi-instance deployments. |
 | `ALX_DEPLOYMENT` | `production` | Production mode: missing SQLite or local auth only prints reminders and does not block startup; an admin can be created from the setup guide. |
@@ -74,7 +74,7 @@ For an MCP stdio connection, run `docker compose exec -T alx /app/alx mcp`; to r
 
 ```sh
 make docker-build
-ALX_IMAGE=alx:local docker compose up -d
+ALX_IMAGE=alemonx:local docker compose up -d
 ```
 
 The build uses a multi-stage image: the Node stage produces the embedded frontend, the Go stage cross-compiles the static `alx`, and the final image keeps only the Node, Git, SSH, and workbench binaries needed to run robots.

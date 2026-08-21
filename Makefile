@@ -1,4 +1,4 @@
-.PHONY: help dev bundle-resources build test test-agent test-all test-sqlite test-space format lint dev-fe build-frontend test-sse verify-sse release-check docker-build docker-buildx docker-up docker-down docker-logs
+.PHONY: help dev bundle-resources build test test-agent test-all test-sqlite test-space format lint dev-fe build-frontend test-sse verify-sse release-check docker-build docker-buildx docker-up docker-down docker-logs yunzai-resources docker-yunzai-build docker-yunzai-buildx docker-yunzai-buildx-push docker-yunzai-up docker-yunzai-down docker-yunzai-logs
 
 .DEFAULT_GOAL := help
 
@@ -101,7 +101,7 @@ release-check: ## Run the publishability gate
 	git diff --check
 
 docker-build: ## Build the local Docker image
-	docker build --build-arg VERSION=$$(git describe --tags --always --dirty 2>/dev/null || echo dev) -t alx:local .
+	docker build --build-arg VERSION=$$(git describe --tags --always --dirty 2>/dev/null || echo dev) -t alemonx:local .
 
 docker-buildx: ## Manually validate or publish the multi-architecture Docker image
 	./scripts/docker-buildx.sh
@@ -109,11 +109,21 @@ docker-buildx: ## Manually validate or publish the multi-architecture Docker ima
 docker-buildx-push: ## Manually validate or publish the multi-architecture Docker image
 	ALX_PUSH=1 ./scripts/docker-buildx.sh
 
-docker-up: ## Start ALemonX through Docker Compose
-	docker compose up -d
+YUNZAI_LOADER_SOURCE ?= ../alemonjs-load-yunzai
+YUNZAI_IMAGE ?= alemonx-yunzai:local
+YUNZAI_BASE_IMAGE ?= alemonx:local
 
-docker-down: ## Stop the Docker Compose deployment
-	docker compose down
+yunzai-resources: ## Package the prebuilt Yunzai loader and refresh local resource checksums
+	sh ./scripts/docker-yunzai-package-loader.sh "$(YUNZAI_LOADER_SOURCE)" .resources/alemonjs-load-yunzai.tar.gz
+	cd .resources && shasum -a 256 Miao-Yunzai-master.zip miao-plugin-master.zip alemonjs-load-yunzai.tar.gz > yunzai-resources.sha256
 
-docker-logs: ## Follow Docker Compose logs
-	docker compose logs -f --tail=200 alx
+docker-yunzai-build: yunzai-resources docker-build ## Build the local Yunzai image without cloning Yunzai repositories
+	# Docker Desktop BuildKit resolves an unqualified local base through a registry.
+	# Use the native image store here so the just-built alemonx:local is reusable.
+	DOCKER_BUILDKIT=0 docker build --build-arg BASE_IMAGE=$(YUNZAI_BASE_IMAGE) -f Dockerfile.yunzai -t $(YUNZAI_IMAGE) .
+
+docker-yunzai-buildx: yunzai-resources ## Validate the multi-architecture Yunzai image build
+	sh ./scripts/docker-yunzai-buildx.sh
+
+docker-yunzai-buildx-push: yunzai-resources ## Build and push the multi-architecture Yunzai image
+	YUNZAI_PUSH=1 sh ./scripts/docker-yunzai-buildx.sh

@@ -17,7 +17,7 @@ lerna-debug.log*
 /frontend/node_modules
 dist
 dist-ssr
-dist-electron
+/.resources
 release
 plugins/*/dist/
 app
