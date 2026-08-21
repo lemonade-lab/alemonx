@@ -6,12 +6,10 @@ FROM ${BASE_IMAGE}
 
 USER root
 
-# The base image already has Node, Corepack, Chromium and the fonts that Miao
-# needs. unzip is the only additional build/runtime utility needed to unpack
-# the immutable source archives while the image is assembled.
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends unzip \
-  && rm -rf /var/lib/apt/lists/*
+# The Debian-based Node runtime used by the ALemonX base image already includes
+# unzip. Do not run APT here: this layer only unpacks local resources, and an
+# unnecessary package upgrade would make publishing depend on Debian mirrors.
+RUN command -v unzip >/dev/null
 
 COPY .resources/Miao-Yunzai-master.zip /tmp/yunzai/Miao-Yunzai-master.zip
 COPY .resources/miao-plugin-master.zip /tmp/yunzai/miao-plugin-master.zip
