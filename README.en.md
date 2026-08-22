@@ -15,11 +15,13 @@ dist/                     Frontend build output (embedded into the alx binary at
 resources/                Runtime resources (embedded into the alx binary)
 ├── templates/            Project template sources (bot/, dev/)
 └── packages/             Bundled tooling (Yarn embedded; tools such as PM2 are installed on demand via Yarn)
-plugins/                  System Plugins directory
+plugins/                  Application-provided compatibility plugin directory (lower priority; installs never write here)
 workspace/                Unified workspace (default <run-dir>/workspace; override with --workspace or ALX_WORKSPACE)
 ├── templates/            Project templates (materialized from embedded templates on first run; editable)
 ├── packages/             Tooling directory (Yarn materialized copies; PM2 is installed here on first use and stays stable)
-└── bots/                 Default destination for newly created robots
+├── bots/                 Default destination for newly created robots
+├── plugins/              Installed system plugins (the sole installation target and highest-priority root)
+└── store/                Persistent system-plugin data (each plugin uses store/<plugin ID>/)
 ```
 
 ## One-line install

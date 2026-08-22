@@ -15,11 +15,12 @@ dist/                     前端构建产物（构建时嵌入 alx 二进制，�
 resources/                运行期资源（构建时嵌入 alx 二进制）
 ├── templates/            项目模板源（bot/、dev/）
 └── packages/             内置工具包（Yarn 嵌入；PM2 等按需用 Yarn 安装）
-plugins/                  系统插件目录 (拖入插件即可自动加载)
 workspace/                统一工作区（默认 <运行目录>/workspace）
 ├── templates/            项目模板（首次启动从内嵌模板物化，可编辑）
 ├── packages/             工具目录（Yarn 物化副本；PM2 首次使用安装到这里，位置固定）
-└── bots/                 新建机器人的默认落点
+├── bots/                 新建机器人的默认落点
+├── plugins/              已安装系统插件（唯一安装目标，优先读取）
+└── store/                系统插件持久数据（每个插件使用 store/<插件 ID>/）
 ```
 
 ## 一行安装

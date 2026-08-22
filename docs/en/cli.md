@@ -46,7 +46,7 @@ alx doctor
 # Foreground start and listen settings
 alx --port 17390                        # default listens on 0.0.0.0; reachable from LAN/public
 alx --host 127.0.0.1                    # localhost only
-alx --workspace /path/to/workspace      # set the unified workspace (templates and new bots)
+alx --workspace /path/to/workspace      # set the unified workspace (templates, robots, system plugins, and their persistent data)
 alx --redis-port 6380                   # change the built-in Redis port
 alx --redis-off                         # do not start the built-in Redis
 
@@ -67,7 +67,7 @@ alx version
 alx update
 ```
 
-The workspace root is resolved from the `ALX_WORKSPACE` environment variable, then from the first writable entry in `ALEMONJS_SETUP_ROOTS`, and finally falls back to `<run-dir>/workspace`; `--workspace` takes the highest precedence. Templates live in `<workspace>/templates`, new robots land in `<workspace>/bots` by default, the built-in Yarn is materialized into `<workspace>/packages/yarn`, and PM2 is not embedded - when first needed it is installed with the built-in Yarn into `<workspace>/packages/pm2` (a stable location).
+The workspace root is resolved from the `ALX_WORKSPACE` environment variable, then from the first writable entry in `ALEMONJS_SETUP_ROOTS`, and finally falls back to `<run-dir>/workspace`; `--workspace` takes the highest precedence. Templates live in `<workspace>/templates`, new robots land in `<workspace>/bots` by default, the built-in Yarn is materialized into `<workspace>/packages/yarn`, and PM2 is not embedded - when first needed it is installed with the built-in Yarn into `<workspace>/packages/pm2` (a stable location). System plugins are installed only in `<workspace>/plugins`; their default recoverable data directory is `<workspace>/store/<plugin ID>`.
 
 `alx install` registers the alx program you are currently running and pins the workspace resolved at install time into the service command line, so the background service and the foreground share the same workspace. Every `alx install` overwrites the existing registration with the current program and workspace; it never skips because a service is already installed. After moving the program, run `alx install` again from the new location, or simply run `alx start` (it detects the change and re-registers with the current program); `alx status` shows the registered program and workspace paths.
 

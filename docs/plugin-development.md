@@ -61,9 +61,10 @@ plugins/
 
 运行中的 ALemonX 按以下顺序发现插件，同一个 `id` 只加载第一个发现位置：
 
-1. 可执行文件同级的 `plugins/`；
-2. 当前工作目录的 `plugins/`；
-3. 用户配置目录的 `alx/plugins/`。
+1. `<workspace>/plugins/`：用户安装插件的唯一写入目录，也是最高优先级；
+2. 程序提供的 `plugins/`：已安装程序使用可执行文件同级目录，源码开发可使用当前工作目录的 `plugins/` 作为兼容读取目录。
+
+不会再从用户配置目录的 `alx/plugins/` 读取插件。插件数据不应写入插件代码目录；执行器应使用 `ALX_PLUGIN_STORE` 提供的 `<workspace>/store/<插件 ID>/`。
 
 插件目录的增删与 `alx.json` 修改由后台**自动热更新**（约 1 秒内反映），无需重启或手动刷新；前端通过修订号（revision）或 SSE 事件感知变化。
 
@@ -83,7 +84,7 @@ plugins/
 }
 ```
 
-在开发仓库中放在仓库根目录的 `plugins/` 下即可被发现；发布时通过 GitHub Release 提供平台安装包（见[发布、安装与版本管理](#发布安装与版本管理)）。
+源码开发时可放在仓库根目录的 `plugins/` 下作为兼容读取目录（同 ID 未被 `<workspace>/plugins/` 覆盖时生效）；发布时通过 GitHub Release 提供平台安装包（见[发布、安装与版本管理](#发布安装与版本管理)）。
 
 ## alx.json 清单参考
 
@@ -214,6 +215,8 @@ plugins/
 | `ALX_PLUGIN_STORE` | 宿主创建的插件持久数据目录：`workspace/store/<插件 ID>`。下载的运行包、登录态、数据库和可恢复配置应默认保存到这里；插件升级不会清除该目录。 |
 | `ALX_PLUGIN_DEV_PORT` | 源码开发命令中唯一可替换变量（宿主分配的回环端口）。 |
 
+`ALX_PLUGIN_STORE` 会注入普通执行器、经宿主授权的特权执行器，以及源码插件的构建、开发服务和开发 Web 进程。静态 Web 页面不能直接读取该目录，需通过 runner 提供受控接口。
+
 ### 最小 Node.js 执行器
 
 ```js
@@ -246,7 +249,7 @@ try {
 | GET | `/api/v1/setup/plugins/events` | SSE「插件已变更」事件流（`data: {}`，25 秒心跳）。 |
 | GET | `/api/v1/setup/plugins/releases/<id>` | 插件 GitHub Release 列表与资产（含 SHA-256、平台兼容性）。 |
 | POST | `/api/v1/setup/plugins/upload` | 上传并安装插件压缩包（`.zip`/`.tar.gz`/`.tgz`，单文件，宿主校验解包）。 |
-| POST | `/api/v1/setup/plugins/<id>/install` | 按 `{version, assetName}` 下载 Release（下载后处于待启动状态，需显式启用）。 |
+| POST | `/api/v1/setup/plugins/<id>/install` | 按 `{version, assetName}` 下载并安装 Release。首次安装默认启用；若同 ID 曾被显式停用，仍需重新启用。 |
 | POST | `/api/v1/setup/plugins/<id>/enabled` | 启用/停用：`{enabled: bool}`。 |
 | POST | `/api/v1/setup/plugins/<id>/switch` | 切换版本：`{version, assetName}`。 |
 | POST | `/api/v1/setup/plugins/<id>/uninstall` | 卸载：`{confirm: true}`。 |
@@ -733,8 +736,4 @@ go vet ./internal/setupplugin/...
 
 ## 参考实现
 
-- [alemonx-network](../plugins/alemonx-network/)：网络检查、端口转发、防火墙；演示 `privilegedOperations`（计划/撤销）、`statusActions` 与开发会话。
-- [alemonx-docker](../plugins/alemonx-docker/)：Docker Compose 管理；演示 `uploads`、`systemPickers`、`services`，以及宿主 `webview.open`（容器页面）与 `ui.modal`/`ui.alert`（确认/提示）。
-- [alemonx-qq](../plugins/alemonx-qq/)：QQ 核心管理；演示 `finder.pick`、`media` 二维码，以及宿主 `webview.open`（管理面板）与 `ui.modal`（操作确认）。
-- [alemonx-finder](../plugins/alemonx-finder/)：工作台文件浏览示例，演示表单类对话框与深层目录浏览。
-- 插件前端工程参考 `alemonx-network/frontend`：React + Vite + Tailwind，构建产物输出到 `web/`；`yarn dev` 时可用 Vite 代理指向本地 alx。
+本仓库当前不随源码分发系统插件示例。开发插件时可按本文的清单、执行器协议和 Release 打包要求建立独立仓库；前端可使用 React + Vite + Tailwind，构建产物输出到 `web/`，本地 `yarn dev` 可通过 Vite 代理指向 alx。

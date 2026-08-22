@@ -47,13 +47,15 @@ ALemonX（命令行叫 `alx`）是 AlemonJS 机器人的**本地工作台**。Al
 
 #### 统一工作区（workspace）
 
-ALemonX 把模板、工具和新建机器人收敛到一个工作区（默认 `<运行目录>/workspace`，可用 `--workspace` 或 `ALX_WORKSPACE` 指定）：
+ALemonX 把模板、工具、新建机器人和系统插件收敛到一个工作区（默认 `<运行目录>/workspace`，可用 `--workspace` 或 `ALX_WORKSPACE` 指定）：
 
 ```text
 workspace/
 ├── templates/    项目模板（首次启动从内嵌模板物化，可编辑）
 ├── packages/     工具目录（内置 Yarn 物化副本；PM2 首次使用时安装到这里）
-└── bots/         新建机器人的默认落点
+├── bots/          新建机器人的默认落点
+├── plugins/       已安装系统插件（唯一安装目标，优先于程序 plugins/）
+└── store/         插件持久数据（每个插件使用 store/<插件 ID>/）
 ```
 
 #### 三种入口

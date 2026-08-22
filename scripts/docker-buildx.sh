@@ -7,7 +7,7 @@ version="${ALX_VERSION:-$(git describe --tags --abbrev=0 2>/dev/null || git rev-
 platforms="${ALX_PLATFORMS:-linux/amd64,linux/arm64}"
 push="${ALX_PUSH:-0}"
 builder="${ALX_BUILDER:-alx-builder}"
-runtime_base="${ALX_RUNTIME_BASE:-alemonx-base:local}"
+runtime_base="${ALX_RUNTIME_BASE:-ccr.ccs.tencentyun.com/ningmengchongshui/alemonbase:latest}"
 
 # ========== 检查环境 ==========
 command -v docker >/dev/null 2>&1 || { echo '❌ 未检测到 Docker。' >&2; exit 1; }

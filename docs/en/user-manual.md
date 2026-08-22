@@ -47,13 +47,15 @@ A robot project is a directory whose root must contain `package.json`. You can c
 
 #### Unified workspace
 
-ALemonX keeps templates, tools, and new robots in one workspace (default `<run-dir>/workspace`; override with `--workspace` or `ALX_WORKSPACE`):
+ALemonX keeps templates, tools, new robots, and system plugins in one workspace (default `<run-dir>/workspace`; override with `--workspace` or `ALX_WORKSPACE`):
 
 ```text
 workspace/
 ├── templates/    project templates (materialized from embedded templates on first run; editable)
 ├── packages/     tooling directory (built-in Yarn materialized copy; PM2 is installed here on first use)
-└── bots/         default destination for newly created robots
+├── bots/          default destination for newly created robots
+├── plugins/       installed system plugins (the sole installation target; takes priority over application plugins/)
+└── store/         persistent plugin data (each plugin uses store/<plugin ID>/)
 ```
 
 #### Three entry points

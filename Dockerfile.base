@@ -2,36 +2,48 @@
 # security updates or runtime system dependencies need to change.
 FROM node:22
 
-RUN (apt-get update --fix-missing || (sleep 5 && apt-get update --fix-missing)) \
-    && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y \
-    && apt-get install -y --no-install-recommends \
-        ca-certificates \
-        curl \
-        git \
-        lsof \
-        openssh-client \
-        tini \
-        fonts-noto-cjk \
-        fonts-noto-color-emoji \
-        chromium \
-        xvfb \
-        x11-xkb-utils \
-        xkb-data \
-        libnss3 \
-        libgbm1 \
-        libglib2.0-0 \
-        libatk1.0-0 \
-        libatk-bridge2.0-0 \
-        libatspi2.0-0 \
-        libgtk-3-0 \
-        libasound2 \
-        libcups2 \
-        libxcomposite1 \
-        libxdamage1 \
-        libxfixes3 \
-        libxrandr2 \
-        libxkbcommon0 \
-    && rm -rf /var/lib/apt/lists/* \
+# 先更新源
+RUN apt-get update --fix-missing || (sleep 5 && apt-get update --fix-missing)
+
+# 第一组：基础工具（几乎不会失败）
+RUN apt-get install -y --no-install-recommends \
+    ca-certificates curl git lsof openssh-client tini \
+    && echo "✅ Base tools installed"
+
+# 第二组：字体（通常没问题）
+RUN apt-get install -y --no-install-recommends \
+    fonts-noto-cjk fonts-noto-color-emoji \
+    && echo "✅ Fonts installed"
+
+# 第三组：Chromium（容易失败）
+RUN apt-get install -y --no-install-recommends --fix-missing chromium \
+    && echo "✅ Chromium installed" || echo "❌ Chromium failed"
+
+# 第四组：X11（容易失败）
+RUN apt-get install -y --no-install-recommends xvfb \
+    && echo "✅ xvfb installed" || echo "❌ xvfb failed"
+
+RUN apt-get install -y --no-install-recommends x11-xkb-utils xkb-data \
+    && echo "✅ X11 utils installed" || echo "❌ X11 utils failed"
+
+# 第五组：GUI 依赖库（逐个安装）
+RUN apt-get install -y --no-install-recommends libnss3 && echo "✅ libnss3" || echo "❌ libnss3"
+RUN apt-get install -y --no-install-recommends libgbm1 && echo "✅ libgbm1" || echo "❌ libgbm1"
+RUN apt-get install -y --no-install-recommends libglib2.0-0 && echo "✅ libglib2.0-0" || echo "❌ libglib2.0-0"
+RUN apt-get install -y --no-install-recommends libatk1.0-0 && echo "✅ libatk1.0-0" || echo "❌ libatk1.0-0"
+RUN apt-get install -y --no-install-recommends libatk-bridge2.0-0 && echo "✅ libatk-bridge2.0-0" || echo "❌ libatk-bridge2.0-0"
+RUN apt-get install -y --no-install-recommends libatspi2.0-0 && echo "✅ libatspi2.0-0" || echo "❌ libatspi2.0-0"
+RUN apt-get install -y --no-install-recommends libgtk-3-0 && echo "✅ libgtk-3-0" || echo "❌ libgtk-3-0"
+RUN apt-get install -y --no-install-recommends libasound2 && echo "✅ libasound2" || echo "❌ libasound2"
+RUN apt-get install -y --no-install-recommends libcups2 && echo "✅ libcups2" || echo "❌ libcups2"
+RUN apt-get install -y --no-install-recommends libxcomposite1 && echo "✅ libxcomposite1" || echo "❌ libxcomposite1"
+RUN apt-get install -y --no-install-recommends libxdamage1 && echo "✅ libxdamage1" || echo "❌ libxdamage1"
+RUN apt-get install -y --no-install-recommends libxfixes3 && echo "✅ libxfixes3" || echo "❌ libxfixes3"
+RUN apt-get install -y --no-install-recommends libxrandr2 && echo "✅ libxrandr2" || echo "❌ libxrandr2"
+RUN apt-get install -y --no-install-recommends libxkbcommon0 && echo "✅ libxkbcommon0" || echo "❌ libxkbcommon0"
+
+# 清理和配置
+RUN rm -rf /var/lib/apt/lists/* \
     && corepack enable \
     && mkdir -p /root/.ssh \
     && chmod 700 /root/.ssh \

@@ -1,8 +1,8 @@
-.PHONY: help dev bundle-resources build test test-agent test-all test-sqlite test-space format lint dev-fe build-frontend test-sse verify-sse release-check docker-build docker-buildx docker-buildx-push docker-base-build docker-up docker-down docker-logs yunzai-resources docker-yunzai-build docker-yunzai-buildx docker-yunzai-buildx-push docker-yunzai-up docker-yunzai-down docker-yunzai-logs
+.PHONY: help dev bundle-resources build test test-agent test-all test-sqlite test-space format lint dev-fe build-frontend test-sse verify-sse release-check docker-build docker-buildx docker-buildx-push docker-base-build docker-base-buildx docker-base-buildx-push docker-up docker-down docker-logs yunzai-resources docker-yunzai-build docker-yunzai-buildx docker-yunzai-buildx-push docker-yunzai-up docker-yunzai-down docker-yunzai-logs
 
 .DEFAULT_GOAL := help
 
-ALX_RUNTIME_BASE ?= alemonx-base:local
+ALX_RUNTIME_BASE ?= ccr.ccs.tencentyun.com/ningmengchongshui/alemonbase:latest
 YUNZAI_LOADER_SOURCE ?= ../alemonjs-load-yunzai
 YUNZAI_IMAGE ?= alemonx-yunzai:local
 YUNZAI_BASE_IMAGE ?= alemonx:local
@@ -105,6 +105,15 @@ release-check: ## Run the publishability gate
 	$(MAKE) build-frontend
 	git diff --check
 
+docker-base-build: ## Build the runtime base image locally
+	./scripts/docker-base-build.sh
+
+docker-base-buildx: ## Validate the multi-architecture alemonbase image
+	./scripts/docker-base-buildx.sh
+
+docker-base-buildx-push: ## Build and publish the multi-architecture alemonbase image
+	ALX_BASE_PUSH=1 ./scripts/docker-base-buildx.sh
+
 docker-build: ## Build the local Docker image
 	docker build --build-arg ALX_RUNTIME_BASE=$(ALX_RUNTIME_BASE) --build-arg VERSION=$$(git describe --tags --always --dirty 2>/dev/null || echo dev) -t alemonx:local .
 
@@ -113,9 +122,6 @@ docker-buildx: ## Manually validate or publish the multi-architecture Docker ima
 
 docker-buildx-push: ## Manually validate or publish the multi-architecture Docker image
 	ALX_PUSH=1 ./scripts/docker-buildx.sh
-
-docker-base-build: ## Build the runtime base image locally
-	./scripts/docker-base-build.sh
 
 yunzai-resources: ## Package the prebuilt Yunzai loader and refresh local resource checksums
 	sh ./scripts/docker-yunzai-package-loader.sh "$(YUNZAI_LOADER_SOURCE)" .resources/alemonjs-load-yunzai.tar.gz

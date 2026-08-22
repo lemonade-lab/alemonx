@@ -50,7 +50,7 @@ docker compose up -d
 | `./data` | `/data` | 工作台状态：账户、配置、SQLite、下载缓存 |
 | `./workspace` | `/app/workspace` | 统一工作区：模板、机器人、内置工具、系统插件 |
 
-容器内统一工作区为 `/app/workspace`：首次启动会把内嵌模板物化到其中的 `templates/`（可编辑，持久保存在宿主机 `./workspace`），新建机器人默认落在 `bots/`。内置 Yarn 物化到 `packages/yarn`；PM2 不随镜像嵌入，首次需要时用内置 Yarn 安装到 `packages/pm2`（位置固定，持久保存在宿主机目录）。通过工作台或 `alx plugin install` 安装的系统插件只写入 `plugins/`；程序随镜像提供的 `/app/plugins` 只用于兼容读取，且优先级低于工作区插件。每个系统插件的默认持久数据目录为 `store/<插件 ID>/`，容器重建后仍保留；例如 QQ 插件应把下载的组件、登录态和配置写入 `store/alemon-qq/`。
+容器内统一工作区为 `/app/workspace`：首次启动会把内嵌模板物化到其中的 `templates/`（可编辑，持久保存在宿主机 `./workspace`），新建机器人默认落在 `bots/`。内置 Yarn 物化到 `packages/yarn`；PM2 不随镜像嵌入，首次需要时用内置 Yarn 安装到 `packages/pm2`（位置固定，持久保存在宿主机目录）。通过工作台或 `alx plugin install` 安装的系统插件只写入 `plugins/`；程序随镜像提供的 `/app/plugins` 只用于兼容读取，且优先级低于工作区插件。每个系统插件的默认持久数据目录为 `store/<插件 ID>/`，容器重建后仍保留；例如 QQ 插件应把下载的组件、登录态和配置写入 `store/alemonx-qq/`。
 
 容器进程以 root 运行，挂载目录开箱即用，无需在宿主机执行 `chown`/`chmod`。
 
@@ -74,34 +74,36 @@ MCP 的 stdio 连接可通过 `docker compose exec -T alx /app/alx mcp` 启动�
 
 ## 从源码构建
 
-首次构建或需要刷新 Debian 安全更新、Chromium、QQ/NapCat 系统依赖时，先在本机构建运行基础镜像：
+首次构建或需要刷新 Debian 安全更新、Chromium、QQ/NapCat 系统依赖时，先由本机 Builder 手动发布 `alemonbase`：
 
 ```sh
-ALX_BASE_VERSION=20260822 make docker-base-build
+docker login ccr.ccs.tencentyun.com
+ALX_BASE_VERSION=20260822 make docker-base-buildx-push
 ```
 
-日常 ALemonX 构建直接复用本地 `alemonx-base:local`，不会再次执行 `apt-get update` 或 `apt-get upgrade`：
+日常 ALemonX 构建直接复用腾讯云的 `alemonbase`，不会再次执行 `apt-get update` 或 `apt-get upgrade`：
 
 ```sh
 make docker-build
 ALX_IMAGE=alemonx:local docker compose up -d
 ```
 
-构建使用多阶段镜像：Node 阶段生成嵌入式前端，Go 阶段交叉编译静态 `alx`，最终镜像继承本地 `alemonx-base`。基础镜像负责 Node、Git、SSH、Chromium 和系统库；应用镜像只复制工作台二进制，因此代码构建不会重复安装系统包。需要复现某个已验证的基础层时，传入本地版本标签，例如 `ALX_RUNTIME_BASE=alemonx-base:20260822 make docker-build`。
+构建使用多阶段镜像：Node 阶段生成嵌入式前端，Go 阶段交叉编译静态 `alx`，最终镜像继承腾讯云 `ccr.ccs.tencentyun.com/ningmengchongshui/alemonbase`。基础镜像负责 Node、Git、SSH、Chromium 和系统库；应用镜像只复制工作台二进制，因此代码构建不会重复安装系统包。需要复现某个已验证的基础层时，传入固定标签，例如 `ALX_RUNTIME_BASE=ccr.ccs.tencentyun.com/ningmengchongshui/alemonbase:20260822 make docker-build`。
 
 镜像内置 Noto CJK 与 Emoji 字体以及 **Chromium 浏览器**：机器人图片消息（jsxp 渲染）中文与表情显示正常，Puppeteer/Playwright 等浏览器自动化开箱可用（无需自行下载）。容器以 root 运行，浏览器或 QQ/NapCat 的 Electron 运行时必须使用 `--no-sandbox`；QQ 插件会自动添加该参数。镜像体积会因此明显增大（Chromium 约 500MB）。
 
 镜像也预装 QQ/NapCat Linux 所需的 Xvfb、XKB、GTK/NSS/GBM、音频、CUPS 和 X11 动态库，并把 `/dev/shm` 设为 1 GiB。安装 QQ 插件时无需再执行“准备 QQ 登录运行环境”的系统授权；插件仍会负责下载 QQ/NapCat、启动独立 Xvfb 显示与登录流程。
 
-多架构发布采用类似 alemongo 的人工 Buildx 流程，而不是版本标签自动推送：
+## 发布与构建边界
+
+Docker 不使用 GitHub Actions。基础镜像和应用镜像均由本机 Builder 手动构建；`alemonbase` 发布到腾讯云后，隔离的 Buildx builder 即可读取它并构建多架构应用镜像：
 
 ```sh
-# 仅验证构建，不推送镜像
-./scripts/docker-buildx.sh
+# 仅验证应用镜像
+make docker-buildx
 
-# 人工确认版本和推送目标后发布
-docker login ccr.ccs.tencentyun.com
-ALX_VERSION=v1.2.3 ALX_PUSH=1 ./scripts/docker-buildx.sh
+# 手动推送应用镜像
+ALX_VERSION=v1.2.3 make docker-buildx-push
 ```
 
-Docker 不再使用 GitHub Actions。基础镜像和应用镜像均由本机命令手动构建；基础镜像不会推送到腾讯云或其他镜像仓库。
+仅需本机单架构开发时，可运行 `make docker-base-build`，它生成 `alemonbase:local`；再以 `ALX_RUNTIME_BASE=alemonbase:local make docker-build` 使用它。

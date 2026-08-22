@@ -42,7 +42,7 @@ alx doctor
 # 启动（前台）与监听设置
 alx --port 17390                        # 默认监听 0.0.0.0，局域网/公网可直接访问
 alx --host 127.0.0.1                    # 仅本机可访问
-alx --workspace /path/to/workspace      # 指定统一工作区（模板与新建机器人）
+alx --workspace /path/to/workspace      # 指定统一工作区（模板、机器人、系统插件及其持久数据）
 alx --redis-port 6380                   # 调整内置 Redis 端口
 alx --redis-off                         # 禁止启动内置 Redis
 
@@ -63,7 +63,7 @@ alx version
 alx update
 ```
 
-工作区默认取 `ALX_WORKSPACE` 环境变量，其次取 `ALEMONJS_SETUP_ROOTS` 中第一个可写目录，最后回退到 `<运行目录>/workspace`；`--workspace` 优先级最高。模板存放在 `<workspace>/templates`，新建机器人默认落在 `<workspace>/bots`，内置 Yarn 物化到 `<workspace>/packages/yarn`；PM2 不随包嵌入，首次需要时用内置 Yarn 安装到 `<workspace>/packages/pm2`（位置固定）。
+工作区默认取 `ALX_WORKSPACE` 环境变量，其次取 `ALEMONJS_SETUP_ROOTS` 中第一个可写目录，最后回退到 `<运行目录>/workspace`；`--workspace` 优先级最高。模板存放在 `<workspace>/templates`，新建机器人默认落在 `<workspace>/bots`，内置 Yarn 物化到 `<workspace>/packages/yarn`；PM2 不随包嵌入，首次需要时用内置 Yarn 安装到 `<workspace>/packages/pm2`（位置固定）。系统插件只安装到 `<workspace>/plugins`，插件的默认可恢复数据目录为 `<workspace>/store/<插件 ID>`。
 
 `alx install` 注册的是**当前执行的 alx 程序**（不会复制到其他目录），并把安装时解析出的工作区固定进服务参数，后台服务与前台使用同一工作区。**无论后台服务是否已安装，每次执行 `alx install` 都会以当前程序与工作区直接覆盖重新注册，不会因为已安装而跳过。** 程序移动后，从新位置重新执行 `alx install`，或直接执行 `alx start`（会自动检测并按当前程序重新注册）；`alx status` 会显示注册的程序与工作区路径。
 

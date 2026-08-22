@@ -107,14 +107,7 @@ YUNZAI_IMAGE=alemonx-yunzai:local docker compose -f docker-compose.yunzai.yml up
 
 ## 多架构发布
 
-发布采用人工 Buildx 流程。先发布与 Yunzai 相同版本的基础镜像：
-
-```sh
-docker login ccr.ccs.tencentyun.com
-ALX_VERSION=v0.2.20 ALX_PUSH=1 ./scripts/docker-buildx.sh
-```
-
-然后验证或推送 Yunzai 镜像：
+Yunzai 镜像仍由本机手动发布，不使用 GitHub Actions。先按 [Docker 部署](docker.md) 中的流程发布或确认 `alemonbase`，再发布同版本的 `alemonx` 应用镜像，最后执行：
 
 ```sh
 # 仅验证 linux/amd64、linux/arm64 构建
@@ -124,13 +117,4 @@ YUNZAI_VERSION=v0.2.20 make docker-yunzai-buildx
 YUNZAI_VERSION=v0.2.20 make docker-yunzai-buildx-push
 ```
 
-发布目标默认为 `ccr.ccs.tencentyun.com/ningmengchongshui/alemonx-yunzai`，基础镜像默认为同版本的 `ccr.ccs.tencentyun.com/ningmengchongshui/alemonx:<版本>`。需要覆盖镜像地址或基础版本时：
-
-```sh
-YUNZAI_VERSION=v0.2.20 \
-YUNZAI_IMAGE=registry.example.com/team/alemonx-yunzai \
-YUNZAI_BASE_IMAGE=registry.example.com/team/alemonx:v0.2.20 \
-make docker-yunzai-buildx-push
-```
-
-`.resources/` 不进入 Git，因此 Yunzai 镜像只应在具备这四份本地资源的机器上手动构建；项目不再通过 GitHub Actions 发布 Docker 镜像。
+发布目标默认为 `ccr.ccs.tencentyun.com/ningmengchongshui/alemonx-yunzai`，基础应用镜像默认为同版本的 `ccr.ccs.tencentyun.com/ningmengchongshui/alemonx:<版本>`。

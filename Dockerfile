@@ -1,5 +1,5 @@
 # Runtime system dependencies are maintained in a separately released image.
-ARG ALX_RUNTIME_BASE=alemonx-base:local
+ARG ALX_RUNTIME_BASE=ccr.ccs.tencentyun.com/ningmengchongshui/alemonbase:latest
 
 # 前端构建阶段 - 构建 React 工作台
 FROM node:22 AS frontend

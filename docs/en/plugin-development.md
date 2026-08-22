@@ -61,9 +61,10 @@ plugins/
 
 A running ALemonX discovers plugins in this order, loading only the first location for a given `id`:
 
-1. `plugins/` next to the executable;
-2. `plugins/` in the current working directory;
-3. `alx/plugins/` in the user config directory.
+1. `<workspace>/plugins/`: the sole writable destination for user-installed plugins and the highest-priority root;
+2. application-provided `plugins/`: the executable-adjacent directory for installed applications, with the current working directory's `plugins/` retained as a source-development compatibility root.
+
+Plugins are no longer read from `alx/plugins/` in the user configuration directory. Plugin data must not be written into plugin code; runners should use the `<workspace>/store/<plugin ID>/` directory provided through `ALX_PLUGIN_STORE`.
 
 Adding/removing plugin directories or editing `alx.json` is hot-reloaded automatically by the backend (reflected within about 1 second), with no restart or manual refresh; the frontend learns about changes via a revision number or SSE events.
 
@@ -83,7 +84,7 @@ Minimal manifest:
 }
 ```
 
-Put it under `plugins/` at the repository root during development to be discovered; publish platform archives through GitHub Releases when shipping (see [Publishing, installation, and version management](#publishing-installation-and-version-management)).
+During source development, put it under `plugins/` at the repository root as a compatibility discovery root (only when it is not overridden by the same ID in `<workspace>/plugins/`); publish platform archives through GitHub Releases when shipping (see [Publishing, installation, and version management](#publishing-installation-and-version-management)).
 
 ## alx.json manifest reference
 
@@ -210,6 +211,8 @@ Runners inherit the host environment (PATH includes the managed Node toolchain d
 | `ALX_PLUGIN_STORE` | Host-created persistent plugin data directory: `workspace/store/<plugin ID>`. Downloaded runtimes, sessions, databases, and recoverable configuration should default here; plugin upgrades do not remove it. |
 | `ALX_PLUGIN_DEV_PORT` | The only replaceable variable in source-development commands (host-allocated loopback port). |
 
+`ALX_PLUGIN_STORE` is injected into regular runners, host-authorized privileged runners, and source-plugin build, development-service, and development-Web processes. Static Web pages cannot read this directory directly; expose any necessary access through a controlled runner interface.
+
 ### Minimal Node.js runner
 
 ```js
@@ -242,7 +245,7 @@ Except for the plugin's own web resources, all endpoints live under `/api/v1` an
 | GET | `/api/v1/setup/plugins/events` | SSE "plugins changed" event stream (`data: {}`, 25-second heartbeat). |
 | GET | `/api/v1/setup/plugins/releases/<id>` | Plugin GitHub Release list and assets (with SHA-256 and platform compatibility). |
 | POST | `/api/v1/setup/plugins/upload` | Upload and install a plugin archive (`.zip`/`.tar.gz`/`.tgz`, single file; host validates extraction). |
-| POST | `/api/v1/setup/plugins/<id>/install` | Download a Release by `{version, assetName}` (ends in a pending state; must be explicitly enabled). |
+| POST | `/api/v1/setup/plugins/<id>/install` | Download and install a Release by `{version, assetName}`. A first installation is enabled by default; a previously explicitly disabled ID must be enabled again. |
 | POST | `/api/v1/setup/plugins/<id>/enabled` | Enable/disable: `{enabled: bool}`. |
 | POST | `/api/v1/setup/plugins/<id>/switch` | Switch version: `{version, assetName}`. |
 | POST | `/api/v1/setup/plugins/<id>/uninstall` | Uninstall: `{confirm: true}`. |
@@ -729,8 +732,4 @@ go vet ./internal/setupplugin/...
 
 ## Reference implementations
 
-- [alemonx-network](../../plugins/alemonx-network/): network checks, port forwarding, firewall; demonstrates `privilegedOperations` (plan/undo), `statusActions`, and development sessions.
-- [alemonx-docker](../../plugins/alemonx-docker/): Docker Compose management; demonstrates `uploads`, `systemPickers`, `services`, host `webview.open` (container pages), and `ui.modal`/`ui.alert` (confirmations/prompts).
-- [alemonx-qq](../../plugins/alemonx-qq/): QQ core management; demonstrates `finder.pick`, `media` QR codes, host `webview.open` (admin panel), and `ui.modal` (action confirmation).
-- [alemonx-finder](../../plugins/alemonx-finder/): workbench file browser example; demonstrates form-style dialogs and deep directory browsing.
-- For the plugin frontend engineering, reference `alemonx-network/frontend`: React + Vite + Tailwind, with build output to `web/`; during `yarn dev`, Vite's proxy can point at a local alx.
+This repository does not currently ship system-plugin examples in its source tree. Build plugins in separate repositories using this document's manifest, runner protocol, and Release-packaging requirements. A frontend can use React, Vite, and Tailwind with build output in `web/`; local `yarn dev` can proxy to alx.
