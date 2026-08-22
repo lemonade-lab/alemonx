@@ -6,9 +6,9 @@ FROM ${BASE_IMAGE}
 
 USER root
 
-# The Debian-based Node runtime used by the ALemonX base image already includes
-# unzip. Do not run APT here: this layer only unpacks local resources, and an
-# unnecessary package upgrade would make publishing depend on Debian mirrors.
+# alemonbase explicitly provides unzip. Do not run APT here: this layer only
+# unpacks local resources, and an unnecessary package upgrade would make
+# publishing depend on Debian mirrors.
 RUN command -v unzip >/dev/null
 
 COPY .resources/Miao-Yunzai-master.zip /tmp/yunzai/Miao-Yunzai-master.zip

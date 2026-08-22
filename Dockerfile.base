@@ -7,7 +7,7 @@ RUN apt-get update --fix-missing || (sleep 5 && apt-get update --fix-missing)
 
 # 第一组：基础工具（几乎不会失败）
 RUN apt-get install -y --no-install-recommends \
-    ca-certificates curl git lsof openssh-client tini \
+    ca-certificates curl git lsof openssh-client tini unzip \
     && echo "✅ Base tools installed"
 
 # 第二组：字体（通常没问题）
