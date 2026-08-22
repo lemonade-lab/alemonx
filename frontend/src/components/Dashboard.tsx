@@ -8118,6 +8118,11 @@ function CatalogDetail({
           <p className="m-0 text-sm text-slate-500">
             {item.description || '在线生态目录条目'}
           </p>
+          {repositoryInstall && packageName.startsWith('git+https://github.com/') && (
+            <p className="m-0 text-xs text-slate-500">
+              已识别 GitHub 仓库，安装时会自动使用 GHFast 镜像。
+            </p>
+          )}
         </div>
         <div className="flex flex-wrap items-end justify-end gap-2">
           {packageName ? (

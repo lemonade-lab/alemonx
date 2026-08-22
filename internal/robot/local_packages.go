@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -31,11 +32,12 @@ func installLocalPackage(root, source string) (Result, error) {
 		if err != nil {
 			return Result{}, err
 		}
+		cloneRepository, mirrored := githubPackageMirror(repository)
 		args := []string{"clone", "--depth", "1"}
 		if ref != "" {
 			args = append(args, "--branch", ref)
 		}
-		args = append(args, repository, target)
+		args = append(args, cloneRepository, target)
 		output, err := run(root, "git", args...)
 		if err != nil {
 			return Result{Path: target, Output: output}, fmt.Errorf("下载本地插件包失败：%w", err)
@@ -44,7 +46,11 @@ func installLocalPackage(root, source string) (Result, error) {
 		if ref != "" {
 			version = "（" + ref + "）"
 		}
-		return Result{Path: target, Output: "已安装到 packages/" + name + version + "。" + defaultEnableLocalPackage(root, target) + "\n" + output}, nil
+		origin := ""
+		if mirrored {
+			origin = "已识别 GitHub 仓库，使用 GHFast 镜像下载。\n"
+		}
+		return Result{Path: target, Output: origin + "已安装到 packages/" + name + version + "。" + defaultEnableLocalPackage(root, target) + "\n" + output}, nil
 	}
 	temporary, err := os.MkdirTemp("", "alx-package-")
 	if err != nil {
@@ -535,6 +541,19 @@ func localPackageName(source string) string {
 }
 
 var gitPackageRefPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]*$`)
+
+const githubPackageMirrorPrefix = "https://ghfast.top/"
+
+// githubPackageMirror accelerates only public HTTPS GitHub package sources.
+// SSH, Gitee, and URLs carrying credentials or queries retain the exact value
+// chosen by the user, so a mirror never receives a secret or private URL.
+func githubPackageMirror(repository string) (string, bool) {
+	parsed, err := url.Parse(repository)
+	if err != nil || parsed == nil || parsed.Scheme != "https" || !strings.EqualFold(parsed.Hostname(), "github.com") || parsed.User != nil || parsed.RawQuery != "" {
+		return repository, false
+	}
+	return githubPackageMirrorPrefix + parsed.String(), true
+}
 
 // splitGitPackageSource accepts the npm-style git+URL#tag form. The ref is
 // passed as a separate git --branch argument, never interpolated into a shell.
