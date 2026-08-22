@@ -752,7 +752,7 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	if privilegeErr != nil {
 		log.Printf("权限审计存储不可用：%v", privilegeErr)
 	}
-	plugins := setupplugin.NewRegistry()
+	plugins := setupplugin.NewWorkspaceRegistry(options.WorkspaceRoot)
 	downloadBroker := newPluginDownloadBroker(networkManager)
 	downloadBroker.setRegistry(plugins)
 	plugins.SetRunnerEnvironmentProvider(downloadBroker.environment)

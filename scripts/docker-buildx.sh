@@ -7,6 +7,7 @@ version="${ALX_VERSION:-$(git describe --tags --abbrev=0 2>/dev/null || git rev-
 platforms="${ALX_PLATFORMS:-linux/amd64,linux/arm64}"
 push="${ALX_PUSH:-0}"
 builder="${ALX_BUILDER:-alx-builder}"
+runtime_base="${ALX_RUNTIME_BASE:-alemonx-base:local}"
 
 # ========== 检查环境 ==========
 command -v docker >/dev/null 2>&1 || { echo '❌ 未检测到 Docker。' >&2; exit 1; }
@@ -27,6 +28,7 @@ echo "=========================================="
 echo "📦 镜像: $image"
 echo "🏷️  版本: $version"
 echo "🖥️  平台: $platforms"
+echo "🧱  运行基础: $runtime_base"
 echo "📤 推送: $([ "$push" = '1' ] && echo '是' || echo '否')"
 echo "=========================================="
 
@@ -35,6 +37,7 @@ if [ "$push" = '1' ]; then
   echo "🚀 构建并推送..."
   docker buildx build \
     --platform "$platforms" \
+    --build-arg "ALX_RUNTIME_BASE=$runtime_base" \
     --build-arg "VERSION=$version" \
     -t "$image:latest" \
     -t "$image:$version" \
@@ -45,9 +48,11 @@ else
   echo "💡 提示: 如需推送，执行: ALX_PUSH=1 $0"
   docker buildx build \
     --platform "$platforms" \
+    --build-arg "ALX_RUNTIME_BASE=$runtime_base" \
     --build-arg "VERSION=$version" \
     -t "$image:latest" \
     -t "$image:$version" \
+    --output type=cacheonly \
     .
 fi
 

@@ -2,6 +2,8 @@ package system
 
 import (
 	"bytes"
+	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -15,17 +17,26 @@ import (
 // native elevation UI. The elevated process then invokes the declared runner
 // directly. No plugin shell script, redirection script, or browser-controlled
 // command line is involved in the authorization path.
-func RunWithPrivilegesInput(directory, name string, args []string, input []byte) ([]byte, error) {
+func RunWithPrivilegesInput(directory, name string, args []string, input []byte, environment []string) ([]byte, error) {
 	inputPath, outputPath, errorPath, cleanup, err := privilegedIOFiles(input)
 	if err != nil {
 		return nil, err
 	}
 	defer cleanup()
+	environmentPath, cleanupEnvironment, err := privilegedEnvironmentFile(environment)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanupEnvironment()
 	executable, err := os.Executable()
 	if err != nil {
 		return nil, fmt.Errorf("无法定位主应用权限助手：%w", err)
 	}
-	helperArgs := []string{"__alx-privileged-run", "--directory", directory, "--input", inputPath, "--output", outputPath, "--error", errorPath, "--program", name, "--"}
+	helperArgs := []string{"__alx-privileged-run", "--directory", directory, "--input", inputPath, "--output", outputPath, "--error", errorPath, "--program", name}
+	if environmentPath != "" {
+		helperArgs = append(helperArgs, "--environment", environmentPath)
+	}
+	helperArgs = append(helperArgs, "--")
 	helperArgs = append(helperArgs, args...)
 	if err := runElevatedHelper(executable, helperArgs); err != nil {
 		return readPrivilegedResult(outputPath, errorPath, err)
@@ -35,6 +46,48 @@ func RunWithPrivilegesInput(directory, name string, args []string, input []byte)
 		return nil, fmt.Errorf("无法读取权限操作结果：%w", err)
 	}
 	return output, nil
+}
+
+func privilegedEnvironmentFile(environment []string) (string, func(), error) {
+	if len(environment) == 0 {
+		return "", func() {}, nil
+	}
+	for _, value := range environment {
+		if !validEnvironmentValue(value) {
+			return "", nil, errors.New("权限操作环境变量无效")
+		}
+	}
+	file, err := os.CreateTemp("", "alx-elevated-environment-*.json")
+	if err != nil {
+		return "", nil, fmt.Errorf("无法准备权限操作环境：%w", err)
+	}
+	path := file.Name()
+	data, err := json.Marshal(environment)
+	if err == nil {
+		_, err = file.Write(data)
+	}
+	if closeErr := file.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		_ = os.Remove(path)
+		return "", nil, fmt.Errorf("无法准备权限操作环境：%w", err)
+	}
+	return path, func() { _ = os.Remove(path) }, nil
+}
+
+func validEnvironmentValue(value string) bool {
+	key, _, ok := strings.Cut(value, "=")
+	if !ok || key == "" || strings.ContainsAny(value, "\x00\r\n") {
+		return false
+	}
+	for index, char := range key {
+		if char == '_' || char >= 'A' && char <= 'Z' || char >= 'a' && char <= 'z' || index > 0 && char >= '0' && char <= '9' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func privilegedIOFiles(input []byte) (string, string, string, func(), error) {
@@ -150,6 +203,7 @@ func RunPrivilegedHelper(arguments []string) int {
 	inputPath := flags.String("input", "", "")
 	outputPath := flags.String("output", "", "")
 	errorPath := flags.String("error", "", "")
+	environmentPath := flags.String("environment", "", "")
 	program := flags.String("program", "", "")
 	if err := flags.Parse(arguments); err != nil || strings.TrimSpace(*inputPath) == "" || strings.TrimSpace(*outputPath) == "" || strings.TrimSpace(*errorPath) == "" || strings.TrimSpace(*program) == "" {
 		return 2
@@ -161,6 +215,21 @@ func RunPrivilegedHelper(arguments []string) int {
 	}
 	command := exec.Command(*program, flags.Args()...)
 	command.Dir = *directory
+	if *environmentPath != "" {
+		data, readErr := os.ReadFile(*environmentPath)
+		var environment []string
+		if readErr != nil || json.Unmarshal(data, &environment) != nil {
+			_ = os.WriteFile(*errorPath, []byte("权限操作环境无效"), 0o600)
+			return 1
+		}
+		for _, value := range environment {
+			if !validEnvironmentValue(value) {
+				_ = os.WriteFile(*errorPath, []byte("权限操作环境无效"), 0o600)
+				return 1
+			}
+		}
+		command.Env = append(os.Environ(), environment...)
+	}
 	command.Stdin = bytes.NewReader(input)
 	var stdout, stderr bytes.Buffer
 	command.Stdout, command.Stderr = &stdout, &stderr

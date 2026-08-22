@@ -1,0 +1,38 @@
+# ALemonX runtime base. Rebuild and publish this image manually when Debian
+# security updates or runtime system dependencies need to change.
+FROM node:22
+
+RUN (apt-get update --fix-missing || (sleep 5 && apt-get update --fix-missing)) \
+    && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        git \
+        lsof \
+        openssh-client \
+        tini \
+        fonts-noto-cjk \
+        fonts-noto-color-emoji \
+        chromium \
+        xvfb \
+        x11-xkb-utils \
+        xkb-data \
+        libnss3 \
+        libgbm1 \
+        libglib2.0-0 \
+        libatk1.0-0 \
+        libatk-bridge2.0-0 \
+        libatspi2.0-0 \
+        libgtk-3-0 \
+        libasound2 \
+        libcups2 \
+        libxcomposite1 \
+        libxdamage1 \
+        libxfixes3 \
+        libxrandr2 \
+        libxkbcommon0 \
+    && rm -rf /var/lib/apt/lists/* \
+    && corepack enable \
+    && mkdir -p /root/.ssh \
+    && chmod 700 /root/.ssh \
+    && ssh-keyscan github.com >> /root/.ssh/known_hosts

@@ -19,6 +19,7 @@ services:
     volumes:
       - ./data:/data
       - ./workspace:/app/workspace
+    shm_size: "1gb"
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:17390/healthz >/dev/null"]
       interval: 30s

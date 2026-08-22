@@ -218,6 +218,10 @@ func (m *pluginDevelopmentManager) start(id string) (pluginDevelopmentView, erro
 			return m.failStart(id, session, err)
 		}
 	}
+	store, err := m.registry.PluginStore(plugin.ID)
+	if err != nil {
+		return m.failStart(id, session, err)
+	}
 
 	started := make([]*pluginDevelopmentProcess, 0)
 	startFailure := func(err error) (pluginDevelopmentView, error) {
@@ -246,7 +250,7 @@ func (m *pluginDevelopmentManager) start(id string) (pluginDevelopmentView, erro
 					break
 				}
 			}
-			process, err := startPluginDevelopmentCommand(plugin.Source, &service.Command, servicePort)
+			process, err := startPluginDevelopmentCommand(plugin.Source, &service.Command, servicePort, store)
 			if err != nil {
 				return startFailure(fmtDevelopmentError("启动服务 "+service.ID, err))
 			}
@@ -266,7 +270,7 @@ func (m *pluginDevelopmentManager) start(id string) (pluginDevelopmentView, erro
 		if err != nil {
 			return startFailure(err)
 		}
-		web, err = startPluginDevelopmentCommand(plugin.Source, plugin.Development.Web.Dev, port)
+		web, err = startPluginDevelopmentCommand(plugin.Source, plugin.Development.Web.Dev, port, store)
 		if err != nil {
 			return startFailure(fmtDevelopmentError("启动前端开发服务", err))
 		}
@@ -418,6 +422,11 @@ func (m *pluginDevelopmentManager) build(id string) (pluginDevelopmentView, erro
 		return pluginDevelopmentView{}, errors.New("源码插件正在" + session.operation + "，请等待当前操作完成")
 	}
 	source, command := session.source, session.plugin.Development.Web.Build
+	store, storeErr := m.registry.PluginStore(session.plugin.ID)
+	if storeErr != nil {
+		m.mu.Unlock()
+		return pluginDevelopmentView{}, storeErr
+	}
 	previousState := session.state
 	session.operation, session.state, session.updatedAt = "构建", "building", time.Now()
 	m.mu.Unlock()
@@ -427,7 +436,7 @@ func (m *pluginDevelopmentManager) build(id string) (pluginDevelopmentView, erro
 	program, args, environment, notice := system.PrepareDevelopmentCommand(command.Program, expandDevelopmentArgs(command.Args, 0))
 	run := exec.CommandContext(ctx, program, args...)
 	run.Dir, run.Stdout, run.Stderr = source, log, log
-	run.Env = environment
+	run.Env = append(environment, "ALX_PLUGIN_STORE="+store)
 	if notice != "" {
 		_, _ = log.Write([]byte(notice + "\n"))
 	}
@@ -560,7 +569,7 @@ func (m *pluginDevelopmentManager) saveLocked() {
 	_ = os.Rename(m.statePath+".new", m.statePath)
 }
 
-func startPluginDevelopmentCommand(source string, command *setupplugin.CommandSpec, port int) (*pluginDevelopmentProcess, error) {
+func startPluginDevelopmentCommand(source string, command *setupplugin.CommandSpec, port int, store string) (*pluginDevelopmentProcess, error) {
 	if command == nil {
 		return nil, errors.New("缺少开发命令")
 	}
@@ -568,7 +577,7 @@ func startPluginDevelopmentCommand(source string, command *setupplugin.CommandSp
 	program, args, environment, notice := system.PrepareDevelopmentCommand(command.Program, expandDevelopmentArgs(command.Args, port))
 	run := exec.Command(program, args...)
 	run.Dir, run.Stdout, run.Stderr = source, log, log
-	run.Env = append(environment, "ALX_PLUGIN_DEV_PORT="+strconv.Itoa(port), "ALX_PLUGIN_SOURCE="+source)
+	run.Env = append(environment, "ALX_PLUGIN_DEV_PORT="+strconv.Itoa(port), "ALX_PLUGIN_SOURCE="+source, "ALX_PLUGIN_STORE="+store)
 	if notice != "" {
 		_, _ = log.Write([]byte(notice + "\n"))
 	}
@@ -694,7 +703,11 @@ func (m *pluginDevelopmentManager) superviseService(pluginID, serviceID, source 
 			}
 		}
 		m.mu.RUnlock()
-		restarted, err := startPluginDevelopmentCommand(source, &command, servicePort)
+		store, storeErr := m.registry.PluginStore(pluginID)
+		if storeErr != nil {
+			return
+		}
+		restarted, err := startPluginDevelopmentCommand(source, &command, servicePort, store)
 		if err == nil && declared != nil {
 			err = waitDevelopmentHTTP(declared.Port, declared.HealthPath, 30*time.Second)
 		}

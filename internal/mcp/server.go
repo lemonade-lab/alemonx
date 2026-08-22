@@ -662,7 +662,7 @@ func (s *Server) execute(name string, arguments json.RawMessage) (string, error)
 		}
 		return encodeResult(s.listTasks(input.Root))
 	case "alemonjs_list_setup_plugins":
-		plugins := setupplugin.NewRegistry().List()
+		plugins := setupplugin.NewWorkspaceRegistry(s.workspaceRoot).List()
 		type setupPluginSummary struct {
 			ID       string `json:"id"`
 			Name     string `json:"name"`

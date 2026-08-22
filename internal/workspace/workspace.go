@@ -5,6 +5,7 @@
 //	<root>/
 //	  templates/   materialized AlemonJS project templates (editable)
 //	  bots/        default destination for newly created robots
+//	  plugins/     user-installed system plugins
 //
 // The bundled templates stay embedded in the binary and are copied here on
 // first run; files that already exist on disk are never overwritten so user
@@ -47,6 +48,13 @@ func (l Layout) Packages() string {
 	return filepath.Join(l.Root, "packages")
 }
 
+// Plugins returns the directory that stores user-installed system plugins.
+// It is deliberately part of the workspace so a Docker bind mount preserves
+// plugin installations across container replacement.
+func (l Layout) Plugins() string {
+	return filepath.Join(l.Root, "plugins")
+}
+
 // TemplatesOutdated reports whether the materialized templates were produced
 // by an older embedded template version. It never modifies the copy.
 func TemplatesOutdated(root string) bool {
@@ -83,8 +91,8 @@ func ResolveRoot(explicit string) (string, error) {
 	return filepath.Join(current, "workspace"), nil
 }
 
-// Ensure resolves the workspace root, creates templates/ and bots/, and
-// materializes the bundled templates into templates/ when they are missing.
+// Ensure resolves the workspace root, creates templates/, bots/ and plugins/,
+// and materializes the bundled templates into templates/ when they are missing.
 func Ensure(explicit string, templates fs.FS) (Layout, error) {
 	root, err := ResolveRoot(explicit)
 	if err != nil {
@@ -102,6 +110,9 @@ func Ensure(explicit string, templates fs.FS) (Layout, error) {
 	}
 	if err := os.MkdirAll(layout.Packages(), 0o755); err != nil {
 		return Layout{}, fmt.Errorf("无法创建工作区工具目录 %s：%w", layout.Packages(), err)
+	}
+	if err := os.MkdirAll(layout.Plugins(), 0o755); err != nil {
+		return Layout{}, fmt.Errorf("无法创建工作区插件目录 %s：%w", layout.Plugins(), err)
 	}
 	if templates != nil {
 		if err := materializeTemplates(templates, layout.Templates()); err != nil {

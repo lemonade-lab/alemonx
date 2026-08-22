@@ -1,3 +1,6 @@
+# Runtime system dependencies are maintained in a separately released image.
+ARG ALX_RUNTIME_BASE=alemonx-base:local
+
 # 前端构建阶段 - 构建 React 工作台
 FROM node:22 AS frontend
 WORKDIR /src/frontend
@@ -46,19 +49,9 @@ RUN set -eu; \
   go build -trimpath -ldflags "-s -w -X main.Version=${VERSION} -X main.BuildTime=$(date +%s)" -o /out/alx .
 
 # 最终运行阶段
-FROM node:22 AS runtime
+FROM ${ALX_RUNTIME_BASE} AS runtime
 
-RUN  (apt-get update || (sleep 3 && apt-get update)) \
-  && apt-get install -y --no-install-recommends ca-certificates curl \
-  && apt-get install -y --no-install-recommends git lsof openssh-client tini \
-  && apt-get install -y --no-install-recommends fonts-noto-cjk fonts-noto-color-emoji \
-  && apt-get install -y --no-install-recommends --fix-missing chromium \
-  && rm -rf /var/lib/apt/lists/* \
-  && corepack enable \
-  && mkdir -p /app /app/workspace /data \
-  && mkdir -p ~/.ssh \
-  && chmod 700 ~/.ssh \
-  && ssh-keyscan github.com >> ~/.ssh/known_hosts
+RUN mkdir -p /app /app/plugins /app/workspace /data
 
 WORKDIR /app
 COPY --from=builder /out/alx /app/alx

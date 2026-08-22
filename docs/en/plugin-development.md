@@ -207,6 +207,7 @@ Runners inherit the host environment (PATH includes the managed Node toolchain d
 | `ALX_PLUGIN_DOWNLOAD_TOKEN` | One-time download token (24 requests, 90-minute expiry). |
 | `ALX_PLUGIN_PROGRESS_MODE` | `structured`: stderr progress frames are available. |
 | `ALX_PLUGIN_INSTALLED_TAG` | Tag of the installed Release. |
+| `ALX_PLUGIN_STORE` | Host-created persistent plugin data directory: `workspace/store/<plugin ID>`. Downloaded runtimes, sessions, databases, and recoverable configuration should default here; plugin upgrades do not remove it. |
 | `ALX_PLUGIN_DEV_PORT` | The only replaceable variable in source-development commands (host-allocated loopback port). |
 
 ### Minimal Node.js runner

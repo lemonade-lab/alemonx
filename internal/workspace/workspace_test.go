@@ -92,7 +92,7 @@ func TestEnsureMaterializesTemplatesAndCreatesLayout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, dir := range []string{layout.Root, layout.Templates(), layout.Bots()} {
+	for _, dir := range []string{layout.Root, layout.Templates(), layout.Bots(), layout.Packages(), layout.Plugins()} {
 		if info, err := os.Stat(dir); err != nil || !info.IsDir() {
 			t.Fatalf("expected directory %s: %v", dir, err)
 		}
@@ -155,6 +155,9 @@ func TestLayoutPaths(t *testing.T) {
 	}
 	if layout.Packages() != filepath.Join("/tmp/alx-workspace", "packages") {
 		t.Fatalf("packages = %q", layout.Packages())
+	}
+	if layout.Plugins() != filepath.Join("/tmp/alx-workspace", "plugins") {
+		t.Fatalf("plugins = %q", layout.Plugins())
 	}
 }
 

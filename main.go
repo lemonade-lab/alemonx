@@ -270,7 +270,7 @@ func main() {
 			serviceAction(system.UninstallService)
 			return
 		case "plugin":
-			pluginCommand(arguments[1:], yes)
+			pluginCommand(arguments[1:], yes, workspaceRoot)
 			return
 		case "auth":
 			authCommand(arguments[1:], yes, account, password, confirmation)
@@ -495,8 +495,8 @@ func publish(root, action string, confirmed bool) {
 	}
 }
 
-func pluginCommand(arguments []string, confirmed bool) {
-	registry := setupplugin.NewRegistry()
+func pluginCommand(arguments []string, confirmed bool, workspaceRoot string) {
+	registry := setupplugin.NewWorkspaceRegistry(workspaceRoot)
 	if len(arguments) == 1 && arguments[0] == "list" {
 		items := registry.All()
 		if len(items) == 0 {
@@ -630,7 +630,7 @@ func usage() {
   alx [serve] --port 17390           启动浏览器引导（默认监听 0.0.0.0，请先 alx auth enable）
       --host 127.0.0.1               仅本机可访问
       --host 0.0.0.0                 监听所有网卡（默认，局域网/公网可直接访问）
-      --workspace <目录>             指定统一工作区（模板与新建机器人；默认 <运行目录>/workspace 或 ALEMONJS_SETUP_ROOTS）
+      --workspace <目录>             指定统一工作区（模板、机器人和系统插件；默认 <运行目录>/workspace 或 ALEMONJS_SETUP_ROOTS）
       --redis-port <端口>             调整内置 Redis 端口（默认 6379，会持久化到配置）
       --redis-off                     禁止启动内置 Redis
 

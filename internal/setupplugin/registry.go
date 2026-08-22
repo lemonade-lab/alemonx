@@ -32,6 +32,7 @@ import (
 
 	"alemonx/internal/system"
 	"alemonx/internal/systemnetwork"
+	"alemonx/internal/workspace"
 
 	"github.com/fsnotify/fsnotify"
 )
@@ -284,6 +285,8 @@ type Progress struct {
 type Registry struct {
 	mu                sync.RWMutex
 	roots             []string
+	installPath       string
+	storeRoot         string
 	statePath         string
 	cacheRoot         string
 	onlineIndexURL    string
@@ -312,14 +315,25 @@ func (r *Registry) SetRunnerEnvironmentProvider(provider func(Plugin, string) []
 	r.mu.Unlock()
 }
 
-func (r *Registry) environmentForRunner(plugin Plugin, action string) []string {
+func (r *Registry) environmentForRunner(plugin Plugin, action string) ([]string, error) {
+	store, err := r.PluginStore(plugin.ID)
+	if err != nil {
+		return nil, err
+	}
 	r.mu.RLock()
 	provider := r.runnerEnvironment
 	r.mu.RUnlock()
-	if provider == nil {
-		return nil
+	environment := []string{}
+	if provider != nil {
+		for _, value := range provider(plugin, action) {
+			if !strings.HasPrefix(value, "ALX_PLUGIN_STORE=") {
+				environment = append(environment, value)
+			}
+		}
 	}
-	return append([]string(nil), provider(plugin, action)...)
+	// Keep the host-owned store path last so an optional host integration
+	// cannot accidentally replace the standard persistence location.
+	return append(environment, "ALX_PLUGIN_STORE="+store), nil
 }
 
 // Subscribe returns a channel that receives a signal whenever the cached plugin
@@ -345,32 +359,83 @@ func (r *Registry) Unsubscribe(ch chan struct{}) {
 }
 
 func NewRegistry(roots ...string) *Registry {
-	if len(roots) == 0 {
-		roots = defaultRoots()
-		return &Registry{
-			roots:             uniqueRoots(roots),
-			statePath:         defaultStatePath(),
-			cacheRoot:         defaultCacheRoot(),
-			onlineIndexURL:    onlineIndexURL,
-			httpClient:        systemnetwork.DefaultClient(5 * time.Second),
-			onlineManifestURL: defaultOnlineManifestURL,
-			releaseURL:        defaultReleaseURL,
-			development:       map[string]Plugin{},
-		}
+	if len(roots) != 0 {
+		// Explicit roots are primarily used by embedders and tests. Keep their
+		// first root as the installation target so callers can build an isolated
+		// registry without changing the process workspace.
+		return &Registry{roots: uniqueRoots(roots), installPath: roots[0], storeRoot: filepath.Join(filepath.Dir(roots[0]), "store"), development: map[string]Plugin{}}
 	}
-	return &Registry{roots: uniqueRoots(roots), development: map[string]Plugin{}}
+	return NewWorkspaceRegistry("")
 }
 
-func defaultRoots() []string {
-	roots := make([]string, 0, 3)
+// NewWorkspaceRegistry is the production registry layout. User-managed
+// plugins are always discovered and installed in workspace/plugins. The
+// application plugins directory is read afterwards so an image or desktop
+// bundle can provide built-in plugins without allowing downloads to modify it.
+func NewWorkspaceRegistry(workspaceRoot string) *Registry {
+	root, err := workspace.ResolveRoot(workspaceRoot)
+	if err != nil {
+		// ResolveRoot only fails when the current working directory cannot be
+		// read. Retain a deterministic workspace target instead of falling back
+		// to the historical user-config plugins directory.
+		root = filepath.Join(".", "workspace")
+		if absolute, absoluteErr := filepath.Abs(root); absoluteErr == nil {
+			root = absolute
+		}
+	}
+	installPath := filepath.Join(root, "plugins")
+	roots := append([]string{installPath}, applicationPluginRoots()...)
+	return &Registry{
+		roots:             uniqueRoots(roots),
+		installPath:       installPath,
+		storeRoot:         filepath.Join(root, "store"),
+		statePath:         defaultStatePath(),
+		cacheRoot:         defaultCacheRoot(),
+		onlineIndexURL:    onlineIndexURL,
+		httpClient:        systemnetwork.DefaultClient(5 * time.Second),
+		onlineManifestURL: defaultOnlineManifestURL,
+		releaseURL:        defaultReleaseURL,
+		development:       map[string]Plugin{},
+	}
+}
+
+// PluginStore returns a plugin's host-managed persistent data directory. It
+// is separate from installed plugin code, so upgrades can replace
+// workspace/plugins/<id> without removing downloaded runtimes, login sessions
+// or plugin configuration.
+func (r *Registry) PluginStore(id string) (string, error) {
+	if !validID.MatchString(id) {
+		return "", errors.New("无效的 Setup 插件标识")
+	}
+	r.mu.RLock()
+	root, installPath := r.storeRoot, r.installPath
+	if installPath == "" && len(r.roots) > 0 {
+		installPath = r.roots[0]
+	}
+	r.mu.RUnlock()
+	if root == "" && installPath != "" {
+		root = filepath.Join(filepath.Dir(installPath), "store")
+	}
+	if root == "" {
+		return "", errors.New("没有可写入的插件存储目录")
+	}
+	directory := filepath.Join(root, id)
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		return "", fmt.Errorf("无法创建插件存储目录 %s：%w", directory, err)
+	}
+	return directory, nil
+}
+
+// applicationPluginRoots returns application-managed plugin locations. The
+// executable-adjacent directory is the normal installed layout; the current
+// directory keeps source-tree development convenient.
+func applicationPluginRoots() []string {
+	roots := make([]string, 0, 2)
 	if executable, err := os.Executable(); err == nil {
 		roots = append(roots, filepath.Join(filepath.Dir(executable), "plugins"))
 	}
 	if cwd, err := os.Getwd(); err == nil {
 		roots = append(roots, filepath.Join(cwd, "plugins"))
-	}
-	if config, err := os.UserConfigDir(); err == nil {
-		roots = append(roots, filepath.Join(config, "alx", "plugins"))
 	}
 	return roots
 }
@@ -904,7 +969,11 @@ func (r *Registry) RunResultWithProgress(id, actionID string, params map[string]
 	program, args, environment, _ := system.PrepareDevelopmentCommand(entry.name, entry.args)
 	command := exec.Command(program, args...)
 	command.Dir = plugin.Source
-	if runnerEnvironment := r.environmentForRunner(plugin, actionID); len(runnerEnvironment) > 0 {
+	runnerEnvironment, environmentErr := r.environmentForRunner(plugin, actionID)
+	if environmentErr != nil {
+		return ActionResult{}, environmentErr
+	}
+	if len(runnerEnvironment) > 0 {
 		command.Env = append(environment, runnerEnvironment...)
 	} else {
 		command.Env = environment
@@ -981,7 +1050,11 @@ func (r *Registry) RunWithNativePrivileges(id, action string, params map[string]
 	if err != nil {
 		return ActionResult{}, err
 	}
-	output, runErr := system.RunWithPrivilegesInput(plugin.Source, entry.name, entry.args, payload)
+	runnerEnvironment, environmentErr := r.environmentForRunner(plugin, operation.RunnerAction)
+	if environmentErr != nil {
+		return ActionResult{}, environmentErr
+	}
+	output, runErr := system.RunWithPrivilegesInput(plugin.Source, entry.name, entry.args, payload, runnerEnvironment)
 	return parseActionResult(output, runErr)
 }
 
@@ -2157,38 +2230,22 @@ func (r *Registry) onlinePlugin(id string) *Plugin {
 	return nil
 }
 
-// installRoot picks where an online plugin release is unpacked. The user-level root (where
-// enable state is stored) is preferred when it is one of the scan roots, so an
-// install lands in a directory alx owns; otherwise the first root a directory
-// can be created in is used.
+// installRoot returns the sole destination for downloaded and uploaded
+// plugins. Production registries always set this to workspace/plugins; there
+// is intentionally no fallback to an application or user-config directory.
 func (r *Registry) installRoot() (string, error) {
-	preferred := ""
-	if config, err := os.UserConfigDir(); err == nil {
-		preferred = filepath.Join(config, "alx", "plugins")
+	root := r.installPath
+	if root == "" && len(r.roots) > 0 {
+		// Backwards-compatible behavior for manually constructed registries.
+		root = r.roots[0]
 	}
-	hasPreferred := false
-	for _, root := range r.roots {
-		if root == preferred {
-			hasPreferred = true
-			break
-		}
+	if root == "" {
+		return "", errors.New("没有可写入的插件安装目录")
 	}
-	ordered := make([]string, 0, len(r.roots))
-	if hasPreferred {
-		ordered = append(ordered, preferred)
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return "", fmt.Errorf("无法创建插件安装目录 %s：%w", root, err)
 	}
-	for _, root := range r.roots {
-		if root == preferred {
-			continue
-		}
-		ordered = append(ordered, root)
-	}
-	for _, root := range ordered {
-		if err := os.MkdirAll(root, 0o755); err == nil {
-			return root, nil
-		}
-	}
-	return "", errors.New("没有可写入的插件安装目录")
+	return root, nil
 }
 
 func (r *Registry) readOnlineFile(url string) ([]byte, error) {

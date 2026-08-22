@@ -238,7 +238,7 @@ Dev mode is for editing code: hot reload and direct logs. PM2 mode is for stable
 
 **Q13: Where does workbench data live, and how do I back it up?**
 
-The workspace directory stores templates, tools, and new robots; workbench state (accounts, config, SQLite, caches, plugins) lives in the user config directory (host `./data` in Docker). AI ops data defaults to `ops.db` (SQLite). Back up these directories.
+The workspace directory stores templates, tools, new robots, and system plugins. System plugins always live in `workspace/plugins`; installation never writes to the application directory. Default recoverable plugin data lives in `workspace/store/<plugin ID>`—for example, QQ sessions and downloaded components—and is retained across plugin upgrades. Workbench state (accounts, config, SQLite, and download caches) lives in the user config directory (host `./data` in Docker). AI ops data defaults to `ops.db` (SQLite). Back up both the workspace and data directories.
 
 The workspace paths also appear in the robot creation destination step (default `workspace/bots`). When templates or built-in tools have a newer version, they are never overwritten automatically; to refresh, delete the corresponding copy directory and use it again.
 

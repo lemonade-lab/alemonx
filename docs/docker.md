@@ -47,10 +47,10 @@ docker compose up -d
 
 | 宿主目录 | 容器路径 | 内容 |
 | --- | --- | --- |
-| `./data` | `/data` | 工作台状态：账户、配置、SQLite、缓存、插件 |
-| `./workspace` | `/app/workspace` | 统一工作区：模板、机器人、内置工具 |
+| `./data` | `/data` | 工作台状态：账户、配置、SQLite、下载缓存 |
+| `./workspace` | `/app/workspace` | 统一工作区：模板、机器人、内置工具、系统插件 |
 
-容器内统一工作区为 `/app/workspace`：首次启动会把内嵌模板物化到其中的 `templates/`（可编辑，持久保存在宿主机 `./workspace`），新建机器人默认落在 `bots/`。内置 Yarn 物化到 `packages/yarn`；PM2 不随镜像嵌入，首次需要时用内置 Yarn 安装到 `packages/pm2`（位置固定，持久保存在宿主机目录）。
+容器内统一工作区为 `/app/workspace`：首次启动会把内嵌模板物化到其中的 `templates/`（可编辑，持久保存在宿主机 `./workspace`），新建机器人默认落在 `bots/`。内置 Yarn 物化到 `packages/yarn`；PM2 不随镜像嵌入，首次需要时用内置 Yarn 安装到 `packages/pm2`（位置固定，持久保存在宿主机目录）。通过工作台或 `alx plugin install` 安装的系统插件只写入 `plugins/`；程序随镜像提供的 `/app/plugins` 只用于兼容读取，且优先级低于工作区插件。每个系统插件的默认持久数据目录为 `store/<插件 ID>/`，容器重建后仍保留；例如 QQ 插件应把下载的组件、登录态和配置写入 `store/alemon-qq/`。
 
 容器进程以 root 运行，挂载目录开箱即用，无需在宿主机执行 `chown`/`chmod`。
 
@@ -74,14 +74,24 @@ MCP 的 stdio 连接可通过 `docker compose exec -T alx /app/alx mcp` 启动�
 
 ## 从源码构建
 
+首次构建或需要刷新 Debian 安全更新、Chromium、QQ/NapCat 系统依赖时，先在本机构建运行基础镜像：
+
+```sh
+ALX_BASE_VERSION=20260822 make docker-base-build
+```
+
+日常 ALemonX 构建直接复用本地 `alemonx-base:local`，不会再次执行 `apt-get update` 或 `apt-get upgrade`：
+
 ```sh
 make docker-build
 ALX_IMAGE=alemonx:local docker compose up -d
 ```
 
-构建使用多阶段镜像：Node 阶段生成嵌入式前端，Go 阶段交叉编译静态 `alx`，最终镜像只保留运行机器人所需的 Node、Git、SSH 与工作台二进制。
+构建使用多阶段镜像：Node 阶段生成嵌入式前端，Go 阶段交叉编译静态 `alx`，最终镜像继承本地 `alemonx-base`。基础镜像负责 Node、Git、SSH、Chromium 和系统库；应用镜像只复制工作台二进制，因此代码构建不会重复安装系统包。需要复现某个已验证的基础层时，传入本地版本标签，例如 `ALX_RUNTIME_BASE=alemonx-base:20260822 make docker-build`。
 
-镜像内置 Noto CJK 与 Emoji 字体以及 **Chromium 浏览器**：机器人图片消息（jsxp 渲染）中文与表情显示正常，Puppeteer/Playwright 等浏览器自动化开箱可用（无需自行下载）。容器以非 root 运行且没有沙箱权限，容器内使用浏览器时需要 `--no-sandbox`（例如 `chromium --headless --no-sandbox ...`，Puppeteer 可传 `args: ['--no-sandbox']`）。镜像体积会因此明显增大（Chromium 约 500MB）。
+镜像内置 Noto CJK 与 Emoji 字体以及 **Chromium 浏览器**：机器人图片消息（jsxp 渲染）中文与表情显示正常，Puppeteer/Playwright 等浏览器自动化开箱可用（无需自行下载）。容器以 root 运行，浏览器或 QQ/NapCat 的 Electron 运行时必须使用 `--no-sandbox`；QQ 插件会自动添加该参数。镜像体积会因此明显增大（Chromium 约 500MB）。
+
+镜像也预装 QQ/NapCat Linux 所需的 Xvfb、XKB、GTK/NSS/GBM、音频、CUPS 和 X11 动态库，并把 `/dev/shm` 设为 1 GiB。安装 QQ 插件时无需再执行“准备 QQ 登录运行环境”的系统授权；插件仍会负责下载 QQ/NapCat、启动独立 Xvfb 显示与登录流程。
 
 多架构发布采用类似 alemongo 的人工 Buildx 流程，而不是版本标签自动推送：
 
@@ -94,4 +104,4 @@ docker login ccr.ccs.tencentyun.com
 ALX_VERSION=v1.2.3 ALX_PUSH=1 ./scripts/docker-buildx.sh
 ```
 
-GitHub Actions 中的 `Docker` 工作流同样只能从 Actions 页面手动触发；默认推送到腾讯云 `ccr.ccs.tencentyun.com/ningmengchongshui/alemonx`。需明确填写版本、平台、仓库凭据，并勾选推送开关后才会发布。
+Docker 不再使用 GitHub Actions。基础镜像和应用镜像均由本机命令手动构建；基础镜像不会推送到腾讯云或其他镜像仓库。

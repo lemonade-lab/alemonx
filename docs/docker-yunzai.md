@@ -45,11 +45,11 @@ workspace/bots/alemonb/
 
 | 宿主目录 | 容器路径 | 内容 |
 | --- | --- | --- |
-| `./data` | `/data` | 工作台账户、SQLite、配置、缓存和插件。 |
-| `./workspace` | `/app/workspace` | 机器人、Miao 数据和安装后的依赖。 |
+| `./data` | `/data` | 工作台账户、SQLite、配置和下载缓存。 |
+| `./workspace` | `/app/workspace` | 机器人、Miao 数据、安装后的依赖和系统插件。 |
 | `./data-redis` | Redis `/data` | Redis AOF 持久化数据。 |
 
-首次启动只把镜像 seed 中不存在的文件复制到 `workspace/bots/alemonb`。后续升级不会覆盖机器人配置、Miao 数据、插件修改或已安装依赖。
+首次启动只把镜像 seed 中不存在的文件复制到 `workspace/bots/alemonb`。后续升级不会覆盖机器人配置、Miao 数据、插件修改或已安装依赖。通过工作台或 `alx plugin install` 添加的系统插件固定写入 `workspace/plugins`；镜像的 `/app/plugins` 仅作为兼容读取目录，且优先级更低。系统插件的默认持久数据目录为 `workspace/store/<插件 ID>/`，因此 QQ 登录态、下载组件和配置会随工作区挂载保留。
 
 镜像内已提供 Chromium 与中文、Emoji 字体。Miao-Yunzai 会识别系统 Chromium，不会额外下载浏览器。
 
@@ -133,4 +133,4 @@ YUNZAI_BASE_IMAGE=registry.example.com/team/alemonx:v0.2.20 \
 make docker-yunzai-buildx-push
 ```
 
-`.resources/` 不进入 Git，因此现有 GitHub Actions Docker 工作流不能直接发布 Yunzai 镜像；需要先为工作流提供这四份本地资源或受控构建产物，才应添加对应的 Actions 发布工作流。
+`.resources/` 不进入 Git，因此 Yunzai 镜像只应在具备这四份本地资源的机器上手动构建；项目不再通过 GitHub Actions 发布 Docker 镜像。

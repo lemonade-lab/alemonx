@@ -211,6 +211,7 @@ plugins/
 | `ALX_PLUGIN_DOWNLOAD_TOKEN` | 一次性下载令牌（24 次请求、90 分钟过期）。 |
 | `ALX_PLUGIN_PROGRESS_MODE` | `structured`：表示 stderr 进度帧可用。 |
 | `ALX_PLUGIN_INSTALLED_TAG` | 已安装 Release 的 tag。 |
+| `ALX_PLUGIN_STORE` | 宿主创建的插件持久数据目录：`workspace/store/<插件 ID>`。下载的运行包、登录态、数据库和可恢复配置应默认保存到这里；插件升级不会清除该目录。 |
 | `ALX_PLUGIN_DEV_PORT` | 源码开发命令中唯一可替换变量（宿主分配的回环端口）。 |
 
 ### 最小 Node.js 执行器

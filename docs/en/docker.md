@@ -47,10 +47,10 @@ Runtime data is not kept in a named volume but in host directories next to the c
 
 | Host directory | Container path | Contents |
 | --- | --- | --- |
-| `./data` | `/data` | Workbench state: accounts, config, SQLite, caches, plugins |
-| `./workspace` | `/app/workspace` | Unified workspace: templates, robots, bundled tools |
+| `./data` | `/data` | Workbench state: accounts, config, SQLite, download caches |
+| `./workspace` | `/app/workspace` | Unified workspace: templates, robots, bundled tools, system plugins |
 
-The unified workspace inside the container is `/app/workspace`: on first start the embedded templates are materialized into its `templates/` directory (editable and persisted on the host under `./workspace`), and new robots land in `bots/` by default. The built-in Yarn is materialized into `packages/yarn`; PM2 is not embedded in the image and is installed with the built-in Yarn into `packages/pm2` on first use (a stable location persisted on the host).
+The unified workspace inside the container is `/app/workspace`: on first start the embedded templates are materialized into its `templates/` directory (editable and persisted on the host under `./workspace`), and new robots land in `bots/` by default. The built-in Yarn is materialized into `packages/yarn`; PM2 is not embedded in the image and is installed with the built-in Yarn into `packages/pm2` on first use (a stable location persisted on the host). System plugins installed from the workbench or `alx plugin install` are written only to `plugins/`; the image-level `/app/plugins` directory is consulted only for compatibility and has lower priority than workspace plugins. Every system plugin receives a persistent default data directory at `store/<plugin ID>/`, which survives container replacement; for example, the QQ plugin should save downloaded components, sessions, and configuration in `store/alemon-qq/`.
 
 The container runs as root, so the mounted directories work out of the box without any `chown`/`chmod` on the host. On macOS, the only host-side requirement is letting Docker Desktop access the deployment directory (System Settings → Privacy & Security → Files and Folders, and Docker Desktop → Settings → Resources → File sharing).
 
@@ -72,14 +72,24 @@ For an MCP stdio connection, run `docker compose exec -T alx /app/alx mcp`; to r
 
 ## Building from source
 
+For the first build, or whenever Debian security updates, Chromium, or the QQ/NapCat system dependencies should be refreshed, build the runtime base locally first:
+
+```sh
+ALX_BASE_VERSION=20260822 make docker-base-build
+```
+
+Routine ALemonX builds reuse the local `alemonx-base:local` layer and do not run `apt-get update` or `apt-get upgrade` again:
+
 ```sh
 make docker-build
 ALX_IMAGE=alemonx:local docker compose up -d
 ```
 
-The build uses a multi-stage image: the Node stage produces the embedded frontend, the Go stage cross-compiles the static `alx`, and the final image keeps only the Node, Git, SSH, and workbench binaries needed to run robots.
+The build uses a multi-stage image: the Node stage produces the embedded frontend, the Go stage cross-compiles the static `alx`, and the final image inherits local `alemonx-base`. The base image owns Node, Git, SSH, Chromium, and the system libraries; the application image only copies the workbench binary, so code builds do not reinstall system packages. To reproduce a verified base, pass its local versioned tag, for example `ALX_RUNTIME_BASE=alemonx-base:20260822 make docker-build`.
 
-The image ships Noto CJK and Emoji fonts plus **Chromium**, so Chinese text and emoji render correctly in robot image messages (jsxp) and browser automation with Puppeteer/Playwright works out of the box (no manual download). The container runs as a non-root user without sandbox privileges, so browser launches inside it need `--no-sandbox` (for example `chromium --headless --no-sandbox ...`, or `args: ['--no-sandbox']` with Puppeteer). The image size grows noticeably (Chromium adds roughly 500 MB).
+The image ships Noto CJK and Emoji fonts plus **Chromium**, so Chinese text and emoji render correctly in robot image messages (jsxp) and browser automation with Puppeteer/Playwright works out of the box (no manual download). The container runs as root, so browser and QQ/NapCat Electron launches need `--no-sandbox`; the QQ plugin adds it automatically. The image size grows noticeably (Chromium adds roughly 500 MB).
+
+It also preinstalls the Linux runtime required by QQ/NapCat: Xvfb, XKB, GTK/NSS/GBM, audio, CUPS, and X11 libraries. Compose reserves 1 GiB for `/dev/shm`, avoiding the small Docker default that can crash Electron renderers. Installing the QQ plugin therefore does not need the privileged “prepare QQ login runtime” action; the plugin still downloads QQ/NapCat and starts its isolated Xvfb display and login flow.
 
 Multi-architecture releases follow a manual Buildx flow (similar to alemongo) rather than automatic pushes on version tags:
 
@@ -92,4 +102,4 @@ docker login ccr.ccs.tencentyun.com
 ALX_VERSION=v1.2.3 ALX_PUSH=1 ./scripts/docker-buildx.sh
 ```
 
-The `Docker` workflow in GitHub Actions can only be triggered manually from the Actions page; by default it pushes to the Tencent Cloud `ccr.ccs.tencentyun.com/ningmengchongshui/alemonx`. It only publishes after the version, platforms, repository credentials, and the push switch are explicitly filled in.
+Docker no longer uses GitHub Actions. Both the base and application images are built manually on the local machine; the base image is never pushed to Tencent Cloud or another registry.

@@ -224,6 +224,39 @@ printf '{"output":"%s"}' "$ALX_TEST_HOST_VALUE"
 	}
 }
 
+func TestWorkspaceRegistryProvidesPersistentPluginStore(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture is Unix-only")
+	}
+	workspaceRoot := t.TempDir()
+	directory := filepath.Join(workspaceRoot, "plugins", "fixture")
+	if err := os.MkdirAll(filepath.Join(directory, "web"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	key := runtime.GOOS + "-" + runtime.GOARCH
+	manifest := `{"id":"fixture","name":"Fixture","version":"1.0.0","entry":{"` + key + `":"runner"},"web":{"root":"web"}}`
+	if err := os.WriteFile(filepath.Join(directory, manifestName), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "runner"), []byte(`#!/bin/sh
+cat >/dev/null
+printf 'survives container replacement' > "$ALX_PLUGIN_STORE/state.txt"
+printf '{"output":"stored"}'
+`), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	registry := NewWorkspaceRegistry(workspaceRoot)
+	output, err := registry.Run("fixture", "save", nil, false)
+	if err != nil || output != "stored" {
+		t.Fatalf("run = %q, %v", output, err)
+	}
+	storeFile := filepath.Join(workspaceRoot, "store", "fixture", "state.txt")
+	data, err := os.ReadFile(storeFile)
+	if err != nil || string(data) != "survives container replacement" {
+		t.Fatalf("persistent plugin data = %q, %v", data, err)
+	}
+}
+
 func TestRegistryRunWithProgressForwardsStructuredStderr(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell fixture is Unix-only")
@@ -611,6 +644,47 @@ func TestRegistryInstallUploadActivatesValidArchive(t *testing.T) {
 	}
 	if found, err := registry.Find("alemonx-network"); err != nil || found.Online || found.Source != filepath.Join(root, "alemonx-network") {
 		t.Fatalf("Find after upload = %#v, %v", found, err)
+	}
+}
+
+func TestWorkspaceRegistryInstallsPluginsOnlyInWorkspace(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	registry := NewWorkspaceRegistry(workspaceRoot)
+	wantRoot := filepath.Join(workspaceRoot, "plugins")
+	if registry.installPath != wantRoot {
+		t.Fatalf("install path = %q, want %q", registry.installPath, wantRoot)
+	}
+	if len(registry.roots) == 0 || registry.roots[0] != wantRoot {
+		t.Fatalf("first discovery root = %#v, want workspace plugins first", registry.roots)
+	}
+
+	archivePath := filepath.Join(t.TempDir(), "network.zip")
+	if err := os.WriteFile(archivePath, makePluginArchive(t), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := registry.InstallUpload(archivePath)
+	if err != nil {
+		t.Fatalf("workspace upload install failed: %v", err)
+	}
+	if installed.Source != filepath.Join(wantRoot, installed.ID) {
+		t.Fatalf("installed source = %q, want a workspace plugin", installed.Source)
+	}
+	if _, err := os.Stat(filepath.Join(wantRoot, installed.ID, manifestName)); err != nil {
+		t.Fatalf("workspace plugin directory missing: %v", err)
+	}
+}
+
+func TestNewRegistryUsesConfiguredWorkspacePluginsFirst(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	t.Setenv("ALX_WORKSPACE", workspaceRoot)
+	t.Setenv("ALEMONJS_SETUP_ROOTS", "")
+	registry := NewRegistry()
+	want := filepath.Join(workspaceRoot, "plugins")
+	if len(registry.roots) == 0 || registry.roots[0] != want {
+		t.Fatalf("discovery roots = %#v, want %q first", registry.roots, want)
+	}
+	if registry.installPath != want {
+		t.Fatalf("install path = %q, want %q", registry.installPath, want)
 	}
 }
 
