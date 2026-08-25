@@ -62,10 +62,14 @@ export function RedisSettingsPanel() {
     : data.running
       ? data.managed
         ? '运行中 · 内置持久化 Redis'
-        : '使用中 · 外部 Redis'
+        : data.nativeRunning
+          ? '运行中 · 独立 Redis（systemd）'
+          : '使用中 · 外部 Redis'
       : '未运行'
 
-  const runAction = async (action: 'start' | 'stop' | 'restart') => {
+  const runAction = async (
+    action: 'start' | 'stop' | 'restart' | 'install-native'
+  ) => {
     setMessage('')
     setCopied(false)
     try {
@@ -115,7 +119,12 @@ export function RedisSettingsPanel() {
     >
       <SettingsCard
         icon={<Database className="size-4" />}
-        title="Redis 内置服务"
+        title={data.nativeRunning ? 'Redis 独立服务' : 'Redis 内置服务'}
+        description={
+          data.nativeRunning
+            ? '由 Linux systemd 独立管理，ALemonX 重启不会影响 Redis。'
+            : '工作台内置的持久化 Redis 服务，供机器人与插件使用。'
+        }
         actions={
           <Button
             variant="ghost"
@@ -153,6 +162,22 @@ export function RedisSettingsPanel() {
           </button>
         </div>
         <div className="settings-card-actions settings-card-actions-end">
+          {data.nativeSupported && !data.nativeRunning && (
+            <Button
+              variant="secondary"
+              className="gap-1.5"
+              disabled={controlling || saving || data.port !== 6379}
+              onClick={() => void runAction('install-native')}
+              title={
+                data.port !== 6379
+                  ? '独立 Redis 当前使用系统默认端口 6379，请先修改端口'
+                  : undefined
+              }
+            >
+              <Database className="size-3.5" />
+              {data.nativeInstalled ? '启用独立 Redis' : '安装独立 Redis'}
+            </Button>
+          )}
           <Button
             variant="primary"
             className="gap-1.5"
@@ -215,8 +240,12 @@ export function RedisSettingsPanel() {
               setChanged(true)
               setMessage('')
             }}
-            label="启用内置 Redis 服务"
-            hint="关闭后不会启动；可用 alx --redis-off 快速禁用"
+            label={data.nativeRunning ? '使用独立 Redis 服务' : '启用内置 Redis 服务'}
+            hint={
+              data.nativeRunning
+                ? '独立 Redis 由 systemd 管理；关闭此开关不会停止系统服务'
+                : '关闭后不会启动；可用 alx --redis-off 快速禁用'
+            }
           />
           <SettingsSwitch
             checked={autoStart}
@@ -232,7 +261,7 @@ export function RedisSettingsPanel() {
       </SettingsCard>
 
       {message && (
-        <SettingsMessage tone={message.includes('失败') ? 'error' : 'info'}>
+        <SettingsMessage tone={message.includes('失败') || message.includes('无法') ? 'error' : 'info'}>
           {message}
         </SettingsMessage>
       )}

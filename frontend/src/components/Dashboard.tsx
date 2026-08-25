@@ -192,7 +192,7 @@ import {
   useUploadRobotPackageMutation,
   useSetSystemCurrentRobotMutation,
   useSystemMcpQuery,
-  useSetupPluginMarketQuery,
+  useLazySetupPluginMarketQuery,
   useSetupPluginsQuery,
   useStartRobotTaskMutation,
   useWritePackageConfigMutation,
@@ -1167,23 +1167,9 @@ export function Dashboard({
   } = useSetupPluginsQuery(undefined, {
     refetchOnMountOrArgChange: true
   })
-  const pluginMarketOpen =
-    Boolean(systemWindows.plugins) || systemFeature === 'plugins'
-  const {
-    data: setupPluginMarketData,
-    isLoading: isPluginMarketLoading,
-    isFetching: isPluginMarketFetching
-  } = useSetupPluginMarketQuery(undefined, {
-    skip: !pluginMarketOpen,
-    refetchOnMountOrArgChange: true
-  })
   // The backend serialises an empty plugin registry as JSON null; normalise to
   // an array so render-time .find/.filter never reads a null value.
   const setupPlugins = useMemo(() => setupPluginsData ?? [], [setupPluginsData])
-  const setupPluginMarket = useMemo(
-    () => setupPluginMarketData ?? [],
-    [setupPluginMarketData]
-  )
   useEffect(() => {
     onWindowStateChange?.({
       terminal: { open: consoleOpen, minimized: consoleMinimized },
@@ -2560,7 +2546,9 @@ export function Dashboard({
     }
     markUserNavigation()
     setPage('robot')
-    setSection('config')
+    // A newly added robot should open on its operational overview. Configuration
+    // remains an explicit destination from the robot navigation.
+    setSection('runtime')
     setOutput('')
   }
   async function cloneRobotRepository(
@@ -3083,8 +3071,6 @@ export function Dashboard({
     ) : feature === 'plugins' ? (
       <SystemPluginCenter
         plugins={setupPlugins}
-        marketPlugins={setupPluginMarket}
-        marketLoading={isPluginMarketLoading || isPluginMarketFetching}
         pluginsLoading={isPluginsLoading || isPluginsFetching}
         sidebarLayout={sidebarLayout}
         onOpen={id => selectSystemFeature(`setup:${id}`)}
@@ -3119,11 +3105,9 @@ export function Dashboard({
         }}
       />
     ) : systemFeature === 'plugins' ? (
-      <SystemPluginCenter
-        plugins={setupPlugins}
-        marketPlugins={setupPluginMarket}
-        marketLoading={isPluginMarketLoading || isPluginMarketFetching}
-        pluginsLoading={isPluginsLoading || isPluginsFetching}
+    <SystemPluginCenter
+      plugins={setupPlugins}
+      pluginsLoading={isPluginsLoading || isPluginsFetching}
         onOpen={id => selectSystemFeature(`setup:${id}`)}
         onRefresh={() => void refetchSetupPlugins()}
       />
@@ -5639,7 +5623,7 @@ function EmptyWorkspace({
   onClone: () => void
 }) {
   return (
-    <section className="grid min-h-full content-center justify-items-center p-0 text-center">
+    <section className="flex flex-col gap-4 justify-center text-center items-center min-h-full content-center ">
       <span className="inline-flex size-8 items-center justify-center rounded-[10px] bg-(--theme-accent-soft) text-lg text-(--theme-accent-text)">
         ◈
       </span>
@@ -5757,16 +5741,12 @@ function InvalidDirectoryDialog({
 }
 function SystemPluginCenter({
   plugins,
-  marketPlugins,
-  marketLoading,
   pluginsLoading,
   onOpen,
   onRefresh,
   sidebarLayout = false
 }: {
   plugins: SetupPlugin[]
-  marketPlugins: SetupPlugin[]
-  marketLoading: boolean
   pluginsLoading: boolean
   onOpen: (id: string) => void
   onRefresh: () => void
@@ -5778,6 +5758,8 @@ function SystemPluginCenter({
   const [setEnabled, { isLoading }] = useSetSetupPluginEnabledMutation()
   const [installPlugin, { isLoading: installing }] =
     useInstallSetupPluginMutation()
+  const [loadMarket, { data: marketData, isLoading: marketLoading, isFetching: marketFetching }] =
+    useLazySetupPluginMarketQuery()
   const [uninstallPlugin, { isLoading: uninstalling }] =
     useUninstallSetupPluginMutation()
   const [migratePlugin, { isLoading: migrating }] =
@@ -5833,7 +5815,12 @@ function SystemPluginCenter({
   const [developmentFinderOpen, setDevelopmentFinderOpen] = useStoreState(false)
   const [pluginView, setPluginView] = useStoreState<
     'market' | 'mine' | 'development'
-  >('market')
+  >('mine')
+  useEffect(() => {
+    if (sidebarLayout && pluginView === 'market') {
+      void loadMarket(undefined, true)
+    }
+  }, [loadMarket, pluginView, sidebarLayout])
   useEffect(() => {
     if (!developerMode && pluginView === 'development') setPluginView('mine')
   }, [developerMode, pluginView, setPluginView])
@@ -5842,7 +5829,7 @@ function SystemPluginCenter({
   const visiblePlugins = !sidebarLayout
     ? plugins
     : pluginView === 'market'
-      ? marketPlugins
+      ? (marketData ?? [])
       : pluginView === 'mine'
         ? plugins.filter(plugin => !plugin.developmentSource)
         : []
@@ -6100,22 +6087,22 @@ function SystemPluginCenter({
     </Button>
   )
   return (
-    <section className="workspace-content system-feature-page mx-auto max-w-215">
+    <section className="workspace-content system-feature-page mx-auto max-w-215 flex flex-col gap-4">
       {sidebarLayout && (
         <SidebarWindowSectionNav>
-          <button
-            type="button"
-            aria-current={pluginView === 'market' ? 'page' : undefined}
-            onClick={() => setPluginView('market')}
-          >
-            <Globe className="size-4" /> 市场
-          </button>
           <button
             type="button"
             aria-current={pluginView === 'mine' ? 'page' : undefined}
             onClick={() => setPluginView('mine')}
           >
             <HardDrive className="size-4" /> 我的
+          </button>
+          <button
+            type="button"
+            aria-current={pluginView === 'market' ? 'page' : undefined}
+            onClick={() => setPluginView('market')}
+          >
+            <Globe className="size-4" /> 市场
           </button>
           {developerMode && (
             <button
@@ -6595,7 +6582,7 @@ function SystemPluginCenter({
               )
             })}
           </div>
-        ) : (pluginView === 'market' && marketLoading) ||
+        ) : (pluginView === 'market' && (marketLoading || marketFetching)) ||
           (pluginView === 'mine' && pluginsLoading) ? (
           <EmptyState
             icon={
@@ -8971,7 +8958,7 @@ function RuntimePanel({
           className="bg-slate-950/25 p-6"
         >
           <section
-            className="grid max-h-[min(720px,calc(100vh-48px))] w-full max-w-2xl grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_20px_58px_rgb(28_26_23/0.22)]"
+            className="grid h-[min(720px,calc(100dvh-48px))] max-h-[min(720px,calc(100dvh-48px))] min-h-0 w-full max-w-2xl grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_20px_58px_rgb(28_26_23/0.22)]"
             role="dialog"
             aria-modal="true"
             aria-label={loginChoice.label}
@@ -8995,7 +8982,7 @@ function RuntimePanel({
                 <X />
               </button>
             </header>
-            <div className="grid min-h-0 gap-4 overflow-auto p-5">
+            <div className="grid min-h-0 gap-4 overflow-y-auto p-5">
               {loginDialogError && (
                 <p className="m-0 rounded-md border border-orange-200 bg-orange-50 px-3 py-2 text-xs leading-5 text-orange-800">
                   {loginDialogError}

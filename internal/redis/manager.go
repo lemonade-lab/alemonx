@@ -38,21 +38,29 @@ type Config struct {
 	// Disabled forbids starting the temporary Redis. It is set by the
 	// --redis-off command-line flag and can be reversed from the settings page.
 	Disabled bool `json:"disabled"`
+	// Native selects the host Redis service. It is intentionally optional so
+	// configurations written by older ALemonX versions remain compatible.
+	Native bool `json:"native,omitempty"`
 }
 
 // Status is the manager state returned to the workbench.
 type Status struct {
-	Running    bool   `json:"running"`
-	Managed    bool   `json:"managed"`
-	External   bool   `json:"external"`
-	Skipped    bool   `json:"skipped"`
-	Port       int    `json:"port"`
-	Address    string `json:"address"`
-	Message    string `json:"message"`
-	AutoStart  bool   `json:"autoStart"`
-	Disabled   bool   `json:"disabled"`
-	Persistent bool   `json:"persistent"`
-	LastSaved  string `json:"lastSaved,omitempty"`
+	Running         bool   `json:"running"`
+	Managed         bool   `json:"managed"`
+	External        bool   `json:"external"`
+	Skipped         bool   `json:"skipped"`
+	Port            int    `json:"port"`
+	Address         string `json:"address"`
+	Message         string `json:"message"`
+	AutoStart       bool   `json:"autoStart"`
+	Disabled        bool   `json:"disabled"`
+	Persistent      bool   `json:"persistent"`
+	LastSaved       string `json:"lastSaved,omitempty"`
+	NativeSupported bool   `json:"nativeSupported"`
+	NativeInstalled bool   `json:"nativeInstalled"`
+	NativeRunning   bool   `json:"nativeRunning"`
+	NativeEnabled   bool   `json:"nativeEnabled"`
+	NativeService   string `json:"nativeService,omitempty"`
 }
 
 // Manager owns the built-in Redis lifecycle and its persisted settings.
@@ -100,6 +108,61 @@ func (m *Manager) Start() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.startLocked()
+}
+
+// InstallNative installs Redis through the Linux package manager, enables its
+// system service, and persists native mode. ALemonX never owns that process.
+func (m *Manager) InstallNative() error {
+	m.mu.Lock()
+	port := m.config.Port
+	wasManaged := m.server != nil
+	if wasManaged {
+		if err := m.saveSnapshotLocked(); err != nil {
+			m.mu.Unlock()
+			return err
+		}
+		m.stopSnapshotterLocked()
+		m.server.Close()
+		m.server = nil
+		m.external = false
+		m.skipped = false
+	}
+	m.mu.Unlock()
+	if port != DefaultPort {
+		if wasManaged {
+			m.restoreManagedAfterNativeFailure()
+		}
+		return fmt.Errorf("独立 Redis 当前使用系统默认端口 6379，请先将 Redis 端口改为 6379")
+	}
+	if err := installNative(); err != nil {
+		if wasManaged {
+			m.restoreManagedAfterNativeFailure()
+		}
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.config.Native = true
+	m.config.Disabled = false
+	m.config.AutoStart = true
+	if err := m.saveLocked(); err != nil {
+		return err
+	}
+	m.external = true
+	m.skipped = true
+	m.message = "独立 Redis 已安装并启用 systemd 开机自启；ALemonX 不会接管其生命周期。"
+	return nil
+}
+
+func (m *Manager) restoreManagedAfterNativeFailure() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.config.Native || m.config.Disabled || m.server != nil {
+		return
+	}
+	if err := m.startLocked(); err != nil {
+		log.Printf("独立 Redis 安装失败后恢复内置 Redis 失败：%v", err)
+	}
 }
 
 // Stop shuts down the managed built-in Redis. Stopping is a no-op when the
@@ -155,8 +218,11 @@ func (m *Manager) Configure(port int, autoStart, disabled bool) error {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.config.Native && port != m.config.Port {
+		return fmt.Errorf("独立 Redis 使用系统默认端口 6379，不能修改为自定义端口")
+	}
 	portChanged := m.server != nil && port != m.config.Port
-	m.config = Config{Port: port, AutoStart: autoStart, Disabled: disabled}
+	m.config = Config{Port: port, AutoStart: autoStart, Disabled: disabled, Native: m.config.Native}
 	if err := m.saveLocked(); err != nil {
 		return err
 	}
@@ -203,6 +269,24 @@ func (m *Manager) startLocked() error {
 	if m.config.Disabled {
 		return errors.New("内置 Redis 已被禁用，无法启动；请在设置中重新启用后再试。")
 	}
+	if m.config.Native {
+		native := inspectNative(m.config.Port)
+		if !native.Running {
+			if native.Installed {
+				if err := startNativeService(native.Service); err != nil {
+					return err
+				}
+				native = inspectNative(m.config.Port)
+			}
+			if !native.Running {
+				return fmt.Errorf("独立 Redis 未运行，请在设置中重新安装或启动系统服务")
+			}
+		}
+		m.external = true
+		m.skipped = true
+		m.message = "正在使用独立 Redis；服务由 systemd 管理，ALemonX 重启不会影响它。"
+		return nil
+	}
 	if m.server != nil {
 		m.message = fmt.Sprintf("内置 Redis 已在运行，地址 %s。", m.server.Addr())
 		return nil
@@ -246,17 +330,23 @@ func (m *Manager) statusLocked() Status {
 			port = parsed
 		}
 	}
+	native := inspectNative(port)
 	managed := m.server != nil
 	external := m.external
+	if m.config.Native {
+		external = native.Running
+	}
 	message := m.message
 	if m.config.Disabled {
 		message = "内置 Redis 已禁用；可在设置中重新启用。"
+	} else if m.config.Native && !native.Running {
+		message = "独立 Redis 已安装但当前未运行；可点击启用独立 Redis。"
 	} else if message == "" {
 		switch {
 		case managed:
 			message = "内置 Redis 正在运行，数据会自动持久化到本机。"
 		case external:
-			message = "正在使用外部 Redis；工作台退出不会影响该服务。"
+			message = "正在使用独立 Redis；服务由 systemd 管理，工作台退出不会影响它。"
 		default:
 			message = "内置 Redis 未运行。"
 		}
@@ -266,17 +356,22 @@ func (m *Manager) statusLocked() Status {
 		lastSaved = m.lastSaved.Format(time.RFC3339)
 	}
 	return Status{
-		Running:    managed || external,
-		Managed:    managed,
-		External:   external,
-		Skipped:    m.skipped,
-		Port:       port,
-		Address:    net.JoinHostPort(bindHost, strconv.Itoa(port)),
-		Message:    message,
-		AutoStart:  m.config.AutoStart,
-		Disabled:   m.config.Disabled,
-		Persistent: managed,
-		LastSaved:  lastSaved,
+		Running:         managed || external,
+		Managed:         managed,
+		External:        external,
+		Skipped:         m.skipped,
+		Port:            port,
+		Address:         net.JoinHostPort(bindHost, strconv.Itoa(port)),
+		Message:         message,
+		AutoStart:       m.config.AutoStart,
+		Disabled:        m.config.Disabled,
+		Persistent:      managed || (m.config.Native && native.Running),
+		LastSaved:       lastSaved,
+		NativeSupported: native.Supported,
+		NativeInstalled: native.Installed,
+		NativeRunning:   native.Running,
+		NativeEnabled:   native.Enabled,
+		NativeService:   native.Service,
 	}
 }
 

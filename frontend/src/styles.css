@@ -9238,3 +9238,41 @@ button > svg,
   font-size: 11.5px;
   line-height: 1.5;
 }
+
+/* The theme overrides below the main responsive block set a label font size
+   again. Keep the mobile wizard as a compact, horizontally scrollable step
+   rail instead of letting every step widen the viewport. */
+@media (max-width: 800px) {
+  .wizard,
+  .wizard-steps {
+    min-width: 0;
+  }
+
+  .wizard-steps {
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 5px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 10px 12px;
+    scroll-padding-inline: 12px;
+    scrollbar-width: none;
+  }
+
+  .wizard-steps::-webkit-scrollbar {
+    display: none;
+  }
+
+  .wizard-steps > :is(div, button) {
+    flex: 0 0 28px;
+    font-size: 0;
+    margin: 0;
+    min-width: 28px;
+    padding: 1px;
+  }
+
+  .wizard-steps span {
+    flex: 0 0 26px;
+    font-size: 0.72rem;
+  }
+}

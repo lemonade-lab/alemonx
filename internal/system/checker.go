@@ -2,7 +2,10 @@
 package system
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,6 +13,11 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf16"
+	"unicode/utf8"
+
+	"golang.org/x/text/encoding/simplifiedchinese"
+	"golang.org/x/text/transform"
 )
 
 const minimumNodeVersion = "22.22.3"
@@ -139,7 +147,7 @@ func (c *Checker) command(id, name, argument, suggestion string) Check {
 	if err != nil {
 		return Check{ID: id, Name: name, Status: "warning", Detail: "已找到，但无法正常运行", Suggestion: "请重新安装或修复 " + name + " 后重试。"}
 	}
-	rawVersion := strings.TrimSpace(strings.Split(string(output), "\n")[0])
+	rawVersion := strings.TrimSpace(strings.Split(normalizeCommandOutput(output), "\n")[0])
 	version := rawVersion
 	if repaired {
 		if version != "" {
@@ -188,7 +196,7 @@ func (c *Checker) browser() Check {
 			Optional:   true,
 		}
 	}
-	version := strings.TrimSpace(strings.Split(string(output), "\n")[0])
+	version := strings.TrimSpace(strings.Split(normalizeCommandOutput(output), "\n")[0])
 	if missing := missingBrowserDependencies(); len(missing) > 0 {
 		return Check{
 			ID:         "browser",
@@ -199,10 +207,63 @@ func (c *Checker) browser() Check {
 			Optional:   true,
 		}
 	}
+	if !browserCanLaunchHeadless(path) {
+		return Check{
+			ID:         "browser",
+			Name:       "浏览器及依赖包",
+			Status:     "warning",
+			Detail:     version + " · 无头模式启动失败",
+			Suggestion: "可选：浏览器版本可读取，但无法以 Puppeteer 所需的无头模式启动；请检查沙箱权限、运行库与服务器环境。",
+			Optional:   true,
+		}
+	}
 	return Check{ID: "browser", Name: "浏览器及依赖包", Status: "ready", Detail: version, Optional: true}
 }
 
+// normalizeCommandOutput keeps command diagnostics readable when a Windows
+// executable writes the active system code page instead of UTF-8. Go turns
+// invalid UTF-8 bytes into replacement characters if they are converted to a
+// string too early, so all subprocess output must pass through this function
+// first.
+func normalizeCommandOutput(output []byte) string {
+	if len(output) == 0 {
+		return ""
+	}
+	if bytes.HasPrefix(output, []byte{0xff, 0xfe}) || bytes.HasPrefix(output, []byte{0xfe, 0xff}) {
+		littleEndian := output[0] == 0xff
+		data := output[2:]
+		if len(data)%2 == 1 {
+			data = data[:len(data)-1]
+		}
+		units := make([]uint16, len(data)/2)
+		for index := range units {
+			offset := index * 2
+			if littleEndian {
+				units[index] = binary.LittleEndian.Uint16(data[offset : offset+2])
+			} else {
+				units[index] = binary.BigEndian.Uint16(data[offset : offset+2])
+			}
+		}
+		return string(utf16.Decode(units))
+	}
+	if utf8.Valid(output) {
+		return string(output)
+	}
+	decoded, _, err := transform.Bytes(simplifiedchinese.GB18030.NewDecoder(), output)
+	if err == nil && utf8.Valid(decoded) {
+		return string(decoded)
+	}
+	return string(output)
+}
+
 func resolveBrowserCommand() (string, string) {
+	for _, variable := range []string{"PUPPETEER_EXECUTABLE_PATH", "CHROME_BIN", "BROWSER_BIN"} {
+		if candidate := strings.TrimSpace(os.Getenv(variable)); candidate != "" {
+			if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+				return candidate, filepath.Base(candidate)
+			}
+		}
+	}
 	for _, candidate := range []struct {
 		command string
 		name    string
@@ -229,13 +290,28 @@ func resolveBrowserCommand() (string, string) {
 func browserApplicationPaths() []string {
 	switch runtime.GOOS {
 	case "darwin":
-		return []string{
+		paths := []string{
 			"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
 			"/Applications/Chromium.app/Contents/MacOS/Chromium",
 			"/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
 		}
+		if home := os.Getenv("HOME"); home != "" {
+			paths = append(paths,
+				filepath.Join(home, "Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+				filepath.Join(home, "Applications/Chromium.app/Contents/MacOS/Chromium"),
+				filepath.Join(home, "Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"),
+			)
+		}
+		return paths
+	case "linux":
+		return []string{
+			"/snap/bin/chromium",
+			"/usr/bin/google-chrome",
+			"/usr/bin/google-chrome-stable",
+			"/usr/bin/microsoft-edge",
+		}
 	case "windows":
-		directories := []string{os.Getenv("ProgramFiles"), os.Getenv("ProgramFiles(x86)"), os.Getenv("LOCALAPPDATA")}
+		directories := []string{os.Getenv("ProgramFiles"), os.Getenv("ProgramW6432"), os.Getenv("ProgramFiles(x86)"), os.Getenv("LOCALAPPDATA"), os.Getenv("LocalAppData")}
 		paths := make([]string, 0, len(directories)*3)
 		for _, directory := range directories {
 			if directory == "" {
@@ -254,23 +330,110 @@ func browserApplicationPaths() []string {
 }
 
 func missingBrowserDependencies() []string {
-	packages := browserDependencyPackagesForHost()
-	if len(packages) == 0 {
+	manager := browserDependencyPackageManager()
+	if manager == "" {
 		return nil
 	}
-	rpm, err := ResolveCommand("rpm")
-	if err != nil {
-		return nil
-	}
+	groups := browserDependencyPackageCandidates(manager)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	missing := make([]string, 0, len(packages))
-	for _, pkg := range packages {
-		if err := exec.CommandContext(ctx, rpm, "-q", pkg).Run(); err != nil {
-			missing = append(missing, pkg)
+	missing := make([]string, 0, len(groups))
+	for _, group := range groups {
+		installed := false
+		for _, pkg := range group {
+			if packageInstalled(ctx, manager, pkg) {
+				installed = true
+				break
+			}
+		}
+		if !installed {
+			missing = append(missing, strings.Join(group, "/"))
+		}
+		if ctx.Err() != nil {
+			return nil
 		}
 	}
 	return missing
+}
+
+func browserDependencyPackageManager() string {
+	if runtime.GOOS != "linux" {
+		return ""
+	}
+	for _, manager := range []string{"apt-get", "dnf", "yum", "apk", "pacman"} {
+		if _, err := ResolveCommand(manager); err == nil {
+			return manager
+		}
+	}
+	return ""
+}
+
+func packageInstalled(ctx context.Context, manager, packageName string) bool {
+	var command string
+	var args []string
+	switch manager {
+	case "apt-get":
+		command = "dpkg-query"
+		args = []string{"-W", "-f=${Status}", packageName}
+	case "dnf", "yum":
+		command = "rpm"
+		args = []string{"-q", packageName}
+	case "apk":
+		command = "apk"
+		args = []string{"info", "-e", packageName}
+	case "pacman":
+		command = "pacman"
+		args = []string{"-Q", packageName}
+	default:
+		return false
+	}
+	path, err := ResolveCommand(command)
+	if err != nil {
+		return false
+	}
+	probe := exec.CommandContext(ctx, path, args...)
+	if manager == "apt-get" {
+		output, err := probe.Output()
+		return err == nil && strings.Contains(string(output), "install ok installed")
+	}
+	return probe.Run() == nil
+}
+
+// browserCanLaunchHeadless verifies the behavior Puppeteer actually needs,
+// instead of treating a successful --version invocation as sufficient.
+func browserCanLaunchHeadless(path string) bool {
+	profile, err := os.MkdirTemp("", "alx-browser-check-")
+	if err != nil {
+		return false
+	}
+	defer os.RemoveAll(profile)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for _, headless := range []string{"--headless=new", "--headless"} {
+		args := []string{
+			headless,
+			"--disable-gpu",
+			"--disable-dev-shm-usage",
+			"--no-first-run",
+			"--no-default-browser-check",
+			"--user-data-dir=" + profile,
+			"--dump-dom",
+			"about:blank",
+		}
+		if runtime.GOOS == "linux" && os.Geteuid() == 0 {
+			args = append(args, "--no-sandbox")
+		}
+		command := exec.CommandContext(ctx, path, args...)
+		command.Stdout = io.Discard
+		command.Stderr = io.Discard
+		if err := command.Run(); err == nil && ctx.Err() == nil {
+			return true
+		}
+		if ctx.Err() != nil {
+			return false
+		}
+	}
+	return false
 }
 
 func nodeVersionAtLeast(version, minimum string) bool {

@@ -38,13 +38,13 @@ export function ConfirmDialog({
       ariaLabel={title}
     >
       <section
-        className="grid w-full max-w-md gap-4 rounded-xl border border-slate-200 bg-white p-4.5 shadow-[0_20px_58px_rgb(28_26_23/0.22)]"
+        className="flex max-h-[min(420px,calc(100dvh-32px))] w-full max-w-md min-h-0 flex-col gap-4 overflow-hidden rounded-xl border border-slate-200 bg-white p-4.5 shadow-[0_20px_58px_rgb(28_26_23/0.22)]"
         role="dialog"
         aria-modal="true"
         aria-label={title}
         onMouseDown={event => event.stopPropagation()}
       >
-        <header className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2.5">
+        <header className="grid shrink-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2.5">
           <i className="inline-flex size-8.5 items-center justify-center rounded-lg bg-orange-50 text-orange-700">
             <AlertTriangle className="size-4.25" />
           </i>
@@ -56,10 +56,10 @@ export function ConfirmDialog({
             <X className="size-4" />
           </Button>
         </header>
-        <p className="m-0 whitespace-pre-line text-xs leading-5 text-slate-500">
+        <p className="m-0 min-h-0 overflow-y-auto whitespace-pre-line text-xs leading-5 text-slate-500">
           {message}
         </p>
-        <footer className="flex justify-end gap-2">
+        <footer className="flex shrink-0 justify-end gap-2">
           <Button variant="secondary" onClick={onCancel}>
             {cancelLabel}
           </Button>

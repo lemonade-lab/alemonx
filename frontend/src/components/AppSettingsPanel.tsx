@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   Database,
   KeyRound,
@@ -70,10 +70,13 @@ const sections: SidebarWindowItem<SettingsSection>[] = [
 export function AppSettingsPanel({
   ...windowProps
 }: Omit<DesktopWindowProps, 'children'>) {
-  const [active, setActive] = useState<SettingsSection>('update')
+  const [active, setActive] = useState<SettingsSection>('auth')
   const [stopBusy, setStopBusy] = useState(false)
   const [stopConfirm, setStopConfirm] = useState(false)
   const [stopMessage, setStopMessage] = useState('')
+  useEffect(() => {
+    if (windowProps.open) setActive('auth')
+  }, [windowProps.open])
   const stopService = async () => {
     setStopBusy(true)
     setStopMessage('')

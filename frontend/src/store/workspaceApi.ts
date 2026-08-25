@@ -173,6 +173,11 @@ export type SystemRedisStatus = {
   disabled: boolean
   persistent: boolean
   lastSaved?: string
+  nativeSupported: boolean
+  nativeInstalled: boolean
+  nativeRunning: boolean
+  nativeEnabled: boolean
+  nativeService?: string
 }
 export type SystemCurrentRobot = {
   root: string
@@ -588,7 +593,7 @@ export const workspaceApi = createApi({
     }),
     controlSystemRedis: build.mutation<
       SystemRedisStatus,
-      'start' | 'stop' | 'restart'
+      'start' | 'stop' | 'restart' | 'install-native'
     >({
       query: action => ({
         url: 'system/redis',
@@ -1014,6 +1019,7 @@ export const {
   useLazySetupUpdateQuery,
   useSetupPluginsQuery,
   useSetupPluginMarketQuery,
+  useLazySetupPluginMarketQuery,
   useSetupPluginReleasesQuery,
   useLazySetupPluginReleasesQuery,
   useSetupPluginVersionsQuery,
