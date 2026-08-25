@@ -64,7 +64,7 @@ A running ALemonX discovers plugins in this order, loading only the first locati
 1. `<workspace>/plugins/`: the sole writable destination for user-installed plugins and the highest-priority root;
 2. application-provided `plugins/`: the executable-adjacent directory for installed applications, with the current working directory's `plugins/` retained as a source-development compatibility root.
 
-Plugins are no longer read from `alx/plugins/` in the user configuration directory. Plugin data must not be written into plugin code; runners should use the `<workspace>/store/<plugin ID>/` directory provided through `ALX_PLUGIN_STORE`.
+The user configuration directory's `alx/plugins/` remains a read-only compatibility discovery root for upgrades, but is no longer an installation target. Workspace plugins take precedence over plugins with the same ID in that legacy location. Plugin data must not be written into plugin code; runners should use the `<workspace>/store/<plugin ID>/` directory provided through `ALX_PLUGIN_STORE`.
 
 Adding/removing plugin directories or editing `alx.json` is hot-reloaded automatically by the backend (reflected within about 1 second), with no restart or manual refresh; the frontend learns about changes via a revision number or SSE events.
 
@@ -208,10 +208,16 @@ Runners inherit the host environment (PATH includes the managed Node toolchain d
 | `ALX_PLUGIN_DOWNLOAD_TOKEN` | One-time download token (24 requests, 90-minute expiry). |
 | `ALX_PLUGIN_PROGRESS_MODE` | `structured`: stderr progress frames are available. |
 | `ALX_PLUGIN_INSTALLED_TAG` | Tag of the installed Release. |
+| `ALX_PLUGIN_INSTALL_MODE` | Host-derived mode: `managed-release`, `legacy-local`, `local-upload`, or `development`. Legacy/manual installs must expose a compatibility and migration path instead of being rejected solely because they lack Release metadata. |
+| `ALX_PLUGIN_INSTALL_ORIGIN` | Host-derived origin: `release`, `legacy-local`, `legacy-config`, `legacy-migration`, `upload`, or `source`. The manifest cannot override it. |
 | `ALX_PLUGIN_STORE` | Host-created persistent plugin data directory: `workspace/store/<plugin ID>`. Downloaded runtimes, sessions, databases, and recoverable configuration should default here; plugin upgrades do not remove it. |
 | `ALX_PLUGIN_DEV_PORT` | The only replaceable variable in source-development commands (host-allocated loopback port). |
 
 `ALX_PLUGIN_STORE` is injected into regular runners, host-authorized privileged runners, and source-plugin build, development-service, and development-Web processes. Static Web pages cannot read this directory directly; expose any necessary access through a controlled runner interface.
+
+#### Legacy installation compatibility
+
+`legacy-local` means the host found a readable old/manual plugin directory without verifiable Release metadata. A runner must treat it as a migratable compatibility installation: keep read-only status and WebUI available, validate the old entry point before starting, preserve existing configuration, and expose an idempotent migration path. Migration must never delete or overwrite the source directory. If the runner keeps its own installation state, it must map `ALX_PLUGIN_INSTALL_MODE=legacy-local` to compatibility/migration mode rather than unconditionally rejecting startup.
 
 ### Minimal Node.js runner
 
@@ -248,6 +254,7 @@ Except for the plugin's own web resources, all endpoints live under `/api/v1` an
 | POST | `/api/v1/setup/plugins/<id>/install` | Download and install a Release by `{version, assetName}`. A first installation is enabled by default; a previously explicitly disabled ID must be enabled again. |
 | POST | `/api/v1/setup/plugins/<id>/enabled` | Enable/disable: `{enabled: bool}`. |
 | POST | `/api/v1/setup/plugins/<id>/switch` | Switch version: `{version, assetName}`. |
+| POST | `/api/v1/setup/plugins/<id>/migrate` | Copy a legacy plugin into the workspace-managed directory: `{confirm: true}`. The source directory is retained and migration is retryable. |
 | POST | `/api/v1/setup/plugins/<id>/uninstall` | Uninstall: `{confirm: true}`. |
 | GET | `/api/v1/setup/plugins/<id>/versions` | Cached version list (tag/asset/size/fingerprint/active/cache state). |
 | DELETE | `/api/v1/setup/plugins/<id>/versions/<tag>` | Delete a non-active cached version. |

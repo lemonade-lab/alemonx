@@ -173,6 +173,7 @@ import {
   useSaveRobotLoginMutation,
   useSetSetupPluginEnabledMutation,
   useInstallSetupPluginMutation,
+  useMigrateSetupPluginMutation,
   useUninstallSetupPluginMutation,
   useLazySetupPluginReleasesQuery,
   useLazySetupPluginVersionsQuery,
@@ -5779,6 +5780,8 @@ function SystemPluginCenter({
     useInstallSetupPluginMutation()
   const [uninstallPlugin, { isLoading: uninstalling }] =
     useUninstallSetupPluginMutation()
+  const [migratePlugin, { isLoading: migrating }] =
+    useMigrateSetupPluginMutation()
   const [loadReleases, { isFetching: releasesFetching }] =
     useLazySetupPluginReleasesQuery()
   const [loadVersions, { isFetching: versionsFetching }] =
@@ -6361,7 +6364,11 @@ function SystemPluginCenter({
             {visiblePlugins.map(plugin => {
               const isOnline = Boolean(plugin.online)
               const isEnabled = Boolean(plugin.enabled)
-              const isManagedRelease = Boolean(plugin.installedTag)
+              const isManagedRelease =
+                plugin.installMode === 'managed-release' ||
+                Boolean(plugin.installedTag)
+              const isLegacyLocal = plugin.installMode === 'legacy-local'
+              const isLegacyMigrated = plugin.installOrigin === 'legacy-migration'
               const isDevelopment = Boolean(plugin.developmentSource)
               const hasPanel = Boolean(plugin.web)
               const canOpen = isEnabled && hasPanel
@@ -6430,6 +6437,11 @@ function SystemPluginCenter({
                         <span className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400">
                           <Circle className="size-3" />
                           已下载，等待启动
+                        </span>
+                      ) : isLegacyLocal ? (
+                        <span className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400">
+                          <Circle className="size-3" />
+                          {isLegacyMigrated ? '旧版已迁移，待兼容启动' : '旧版安装，兼容待迁移'}
                         </span>
                       ) : isEnabled ? (
                         <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
@@ -6507,6 +6519,21 @@ function SystemPluginCenter({
                         className="h-7 rounded-md px-2.5 text-xs font-medium"
                       >
                         停止开发
+                      </Button>
+                    </div>
+                  ) : isLegacyLocal && !isLegacyMigrated ? (
+                    <div className="system-feature-actions flex shrink-0 gap-1.5">
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        disabled={migrating}
+                        onClick={() => {
+                          if (!window.confirm(`将 ${plugin.name} 复制到工作区管理目录，原目录不会删除。继续吗？`)) return
+                          void migratePlugin({ pluginID: plugin.id })
+                        }}
+                        className="h-7 rounded-md px-2.5 text-xs font-medium"
+                      >
+                        {migrating ? '迁移中…' : '迁移到工作区'}
                       </Button>
                     </div>
                   ) : isManagedRelease ? (

@@ -274,6 +274,9 @@ export type SetupPlugin = {
   // Filled only for a locally discovered (therefore installed) system plugin.
   // This is the registry's actual directory, not a guessed cache path.
   source?: string
+  /** Host-derived installation provenance. Never comes from alx.json. */
+  installMode?: 'managed-release' | 'legacy-local' | 'local-upload' | 'development'
+  installOrigin?: 'release' | 'legacy-local' | 'legacy-config' | 'legacy-migration' | 'upload' | 'source'
   installedTag?: string
   fingerprint?: string
   developmentSource?: boolean
@@ -482,6 +485,17 @@ export const workspaceApi = createApi({
         url: `setup/plugins/${encodeURIComponent(pluginID)}/switch`,
         method: 'POST',
         body
+      }),
+      invalidatesTags: ['SetupPlugins']
+    }),
+    migrateSetupPlugin: build.mutation<
+      { id: string; migrated: boolean; source?: string },
+      { pluginID: string }
+    >({
+      query: ({ pluginID }) => ({
+        url: `setup/plugins/${encodeURIComponent(pluginID)}/migrate`,
+        method: 'POST',
+        body: { confirm: true }
       }),
       invalidatesTags: ['SetupPlugins']
     }),
@@ -1010,6 +1024,7 @@ export const {
   useInstallSetupPluginMutation,
   useUninstallSetupPluginMutation,
   useSwitchSetupPluginVersionMutation,
+  useMigrateSetupPluginMutation,
   useDeleteSetupPluginVersionMutation,
   useCleanupSetupPluginCacheMutation,
   useClearPluginDownloadCacheMutation,

@@ -94,10 +94,17 @@ type Plugin struct {
 	Enabled              bool                      `json:"enabled"`
 	Online               bool                      `json:"online,omitempty"`
 	Source               string                    `json:"source,omitempty"`
-	InstalledTag         string                    `json:"installedTag,omitempty"`
-	InstalledAsset       string                    `json:"installedAsset,omitempty"`
-	ArchiveSHA256        string                    `json:"archiveSha256,omitempty"`
-	Fingerprint          string                    `json:"fingerprint,omitempty"`
+	// InstallMode describes how the host obtained the local plugin. It is
+	// derived from host-owned metadata and is never trusted from alx.json.
+	// managed-release is a verified Release installation; legacy-local is an
+	// older/manual directory without a verifiable Release marker; local-upload
+	// is an archive installed through the current UI without Release metadata.
+	InstallMode    string `json:"installMode,omitempty"`
+	InstallOrigin  string `json:"installOrigin,omitempty"`
+	InstalledTag   string `json:"installedTag,omitempty"`
+	InstalledAsset string `json:"installedAsset,omitempty"`
+	ArchiveSHA256  string `json:"archiveSha256,omitempty"`
+	Fingerprint    string `json:"fingerprint,omitempty"`
 	// DevelopmentSource is set only by the host for an explicitly started
 	// source-development session. It is never trusted from alx.json.
 	DevelopmentSource bool `json:"developmentSource,omitempty"`
@@ -116,6 +123,7 @@ type installMetadata struct {
 	CachePath     string `json:"cachePath,omitempty"`
 	InstalledAt   string `json:"installedAt"`
 	LastUsedAt    string `json:"lastUsedAt,omitempty"`
+	Origin        string `json:"origin,omitempty"`
 }
 
 // RuntimeSpec is an optional development fallback. Release plugins should use
@@ -326,14 +334,28 @@ func (r *Registry) environmentForRunner(plugin Plugin, action string) ([]string,
 	environment := []string{}
 	if provider != nil {
 		for _, value := range provider(plugin, action) {
-			if !strings.HasPrefix(value, "ALX_PLUGIN_STORE=") {
+			if !strings.HasPrefix(value, "ALX_PLUGIN_STORE=") &&
+				!strings.HasPrefix(value, "ALX_PLUGIN_INSTALL_MODE=") &&
+				!strings.HasPrefix(value, "ALX_PLUGIN_INSTALL_ORIGIN=") {
 				environment = append(environment, value)
 			}
 		}
 	}
-	// Keep the host-owned store path last so an optional host integration
-	// cannot accidentally replace the standard persistence location.
-	return append(environment, "ALX_PLUGIN_STORE="+store), nil
+	// Keep host-owned compatibility values last so an optional host
+	// integration cannot replace the standard persistence or install state.
+	mode := plugin.InstallMode
+	if mode == "" {
+		mode = "legacy-local"
+	}
+	origin := plugin.InstallOrigin
+	if origin == "" {
+		origin = mode
+	}
+	return append(environment,
+		"ALX_PLUGIN_STORE="+store,
+		"ALX_PLUGIN_INSTALL_MODE="+mode,
+		"ALX_PLUGIN_INSTALL_ORIGIN="+origin,
+	), nil
 }
 
 // Subscribe returns a channel that receives a signal whenever the cached plugin
@@ -428,14 +450,19 @@ func (r *Registry) PluginStore(id string) (string, error) {
 
 // applicationPluginRoots returns application-managed plugin locations. The
 // executable-adjacent directory is the normal installed layout; the current
-// directory keeps source-tree development convenient.
+// directory keeps source-tree development convenient. The historical user
+// config directory is retained as a read-only discovery root so upgrades do
+// not make older plugins disappear before they can be migrated.
 func applicationPluginRoots() []string {
-	roots := make([]string, 0, 2)
+	roots := make([]string, 0, 3)
 	if executable, err := os.Executable(); err == nil {
 		roots = append(roots, filepath.Join(filepath.Dir(executable), "plugins"))
 	}
 	if cwd, err := os.Getwd(); err == nil {
 		roots = append(roots, filepath.Join(cwd, "plugins"))
+	}
+	if config, err := os.UserConfigDir(); err == nil {
+		roots = append(roots, filepath.Join(config, "alx", "plugins"))
 	}
 	return roots
 }
@@ -518,6 +545,77 @@ func (r *Registry) Find(id string) (Plugin, error) {
 	return Plugin{}, errors.New("未找到已加载的 Setup 插件")
 }
 
+// MigrateLegacy copies a discovered legacy plugin into the workspace-owned
+// install directory. The source is never removed, so an interrupted upgrade
+// can be retried safely. This only migrates the plugin files and host metadata;
+// a plugin-specific runner must still migrate its own state when required.
+func (r *Registry) MigrateLegacy(id string) (Plugin, error) {
+	plugin, err := r.Find(id)
+	if err != nil {
+		return Plugin{}, err
+	}
+	if plugin.InstallMode != "legacy-local" {
+		return Plugin{}, errors.New("该插件不是可迁移的旧版安装")
+	}
+	root, err := r.installRoot()
+	if err != nil {
+		return Plugin{}, err
+	}
+	target := filepath.Join(root, plugin.ID)
+	source, sourceErr := filepath.Abs(plugin.Source)
+	targetAbs, targetErr := filepath.Abs(target)
+	if sourceErr != nil || targetErr != nil {
+		return Plugin{}, errors.New("无法解析插件迁移路径")
+	}
+	if filepath.Clean(source) == filepath.Clean(targetAbs) {
+		metadata := installMetadata{
+			ID:          plugin.ID,
+			InstalledAt: time.Now().UTC().Format(time.RFC3339Nano),
+			LastUsedAt:  time.Now().UTC().Format(time.RFC3339Nano),
+			Origin:      "legacy-migration",
+		}
+		data, marshalErr := json.MarshalIndent(metadata, "", "  ")
+		if marshalErr != nil {
+			return Plugin{}, marshalErr
+		}
+		if writeErr := os.WriteFile(filepath.Join(targetAbs, installMetadataName), append(data, '\n'), 0o600); writeErr != nil {
+			return Plugin{}, errors.New("无法写入旧版插件迁移元数据：" + writeErr.Error())
+		}
+		r.Rescan()
+		migrated, findErr := r.Find(plugin.ID)
+		if findErr != nil {
+			return Plugin{}, errors.New("插件已标记迁移，但加载失败：" + findErr.Error())
+		}
+		return migrated, nil
+	}
+	if _, err := os.Lstat(target); err == nil {
+		return Plugin{}, errors.New("工作区已存在同 ID 插件；请先确认并处理该目录")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return Plugin{}, errors.New("无法检查工作区插件目录：" + err.Error())
+	}
+	if _, err := plugin.WebRoot(); err != nil {
+		return Plugin{}, errors.New("旧版插件缺少可用的 Web 目录，无法迁移")
+	}
+	if _, err := plugin.entryPath(); err != nil {
+		return Plugin{}, errors.New("旧版插件缺少当前平台执行器，无法迁移")
+	}
+	metadata := installMetadata{
+		ID:          plugin.ID,
+		InstalledAt: time.Now().UTC().Format(time.RFC3339Nano),
+		LastUsedAt:  time.Now().UTC().Format(time.RFC3339Nano),
+		Origin:      "legacy-migration",
+	}
+	if err := r.activateTree(root, plugin.ID, source, metadata); err != nil {
+		return Plugin{}, err
+	}
+	r.Rescan()
+	migrated, err := r.Find(plugin.ID)
+	if err != nil {
+		return Plugin{}, errors.New("插件已迁移，但加载失败：" + err.Error())
+	}
+	return migrated, nil
+}
+
 // Revision returns the cache revision, bumped whenever a rescan changes the
 // plugin set. Poll it (or the plugin list) for hot-plug detection.
 func (r *Registry) Revision() uint64 {
@@ -594,6 +692,8 @@ func (r *Registry) ActivateDevelopment(plugin Plugin) {
 	}
 	plugin.DevelopmentSource = true
 	plugin.Enabled = true
+	plugin.InstallMode = "development"
+	plugin.InstallOrigin = "source"
 	r.development[plugin.ID] = plugin
 	r.revision++
 	r.notifyLocked()
@@ -658,6 +758,7 @@ func pluginsEqual(a, b Plugin) bool {
 	return a.ID == b.ID && a.Name == b.Name && a.Version == b.Version &&
 		a.Description == b.Description && a.Runnable == b.Runnable &&
 		a.Enabled == b.Enabled && a.Online == b.Online && a.InstalledTag == b.InstalledTag && a.InstalledAsset == b.InstalledAsset && a.ArchiveSHA256 == b.ArchiveSHA256 && a.Fingerprint == b.Fingerprint &&
+		a.InstallMode == b.InstallMode && a.InstallOrigin == b.InstallOrigin &&
 		strings.Join(a.Platforms, ",") == strings.Join(b.Platforms, ",") &&
 		strings.Join(a.StatusActions, ",") == strings.Join(b.StatusActions, ",") &&
 		pluginDeclaredCapabilitiesEqual(a, b) &&
@@ -732,6 +833,9 @@ func (r *Registry) compute() []Plugin {
 			if err != nil || seen[plugin.ID] || !supportsCurrentPlatform(plugin.Platforms) {
 				continue
 			}
+			if plugin.InstallMode == "legacy-local" && isLegacyConfigPluginRoot(root) {
+				plugin.InstallOrigin = "legacy-config"
+			}
 			plugin.Enabled = !disabled[plugin.ID]
 			seen[plugin.ID] = true
 			items = append(items, plugin)
@@ -744,6 +848,17 @@ func (r *Registry) compute() []Plugin {
 		return items[i].Navigation.Label < items[j].Navigation.Label
 	})
 	return items
+}
+
+func isLegacyConfigPluginRoot(root string) bool {
+	config, err := os.UserConfigDir()
+	if err != nil {
+		return false
+	}
+	configured := filepath.Join(config, "alx", "plugins")
+	left, leftErr := filepath.Abs(root)
+	right, rightErr := filepath.Abs(configured)
+	return leftErr == nil && rightErr == nil && filepath.Clean(left) == filepath.Clean(right)
 }
 
 type disabledState struct {
@@ -1219,6 +1334,12 @@ func load(directory string) (Plugin, error) {
 	if err != nil {
 		return Plugin{}, err
 	}
+	// Local directories remain discoverable for backwards compatibility, but
+	// absence of a verified Release marker must be visible to the runner and UI.
+	// Do not treat alx.json.version as a Release tag: old/manual installs have
+	// no trustworthy asset checksum or provenance.
+	plugin.InstallMode = "legacy-local"
+	plugin.InstallOrigin = "legacy-local"
 	metadataPath := filepath.Join(directory, installMetadataName)
 	metadataInfo, metadataErr := os.Lstat(metadataPath)
 	if metadataErr == nil && metadataInfo.Mode().IsRegular() && metadataInfo.Size() <= maxManifestSize {
@@ -1226,10 +1347,19 @@ func load(directory string) (Plugin, error) {
 		var metadata installMetadata
 		if readErr == nil && json.Unmarshal(metadataBytes, &metadata) == nil && metadata.ID == plugin.ID && validReleaseTag(metadata.Tag) && len(metadata.ArchiveSHA256) == 64 && metadata.Fingerprint == installFingerprint(metadata.ID, metadata.Tag, metadata.Asset, metadata.ArchiveSHA256) {
 			plugin.Version = strings.TrimPrefix(metadata.Tag, "v")
+			plugin.InstallMode = "managed-release"
+			plugin.InstallOrigin = "release"
 			plugin.InstalledTag = metadata.Tag
 			plugin.InstalledAsset = metadata.Asset
 			plugin.ArchiveSHA256 = metadata.ArchiveSHA256
 			plugin.Fingerprint = metadata.Fingerprint
+		} else if readErr == nil && json.Unmarshal(metadataBytes, &metadata) == nil && metadata.ID == plugin.ID && (metadata.Origin == "local-upload" || metadata.Origin == "legacy-migration") {
+			plugin.InstallMode = "local-upload"
+			plugin.InstallOrigin = "upload"
+			if metadata.Origin == "legacy-migration" {
+				plugin.InstallMode = "legacy-local"
+				plugin.InstallOrigin = "legacy-migration"
+			}
 		}
 	}
 	return plugin, nil
@@ -1672,7 +1802,7 @@ func (r *Registry) InstallUpload(archivePath string) (Plugin, error) {
 		return Plugin{}, err
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	metadata := installMetadata{ID: plugin.ID, InstalledAt: now, LastUsedAt: now}
+	metadata := installMetadata{ID: plugin.ID, InstalledAt: now, LastUsedAt: now, Origin: "local-upload"}
 	if err := r.activateTree(root, plugin.ID, source, metadata); err != nil {
 		return Plugin{}, err
 	}

@@ -204,7 +204,7 @@ func TestRegistryProvidesHostApprovedRunnerEnvironment(t *testing.T) {
 	}
 	if err := os.WriteFile(filepath.Join(directory, "runner"), []byte(`#!/bin/sh
 cat >/dev/null
-printf '{"output":"%s"}' "$ALX_TEST_HOST_VALUE"
+printf '{"output":"%s|%s|%s"}' "$ALX_TEST_HOST_VALUE" "$ALX_PLUGIN_INSTALL_MODE" "$ALX_PLUGIN_INSTALL_ORIGIN"
 `), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -219,8 +219,91 @@ printf '{"output":"%s"}' "$ALX_TEST_HOST_VALUE"
 		return []string{"ALX_TEST_HOST_VALUE=host-approved"}
 	})
 	output, err := registry.Run("fixture", "check", nil, false)
-	if err != nil || output != "host-approved" {
+	if err != nil || output != "host-approved|legacy-local|legacy-local" {
 		t.Fatalf("run = %q, %v", output, err)
+	}
+}
+
+func TestRegistryClassifiesVerifiedAndLegacyInstallModes(t *testing.T) {
+	root := t.TempDir()
+	legacy := filepath.Join(root, "legacy")
+	if err := os.MkdirAll(filepath.Join(legacy, "web"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := `{"id":"legacy","name":"Legacy","version":"1.0.0","web":{"root":"web"}}`
+	if err := os.WriteFile(filepath.Join(legacy, manifestName), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	plugin, err := NewRegistry(root).Find("legacy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plugin.InstallMode != "legacy-local" || plugin.InstallOrigin != "legacy-local" {
+		t.Fatalf("legacy install mode = %#v", plugin)
+	}
+}
+
+func TestRegistryMigratesLegacyPluginWithoutDeletingSource(t *testing.T) {
+	root := t.TempDir()
+	workspaceRoot := filepath.Join(root, "workspace", "plugins")
+	legacyRoot := filepath.Join(root, "legacy", "plugins")
+	legacy := filepath.Join(legacyRoot, "legacy")
+	if err := os.MkdirAll(filepath.Join(legacy, "web"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	entryKey := runtime.GOOS
+	manifest := fmt.Sprintf(`{"id":"legacy","name":"Legacy","version":"1.0.0","entry":{"%s":"runner"},"web":{"root":"web"}}`, entryKey)
+	if err := os.WriteFile(filepath.Join(legacy, manifestName), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(legacy, "runner"), []byte("#!/bin/sh\ncat >/dev/null\nprintf '{\"output\":\"ok\"}'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	registry := &Registry{
+		roots:       []string{workspaceRoot, legacyRoot},
+		installPath: workspaceRoot,
+		storeRoot:   filepath.Join(root, "workspace", "store"),
+		development: map[string]Plugin{},
+	}
+	migrated, err := registry.MigrateLegacy("legacy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if migrated.InstallMode != "legacy-local" || migrated.InstallOrigin != "legacy-migration" {
+		t.Fatalf("migrated mode = %#v", migrated)
+	}
+	if migrated.Source != filepath.Join(workspaceRoot, "legacy") {
+		t.Fatalf("migrated source = %q", migrated.Source)
+	}
+	if _, err := os.Stat(filepath.Join(legacy, manifestName)); err != nil {
+		t.Fatalf("legacy source was removed: %v", err)
+	}
+}
+
+func TestRegistryMarksWorkspaceLegacyPluginForRunnerMigration(t *testing.T) {
+	root := t.TempDir()
+	pluginRoot := filepath.Join(root, "plugins")
+	pluginDir := filepath.Join(pluginRoot, "legacy")
+	if err := os.MkdirAll(filepath.Join(pluginDir, "web"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := fmt.Sprintf(`{"id":"legacy","name":"Legacy","version":"1.0.0","entry":{"%s":"runner"},"web":{"root":"web"}}`, runtime.GOOS)
+	if err := os.WriteFile(filepath.Join(pluginDir, manifestName), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pluginDir, "runner"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	registry := &Registry{roots: []string{pluginRoot}, installPath: pluginRoot, storeRoot: filepath.Join(root, "store"), development: map[string]Plugin{}}
+	migrated, err := registry.MigrateLegacy("legacy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if migrated.InstallOrigin != "legacy-migration" || migrated.Source != pluginDir {
+		t.Fatalf("workspace migration = %#v", migrated)
+	}
+	if _, err := os.Stat(filepath.Join(pluginDir, installMetadataName)); err != nil {
+		t.Fatalf("migration metadata missing: %v", err)
 	}
 }
 

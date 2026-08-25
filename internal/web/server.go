@@ -1875,6 +1875,22 @@ func (s *server) setupPluginActionHandler(w http.ResponseWriter, r *http.Request
 		writeJSON(w, http.StatusOK, map[string]any{"id": installed.ID, "tag": installed.InstalledTag, "switched": true})
 		return
 	}
+	if parts[1] == "migrate" {
+		var input struct {
+			Confirm bool `json:"confirm"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&input); err != nil || !input.Confirm {
+			writeError(w, http.StatusBadRequest, "请确认迁移旧版插件。")
+			return
+		}
+		migrated, err := s.plugins.MigrateLegacy(parts[0])
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"id": migrated.ID, "migrated": true, "source": migrated.Source})
+		return
+	}
 	if parts[1] != "actions" {
 		writeError(w, http.StatusNotFound, "未找到 Setup 插件操作。")
 		return

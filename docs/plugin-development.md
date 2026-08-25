@@ -62,9 +62,10 @@ plugins/
 运行中的 ALemonX 按以下顺序发现插件，同一个 `id` 只加载第一个发现位置：
 
 1. `<workspace>/plugins/`：用户安装插件的唯一写入目录，也是最高优先级；
-2. 程序提供的 `plugins/`：已安装程序使用可执行文件同级目录，源码开发可使用当前工作目录的 `plugins/` 作为兼容读取目录。
+2. 程序提供的 `plugins/`：已安装程序使用可执行文件同级目录，源码开发可使用当前工作目录的 `plugins/` 作为兼容读取目录；
+3. 用户配置目录的 `alx/plugins/`：仅作为升级兼容的只读发现目录，不再作为新安装目标。
 
-不会再从用户配置目录的 `alx/plugins/` 读取插件。插件数据不应写入插件代码目录；执行器应使用 `ALX_PLUGIN_STORE` 提供的 `<workspace>/store/<插件 ID>/`。
+旧目录中的插件不会被自动覆盖或删除；宿主会优先使用工作区中同 ID 的插件，避免旧目录遮蔽新安装。插件数据不应写入插件代码目录；执行器应使用 `ALX_PLUGIN_STORE` 提供的 `<workspace>/store/<插件 ID>/`。
 
 插件目录的增删与 `alx.json` 修改由后台**自动热更新**（约 1 秒内反映），无需重启或手动刷新；前端通过修订号（revision）或 SSE 事件感知变化。
 
@@ -212,10 +213,23 @@ plugins/
 | `ALX_PLUGIN_DOWNLOAD_TOKEN` | 一次性下载令牌（24 次请求、90 分钟过期）。 |
 | `ALX_PLUGIN_PROGRESS_MODE` | `structured`：表示 stderr 进度帧可用。 |
 | `ALX_PLUGIN_INSTALLED_TAG` | 已安装 Release 的 tag。 |
+| `ALX_PLUGIN_INSTALL_MODE` | 宿主判定的安装模式：`managed-release`、`legacy-local`、`local-upload` 或 `development`。旧版/手动安装不应因缺少 Release 标记而被静默当作正式 Release；Runner 应在 `legacy-local` 下提供只读、启动和迁移兼容路径。 |
+| `ALX_PLUGIN_INSTALL_ORIGIN` | 安装来源：`release`、`legacy-local`、`legacy-config`、`legacy-migration`、`upload` 或 `source`。该值由宿主注入，不能由清单覆盖。 |
 | `ALX_PLUGIN_STORE` | 宿主创建的插件持久数据目录：`workspace/store/<插件 ID>`。下载的运行包、登录态、数据库和可恢复配置应默认保存到这里；插件升级不会清除该目录。 |
 | `ALX_PLUGIN_DEV_PORT` | 源码开发命令中唯一可替换变量（宿主分配的回环端口）。 |
 
 `ALX_PLUGIN_STORE` 会注入普通执行器、经宿主授权的特权执行器，以及源码插件的构建、开发服务和开发 Web 进程。静态 Web 页面不能直接读取该目录，需通过 runner 提供受控接口。
+
+#### 旧版安装兼容协议
+
+`legacy-local` 表示宿主发现了一个可读取的旧版/手动插件目录，但没有验证过工作台 Release 元数据。Runner 必须把它视为“可迁移的兼容安装”，而不是直接报“不是工作台管理的安装”并拒绝全部操作：
+
+1. 继续提供只读状态和 WebUI；
+2. 启动前校验旧版入口、运行目录和依赖，兼容已有配置；
+3. 提供幂等的迁移动作，将必要文件复制到工作台管理目录，并由宿主重新安装/签发受管元数据；
+4. 迁移失败时返回可操作原因，不能覆盖旧目录或删除用户数据。
+
+Runner 不得让插件清单自行覆盖上述安装模式。若 Runner 还维护自己的安装状态，应把 `ALX_PLUGIN_INSTALL_MODE=legacy-local` 映射为“兼容/待迁移”，并允许显式启动或迁移；只有在受管 Release 且校验通过时，才显示为 `managed-release`。
 
 ### 最小 Node.js 执行器
 
@@ -252,6 +266,7 @@ try {
 | POST | `/api/v1/setup/plugins/<id>/install` | 按 `{version, assetName}` 下载并安装 Release。首次安装默认启用；若同 ID 曾被显式停用，仍需重新启用。 |
 | POST | `/api/v1/setup/plugins/<id>/enabled` | 启用/停用：`{enabled: bool}`。 |
 | POST | `/api/v1/setup/plugins/<id>/switch` | 切换版本：`{version, assetName}`。 |
+| POST | `/api/v1/setup/plugins/<id>/migrate` | 将旧目录插件安全复制到工作区管理目录：`{confirm: true}`。原目录保留，迁移可重试。 |
 | POST | `/api/v1/setup/plugins/<id>/uninstall` | 卸载：`{confirm: true}`。 |
 | GET | `/api/v1/setup/plugins/<id>/versions` | 已缓存版本列表（tag/asset/大小/指纹/活动/缓存状态）。 |
 | DELETE | `/api/v1/setup/plugins/<id>/versions/<tag>` | 删除某个非活动缓存版本。 |
