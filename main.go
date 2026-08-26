@@ -40,6 +40,7 @@ var resourceFiles embed.FS
 // 开发模板文件 + 机器人启动目录
 
 var Version = "dev"
+var FrontendBuild = "dev"
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "__alx-privileged-run" {
@@ -357,7 +358,7 @@ func authCommand(arguments []string, confirmed bool, account, password, confirma
 }
 
 func serve(host, port, redisPort string, redisOff bool, workspaceRoot string) {
-	options := web.ServerOptions{RedisDisabled: redisOff, WorkspaceRoot: workspaceRoot}
+	options := web.ServerOptions{RedisDisabled: redisOff, WorkspaceRoot: workspaceRoot, FrontendBuild: FrontendBuild}
 	if strings.TrimSpace(redisPort) != "" {
 		if value, err := strconv.Atoi(strings.TrimSpace(redisPort)); err == nil {
 			options.RedisPort = value

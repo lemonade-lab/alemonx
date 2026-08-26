@@ -33,20 +33,33 @@ func TestDependencySourceDistributionSupport(t *testing.T) {
 	}
 }
 
-func TestAPTDependencySourceContent(t *testing.T) {
-	ubuntu := aptContent("aliyun", "ubuntu", "noble")
-	if !strings.Contains(ubuntu, "https://mirrors.aliyun.com/ubuntu noble") || !strings.Contains(ubuntu, "noble-updates") {
-		t.Fatalf("unexpected Ubuntu source: %q", ubuntu)
-	}
-	debian := aptContent("official", "debian", "bookworm")
-	if !strings.Contains(debian, "https://deb.debian.org/debian bookworm") || !strings.Contains(debian, "non-free-firmware") {
-		t.Fatalf("unexpected Debian source: %q", debian)
-	}
-}
-
 func TestDependencySourceOperationRejectsUnknownTarget(t *testing.T) {
 	if code := DependencySourceOperationHelper([]byte(`{"action":"delete","target":"/tmp/not-allowed"}`)); code != 2 {
 		t.Fatalf("invalid target exit code = %d, want 2", code)
+	}
+}
+
+func TestDependencySourceOperationRejectsWrites(t *testing.T) {
+	if code := DependencySourceOperationHelper([]byte(`{"action":"write","target":"/etc/apt/sources.list.d/alemonx-mirror.list","content":"x"}`)); code != 2 {
+		t.Fatalf("legacy write operation exit code = %d, want 2", code)
+	}
+}
+
+func TestLegacyDependencySourceRequiresOwnershipMarker(t *testing.T) {
+	if !isALemonXManagedDependencySource("# Managed by ALemonX\n[alemonx-baseos]\n") {
+		t.Fatal("ALemonX ownership marker must be recognized")
+	}
+	if isALemonXManagedDependencySource("[alemonx-baseos]\nbaseurl=https://example.invalid\n") {
+		t.Fatal("a matching file name or repository id alone must never authorize deletion")
+	}
+}
+
+func TestDependencySourceWritesAreDisabled(t *testing.T) {
+	if _, err := ApplyDependencySource(context.Background(), "official"); err == nil || !strings.Contains(err.Error(), "已停用") {
+		t.Fatalf("apply must be disabled, got %v", err)
+	}
+	if _, err := RestoreDependencySource(context.Background(), "backup"); err == nil || !strings.Contains(err.Error(), "已停用") {
+		t.Fatalf("restore must be disabled, got %v", err)
 	}
 }
 
@@ -90,22 +103,5 @@ func TestDependencySourceStatusSerializesEmptyBackupsAsArray(t *testing.T) {
 	}
 	if !strings.Contains(string(data), `"backups":[]`) {
 		t.Fatalf("empty backups must be an array: %s", data)
-	}
-}
-
-func TestDNFDependencySourceRefreshOnlyUsesManagedRepositories(t *testing.T) {
-	previous := runDependencySourceCommand
-	var program string
-	var args []string
-	runDependencySourceCommand = func(_ context.Context, nextProgram string, nextArgs []string) (string, error) {
-		program, args = nextProgram, append([]string(nil), nextArgs...)
-		return "", nil
-	}
-	t.Cleanup(func() { runDependencySourceCommand = previous })
-	if err := refreshDependencySource(context.Background(), "dnf"); err != nil {
-		t.Fatal(err)
-	}
-	if program != "dnf" || !strings.Contains(strings.Join(args, " "), "--disablerepo=*") || !strings.Contains(strings.Join(args, " "), "--enablerepo=alemonx-baseos,alemonx-appstream") {
-		t.Fatalf("dnf refresh must be limited to managed repositories: %q %#v", program, args)
 	}
 }

@@ -959,11 +959,7 @@ function FlowView({
   const isDeveloper = goal?.id === 'develop'
   const isInstaller = goal?.id === 'install'
   const releaseApp =
-    goal?.id === 'desktop'
-      ? 'alemondesk'
-      : goal?.id === 'web' && webEdition === 'clean'
-        ? 'alx'
-        : null
+    goal?.id === 'web' && webEdition === 'clean' ? 'alx' : null
   const {
     data: releaseData,
     isError: releaseError,
@@ -1007,7 +1003,7 @@ function FlowView({
           ? webSteps
           : goal.id === 'build'
             ? buildSteps
-            : goal.id === 'desktop' || goal.id === 'mobile'
+            : goal.id === 'mobile'
               ? downloadSteps
               : goal.steps)
       ]
@@ -1880,11 +1876,11 @@ function FlowView({
           downloadSkills: config.skills === 'yes',
           developmentPackages: capabilities
         }
-  const isDownloadFlow = goal?.id === 'desktop' || goal?.id === 'mobile'
+  const isDownloadFlow = goal?.id === 'mobile'
   const isWeb = goal?.id === 'web'
   const isBuild = goal?.id === 'build'
   const purposeOptions = [
-    ['deploy', '部署', '部署源码版、桌面版、手机版或 Web 版。'],
+    ['deploy', '部署', '部署源码版、手机版或 Web 版。'],
     ['develop', '开发', '按需选择并创建 AlemonJS 开发模板。'],
     ['manage', '管理', '如果已有可用项目, 点击进入管理面板。']
   ]

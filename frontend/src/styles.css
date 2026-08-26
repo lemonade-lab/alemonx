@@ -4409,7 +4409,8 @@ button {
 }
 .primary-button,
 .secondary-button,
-.next-button {
+.next-button,
+.danger-button {
   align-items: center;
   border-radius: 6px;
   display: inline-flex;
@@ -4422,8 +4423,11 @@ button {
   border: 1px solid var(--theme-accent);
 }
 .secondary-button {
-  min-height: var(--compact-control-height);
-  padding: 0 12px;
+  min-height: var(--control-height);
+  padding: 0 14px;
+}
+.danger-button {
+  border: 1px solid var(--theme-danger);
 }
 .text-button {
   align-items: center;

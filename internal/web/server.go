@@ -320,6 +320,7 @@ type liveUpload struct {
 
 type server struct {
 	version            string
+	frontendBuild      string
 	assets             fs.FS
 	static             http.Handler
 	checker            *system.Checker
@@ -629,7 +630,6 @@ var goals = []goal{
 	{ID: "install", Title: "安装机器人", Description: "用推荐默认配置，快速安装一个可以运行的 AlemonJS 机器人。", Steps: []string{"环境检查", "机器人名称与位置", "确认安装"}},
 	{ID: "manage", Title: "管理机器人", Description: "管理已有机器人项目的配置、依赖与运行方式。", Steps: []string{"打开机器人管理"}},
 	{ID: "develop", Title: "开发机器人", Description: "创建一个可按需配置的 AlemonJS 开发项目。", Steps: []string{"环境检查", "项目名称", "开发语言", "代码规范", "版本管理", "本地运行", "包管理器", "开发能力包", "图片开发", "样式方案", "开发技能", "确认创建"}},
-	{ID: "desktop", Title: "安装桌面版", Description: "下载 AlemonDesk。", Steps: []string{"选择下载镜像", "下载桌面版"}, Mirrors: githubMirrors("alemondesk")},
 	{ID: "mobile", Title: "安装手机版", Description: "下载 AlemonApp Android 安装包。", Steps: []string{"下载 Android 安装包"}, DownloadURL: "https://download.alemonjs.com/application/alemonapp/app-universal-release.apk"},
 	{ID: "web", Title: "部署 Web 版", Description: "部署 alx。", Steps: []string{"选择部署方式", "环境检查", "快速启动"}, Mirrors: githubMirrors("alx")},
 }
@@ -666,6 +666,9 @@ type ServerOptions struct {
 	// WorkspaceRoot overrides the runtime workspace directory (--workspace or
 	// ALX_WORKSPACE). When empty the workspace package resolves a default.
 	WorkspaceRoot string
+	// FrontendBuild identifies the web assets embedded in this binary. It is
+	// compared by the browser with its own compile-time marker after upgrades.
+	FrontendBuild string
 }
 
 func NewServerRuntime(version string, staticFiles fs.FS, templateFiles ...fs.FS) *ServerRuntime {
@@ -756,7 +759,7 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	downloadBroker := newPluginDownloadBroker(networkManager)
 	downloadBroker.setRegistry(plugins)
 	plugins.SetRunnerEnvironmentProvider(downloadBroker.environment)
-	s := &server{version: version, assets: assets, static: http.FileServer(http.FS(assets)), checker: system.NewChecker(), network: networkManager, plugins: plugins, auth: identity, ai: aiManager, agentSessions: sessionStore, agentTaskStore: taskStore, agentTasks: tasks, taskService: &agent.TaskService{Manager: tasks}, goalStore: goalStore, opsStore: opsStore, chatHistory: chatHistory, testoneRecords: testoneRecords, opsProjects: opsProjects, opsBackground: startBackground, opsPaused: opsStartupErr != nil, goalSchedulerStop: make(chan struct{}), goalRunning: map[string]bool{}, agentConfirms: newAgentConfirmManager(), development: map[string]developmentProcess{}, botAppPageRuntimes: map[string]*botAppPageRuntime{}, stopping: map[string]bool{}, consoleCache: map[string]consoleSnapshot{}, outputBuffers: map[string]*operationOutputBuffer{}, directoryRoots: managedDirectoryRoots(), events: newRobotEventHub(), eventGateway: newEventGateway(), operationEvents: operationEvents, operations: operationEvents.snapshot(), opsEvents: newOpsEventHub(), mcpEvents: newMCPEventHub(), mcpMonitorStop: make(chan struct{}), pluginEventsStop: make(chan struct{}), updateMonitorStop: make(chan struct{}), updateState: updateStatusState{Update: releases.Update{Current: version}}, nodeID: fmt.Sprintf("%s-%d", hostname(), os.Getpid()), pluginStatusCache: map[string]*pluginStatusSnapshot{}, hostContexts: map[string]pluginHostContext{}, privilegeStore: privileges, pluginDownloadBroker: downloadBroker, sudoAttempts: map[string]sudoAttempt{}, runPrivilegedCommand: system.RunSudoCommand, installEnvironment: system.InstallEnvironment, liveUploads: map[string]liveUpload{}}
+	s := &server{version: version, frontendBuild: options.FrontendBuild, assets: assets, static: http.FileServer(http.FS(assets)), checker: system.NewChecker(), network: networkManager, plugins: plugins, auth: identity, ai: aiManager, agentSessions: sessionStore, agentTaskStore: taskStore, agentTasks: tasks, taskService: &agent.TaskService{Manager: tasks}, goalStore: goalStore, opsStore: opsStore, chatHistory: chatHistory, testoneRecords: testoneRecords, opsProjects: opsProjects, opsBackground: startBackground, opsPaused: opsStartupErr != nil, goalSchedulerStop: make(chan struct{}), goalRunning: map[string]bool{}, agentConfirms: newAgentConfirmManager(), development: map[string]developmentProcess{}, botAppPageRuntimes: map[string]*botAppPageRuntime{}, stopping: map[string]bool{}, consoleCache: map[string]consoleSnapshot{}, outputBuffers: map[string]*operationOutputBuffer{}, directoryRoots: managedDirectoryRoots(), events: newRobotEventHub(), eventGateway: newEventGateway(), operationEvents: operationEvents, operations: operationEvents.snapshot(), opsEvents: newOpsEventHub(), mcpEvents: newMCPEventHub(), mcpMonitorStop: make(chan struct{}), pluginEventsStop: make(chan struct{}), updateMonitorStop: make(chan struct{}), updateState: updateStatusState{Update: releases.Update{Current: version}}, nodeID: fmt.Sprintf("%s-%d", hostname(), os.Getpid()), pluginStatusCache: map[string]*pluginStatusSnapshot{}, hostContexts: map[string]pluginHostContext{}, privilegeStore: privileges, pluginDownloadBroker: downloadBroker, sudoAttempts: map[string]sudoAttempt{}, runPrivilegedCommand: system.RunSudoCommand, installEnvironment: system.InstallEnvironment, liveUploads: map[string]liveUpload{}}
 	s.redisManager = redis.NewManager(filepath.Join(filepath.Dir(taskStore.TasksDir()), "alx-redis.json"))
 	if options.RedisPort > 0 || options.RedisDisabled {
 		status := s.redisManager.Status()
@@ -3497,7 +3500,10 @@ func (s *server) dependencySourcesHandler(w http.ResponseWriter, r *http.Request
 			writeError(w, http.StatusNotFound, "依赖源任务不存在或已过期。")
 			return
 		}
-		writeJSON(w, http.StatusOK, system.DependencySourceStatusSnapshot())
+		status := system.DependencySourceStatusSnapshot()
+		status.ServerBuild = s.version
+		status.FrontendBuild = s.frontendBuild
+		writeJSON(w, http.StatusOK, status)
 	case http.MethodPost:
 		if s.auth != nil && !s.requireSuperAdmin(w, r) {
 			return
@@ -3512,8 +3518,9 @@ func (s *server) dependencySourcesHandler(w http.ResponseWriter, r *http.Request
 			return
 		}
 		switch strings.TrimSpace(input.Action) {
-		case "apply":
-		case "restore":
+		case "apply", "restore":
+			writeError(w, http.StatusConflict, "依赖源自动写入已停用；当前仅支持只读检测和旧版 ALemonX 受管源清理。")
+			return
 		case "delete-backup":
 		case "remove-managed-source":
 		case "test":
@@ -3577,9 +3584,6 @@ func (s *server) runDependencySourceOperation(created operationTask, action, pre
 	case "apply":
 		s.updateOperation(created.ID, 35, "正在备份并写入受管依赖源…", "", false)
 		_, err = system.ApplyDependencySource(ctx, preset)
-	case "restore":
-		s.updateOperation(created.ID, 35, "正在备份当前配置并恢复依赖源…", "", false)
-		_, err = system.RestoreDependencySource(ctx, backupID)
 	case "delete-backup":
 		s.updateOperation(created.ID, 50, "正在删除依赖源备份…", "", false)
 		_, err = system.DeleteDependencySourceBackup(backupID)

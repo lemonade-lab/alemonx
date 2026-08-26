@@ -176,6 +176,8 @@ export type DependencySourceBackup = {
 export type DependencySourceStatus = {
   supported: boolean
   writable: boolean
+  mode: 'readonly' | 'legacy-cleanup'
+  checksAvailable: boolean
   os: string
   distribution: string
   architecture: string
@@ -184,6 +186,11 @@ export type DependencySourceStatus = {
   target?: string
   activePreset?: string
   managed: boolean
+  legacyManagedSource: boolean
+  cleanupAvailable: boolean
+  sameNameUnmanaged: boolean
+  serverBuild?: string
+  frontendBuild?: string
   presets: DependencySourcePreset[]
   backups: DependencySourceBackup[]
 }
@@ -638,14 +645,6 @@ export const workspaceApi = createApi({
     }),
     dependencySourceTask: build.query<DependencySourceTask, string>({
       query: taskId => `system/dependency-sources?${new URLSearchParams({ taskId })}`
-    }),
-    applyDependencySource: build.mutation<DependencySourceTask, { preset: string }>({
-      query: body => ({ url: 'system/dependency-sources', method: 'POST', body: { ...body, action: 'apply' } }),
-      invalidatesTags: ['DependencySources']
-    }),
-    restoreDependencySource: build.mutation<DependencySourceTask, { id: string }>({
-      query: body => ({ url: 'system/dependency-sources', method: 'POST', body: { ...body, action: 'restore' } }),
-      invalidatesTags: ['DependencySources']
     }),
     deleteDependencySourceBackup: build.mutation<DependencySourceTask, { id: string }>({
       query: body => ({ url: 'system/dependency-sources', method: 'POST', body: { ...body, action: 'delete-backup' } }),
@@ -1115,8 +1114,6 @@ export const {
   useSystemNetworkQuery,
   useDependencySourcesQuery,
   useDependencySourceTaskQuery,
-  useApplyDependencySourceMutation,
-  useRestoreDependencySourceMutation,
   useDeleteDependencySourceBackupMutation,
   useRemoveManagedDependencySourceMutation,
   useTestDependencySourceMutation,

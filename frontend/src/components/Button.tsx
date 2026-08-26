@@ -14,7 +14,7 @@ const variantClasses: Record<ButtonVariant, string> = {
 }
 
 const sizeClasses: Record<ButtonSize, string> = {
-  sm: '',
+  sm: 'min-h-8',
   md: 'min-h-9',
   icon: 'size-8 p-0'
 }
@@ -33,7 +33,7 @@ type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
  */
 export function Button({
   variant = 'secondary',
-  size = variant === 'icon' ? 'icon' : 'sm',
+  size = variant === 'icon' ? 'icon' : 'md',
   loading = false,
   loadingLabel = '处理中…',
   className,

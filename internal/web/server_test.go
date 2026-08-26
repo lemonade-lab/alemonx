@@ -122,6 +122,22 @@ func TestRequireSuperAdminAllowsWhenAuthenticationDisabled(t *testing.T) {
 	}
 }
 
+func TestDependencySourcesRejectLegacyWritesAndReportBuilds(t *testing.T) {
+	s := &server{version: "v0.2.11", frontendBuild: "v0.2.11"}
+	get := httptest.NewRecorder()
+	s.dependencySourcesHandler(get, httptest.NewRequest(http.MethodGet, "/api/v1/system/dependency-sources", nil))
+	if get.Code != http.StatusOK || !strings.Contains(get.Body.String(), `"serverBuild":"v0.2.11"`) || !strings.Contains(get.Body.String(), `"frontendBuild":"v0.2.11"`) {
+		t.Fatalf("dependency source status must report build markers: %d %s", get.Code, get.Body.String())
+	}
+	for _, action := range []string{"apply", "restore"} {
+		recorder := httptest.NewRecorder()
+		s.dependencySourcesHandler(recorder, httptest.NewRequest(http.MethodPost, "/api/v1/system/dependency-sources", strings.NewReader(`{"action":"`+action+`"}`)))
+		if recorder.Code != http.StatusConflict || !strings.Contains(recorder.Body.String(), "已停用") {
+			t.Fatalf("%s must be rejected without a task: %d %s", action, recorder.Code, recorder.Body.String())
+		}
+	}
+}
+
 func TestGoalsApplyOfficialDownloadMirror(t *testing.T) {
 	manager, err := systemnetwork.NewAt(filepath.Join(t.TempDir(), "network.json"))
 	if err != nil {
@@ -1406,6 +1422,9 @@ func TestGoals(t *testing.T) {
 	if goals.Code != http.StatusOK || !bytes.Contains(goals.Body.Bytes(), []byte(`"id":"develop"`)) {
 		t.Fatalf("goals response = %d %s", goals.Code, goals.Body.String())
 	}
+	if bytes.Contains(goals.Body.Bytes(), []byte(`"id":"desktop"`)) {
+		t.Fatal("goals response must not advertise the retired desktop edition")
+	}
 }
 
 func TestRobotTasksStartsAsJSONArray(t *testing.T) {
@@ -1422,13 +1441,13 @@ func TestRobotTasksStartsAsJSONArray(t *testing.T) {
 
 func TestChecks(t *testing.T) {
 	response := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/checks", bytes.NewBufferString(`{"goalId":"desktop"}`))
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/checks", bytes.NewBufferString(`{"goalId":"mobile"}`))
 	newTestServer().ServeHTTP(response, request)
 
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
 	}
-	if !bytes.Contains(response.Body.Bytes(), []byte(`"goalId":"desktop"`)) {
+	if !bytes.Contains(response.Body.Bytes(), []byte(`"goalId":"mobile"`)) {
 		t.Fatalf("checks response = %s", response.Body.String())
 	}
 }
@@ -1535,7 +1554,7 @@ func TestAccountRolesControlManagementAndWorkbenchAccess(t *testing.T) {
 		t.Fatalf("reader GET = %d %s", readOnly.Code, readOnly.Body.String())
 	}
 	blockedWrite := httptest.NewRecorder()
-	request = httptest.NewRequest(http.MethodPost, "/api/v1/checks", bytes.NewBufferString(`{"goalId":"desktop"}`))
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/checks", bytes.NewBufferString(`{"goalId":"mobile"}`))
 	request.AddCookie(aliceCookie)
 	handler.ServeHTTP(blockedWrite, request)
 	if blockedWrite.Code != http.StatusForbidden {

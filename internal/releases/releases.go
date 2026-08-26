@@ -34,7 +34,7 @@ type Asset struct {
 	SHA256 string `json:"sha256,omitempty"`
 }
 
-var allowed = map[string]string{"alemondesk": "lemonade-lab/alemondesk", "alemonapp": "lemonade-lab/alemonapp", "alx": "lemonade-lab/alx", "alemonx": "lemonade-lab/alemonx"}
+var allowed = map[string]string{"alemonapp": "lemonade-lab/alemonapp", "alx": "lemonade-lab/alx", "alemonx": "lemonade-lab/alemonx"}
 
 // githubReleasesURL is a package variable so tests can point it at an
 // unreachable host and exercise the offline cache fallback path.

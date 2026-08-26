@@ -129,8 +129,7 @@ function PurposeGroup({
             '创建一个可用于生产环境的机器人源码项目。'
           ],
           ['mobile', '手机版(简单)', '下载 Android 端的 通用 APK 安装包。'],
-          ['desktop', '桌面版(一般)', '下载 PC 端的 AlemonDesk 安装包。'],
-          ['web', 'Web版(困难)', '下载 alemongo，或使用 Docker 部署 alemongo。']
+          ['web', 'Web版(困难)', '下载 alx，或使用 Docker 部署 alx。']
         ]
       : [
           [

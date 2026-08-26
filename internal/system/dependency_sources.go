@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -21,18 +20,25 @@ import (
 // the host. Only managers with a well-defined, reversible overlay are marked
 // as writable.
 type DependencySourceStatus struct {
-	Supported    bool                     `json:"supported"`
-	Writable     bool                     `json:"writable"`
-	OS           string                   `json:"os"`
-	Distribution string                   `json:"distribution"`
-	Architecture string                   `json:"architecture"`
-	Manager      string                   `json:"manager"`
-	Reason       string                   `json:"reason,omitempty"`
-	Target       string                   `json:"target,omitempty"`
-	ActivePreset string                   `json:"activePreset,omitempty"`
-	Managed      bool                     `json:"managed"`
-	Presets      []DependencySourcePreset `json:"presets"`
-	Backups      []DependencySourceBackup `json:"backups"`
+	Supported           bool                     `json:"supported"`
+	Writable            bool                     `json:"writable"`
+	Mode                string                   `json:"mode"`
+	ChecksAvailable     bool                     `json:"checksAvailable"`
+	OS                  string                   `json:"os"`
+	Distribution        string                   `json:"distribution"`
+	Architecture        string                   `json:"architecture"`
+	Manager             string                   `json:"manager"`
+	Reason              string                   `json:"reason,omitempty"`
+	Target              string                   `json:"target,omitempty"`
+	ActivePreset        string                   `json:"activePreset,omitempty"`
+	Managed             bool                     `json:"managed"`
+	LegacyManagedSource bool                     `json:"legacyManagedSource"`
+	CleanupAvailable    bool                     `json:"cleanupAvailable"`
+	SameNameUnmanaged   bool                     `json:"sameNameUnmanaged"`
+	ServerBuild         string                   `json:"serverBuild,omitempty"`
+	FrontendBuild       string                   `json:"frontendBuild,omitempty"`
+	Presets             []DependencySourcePreset `json:"presets"`
+	Backups             []DependencySourceBackup `json:"backups"`
 }
 
 type DependencySourcePreset struct {
@@ -64,31 +70,43 @@ type dependencySourceOperation struct {
 }
 
 const dependencySourceBackupDir = "dependency-mirrors/backups"
+const dependencySourceOwnershipMarker = "Managed by ALemonX"
+const dependencySourceWritesDisabledReason = "系统依赖源自动写入已停用：MVP 仅提供只读连通性检查和旧版 ALemonX 受管源清理。"
 
 var dependencySourceConfigRoot = defaultDependencySourceConfigDir
 
 func DependencySourceStatusSnapshot() DependencySourceStatus {
-	status := DependencySourceStatus{OS: runtime.GOOS, Architecture: runtime.GOARCH, Presets: dependencySourcePresets(), Backups: []DependencySourceBackup{}}
+	status := DependencySourceStatus{OS: runtime.GOOS, Architecture: runtime.GOARCH, Mode: "readonly", Backups: []DependencySourceBackup{}}
 	status.Distribution = readOSReleaseValue("ID")
 	if status.Distribution == "" {
 		status.Distribution = runtime.GOOS
 	}
 	status.Manager, _ = hostPackageManager()
 	status.Target = dependencySourceTarget(status.Manager)
-	status.Supported = (status.Manager == "apt-get" && isAPTDistribution(status.Distribution)) || ((status.Manager == "dnf" || status.Manager == "yum") && isCentOSStream(status.Distribution, readOSReleaseValue("VARIANT_ID"), readOSReleaseValue("NAME"), readOSReleaseValue("PRETTY_NAME")))
-	// Adding enabled DNF/YUM repositories alongside a host's own BaseOS and
-	// AppStream repositories can create mixed package sets (notably cockpit
-	// components). Do not offer automatic RPM source application until the
-	// full replacement transaction is implemented and verified per release.
-	status.Writable = status.Manager == "apt-get" && status.Supported && status.Target != ""
-	if status.Supported && (status.Manager == "dnf" || status.Manager == "yum") {
-		status.Reason = "DNF/YUM 镜像自动应用已暂停：附加仓库可能与系统现有 BaseOS/AppStream 产生包版本冲突。可保留检测，或移除已有 ALemonX 受管源后使用系统原有仓库。"
+	status.ChecksAvailable = (status.Manager == "apt-get" && isAPTDistribution(status.Distribution)) || ((status.Manager == "dnf" || status.Manager == "yum") && isCentOSStream(status.Distribution, readOSReleaseValue("VARIANT_ID"), readOSReleaseValue("NAME"), readOSReleaseValue("PRETTY_NAME")))
+	// The panel is intentionally visible whenever a host package manager is
+	// found, even when no template is verified. It must report why it is read
+	// only instead of silently inviting the UI to guess a source format.
+	status.Supported = status.Manager != ""
+	status.Writable = false
+	if status.ChecksAvailable {
+		status.Presets = dependencySourcePresets()
+		status.Reason = dependencySourceWritesDisabledReason
+	} else {
+		status.Reason = "当前平台尚无经过验证的镜像模板，ALemonX 仅显示环境状态，不会修改系统仓库。"
 	}
-	status.ActivePreset = activeDependencySourcePreset(status.Target)
-	_, managedErr := os.Stat(status.Target)
-	status.Managed = managedErr == nil
-	if !status.Supported {
-		status.Reason = "当前包管理器暂未提供可安全回滚的自动改源方案，ALemonX 不会直接修改系统源。"
+	if status.Target != "" {
+		if content, err := os.ReadFile(status.Target); err == nil {
+			if isALemonXManagedDependencySource(string(content)) {
+				status.LegacyManagedSource = true
+				status.Managed = true // compatibility for older clients.
+				status.CleanupAvailable = true
+				status.Mode = "legacy-cleanup"
+				status.ActivePreset = activeDependencySourcePreset(status.Target)
+			} else {
+				status.SameNameUnmanaged = true
+			}
+		}
 	}
 	for _, backup := range dependencySourceBackups() {
 		if backup.Target == status.Target {
@@ -97,6 +115,10 @@ func DependencySourceStatusSnapshot() DependencySourceStatus {
 	}
 	sort.Slice(status.Backups, func(i, j int) bool { return status.Backups[i].CreatedAt > status.Backups[j].CreatedAt })
 	return status
+}
+
+func isALemonXManagedDependencySource(content string) bool {
+	return strings.Contains(content, dependencySourceOwnershipMarker)
 }
 
 func activeDependencySourcePreset(target string) string {
@@ -140,98 +162,21 @@ func dependencySourceTarget(manager string) string {
 }
 
 func ApplyDependencySource(ctx context.Context, preset string) (DependencySourceStatus, error) {
-	status := DependencySourceStatusSnapshot()
-	if !status.Writable {
-		return status, errors.New(status.Reason)
-	}
-	content, err := dependencySourceContent(status, preset)
-	if err != nil {
-		return status, err
-	}
-	check, err := testDependencySource(ctx, status, preset)
-	if err != nil {
-		return status, err
-	}
-	if !check.OK {
-		return status, fmt.Errorf("镜像检测失败：%s", check.Message)
-	}
-	previous, err := readDependencySource(status.Target)
-	if err != nil {
-		return status, err
-	}
-	backupID, err := saveDependencySourceBackup(status.Target, "apply-"+preset, previous)
-	if err != nil {
-		return status, err
-	}
-	op := dependencySourceOperation{Action: "write", Target: status.Target, Content: content}
-	if _, err := runDependencySourceOperation(op); err != nil {
-		return status, err
-	}
-	if err := refreshDependencySource(ctx, status.Manager); err != nil {
-		if rollbackErr := restoreDependencySourceContent(status.Target, previous); rollbackErr != nil {
-			return status, fmt.Errorf("依赖源刷新失败：%v；自动回滚也失败：%v（备份 %s）", err, rollbackErr, backupID)
-		}
-		return status, fmt.Errorf("依赖源刷新失败，已自动回滚到应用前状态（备份 %s）：%v", backupID, err)
-	}
-	return DependencySourceStatusSnapshot(), nil
+	return DependencySourceStatusSnapshot(), errors.New(dependencySourceWritesDisabledReason)
 }
 
 func RestoreDependencySource(ctx context.Context, id string) (DependencySourceStatus, error) {
-	if strings.ContainsAny(id, `/\\`) || strings.TrimSpace(id) == "" {
-		return DependencySourceStatusSnapshot(), errors.New("备份编号无效")
-	}
-	path := filepath.Join(dependencySourceConfigDir(), dependencySourceBackupDir, id+".json")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return DependencySourceStatusSnapshot(), errors.New("备份不存在或无法读取")
-	}
-	var backup struct {
-		Target   string `json:"target"`
-		Content  string `json:"content"`
-		Checksum string `json:"checksum"`
-	}
-	if json.Unmarshal(data, &backup) != nil || backup.Target == "" {
-		return DependencySourceStatusSnapshot(), errors.New("备份内容无效")
-	}
-	if backup.Checksum != "" && backup.Checksum != dependencySourceChecksum(backup.Content) {
-		return DependencySourceStatusSnapshot(), errors.New("备份校验失败，已拒绝恢复")
-	}
-	status := DependencySourceStatusSnapshot()
-	if backup.Target != status.Target {
-		return status, errors.New("备份与当前系统源不匹配")
-	}
-	current, err := readDependencySource(status.Target)
-	if err != nil {
-		return status, err
-	}
-	backupID, err := saveDependencySourceBackup(status.Target, "before-restore", current)
-	if err != nil {
-		return status, err
-	}
-	action := "write"
-	if backup.Content == "" {
-		action = "delete"
-	}
-	if _, err := runDependencySourceOperation(dependencySourceOperation{Action: action, Target: backup.Target, Content: backup.Content}); err != nil {
-		return status, err
-	}
-	if err := refreshDependencySource(ctx, status.Manager); err != nil {
-		if rollbackErr := restoreDependencySourceContent(status.Target, current); rollbackErr != nil {
-			return status, fmt.Errorf("恢复后的依赖源刷新失败：%v；自动回滚也失败：%v（备份 %s）", err, rollbackErr, backupID)
-		}
-		return status, fmt.Errorf("恢复后的依赖源刷新失败，已自动回滚（备份 %s）：%v", backupID, err)
-	}
-	return DependencySourceStatusSnapshot(), nil
+	return DependencySourceStatusSnapshot(), errors.New("旧版依赖源备份仅供审计；为避免重新启用不兼容仓库，恢复写入已停用。")
 }
 
 // TestDependencySource checks the repository metadata address without
 // changing system sources or package-manager caches.
 func TestDependencySource(ctx context.Context, preset string) (DependencySourceCheck, error) {
 	status := DependencySourceStatusSnapshot()
-	if !status.Writable {
+	if !status.ChecksAvailable {
 		return DependencySourceCheck{}, errors.New(status.Reason)
 	}
-	if _, err := dependencySourceContent(status, preset); err != nil {
+	if _, err := dependencySourceCheckURL(status, preset); err != nil {
 		return DependencySourceCheck{}, err
 	}
 	return testDependencySource(ctx, status, preset)
@@ -261,32 +206,6 @@ func testDependencySource(ctx context.Context, status DependencySourceStatus, pr
 	return DependencySourceCheck{OK: ok, URL: url, Status: response.StatusCode, LatencyMS: time.Since(started).Milliseconds(), Message: message}, nil
 }
 
-func dependencySourceContent(status DependencySourceStatus, preset string) (string, error) {
-	if preset != "aliyun" && preset != "tencent" && preset != "official" {
-		return "", errors.New("未知的依赖镜像")
-	}
-	if status.Manager == "apt-get" {
-		codename := readOSReleaseValue("VERSION_CODENAME")
-		if codename == "" {
-			codename = "stable"
-		}
-		if strings.Contains(strings.ToLower(status.Distribution), "ubuntu") {
-			return aptContent(preset, "ubuntu", codename), nil
-		}
-		return aptContent(preset, "debian", codename), nil
-	}
-	base := map[string]string{"aliyun": "https://mirrors.aliyun.com/centos-stream", "tencent": "https://mirrors.cloud.tencent.com/centos-stream", "official": "https://mirror.stream.centos.org"}[preset]
-	version := readOSReleaseValue("VERSION_ID")
-	if version == "" {
-		return "", errors.New("无法识别 CentOS Stream 版本，已拒绝修改软件源")
-	}
-	if version == "9" {
-		version = "9-stream"
-	}
-	gpgKey := "file:///etc/pki/rpm-gpg/RPM-GPG-KEY-centosofficial"
-	return fmt.Sprintf("# Managed by ALemonX. Restore the backup before removing this file.\n[alemonx-baseos]\nname=ALemonX BaseOS\nbaseurl=%s/%s/BaseOS/$basearch/os\nenabled=1\ngpgcheck=1\ngpgkey=%s\n\n[alemonx-appstream]\nname=ALemonX AppStream\nbaseurl=%s/%s/AppStream/$basearch/os\nenabled=1\ngpgcheck=1\ngpgkey=%s\n", base, version, gpgKey, base, version, gpgKey), nil
-}
-
 func isAPTDistribution(distribution string) bool {
 	distribution = strings.ToLower(strings.TrimSpace(distribution))
 	return distribution == "debian" || distribution == "ubuntu"
@@ -301,17 +220,6 @@ func isCentOSStream(distribution, variant, name, prettyName string) bool {
 	}
 	identity := strings.ToLower(strings.TrimSpace(name + " " + prettyName))
 	return strings.Contains(identity, "centos stream")
-}
-
-func aptContent(preset, distro, codename string) string {
-	host := map[string]string{"aliyun": "https://mirrors.aliyun.com", "tencent": "https://mirrors.cloud.tencent.com", "official": "https://deb.debian.org"}[preset]
-	if distro == "ubuntu" {
-		if preset == "official" {
-			host = "https://archive.ubuntu.com"
-		}
-		return fmt.Sprintf("# Managed by ALemonX. Restore the backup before removing this file.\ndeb %s/ubuntu %s main restricted universe multiverse\ndeb %s/ubuntu %s-updates main restricted universe multiverse\n", host, codename, host, codename)
-	}
-	return fmt.Sprintf("# Managed by ALemonX. Restore the backup before removing this file.\ndeb %s/debian %s main contrib non-free non-free-firmware\ndeb %s/debian %s-updates main contrib non-free non-free-firmware\n", host, codename, host, codename)
 }
 
 func dependencySourceCheckURL(status DependencySourceStatus, preset string) (string, error) {
@@ -408,15 +316,15 @@ func DeleteDependencySourceBackup(id string) (DependencySourceStatus, error) {
 // file. It never changes any distribution-owned repository file.
 func RemoveManagedDependencySource() (DependencySourceStatus, error) {
 	status := DependencySourceStatusSnapshot()
-	if status.Target == "" || !validDependencySourceTarget(status.Target) {
+	if status.Target == "" || !validDependencySourceTarget(status.Target) || !status.CleanupAvailable {
 		return status, errors.New("当前系统没有可移除的 ALemonX 受管依赖源")
 	}
 	previous, err := readDependencySource(status.Target)
 	if err != nil {
 		return status, err
 	}
-	if previous == "" && !status.Managed {
-		return status, errors.New("当前系统没有已启用的 ALemonX 受管依赖源")
+	if !isALemonXManagedDependencySource(previous) {
+		return status, errors.New("同名文件不属于 ALemonX，已拒绝删除")
 	}
 	if _, err := saveDependencySourceBackup(status.Target, "remove-managed-source", previous); err != nil {
 		return status, err
@@ -425,48 +333,6 @@ func RemoveManagedDependencySource() (DependencySourceStatus, error) {
 		return status, err
 	}
 	return DependencySourceStatusSnapshot(), nil
-}
-
-func restoreDependencySourceContent(target, content string) error {
-	action := "write"
-	if content == "" {
-		action = "delete"
-	}
-	_, err := runDependencySourceOperation(dependencySourceOperation{Action: action, Target: target, Content: content})
-	return err
-}
-
-func refreshDependencySource(ctx context.Context, manager string) error {
-	args := map[string][]string{
-		"apt-get": {"update"},
-		// Do not refresh every system repository here. RHEL-compatible hosts
-		// can retain a subscription-manager repository whose registration is
-		// unrelated to the ALemonX-managed mirror. Restrict validation to the
-		// two repositories we just wrote so it cannot block on or fail because
-		// of an existing third-party/subscription source.
-		"dnf": {"makecache", "--disablerepo=*", "--enablerepo=alemonx-baseos,alemonx-appstream"},
-		"yum": {"makecache", "--disablerepo=*", "--enablerepo=alemonx-baseos,alemonx-appstream"},
-	}[manager]
-	if len(args) == 0 {
-		return errors.New("当前包管理器暂未提供安全的索引刷新命令")
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if _, err := runDependencySourceCommand(ctx, manager, args); err != nil {
-		return errors.New("包管理器索引刷新失败")
-	}
-	return nil
-}
-
-var runDependencySourceCommand = func(ctx context.Context, program string, args []string) (string, error) {
-	if os.Geteuid() == 0 {
-		command := exec.CommandContext(ctx, program, args...)
-		output, err := command.CombinedOutput()
-		return string(output), err
-	}
-	output, err := RunWithPrivilegesInput("", program, args, nil, nil)
-	return string(output), err
 }
 
 func runDependencySourceOperation(op dependencySourceOperation) (string, error) {
@@ -518,7 +384,7 @@ func DependencySourceOperationHelper(data []byte) int {
 
 func dependencySourceOperationHelperTo(data []byte, output io.Writer) int {
 	var op dependencySourceOperation
-	if json.Unmarshal(data, &op) != nil || (op.Action != "write" && op.Action != "read" && op.Action != "delete") || !validDependencySourceTarget(op.Target) {
+	if json.Unmarshal(data, &op) != nil || (op.Action != "read" && op.Action != "delete") || !validDependencySourceTarget(op.Target) {
 		return 2
 	}
 	if op.Action == "read" {
@@ -534,27 +400,7 @@ func dependencySourceOperationHelperTo(data []byte, output io.Writer) int {
 		}
 		return 0
 	}
-	if err := os.MkdirAll(filepath.Dir(op.Target), 0o755); err != nil {
-		return 1
-	}
-	tmp, err := os.CreateTemp(filepath.Dir(op.Target), ".alemonx-source-*")
-	if err != nil {
-		return 1
-	}
-	defer os.Remove(tmp.Name())
-	if _, err = tmp.WriteString(op.Content); err == nil {
-		err = tmp.Chmod(0o644)
-	}
-	if closeErr := tmp.Close(); err == nil {
-		err = closeErr
-	}
-	if err != nil {
-		return 1
-	}
-	if err = os.Rename(tmp.Name(), op.Target); err != nil {
-		return 1
-	}
-	return 0
+	return 2
 }
 
 func validDependencySourceTarget(target string) bool {

@@ -42,7 +42,7 @@ window.__alxWebview.onMessage(listener)
 window.__alxWebview.request('./api/example', options)
 ```
 
-`request` only accepts paths starting with `./api/` and only proxies to the current robot app. `postMessage` starts the directory-local `alemonjs/desktop.js` desk Node.js process on first call and then communicates bidirectionally with the plugin desktop module over stdin/stdout JSON IPC; it does not start the robot's `app/dev`. `appDesktopAPI.postMessage`, `appDesktopAPI.onMessage`, and `appDesktopAPI.themeOn` have minimal compatibility implementations and must not be treated as the full Wails API of AlemonDesk.
+`request` only accepts paths starting with `./api/` and only proxies to the current robot app. `postMessage` starts the directory-local `alemonjs/desktop.js` desk Node.js process on first call and then communicates bidirectionally with the plugin desktop module over stdin/stdout JSON IPC; it does not start the robot's `app/dev`. `appDesktopAPI.postMessage`, `appDesktopAPI.onMessage`, and `appDesktopAPI.themeOn` have minimal compatibility implementations and must not be treated as the full Wails API of the legacy desktop runtime.
 
 ## Isolation and lifecycle
 

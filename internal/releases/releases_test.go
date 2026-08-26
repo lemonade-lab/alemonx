@@ -237,7 +237,7 @@ func TestListFallsBackToStalePersistedCacheWhenGitHubUnreachable(t *testing.T) {
 
 func TestListReportsErrorWhenGitHubUnreachableAndNoCache(t *testing.T) {
 	t.Setenv("ALX_TEST_CACHE_DIR", t.TempDir())
-	id := "alemondesk"
+	id := "alx"
 	pointGitHubAtUnreachable(t)
 	if _, err := List(id); err == nil {
 		t.Fatal("List should report an error when GitHub is unreachable and no cache exists")

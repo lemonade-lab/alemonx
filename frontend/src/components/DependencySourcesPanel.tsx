@@ -1,14 +1,13 @@
-import { AlertTriangle, Archive, CheckCircle2, Database, RotateCcw, Save, Trash2, Wifi } from 'lucide-react'
+import { AlertTriangle, Archive, CheckCircle2, Database, Trash2, Wifi } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import {
-  useApplyDependencySourceMutation,
   useDeleteDependencySourceBackupMutation,
   useDependencySourceTaskQuery,
   useDependencySourcesQuery,
   useRemoveManagedDependencySourceMutation,
-  useRestoreDependencySourceMutation,
   useTestDependencySourceMutation
 } from '../store/workspaceApi'
+import { frontendBuildID } from '../buildInfo'
 import { Button } from './Button'
 import { SettingsCard, SettingsMessage, SettingsPage } from './SettingsCard'
 import { ConfirmDialog } from './ConfirmDialog'
@@ -19,14 +18,8 @@ function backupLabel(preset: string) {
   return preset
 }
 
-function presetLabel(preset?: string) {
-  return ({ aliyun: '阿里云', tencent: '腾讯云', official: '官方源' } as Record<string, string>)[preset ?? ''] || '未启用 ALemonX 管理源'
-}
-
 export function DependencySourcesPanel() {
   const { data, isLoading, isError, refetch } = useDependencySourcesQuery()
-  const [apply, { isLoading: applying }] = useApplyDependencySourceMutation()
-  const [restore, { isLoading: restoring }] = useRestoreDependencySourceMutation()
   const [deleteBackup, { isLoading: deleting }] = useDeleteDependencySourceBackupMutation()
   const [removeManagedSource, { isLoading: removing }] = useRemoveManagedDependencySourceMutation()
   const [test, { isLoading: testing }] = useTestDependencySourceMutation()
@@ -75,37 +68,38 @@ export function DependencySourcesPanel() {
     }
   }
   return (
-    <SettingsPage title="依赖源" description="为系统包管理器增加 ALemonX 管理的镜像入口。原有系统源不会被覆盖，所有变更都可恢复。">
+    <SettingsPage title="镜像连通性检查" description="仅检查经验证镜像的元数据可访问性；MVP 不会自动追加、切换或恢复系统仓库。">
       <SettingsCard icon={<Database className="size-4" />} title="当前环境" description={`${data.distribution} · ${data.architecture} · ${data.manager || '未检测到包管理器'}`}>
-        <p className="text-xs text-(--theme-text-muted)">{data.writable ? `当前：${presetLabel(data.activePreset)} · 管理文件：${data.target}` : (data.reason || '当前系统暂不支持自动改源。')}</p>
+        <p className="text-xs text-(--theme-text-muted)">{data.reason || '当前系统暂不支持镜像检查。'}</p>
       </SettingsCard>
-      {data.writable && (
-        <SettingsCard icon={<Save className="size-4" />} title="选择镜像" description="先检测仓库元数据是否可访问；应用前会保存上一份 ALemonX 管理文件。">
+      {data.checksAvailable && (
+        <SettingsCard icon={<Wifi className="size-4" />} title="镜像连通性" description="检测不会提权、写入配置或刷新系统包索引。">
           <div className="grid gap-2">
             {data.presets.map(preset => (
               <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-(--theme-border) px-3 py-2" key={preset.id}>
                 <div><strong className="block text-sm">{preset.name}</strong><small className="text-xs text-(--theme-text-muted)">{preset.description}</small></div>
                 <div className="flex items-center gap-2">
                   <Button variant="secondary" loading={testing} loadingLabel="检测中…" onClick={() => void testPreset(preset.id, preset.name)}><Wifi className="size-3.5" />检测</Button>
-                  <Button variant={preset.id === 'official' ? 'secondary' : 'primary'} loading={applying} loadingLabel="应用中…" onClick={() => void run(() => apply({ preset: preset.id }).unwrap(), `已应用${preset.name}依赖源。`)}>应用</Button>
                 </div>
               </div>
             ))}
           </div>
         </SettingsCard>
       )}
-      {data.managed && !data.writable && (
+      {data.cleanupAvailable && (
         <SettingsCard icon={<AlertTriangle className="size-4" />} title="移除受管源" description="当前系统的软件源存在兼容风险。移除只会删除 ALemonX 创建的固定文件，不会修改系统原有仓库。">
           <Button variant="danger" loading={removing} loadingLabel="移除中…" onClick={() => setRemoveConfirm(true)}><Trash2 className="size-3.5" />移除 ALemonX 受管源</Button>
         </SettingsCard>
       )}
+      {data.sameNameUnmanaged && <SettingsMessage tone="error">检测到同名文件 {data.target}，但它不带 ALemonX 所有权标记。为保护你的系统，ALemonX 不会删除它。</SettingsMessage>}
       {(data.backups ?? []).length > 0 && (
-        <SettingsCard icon={<Archive className="size-4" />} title="备份与恢复" description="恢复会将对应备份写回 ALemonX 管理文件，不会删除备份。">
-          <div className="grid gap-2">{(data.backups ?? []).map(backup => <div className="flex flex-wrap items-center justify-between gap-3 text-xs" key={backup.id}><span>{new Date(backup.createdAt).toLocaleString()} · {backupLabel(backup.preset)}</span><span className="flex gap-2"><Button variant="secondary" loading={restoring} onClick={() => void run(() => restore({ id: backup.id }).unwrap(), '已恢复依赖源备份。')}><RotateCcw className="size-3.5" />恢复</Button><Button variant="secondary" onClick={() => setDeletingID(backup.id)}><Trash2 className="size-3.5" />删除</Button></span></div>)}</div>
+        <SettingsCard icon={<Archive className="size-4" />} title="备份审计" description="备份保存清理前状态和校验和；为避免重新启用不兼容仓库，MVP 不提供恢复写入。">
+          <div className="grid gap-2">{(data.backups ?? []).map(backup => <div className="flex flex-wrap items-center justify-between gap-3 text-xs" key={backup.id}><span>{new Date(backup.createdAt).toLocaleString()} · {backupLabel(backup.preset)}</span><Button variant="secondary" onClick={() => setDeletingID(backup.id)}><Trash2 className="size-3.5" />删除</Button></div>)}</div>
         </SettingsCard>
       )}
       {task && <SettingsMessage tone="info">{task.progress}% · {task.output || '正在执行依赖源操作…'}</SettingsMessage>}
       {message && <SettingsMessage tone={success ? 'success' : 'error'}>{success && <CheckCircle2 className="mr-1 inline size-4" />}{message}</SettingsMessage>}
+      {data.frontendBuild && data.serverBuild && data.frontendBuild !== frontendBuildID && <SettingsMessage tone="error">浏览器资源与服务端构建不一致（页面 {frontendBuildID}，服务端嵌入资源 {data.frontendBuild}）。请强制刷新页面；若仍存在，重新部署并重启新二进制。</SettingsMessage>}
       <ConfirmDialog open={Boolean(deletingID)} title="删除依赖源备份" message="删除后无法恢复该备份。确认继续吗？" destructive busy={deleting} onCancel={() => setDeletingID('')} onConfirm={() => { const id = deletingID; setDeletingID(''); void run(() => deleteBackup({ id }).unwrap(), '备份已删除。') }} />
       <ConfirmDialog open={removeConfirm} title="移除 ALemonX 受管依赖源" message="这会删除 ALemonX 创建的依赖源文件，系统将继续使用原有软件源。不会修改系统原有仓库。" destructive busy={removing} onCancel={() => setRemoveConfirm(false)} onConfirm={() => { setRemoveConfirm(false); void run(() => removeManagedSource().unwrap(), '已移除 ALemonX 受管依赖源。') }} />
     </SettingsPage>
