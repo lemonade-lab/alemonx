@@ -161,6 +161,49 @@ export type SystemNetworkCheck = {
   latencyMs?: number
   message: string
 }
+export type DependencySourcePreset = {
+  id: string
+  name: string
+  description: string
+}
+export type DependencySourceBackup = {
+  id: string
+  createdAt: string
+  preset: string
+  target: string
+  checksum?: string
+}
+export type DependencySourceStatus = {
+  supported: boolean
+  writable: boolean
+  os: string
+  distribution: string
+  architecture: string
+  manager: string
+  reason?: string
+  target?: string
+  activePreset?: string
+  presets: DependencySourcePreset[]
+  backups: DependencySourceBackup[]
+}
+export type DependencySourceCheck = {
+  ok: boolean
+  url: string
+  status?: number
+  latencyMs?: number
+  message: string
+}
+export type DependencySourceTask = {
+  id: string
+  action: string
+  status: 'running' | 'completed' | 'failed'
+  output?: string
+  error?: string
+  progress: number
+  steps?: Array<{ at: string; progress: number; message: string }>
+  createdAt: string
+  finishedAt?: string
+}
 export type SystemRedisStatus = {
   running: boolean
   managed: boolean
@@ -366,6 +409,7 @@ export const workspaceApi = createApi({
     'SetupPlugins',
     'EnvironmentReport',
     'SystemNetwork',
+    'DependencySources',
     'SystemRedis'
   ],
   endpoints: build => ({
@@ -586,6 +630,28 @@ export const workspaceApi = createApi({
     systemNetwork: build.query<SystemNetworkSettings, void>({
       query: () => 'system/network',
       providesTags: ['SystemNetwork']
+    }),
+    dependencySources: build.query<DependencySourceStatus, void>({
+      query: () => 'system/dependency-sources',
+      providesTags: ['DependencySources']
+    }),
+    dependencySourceTask: build.query<DependencySourceTask, string>({
+      query: taskId => `system/dependency-sources?${new URLSearchParams({ taskId })}`
+    }),
+    applyDependencySource: build.mutation<DependencySourceTask, { preset: string }>({
+      query: body => ({ url: 'system/dependency-sources', method: 'POST', body: { ...body, action: 'apply' } }),
+      invalidatesTags: ['DependencySources']
+    }),
+    restoreDependencySource: build.mutation<DependencySourceTask, { id: string }>({
+      query: body => ({ url: 'system/dependency-sources', method: 'POST', body: { ...body, action: 'restore' } }),
+      invalidatesTags: ['DependencySources']
+    }),
+    deleteDependencySourceBackup: build.mutation<DependencySourceTask, { id: string }>({
+      query: body => ({ url: 'system/dependency-sources', method: 'POST', body: { ...body, action: 'delete-backup' } }),
+      invalidatesTags: ['DependencySources']
+    }),
+    testDependencySource: build.mutation<DependencySourceCheck, { preset: string }>({
+      query: body => ({ url: 'system/dependency-sources', method: 'POST', body: { ...body, action: 'test' } })
     }),
     systemRedis: build.query<SystemRedisStatus, void>({
       query: () => 'system/redis',
@@ -1042,6 +1108,12 @@ export const {
   useUploadSetupPluginArchiveMutation,
   useSystemMcpQuery,
   useSystemNetworkQuery,
+  useDependencySourcesQuery,
+  useDependencySourceTaskQuery,
+  useApplyDependencySourceMutation,
+  useRestoreDependencySourceMutation,
+  useDeleteDependencySourceBackupMutation,
+  useTestDependencySourceMutation,
   useSystemRedisQuery,
   useSaveSystemNetworkMutation,
   useTestSystemNetworkMutation,

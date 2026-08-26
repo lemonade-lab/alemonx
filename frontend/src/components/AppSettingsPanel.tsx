@@ -6,6 +6,7 @@ import {
   Power,
   RefreshCw,
   Server,
+  Boxes,
   UsersRound
 } from 'lucide-react'
 import { AccountManagementPage } from './AccountManagement'
@@ -17,7 +18,9 @@ import { GithubMark } from './GithubMark'
 import { ServiceControlCard } from './ServiceControlCard'
 import { ConfirmDialog } from './ConfirmDialog'
 import { RedisSettingsPanel } from './RedisSettingsPanel'
+import { DependencySourcesPanel } from './DependencySourcesPanel'
 import { SidebarWindow, type SidebarWindowItem } from './SidebarWindow'
+import { useDependencySourcesQuery } from '../store/workspaceApi'
 import type { DesktopWindowProps } from './DesktopWindow'
 
 type SettingsSection =
@@ -28,6 +31,7 @@ type SettingsSection =
   | 'update'
   | 'service'
   | 'redis'
+  | 'dependency-sources'
 
 const sections: SidebarWindowItem<SettingsSection>[] = [
   {
@@ -64,6 +68,11 @@ const sections: SidebarWindowItem<SettingsSection>[] = [
     id: 'redis',
     label: 'Redis',
     icon: Database
+  },
+  {
+    id: 'dependency-sources',
+    label: '依赖源',
+    icon: Boxes
   }
 ]
 
@@ -74,9 +83,17 @@ export function AppSettingsPanel({
   const [stopBusy, setStopBusy] = useState(false)
   const [stopConfirm, setStopConfirm] = useState(false)
   const [stopMessage, setStopMessage] = useState('')
+  const { data: dependencySources } = useDependencySourcesQuery(undefined, {
+    skip: !windowProps.open
+  })
   useEffect(() => {
     if (windowProps.open) setActive('auth')
   }, [windowProps.open])
+  useEffect(() => {
+    if (dependencySources && !dependencySources.supported && active === 'dependency-sources') {
+      setActive('auth')
+    }
+  }, [active, dependencySources])
   const stopService = async () => {
     setStopBusy(true)
     setStopMessage('')
@@ -105,7 +122,9 @@ export function AppSettingsPanel({
     <SidebarWindow
       {...windowProps}
       activeItem={active}
-      items={sections}
+      items={dependencySources?.supported
+        ? sections
+        : sections.filter(item => item.id !== 'dependency-sources')}
       onActiveItemChange={setActive}
       sidebarAriaLabel="设置页面"
       sidebarFooter={
@@ -136,6 +155,7 @@ export function AppSettingsPanel({
       {active === 'accounts' && <AccountManagementPage />}
       {active === 'service' && <ServiceControlCard />}
       {active === 'redis' && <RedisSettingsPanel />}
+      {active === 'dependency-sources' && <DependencySourcesPanel />}
       <ConfirmDialog
         open={stopConfirm}
         title="停止 AlemonX"

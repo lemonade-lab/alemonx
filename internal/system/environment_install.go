@@ -78,6 +78,8 @@ func environmentInstallPlan(checkID, manager string) (EnvironmentInstallPlan, er
 	case "browser":
 		plan.Name = "浏览器及依赖包"
 		switch manager {
+		case "pkg":
+			plan.Packages = []string{"chromium"}
 		case "winget":
 			plan.Packages = []string{"Google.Chrome"}
 		case "choco":
@@ -404,8 +406,15 @@ func hostPackageManager() (string, error) {
 		}
 		return "", errors.New("未检测到 WinGet 或 Chocolatey。请由 Windows 管理员预装其中之一，随后即可在工作台内安装环境")
 	}
+	if runtime.GOOS == "freebsd" {
+		if _, err := ResolveCommand("pkg"); err != nil {
+			return "", errors.New("未检测到 FreeBSD pkg 包管理器")
+		}
+		RefreshCommandEnvironment("pkg")
+		return "pkg", nil
+	}
 	if runtime.GOOS != "linux" {
-		return "", errors.New("工作台内安装目前支持 Linux、macOS 与 Windows")
+		return "", errors.New("工作台内安装目前支持 Linux、macOS、Windows 与 FreeBSD")
 	}
 	for _, name := range []string{"apt-get", "dnf", "yum", "apk", "pacman"} {
 		if _, err := ResolveCommand(name); err == nil {
@@ -476,10 +485,22 @@ func installRPMBrowserEnvironment(ctx context.Context, plan EnvironmentInstallPl
 		plan.BrowserPackage = rpmBrowserPackageAvailable(manager)
 	}
 	groups := browserDependencyPackageCandidates(manager)
-	total := len(groups)
+	browserCandidates := rpmBrowserPackages
 	if plan.BrowserPackage != "" {
-		total++
+		// The repository probe is only an optimization. Always keep the fixed
+		// candidates behind it because dnf metadata can be stale immediately
+		// after EPEL/CRB is enabled.
+		browserCandidates = append([]string{plan.BrowserPackage}, browserCandidates...)
 	}
+	seenBrowsers := map[string]bool{}
+	uniqueBrowsers := make([]string, 0, len(browserCandidates))
+	for _, candidate := range browserCandidates {
+		if candidate != "" && !seenBrowsers[candidate] {
+			seenBrowsers[candidate] = true
+			uniqueBrowsers = append(uniqueBrowsers, candidate)
+		}
+	}
+	total := len(groups) + len(uniqueBrowsers)
 	failed := make([]string, 0, 2)
 	for _, group := range groups {
 		installed, installErr := installCandidateGroup(ctx, manager, plan.Name, group)
@@ -493,33 +514,36 @@ func installRPMBrowserEnvironment(ctx context.Context, plan EnvironmentInstallPl
 			failed = append(failed, group[0])
 		}
 	}
-	if plan.BrowserPackage != "" {
-		installed, installErr := installCandidateGroup(ctx, manager, plan.Name, []string{plan.BrowserPackage})
+	browserPackage := ""
+	for _, candidate := range uniqueBrowsers {
+		installed, installErr := installCandidateGroup(ctx, manager, plan.Name, []string{candidate})
 		if installErr != nil {
 			if len(failed) > 0 {
 				return "", fmt.Errorf("%v（此前已完成安装，以下包未安装：%s）", installErr, strings.Join(failed, "、"))
 			}
 			return "", installErr
 		}
-		if installed == "" {
-			failed = append(failed, plan.BrowserPackage)
+		if installed != "" {
+			browserPackage = installed
+			break
 		}
+		failed = append(failed, candidate)
 	}
 	RefreshCommandEnvironment(plan.CheckID)
 	if len(failed) == 0 {
-		if plan.BrowserPackage == "" {
-			browserNote := "当前软件源未提供 Chromium、Chrome 或 Edge 软件包"
-			if reposPrepared {
-				browserNote = "已启用 EPEL 并更新软件源，但软件源仍未提供 Chromium、Chrome 或 Edge 软件包"
-			}
-			return fmt.Sprintf("已在当前主机安装浏览器运行库；%s，Puppeteer 将使用项目自带的浏览器。请重新检查环境确认。", browserNote), nil
-		}
-		return fmt.Sprintf("已在当前主机安装浏览器及依赖包（%s）。请重新检查环境确认版本。", plan.BrowserPackage), nil
+		return fmt.Sprintf("已在当前主机安装浏览器及依赖包（%s）。请重新检查环境确认版本。", browserPackage), nil
+	}
+	if browserPackage != "" {
+		return fmt.Sprintf("已在当前主机安装浏览器及部分运行库（%s）；以下软件包未能安装：%s。请重新检查环境确认。", browserPackage, strings.Join(failed, "、")), nil
 	}
 	if len(failed) == total {
 		return "", fmt.Errorf("服务器安装 %s 失败：以下软件包均未安装：%s。请检查软件源或网络后重试", plan.Name, strings.Join(failed, "、"))
 	}
-	return fmt.Sprintf("已在当前主机安装浏览器运行库；以下软件包未能安装：%s（可能影响浏览器自动化功能）。Puppeteer 将使用项目自带的浏览器；如软件源确实缺少这些包，可启用 EPEL 等仓库后重试。请重新检查环境确认。", strings.Join(failed, "、")), nil
+	browserNote := "当前软件源未提供 Chromium、Chrome 或 Edge 软件包"
+	if reposPrepared {
+		browserNote = "已由 ALemonX 启用 EPEL/CRB 并刷新软件源，但仍未找到 Chromium、Chrome 或 Edge 软件包"
+	}
+	return fmt.Sprintf("已在当前主机安装浏览器运行库；%s。仅当项目已自带或下载浏览器时才能进行 Puppeteer 自动化，请重新检查环境确认。", browserNote), nil
 }
 
 // installLinuxBrowserEnvironment installs the runtime libraries and the
@@ -658,6 +682,8 @@ func packageManagerPrecondition(ctx context.Context, manager string) bool {
 		args = []string{"update"}
 	case "brew":
 		args = []string{"update"}
+	case "pkg":
+		args = []string{"update", "-f"}
 	default:
 		return false
 	}

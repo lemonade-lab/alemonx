@@ -94,7 +94,7 @@ func TestRPMBrowserInstallReportsUnavailableBrowserPackage(t *testing.T) {
 	var calls [][]string
 	runPackageCommand = func(_ context.Context, _ string, args []string) (string, error) {
 		calls = append(calls, args)
-		if slices.Contains(args, "chromium") {
+		if anyBrowserPackage(args) {
 			return "Error: Problem installing chromium", errors.New("exit status 1")
 		}
 		return "", nil
@@ -108,11 +108,11 @@ func TestRPMBrowserInstallReportsUnavailableBrowserPackage(t *testing.T) {
 	}
 	// dnf preparation: dnf-plugins-core, CRB, epel-release, update; then
 	// makecache, every dependency group and the browser binary.
-	wantCalls := 5 + len(browserDependencyPackageCandidates("dnf")) + 1
+	wantCalls := 5 + len(browserDependencyPackageCandidates("dnf")) + len(rpmBrowserPackages)
 	if len(calls) != wantCalls {
 		t.Fatalf("install calls = %d, want %d: %#v", len(calls), wantCalls, calls)
 	}
-	if !strings.Contains(message, "chromium") || !strings.Contains(message, "自带") {
+	if !strings.Contains(message, "Chromium") || !strings.Contains(message, "自带") {
 		t.Fatalf("fallback message = %q", message)
 	}
 }
@@ -183,7 +183,10 @@ func TestRPMBrowserInstallNotesFailedEPELFallback(t *testing.T) {
 	rpmBrowserPackageAvailable = func(string) string { return "" }
 	defer func() { rpmBrowserPackageAvailable = originalProbe }()
 	originalRun := runPackageCommand
-	runPackageCommand = func(_ context.Context, _ string, _ []string) (string, error) {
+	runPackageCommand = func(_ context.Context, _ string, args []string) (string, error) {
+		if anyBrowserPackage(args) {
+			return "Error: No match for browser package", errors.New("exit status 1")
+		}
 		return "", nil
 	}
 	defer func() { runPackageCommand = originalRun }()
@@ -206,6 +209,9 @@ func TestRPMBrowserInstallOnlyInstallsDepsWithoutBrowserPackage(t *testing.T) {
 	var calls [][]string
 	runPackageCommand = func(_ context.Context, _ string, args []string) (string, error) {
 		calls = append(calls, args)
+		if anyBrowserPackage(args) {
+			return "Error: No match for browser package", errors.New("exit status 1")
+		}
 		return "", nil
 	}
 	defer func() { runPackageCommand = originalRun }()
@@ -216,11 +222,11 @@ func TestRPMBrowserInstallOnlyInstallsDepsWithoutBrowserPackage(t *testing.T) {
 		t.Fatal(err)
 	}
 	// makecache + epel-release + makecache + every core candidate group.
-	wantCalls := 3 + len(browserDependencyPackageCandidates("yum"))
+	wantCalls := 3 + len(browserDependencyPackageCandidates("yum")) + len(rpmBrowserPackages)
 	if len(calls) != wantCalls {
 		t.Fatalf("install calls = %d, want %d: %#v", len(calls), wantCalls, calls)
 	}
-	if !strings.Contains(message, "未提供") {
+	if !strings.Contains(message, "未找到") {
 		t.Fatalf("deps-only message = %q", message)
 	}
 }
@@ -677,4 +683,23 @@ func TestBrowserInstallPlanForWindowsUsesChrome(t *testing.T) {
 	if len(plan.Packages) != 1 || plan.Packages[0] != "Google.Chrome" {
 		t.Fatalf("Windows browser plan = %#v", plan)
 	}
+}
+
+func TestBrowserInstallPlanForFreeBSDUsesPkgChromium(t *testing.T) {
+	plan, err := environmentInstallPlan("browser", "pkg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Packages) != 1 || plan.Packages[0] != "chromium" {
+		t.Fatalf("FreeBSD browser plan = %#v", plan)
+	}
+}
+
+func anyBrowserPackage(args []string) bool {
+	for _, candidate := range rpmBrowserPackages {
+		if slices.Contains(args, candidate) {
+			return true
+		}
+	}
+	return false
 }

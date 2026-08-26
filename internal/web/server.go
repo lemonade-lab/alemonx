@@ -1050,6 +1050,7 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	mux.HandleFunc("/api/v1/system/service", s.systemServiceHandler)
 	mux.HandleFunc("/api/v1/system/environment/install", s.environmentInstallHandler)
 	mux.HandleFunc("/api/v1/system/network", s.systemNetworkHandler)
+	mux.HandleFunc("/api/v1/system/dependency-sources", s.dependencySourcesHandler)
 	mux.HandleFunc("/api/v1/system/redis", s.systemRedisHandler)
 	mux.HandleFunc(pluginDownloadBrokerPath, s.pluginDownloadBrokerHandler)
 	mux.HandleFunc("/api/v1/system/plugin-download-cache", s.pluginDownloadCacheHandler)
@@ -3470,6 +3471,113 @@ func (s *server) systemNetworkHandler(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
 	}
+}
+
+// dependencySourcesHandler manages only ALemonX-owned source drop-ins. It
+// never rewrites the user's existing package-manager files and every apply is
+// recorded before the new drop-in is committed.
+func (s *server) dependencySourcesHandler(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		if taskID := strings.TrimSpace(r.URL.Query().Get("taskId")); taskID != "" {
+			if task, ok := s.dependencySourceOperation(taskID); ok {
+				writeJSON(w, http.StatusOK, task)
+				return
+			}
+			writeError(w, http.StatusNotFound, "依赖源任务不存在或已过期。")
+			return
+		}
+		writeJSON(w, http.StatusOK, system.DependencySourceStatusSnapshot())
+	case http.MethodPost:
+		if s.auth != nil && !s.requireSuperAdmin(w, r) {
+			return
+		}
+		var input struct {
+			Action string `json:"action"`
+			Preset string `json:"preset"`
+			ID     string `json:"id"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 16<<10)).Decode(&input); err != nil {
+			writeError(w, http.StatusBadRequest, "依赖源请求无效。")
+			return
+		}
+		switch strings.TrimSpace(input.Action) {
+		case "apply":
+		case "restore":
+		case "delete-backup":
+		case "test":
+			ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
+			defer cancel()
+			result, testErr := system.TestDependencySource(ctx, strings.TrimSpace(input.Preset))
+			if testErr != nil {
+				writeError(w, http.StatusBadRequest, testErr.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, result)
+			return
+		default:
+			writeError(w, http.StatusBadRequest, "不支持的依赖源操作。")
+			return
+		}
+		if active := s.activeDependencySourceOperation(); active != nil {
+			writeError(w, http.StatusConflict, "已有依赖源操作正在执行，请等待其完成。")
+			return
+		}
+		created := operationTask{ID: "dependency-source-" + time.Now().UTC().Format("20060102150405.000000000"), Action: "dependency-source-" + input.Action, Status: "running", Output: "正在准备依赖源操作…", Progress: 0, CreatedAt: time.Now().UTC()}
+		s.addOperation(created)
+		preset, backupID := strings.TrimSpace(input.Preset), strings.TrimSpace(input.ID)
+		go s.runDependencySourceOperation(created, strings.TrimSpace(input.Action), preset, backupID)
+		writeJSON(w, http.StatusAccepted, created)
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
+	}
+}
+
+func (s *server) activeDependencySourceOperation() *operationTask {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for index := range s.operations {
+		item := s.operations[index]
+		if item.Status == "running" && strings.HasPrefix(item.Action, "dependency-source-") {
+			copy := item
+			return &copy
+		}
+	}
+	return nil
+}
+
+func (s *server) dependencySourceOperation(id string) (operationTask, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, item := range s.operations {
+		if item.ID == id && strings.HasPrefix(item.Action, "dependency-source-") {
+			return item, true
+		}
+	}
+	return operationTask{}, false
+}
+
+func (s *server) runDependencySourceOperation(created operationTask, action, preset, backupID string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	s.updateOperation(created.ID, 10, "正在检测镜像仓库元数据…", "", false)
+	var err error
+	switch action {
+	case "apply":
+		s.updateOperation(created.ID, 35, "正在备份并写入受管依赖源…", "", false)
+		_, err = system.ApplyDependencySource(ctx, preset)
+	case "restore":
+		s.updateOperation(created.ID, 35, "正在备份当前配置并恢复依赖源…", "", false)
+		_, err = system.RestoreDependencySource(ctx, backupID)
+	case "delete-backup":
+		s.updateOperation(created.ID, 50, "正在删除依赖源备份…", "", false)
+		_, err = system.DeleteDependencySourceBackup(backupID)
+	}
+	if err != nil {
+		s.updateOperation(created.ID, 100, "依赖源操作未完成；如已写入，系统已尝试自动回滚。", err.Error(), true)
+		return
+	}
+	s.updateOperation(created.ID, 100, "依赖源已写入、索引已刷新并完成验证。", "", true)
 }
 
 func (s *server) pluginDownloadBrokerHandler(w http.ResponseWriter, r *http.Request) {

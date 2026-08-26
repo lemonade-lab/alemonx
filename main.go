@@ -4,6 +4,7 @@ import (
 	"context"
 	"embed"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"net"
@@ -43,6 +44,13 @@ var Version = "dev"
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "__alx-privileged-run" {
 		os.Exit(system.RunPrivilegedHelper(os.Args[2:]))
+	}
+	if len(os.Args) > 1 && os.Args[1] == "__alx-dependency-source" {
+		data, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			os.Exit(2)
+		}
+		os.Exit(system.DependencySourceOperationHelper(data))
 	}
 	logging.ConfigureStandardLogger(os.Stderr)
 	defer robot.CleanupGitBuildSessions()
