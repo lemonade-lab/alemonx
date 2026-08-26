@@ -4,7 +4,7 @@
 
 [English](README.en.md) · 中文
 
-[用户手册](docs/user-manual.md) · [一行安装](#一行安装) · [Docker 部署](docs/docker.md) · [命令行](docs/cli.md) · [MCP 文档](docs/mcp.md) · [系统插件开发](docs/plugin-development.md)
+[用户手册](docs/user-manual.md) · [构建规范](docs/build.md) · [一行安装](#一行安装) · [Docker 部署](docs/docker.md) · [命令行](docs/cli.md) · [MCP 文档](docs/mcp.md) · [系统插件开发](docs/plugin-development.md)
 
 ![ALemonX 工作台：多机器人项目管理、运行配置与 Agent 协作](docs/images/alemonx-workbench.png)
 
@@ -92,6 +92,7 @@ chmod +x alx
 ## 文档
 
 - [用户手册](docs/user-manual.md)
+- [机器人构建规范](docs/build.md)
 - [MCP 控制面](docs/mcp.md)
 - [Docker 部署](docs/docker.md)
 - [命令行](docs/cli.md)

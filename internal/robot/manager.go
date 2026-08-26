@@ -749,7 +749,7 @@ func (m Manager) installRuntimeDependencies(root, action string) (string, error)
 	removeYarnIntegrity(root)
 	output, installErr := runPackageManager(root, "install")
 	if installErr != nil {
-		return output, buildDependencyError(action+"失败", output)
+		return output, buildDependencyError(action+"失败", output, installErr)
 	}
 	remaining, checkErr := m.RuntimeDependencies(root)
 	if checkErr != nil {
@@ -768,7 +768,7 @@ func (Manager) SyncWorkspaceDependencies(root string) (string, error) {
 	output, err := runPackageManager(root, "install")
 	prefix := "本地插件工作区已变更，正在同步依赖。"
 	if err != nil {
-		return prefix + "\n" + output, buildDependencyError("同步本地插件依赖失败", output)
+		return prefix + "\n" + output, buildDependencyError("同步本地插件依赖失败", output, err)
 	}
 	return prefix + "\n" + output + "\n本地插件依赖已同步。", nil
 }

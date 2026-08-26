@@ -11452,6 +11452,8 @@ function GitReleasePanelNext({
     remoteBranch?: string
     remoteReachable?: boolean
     remoteAdvice?: string
+    localHead?: string
+    remoteHead?: string
     suggestedVersion?: string
     sourceCommits?: SourceCommit[]
     sourceBranches?: Array<{ name: string; commits: SourceCommit[] }>
@@ -11486,6 +11488,8 @@ function GitReleasePanelNext({
   const [requestError, setRequestError] = useStoreState('')
   const [result, setResult] = useStoreState<PublishResult | null>(null)
   const [retryingTag, setRetryingTag] = useStoreState(false)
+  const [remoteRefreshError, setRemoteRefreshError] = useStoreState('')
+  const [remoteRefreshNonce, setRemoteRefreshNonce] = useStoreState(0)
   const remoteBranchesRefreshed = useRef('')
   const status = error
     ? { issues: ['无法读取 Git 发布状态。'] }
@@ -11505,18 +11509,28 @@ function GitReleasePanelNext({
     if (!root || !status?.gitReady || remoteBranchesRefreshed.current === root)
       return
     remoteBranchesRefreshed.current = root
+    setRemoteRefreshError('')
     void fetch('/api/v1/publish/git/refresh-branches', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ root })
     })
-      .then(response => {
-        if (response.ok) return refetch()
+      .then(async response => {
+        if (response.ok) {
+          await refetch()
+          return
+        }
+        const payload = (await response.json().catch(() => ({}))) as {
+          error?: string
+        }
+        setRemoteRefreshError(payload.error || '无法刷新远程分支状态。')
       })
-      .catch(() => {
-        // 远程不可用时仍可使用已缓存的本地分支，不打断发布页。
+      .catch(reason => {
+        setRemoteRefreshError(
+          reason instanceof Error ? reason.message : '无法刷新远程分支状态。'
+        )
       })
-  }, [refetch, root, status?.gitReady])
+  }, [refetch, remoteRefreshNonce, root, setRemoteRefreshError, status?.gitReady])
   useEffect(() => {
     if (!branches.some(item => item.name === sourceBranch))
       setSourceBranch(status?.branch || branches[0]?.name || '')
@@ -11540,6 +11554,8 @@ function GitReleasePanelNext({
     setArtifacts([])
     setRequestError('')
     setResult(null)
+    remoteBranchesRefreshed.current = ''
+    setRemoteRefreshNonce(value => value + 1)
     void refetch()
   }
   const post = async <T,>(url: string, body: object): Promise<T> => {
@@ -11948,6 +11964,25 @@ function GitReleasePanelNext({
               )}
             </section>
           )}
+          {phase === 'source' && remoteRefreshError && (
+            <p className="m-0 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs leading-5 text-rose-700 dark:border-rose-900 dark:bg-rose-950/30 dark:text-rose-300">
+              远程状态刷新失败：{remoteRefreshError}
+            </p>
+          )}
+          {phase === 'source' &&
+            status?.localHead &&
+            status?.remoteHead &&
+            status.localHead !== status.remoteHead && (
+              <details className="m-0 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+                <summary className="cursor-pointer font-semibold">
+                  查看实际比较的提交 SHA
+                </summary>
+                <div className="mt-2 grid gap-1 font-mono text-[11px]">
+                  <span>本地 HEAD：{status.localHead}</span>
+                  <span>远程 {status.remoteBranch || 'main'}：{status.remoteHead}</span>
+                </div>
+              </details>
+            )}
           {phase === 'confirm' && session && (
             <p className="m-0 rounded-lg border border-brand-200 bg-brand-50 px-3 py-2 text-xs leading-5 text-brand-700 dark:border-brand-200 dark:bg-brand-100/30 dark:text-brand-200">
               即将把 {artifacts.length} 项构建产物发布到{' '}

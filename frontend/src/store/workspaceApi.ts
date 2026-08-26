@@ -241,6 +241,9 @@ export type GitWorkspace = {
   remote?: string
   branch?: string
   upstream?: string
+  remoteReachable: boolean
+  remoteSynced: boolean
+  remoteChecked: boolean
   ahead: number
   behind: number
   changes: Array<{ status: string; path: string }>

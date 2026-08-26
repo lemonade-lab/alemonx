@@ -332,6 +332,10 @@ export function RobotGitControl({
   const changeTree = buildChangeTree(changes)
   const syncText = !data?.upstream
     ? '当前分支尚未关联远程分支'
+    : data.remoteChecked && !data.remoteSynced
+      ? `实时远程不一致 · 缓存领先 ${data.ahead} · 落后 ${data.behind}`
+      : data.remoteChecked && data.remoteSynced
+        ? `已与远程实时同步 · 领先 ${data.ahead} · 落后 ${data.behind}`
     : `领先 ${data.ahead} · 落后 ${data.behind}`
   const confirm = pending ? actionCopy[pending.action] : null
 

@@ -25,6 +25,8 @@ type GitStatus struct {
 	Repository         string            `json:"repository,omitempty"`
 	Branch             string            `json:"branch,omitempty"`
 	RemoteBranch       string            `json:"remoteBranch,omitempty"`
+	LocalHead          string            `json:"localHead,omitempty"`
+	RemoteHead         string            `json:"remoteHead,omitempty"`
 	RemoteReachable    bool              `json:"remoteReachable"`
 	RemoteAdvice       string            `json:"remoteAdvice,omitempty"`
 	PackageName        string            `json:"packageName,omitempty"`
@@ -119,6 +121,7 @@ func GitReleaseStatus(root string) (GitStatus, error) {
 		status.Checks = append(status.Checks, "已发现 GitHub 工作流")
 	}
 	status.Branch, _ = gitRun(path, "branch", "--show-current")
+	status.LocalHead, _ = gitRun(path, "rev-parse", "HEAD")
 	// GitPublish creates detached worktrees from the selected commit.  The
 	// caller's working tree is intentionally never read, cleaned, or switched,
 	// so local edits (including generated lib files) must not block a release.
@@ -216,6 +219,7 @@ func inspectRemoteRelease(path string, status *GitStatus) {
 		}
 	}
 	status.RemoteBranch = defaultBranch
+	status.RemoteHead = remoteHeads[defaultBranch]
 	status.Tags = remoteTags
 	if defaultBranch == "" {
 		status.Issues = append(status.Issues, "远程仓库尚未设置默认分支；请先推送一个分支，并在仓库设置中设为默认分支。")
@@ -411,13 +415,21 @@ func GitPublishWithOptions(root, version, sourceBranch, sourceCommit string, art
 	output, err = runPackageManager(sourceWorktree, "install")
 	logs = append(logs, output)
 	if err != nil {
-		return Result{Path: path, Output: strings.Join(logs, "\n")}, buildDependencyError("安装构建依赖失败", strings.Join(logs, "\n"))
+		return Result{Path: path, Output: strings.Join(logs, "\n")}, buildDependencyError("安装构建依赖失败", strings.Join(logs, "\n"), err)
+	}
+	buildKind, buildScript := resolveBuildScript(sourceWorktree)
+	nestedInstall, err := installBuildSubprojects(sourceWorktree, buildScript)
+	if nestedInstall != "" {
+		logs = append(logs, nestedInstall)
+	}
+	if err != nil {
+		return Result{Path: path, Output: strings.Join(logs, "\n")}, buildDependencyError("安装前端构建依赖失败", strings.Join(logs, "\n"), err)
 	}
 	logs = append(logs, "开始构建 "+status.PackageName)
-	output, err = runPackageManager(sourceWorktree, "run", "build")
+	output, err = runResolvedBuild(sourceWorktree, buildKind, buildScript)
 	logs = append(logs, output)
 	if err != nil {
-		return Result{Path: path, Output: strings.Join(logs, "\n")}, buildDependencyError("构建失败", strings.Join(logs, "\n"))
+		return Result{Path: path, Output: strings.Join(logs, "\n")}, buildDependencyError("构建失败", strings.Join(logs, "\n"), err)
 	}
 	if _, err := os.Stat(filepath.Join(sourceWorktree, "lib")); err != nil {
 		return Result{Path: path, Output: strings.Join(logs, "\n")}, errors.New("构建结束后仍未找到 lib 目录，无法创建 Git 发布包")

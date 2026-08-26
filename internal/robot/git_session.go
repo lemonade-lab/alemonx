@@ -80,13 +80,20 @@ func PrepareGitBuild(root, branch, commit string) (GitBuildSession, error) {
 	output += "\n" + install
 	if err != nil {
 		cleanup()
-		return GitBuildSession{}, buildDependencyError("安装构建依赖失败", output)
+		return GitBuildSession{}, buildDependencyError("安装构建依赖失败", output, err)
 	}
-	build, err := runPackageManager(worktree, "run", "build")
+	buildKind, buildScript := resolveBuildScript(worktree)
+	nestedInstall, err := installBuildSubprojects(worktree, buildScript)
+	output += "\n" + nestedInstall
+	if err != nil {
+		cleanup()
+		return GitBuildSession{}, buildDependencyError("安装前端构建依赖失败", output, err)
+	}
+	build, err := runResolvedBuild(worktree, buildKind, buildScript)
 	output += "\n" + build
 	if err != nil {
 		cleanup()
-		return GitBuildSession{}, buildDependencyError("构建失败", output)
+		return GitBuildSession{}, buildDependencyError("构建失败", output, err)
 	}
 	files := scanPublishFiles(worktree, "")
 	if len(files) == 0 {
@@ -105,7 +112,82 @@ func PrepareGitBuild(root, branch, commit string) (GitBuildSession, error) {
 	return session, nil
 }
 
-func buildDependencyError(action, output string) error {
+// installBuildSubprojects installs dependencies for package-manager commands
+// that build a nested project, such as `yarn --cwd frontend build`. A root
+// install does not install this directory when the repository is not a Yarn
+// workspace, which otherwise produces misleading "Cannot find module react"
+// TypeScript errors during the isolated release build.
+func resolveBuildScript(root string) (kind, script string) {
+	pkg, err := readPackage(root)
+	if err != nil {
+		return "lvy", ""
+	}
+	scripts, _ := pkg["scripts"].(map[string]any)
+	if declaration, ok := pkg["alemonjs"].(map[string]any); ok {
+		if value, ok := declaration["build"].(string); ok && strings.TrimSpace(value) != "" {
+			name := strings.TrimSpace(value)
+			if _, exists := scripts[name]; exists {
+				return "script", name
+			}
+		}
+	}
+	if _, exists := scripts["bundle"]; exists {
+		return "script", "bundle"
+	}
+	return "lvy", ""
+}
+
+func runResolvedBuild(root, kind, script string) (string, error) {
+	if kind == "script" {
+		return runPackageManager(root, "run", script)
+	}
+	return run(root, "lvy", "build")
+}
+
+func installBuildSubprojects(root, scriptName string) (string, error) {
+	pkg, err := readPackage(root)
+	if err != nil {
+		return "", err
+	}
+	scripts, _ := pkg["scripts"].(map[string]any)
+	buildScript, _ := scripts[scriptName].(string)
+	if strings.TrimSpace(buildScript) == "" {
+		return "", nil
+	}
+	fields := strings.Fields(buildScript)
+	logs := []string{}
+	seen := map[string]bool{}
+	for index, field := range fields {
+		if field != "--cwd" && field != "--prefix" || index+1 >= len(fields) {
+			continue
+		}
+		relative := strings.Trim(fields[index+1], "'\"")
+		if relative == "" || filepath.IsAbs(relative) || relative == "." {
+			continue
+		}
+		path := filepath.Clean(filepath.Join(root, relative))
+		within, relErr := filepath.Rel(root, path)
+		if relErr != nil || within == ".." || strings.HasPrefix(within, ".."+string(filepath.Separator)) || seen[path] {
+			continue
+		}
+		if _, statErr := os.Stat(filepath.Join(path, "package.json")); statErr != nil {
+			continue
+		}
+		seen[path] = true
+		manager := projectPackageManager(path)
+		logs = append(logs, "安装 "+manager+" 子项目依赖："+within)
+		install, installErr := runPackageManager(path, "install")
+		if install != "" {
+			logs = append(logs, install)
+		}
+		if installErr != nil {
+			return strings.Join(logs, "\n"), installErr
+		}
+	}
+	return strings.Join(logs, "\n"), nil
+}
+
+func buildDependencyError(action, output string, cause error) error {
 	lower := strings.ToLower(output)
 	if strings.Contains(lower, `the engine "node" is incompatible`) || strings.Contains(lower, "engine \"node\" is incompatible") {
 		got := "当前 Node.js 版本"
@@ -116,7 +198,25 @@ func buildDependencyError(action, output string) error {
 		}
 		return errors.New(action + "：" + got + " 不被项目依赖支持。请安装并切换到 Node.js 24 LTS（推荐），或切换到错误信息中要求的版本后重新构建；Node.js 25 等非 LTS 版本常会被依赖明确拒绝。")
 	}
-	return errors.New(action + "：" + strings.TrimSpace(output))
+	detail := strings.TrimSpace(output)
+	if cause != nil && (detail == "" || !strings.Contains(detail, cause.Error())) {
+		if detail != "" {
+			detail += "\n"
+		}
+		detail += cause.Error()
+	}
+	if detail == "" {
+		detail = "未返回错误详情"
+	}
+	// A build can print tens of thousands of bytes (for example webpack or
+	// TypeScript diagnostics). Returning all of it as the HTTP error makes the
+	// 400 response oversized and causes the desktop client to truncate it. The
+	// tail contains the actionable command failure in Yarn/npm output.
+	const maxErrorDetail = 12000
+	if len(detail) > maxErrorDetail {
+		detail = "（前面的构建日志已省略）\n" + detail[len(detail)-maxErrorDetail:]
+	}
+	return errors.New(action + "：" + detail)
 }
 func scanPublishFiles(root, prefix string) []string {
 	entries, _ := os.ReadDir(root)

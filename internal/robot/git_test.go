@@ -1,11 +1,52 @@
 package robot
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestBuildDependencyErrorKeepsProcessFailureDetails(t *testing.T) {
+	err := buildDependencyError("安装构建依赖失败", "Preparing worktree (detached HEAD)\nHEAD is now at abc", errors.New("yarn: executable file not found in $PATH"))
+	if !strings.Contains(err.Error(), "yarn: executable file not found") {
+		t.Fatalf("error lost process failure detail: %v", err)
+	}
+}
+
+func TestBuildDependencyErrorBoundsLargeBuildOutput(t *testing.T) {
+	output := strings.Repeat("verbose build output\n", 2000) + "ERROR: build failed"
+	err := buildDependencyError("构建失败", output, errors.New("exit status 1"))
+	if len(err.Error()) > 12500 {
+		t.Fatalf("build error was not bounded: %d bytes", len(err.Error()))
+	}
+	if !strings.Contains(err.Error(), "ERROR: build failed") {
+		t.Fatalf("build error lost the actionable tail: %v", err)
+	}
+}
+
+func TestResolveBuildScriptUsesDeclaredPrecedence(t *testing.T) {
+	root := t.TempDir()
+	writePackage := func(content string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(root, "package.json"), []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writePackage(`{"scripts":{"bundle":"echo bundle","custom":"echo custom"},"alemonjs":{"build":"custom"}}`)
+	if kind, script := resolveBuildScript(root); kind != "script" || script != "custom" {
+		t.Fatalf("alemonjs.build resolution = %q, %q", kind, script)
+	}
+	writePackage(`{"scripts":{"bundle":"echo bundle"}}`)
+	if kind, script := resolveBuildScript(root); kind != "script" || script != "bundle" {
+		t.Fatalf("bundle resolution = %q, %q", kind, script)
+	}
+	writePackage(`{"scripts":{}}`)
+	if kind, script := resolveBuildScript(root); kind != "lvy" || script != "" {
+		t.Fatalf("lvy resolution = %q, %q", kind, script)
+	}
+}
 
 func TestCloneProgressFromGitOutput(t *testing.T) {
 	tests := []struct {
@@ -116,6 +157,60 @@ func TestGitWorkspaceReportsSourceControlWithoutReleaseChecks(t *testing.T) {
 	}
 	if _, err := GitWorkspaceAction(root, "branch-create", "bad..branch", ""); err == nil {
 		t.Fatal("invalid branch name should be rejected")
+	}
+}
+
+func TestGitWorkspaceDetectsLiveRemoteDivergenceWhenTrackingRefIsStale(t *testing.T) {
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	source := filepath.Join(t.TempDir(), "source")
+	cloneParent := t.TempDir()
+	if err := os.MkdirAll(source, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gitRun(t.TempDir(), "init", "--bare", remote); err != nil {
+		t.Skipf("git is unavailable: %v", err)
+	}
+	for _, command := range [][]string{
+		{"init", "-b", "main"},
+		{"config", "user.name", "Test User"},
+		{"config", "user.email", "test@example.com"},
+	} {
+		if _, err := gitRun(source, command...); err != nil {
+			t.Skipf("git is unavailable: %v", err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(source, "note.txt"), []byte("one\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	for _, command := range [][]string{
+		{"add", "note.txt"}, {"commit", "-m", "initial"},
+		{"remote", "add", "origin", remote}, {"push", "-u", "origin", "main"},
+	} {
+		if _, err := gitRun(source, command...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := gitRun(cloneParent, "clone", remote, "clone"); err != nil {
+		t.Fatal(err)
+	}
+	clone := filepath.Join(cloneParent, "clone")
+	if err := os.WriteFile(filepath.Join(source, "note.txt"), []byte("two\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	for _, command := range [][]string{{"add", "note.txt"}, {"commit", "-m", "remote update"}, {"push"}} {
+		if _, err := gitRun(source, command...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	status, err := GitWorkspaceView(clone, "remote")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.RemoteChecked || !status.RemoteReachable || status.RemoteSynced {
+		t.Fatalf("live remote status = %#v", status)
+	}
+	if status.Ahead != 0 || status.Behind != 0 {
+		t.Fatalf("cached counts should remain unchanged before fetch: %#v", status)
 	}
 }
 

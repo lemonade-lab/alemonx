@@ -11,20 +11,23 @@ import (
 // no package-build or release-branch checks: Git management and publishing are
 // separate user workflows.
 type GitWorkspaceStatus struct {
-	Root           string            `json:"root"`
-	Repository     bool              `json:"repository"`
-	GitRoot        string            `json:"gitRoot,omitempty"`
-	Remote         string            `json:"remote,omitempty"`
-	Branch         string            `json:"branch,omitempty"`
-	Upstream       string            `json:"upstream,omitempty"`
-	Ahead          int               `json:"ahead"`
-	Behind         int               `json:"behind"`
-	Changes        []GitChange       `json:"changes"`
-	Branches       []GitBranch       `json:"branches"`
-	RemoteBranches []GitRemoteBranch `json:"remoteBranches"`
-	Commits        []GitCommit       `json:"commits"`
-	Tags           []GitTag          `json:"tags"`
-	Remotes        []GitRemote       `json:"remotes"`
+	Root            string            `json:"root"`
+	Repository      bool              `json:"repository"`
+	GitRoot         string            `json:"gitRoot,omitempty"`
+	Remote          string            `json:"remote,omitempty"`
+	Branch          string            `json:"branch,omitempty"`
+	Upstream        string            `json:"upstream,omitempty"`
+	RemoteReachable bool              `json:"remoteReachable"`
+	RemoteSynced    bool              `json:"remoteSynced"`
+	RemoteChecked   bool              `json:"remoteChecked"`
+	Ahead           int               `json:"ahead"`
+	Behind          int               `json:"behind"`
+	Changes         []GitChange       `json:"changes"`
+	Branches        []GitBranch       `json:"branches"`
+	RemoteBranches  []GitRemoteBranch `json:"remoteBranches"`
+	Commits         []GitCommit       `json:"commits"`
+	Tags            []GitTag          `json:"tags"`
+	Remotes         []GitRemote       `json:"remotes"`
 }
 
 type GitBranch struct {
@@ -127,6 +130,21 @@ func GitWorkspaceView(root, view string) (GitWorkspaceStatus, error) {
 			status.Upstream = upstream
 			if counts, err := gitRun(path, "rev-list", "--left-right", "--count", "HEAD...@{upstream}"); err == nil {
 				_, _ = fmt.Sscanf(counts, "%d\t%d", &status.Ahead, &status.Behind)
+			}
+		}
+		// Keep Git management consistent with the release preflight. The
+		// tracking ref above is local cache; this query checks the actual remote
+		// head without changing the worktree or remote-tracking refs.
+		if status.Branch != "" && validGitRef(status.Branch) {
+			if output, err := gitRun(path, "ls-remote", "origin", "refs/heads/"+status.Branch); err == nil {
+				fields := strings.Fields(output)
+				if len(fields) >= 2 {
+					status.RemoteReachable = true
+					status.RemoteChecked = true
+					if head, headErr := gitRun(path, "rev-parse", "HEAD"); headErr == nil {
+						status.RemoteSynced = strings.TrimSpace(head) == fields[0]
+					}
+				}
 			}
 		}
 		for _, name := range gitLines(path, "remote") {
