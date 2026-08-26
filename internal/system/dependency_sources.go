@@ -67,7 +67,7 @@ const dependencySourceBackupDir = "dependency-mirrors/backups"
 var dependencySourceConfigRoot = defaultDependencySourceConfigDir
 
 func DependencySourceStatusSnapshot() DependencySourceStatus {
-	status := DependencySourceStatus{OS: runtime.GOOS, Architecture: runtime.GOARCH, Presets: dependencySourcePresets()}
+	status := DependencySourceStatus{OS: runtime.GOOS, Architecture: runtime.GOARCH, Presets: dependencySourcePresets(), Backups: []DependencySourceBackup{}}
 	status.Distribution = readOSReleaseValue("ID")
 	if status.Distribution == "" {
 		status.Distribution = runtime.GOOS

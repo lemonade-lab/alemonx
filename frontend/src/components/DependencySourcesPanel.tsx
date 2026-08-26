@@ -91,9 +91,9 @@ export function DependencySourcesPanel() {
           </div>
         </SettingsCard>
       )}
-      {data.backups.length > 0 && (
+      {(data.backups ?? []).length > 0 && (
         <SettingsCard icon={<Archive className="size-4" />} title="备份与恢复" description="恢复会将对应备份写回 ALemonX 管理文件，不会删除备份。">
-          <div className="grid gap-2">{data.backups.map(backup => <div className="flex flex-wrap items-center justify-between gap-3 text-xs" key={backup.id}><span>{new Date(backup.createdAt).toLocaleString()} · {backupLabel(backup.preset)}</span><span className="flex gap-2"><Button variant="secondary" loading={restoring} onClick={() => void run(() => restore({ id: backup.id }).unwrap(), '已恢复依赖源备份。')}><RotateCcw className="size-3.5" />恢复</Button><Button variant="secondary" onClick={() => setDeletingID(backup.id)}><Trash2 className="size-3.5" />删除</Button></span></div>)}</div>
+          <div className="grid gap-2">{(data.backups ?? []).map(backup => <div className="flex flex-wrap items-center justify-between gap-3 text-xs" key={backup.id}><span>{new Date(backup.createdAt).toLocaleString()} · {backupLabel(backup.preset)}</span><span className="flex gap-2"><Button variant="secondary" loading={restoring} onClick={() => void run(() => restore({ id: backup.id }).unwrap(), '已恢复依赖源备份。')}><RotateCcw className="size-3.5" />恢复</Button><Button variant="secondary" onClick={() => setDeletingID(backup.id)}><Trash2 className="size-3.5" />删除</Button></span></div>)}</div>
         </SettingsCard>
       )}
       {task && <SettingsMessage tone="info">{task.progress}% · {task.output || '正在执行依赖源操作…'}</SettingsMessage>}

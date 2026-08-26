@@ -1,6 +1,7 @@
 package system
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -74,5 +75,19 @@ func TestDependencySourceBackupIntegrityAndRetention(t *testing.T) {
 		if err != nil || info.Mode().Perm() != 0o600 {
 			t.Fatalf("backup permission = %v, err = %v", info.Mode().Perm(), err)
 		}
+	}
+}
+
+func TestDependencySourceStatusSerializesEmptyBackupsAsArray(t *testing.T) {
+	previous := dependencySourceConfigRoot
+	configDir := t.TempDir()
+	dependencySourceConfigRoot = func() string { return configDir }
+	t.Cleanup(func() { dependencySourceConfigRoot = previous })
+	data, err := json.Marshal(DependencySourceStatusSnapshot())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"backups":[]`) {
+		t.Fatalf("empty backups must be an array: %s", data)
 	}
 }
