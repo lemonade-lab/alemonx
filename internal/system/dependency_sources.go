@@ -30,6 +30,7 @@ type DependencySourceStatus struct {
 	Reason       string                   `json:"reason,omitempty"`
 	Target       string                   `json:"target,omitempty"`
 	ActivePreset string                   `json:"activePreset,omitempty"`
+	Managed      bool                     `json:"managed"`
 	Presets      []DependencySourcePreset `json:"presets"`
 	Backups      []DependencySourceBackup `json:"backups"`
 }
@@ -75,8 +76,17 @@ func DependencySourceStatusSnapshot() DependencySourceStatus {
 	status.Manager, _ = hostPackageManager()
 	status.Target = dependencySourceTarget(status.Manager)
 	status.Supported = (status.Manager == "apt-get" && isAPTDistribution(status.Distribution)) || ((status.Manager == "dnf" || status.Manager == "yum") && isCentOSStream(status.Distribution, readOSReleaseValue("VARIANT_ID"), readOSReleaseValue("NAME"), readOSReleaseValue("PRETTY_NAME")))
-	status.Writable = status.Supported && status.Target != ""
+	// Adding enabled DNF/YUM repositories alongside a host's own BaseOS and
+	// AppStream repositories can create mixed package sets (notably cockpit
+	// components). Do not offer automatic RPM source application until the
+	// full replacement transaction is implemented and verified per release.
+	status.Writable = status.Manager == "apt-get" && status.Supported && status.Target != ""
+	if status.Supported && (status.Manager == "dnf" || status.Manager == "yum") {
+		status.Reason = "DNF/YUM 镜像自动应用已暂停：附加仓库可能与系统现有 BaseOS/AppStream 产生包版本冲突。可保留检测，或移除已有 ALemonX 受管源后使用系统原有仓库。"
+	}
 	status.ActivePreset = activeDependencySourcePreset(status.Target)
+	_, managedErr := os.Stat(status.Target)
+	status.Managed = managedErr == nil
 	if !status.Supported {
 		status.Reason = "当前包管理器暂未提供可安全回滚的自动改源方案，ALemonX 不会直接修改系统源。"
 	}
@@ -394,6 +404,29 @@ func DeleteDependencySourceBackup(id string) (DependencySourceStatus, error) {
 	return DependencySourceStatusSnapshot(), nil
 }
 
+// RemoveManagedDependencySource removes only the fixed ALemonX-owned source
+// file. It never changes any distribution-owned repository file.
+func RemoveManagedDependencySource() (DependencySourceStatus, error) {
+	status := DependencySourceStatusSnapshot()
+	if status.Target == "" || !validDependencySourceTarget(status.Target) {
+		return status, errors.New("当前系统没有可移除的 ALemonX 受管依赖源")
+	}
+	previous, err := readDependencySource(status.Target)
+	if err != nil {
+		return status, err
+	}
+	if previous == "" && !status.Managed {
+		return status, errors.New("当前系统没有已启用的 ALemonX 受管依赖源")
+	}
+	if _, err := saveDependencySourceBackup(status.Target, "remove-managed-source", previous); err != nil {
+		return status, err
+	}
+	if _, err := runDependencySourceOperation(dependencySourceOperation{Action: "delete", Target: status.Target}); err != nil {
+		return status, err
+	}
+	return DependencySourceStatusSnapshot(), nil
+}
+
 func restoreDependencySourceContent(target, content string) error {
 	action := "write"
 	if content == "" {
@@ -406,8 +439,13 @@ func restoreDependencySourceContent(target, content string) error {
 func refreshDependencySource(ctx context.Context, manager string) error {
 	args := map[string][]string{
 		"apt-get": {"update"},
-		"dnf":     {"makecache"},
-		"yum":     {"makecache"},
+		// Do not refresh every system repository here. RHEL-compatible hosts
+		// can retain a subscription-manager repository whose registration is
+		// unrelated to the ALemonX-managed mirror. Restrict validation to the
+		// two repositories we just wrote so it cannot block on or fail because
+		// of an existing third-party/subscription source.
+		"dnf": {"makecache", "--disablerepo=*", "--enablerepo=alemonx-baseos,alemonx-appstream"},
+		"yum": {"makecache", "--disablerepo=*", "--enablerepo=alemonx-baseos,alemonx-appstream"},
 	}[manager]
 	if len(args) == 0 {
 		return errors.New("当前包管理器暂未提供安全的索引刷新命令")
@@ -421,7 +459,7 @@ func refreshDependencySource(ctx context.Context, manager string) error {
 	return nil
 }
 
-func runDependencySourceCommand(ctx context.Context, program string, args []string) (string, error) {
+var runDependencySourceCommand = func(ctx context.Context, program string, args []string) (string, error) {
 	if os.Geteuid() == 0 {
 		command := exec.CommandContext(ctx, program, args...)
 		output, err := command.CombinedOutput()

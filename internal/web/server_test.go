@@ -107,6 +107,21 @@ func TestSystemNetworkSettingsSaveWithoutLeakingProxyCredentials(t *testing.T) {
 	}
 }
 
+func TestRequireSuperAdminAllowsWhenAuthenticationDisabled(t *testing.T) {
+	manager, err := access.NewAt(filepath.Join(t.TempDir(), "auth.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &server{auth: manager}
+	recorder := httptest.NewRecorder()
+	if !s.requireSuperAdmin(recorder, httptest.NewRequest(http.MethodPost, "/api/v1/system/dependency-sources", nil)) {
+		t.Fatalf("disabled authentication must not require a super administrator: %d %s", recorder.Code, recorder.Body.String())
+	}
+	if recorder.Code != http.StatusOK || recorder.Body.Len() != 0 {
+		t.Fatalf("unexpected disabled-auth response: %d %s", recorder.Code, recorder.Body.String())
+	}
+}
+
 func TestGoalsApplyOfficialDownloadMirror(t *testing.T) {
 	manager, err := systemnetwork.NewAt(filepath.Join(t.TempDir(), "network.json"))
 	if err != nil {

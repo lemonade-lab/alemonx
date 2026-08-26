@@ -81,6 +81,10 @@ alx --host 127.0.0.1 --port 17390
 
 由于默认就监听所有网卡，请务必先开启身份认证（`alx auth enable`），并用防火墙限制可访问的 IP；公网直接暴露且未认证的工作台等同于任意控制你的机器人。生产部署还建议设置 `ALX_DEPLOYMENT=production`：SQLite 与本地认证未配置时都仅提示，不会阻止启动（可在引导页创建管理员账户）。
 
+### 认证关闭时的权限语义
+
+本地认证未开启时，工作台按“本机信任模式”运行：不会要求登录、角色或超级管理员身份，系统环境安装、依赖源管理、插件提权与账户管理等本机操作可直接执行。认证一旦开启，所有管理 API 才按账户权限校验；需要超级管理员的操作会明确要求已登录的超级管理员。将工作台暴露到公网前必须先开启认证并配置防火墙。
+
 `alx install` 也支持 `--host`，安装的后台服务会按同样的地址监听；`--redis-port` 与 `--redis-off` 会持久化到 Redis 配置（`alx-redis.json`），设置页可随时重新调整。
 
 `alx logs` 读取托管服务日志：macOS 读取 `~/Library/Logs/alx.log`，Linux 读取 `journalctl --user -u alx.service`，Windows 读取 `%LOCALAPPDATA%\\alx\\alx.log`。前台直接运行时日志只在启动它的终端内；FreeBSD 请使用其系统服务管理器的日志工具。

@@ -1397,8 +1397,18 @@ func (s *server) setAuthCookie(w http.ResponseWriter, token string) {
 }
 
 func (s *server) requireSuperAdmin(w http.ResponseWriter, r *http.Request) bool {
+	if s.auth == nil {
+		return true
+	}
 	status, err := s.auth.Status(s.authToken(r))
-	if err != nil || !status.Authenticated || !status.SuperAdmin {
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "无法读取认证状态。")
+		return false
+	}
+	if !status.Enabled {
+		return true
+	}
+	if !status.Authenticated || !status.SuperAdmin {
 		writeError(w, http.StatusForbidden, "仅超级管理员可以管理账户与角色。")
 		return false
 	}
@@ -3505,6 +3515,7 @@ func (s *server) dependencySourcesHandler(w http.ResponseWriter, r *http.Request
 		case "apply":
 		case "restore":
 		case "delete-backup":
+		case "remove-managed-source":
 		case "test":
 			ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
 			defer cancel()
@@ -3572,6 +3583,9 @@ func (s *server) runDependencySourceOperation(created operationTask, action, pre
 	case "delete-backup":
 		s.updateOperation(created.ID, 50, "正在删除依赖源备份…", "", false)
 		_, err = system.DeleteDependencySourceBackup(backupID)
+	case "remove-managed-source":
+		s.updateOperation(created.ID, 50, "正在移除 ALemonX 受管依赖源…", "", false)
+		_, err = system.RemoveManagedDependencySource()
 	}
 	if err != nil {
 		s.updateOperation(created.ID, 100, "依赖源操作未完成；如已写入，系统已尝试自动回滚。", err.Error(), true)
@@ -3580,6 +3594,8 @@ func (s *server) runDependencySourceOperation(created operationTask, action, pre
 	completed := "依赖源已写入、索引已刷新并完成验证。"
 	if action == "delete-backup" {
 		completed = "依赖源备份已删除。"
+	} else if action == "remove-managed-source" {
+		completed = "ALemonX 受管依赖源已移除，系统将继续使用原有软件源。"
 	}
 	s.updateOperation(created.ID, 100, completed, "", true)
 }

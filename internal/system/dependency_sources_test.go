@@ -1,6 +1,7 @@
 package system
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -89,5 +90,22 @@ func TestDependencySourceStatusSerializesEmptyBackupsAsArray(t *testing.T) {
 	}
 	if !strings.Contains(string(data), `"backups":[]`) {
 		t.Fatalf("empty backups must be an array: %s", data)
+	}
+}
+
+func TestDNFDependencySourceRefreshOnlyUsesManagedRepositories(t *testing.T) {
+	previous := runDependencySourceCommand
+	var program string
+	var args []string
+	runDependencySourceCommand = func(_ context.Context, nextProgram string, nextArgs []string) (string, error) {
+		program, args = nextProgram, append([]string(nil), nextArgs...)
+		return "", nil
+	}
+	t.Cleanup(func() { runDependencySourceCommand = previous })
+	if err := refreshDependencySource(context.Background(), "dnf"); err != nil {
+		t.Fatal(err)
+	}
+	if program != "dnf" || !strings.Contains(strings.Join(args, " "), "--disablerepo=*") || !strings.Contains(strings.Join(args, " "), "--enablerepo=alemonx-baseos,alemonx-appstream") {
+		t.Fatalf("dnf refresh must be limited to managed repositories: %q %#v", program, args)
 	}
 }

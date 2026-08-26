@@ -183,6 +183,7 @@ export type DependencySourceStatus = {
   reason?: string
   target?: string
   activePreset?: string
+  managed: boolean
   presets: DependencySourcePreset[]
   backups: DependencySourceBackup[]
 }
@@ -650,6 +651,10 @@ export const workspaceApi = createApi({
       query: body => ({ url: 'system/dependency-sources', method: 'POST', body: { ...body, action: 'delete-backup' } }),
       invalidatesTags: ['DependencySources']
     }),
+    removeManagedDependencySource: build.mutation<DependencySourceTask, void>({
+      query: () => ({ url: 'system/dependency-sources', method: 'POST', body: { action: 'remove-managed-source' } }),
+      invalidatesTags: ['DependencySources']
+    }),
     testDependencySource: build.mutation<DependencySourceCheck, { preset: string }>({
       query: body => ({ url: 'system/dependency-sources', method: 'POST', body: { ...body, action: 'test' } })
     }),
@@ -1113,6 +1118,7 @@ export const {
   useApplyDependencySourceMutation,
   useRestoreDependencySourceMutation,
   useDeleteDependencySourceBackupMutation,
+  useRemoveManagedDependencySourceMutation,
   useTestDependencySourceMutation,
   useSystemRedisQuery,
   useSaveSystemNetworkMutation,

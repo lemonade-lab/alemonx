@@ -1,10 +1,11 @@
-import { Archive, CheckCircle2, Database, RotateCcw, Save, Trash2, Wifi } from 'lucide-react'
+import { AlertTriangle, Archive, CheckCircle2, Database, RotateCcw, Save, Trash2, Wifi } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import {
   useApplyDependencySourceMutation,
   useDeleteDependencySourceBackupMutation,
   useDependencySourceTaskQuery,
   useDependencySourcesQuery,
+  useRemoveManagedDependencySourceMutation,
   useRestoreDependencySourceMutation,
   useTestDependencySourceMutation
 } from '../store/workspaceApi'
@@ -27,11 +28,13 @@ export function DependencySourcesPanel() {
   const [apply, { isLoading: applying }] = useApplyDependencySourceMutation()
   const [restore, { isLoading: restoring }] = useRestoreDependencySourceMutation()
   const [deleteBackup, { isLoading: deleting }] = useDeleteDependencySourceBackupMutation()
+  const [removeManagedSource, { isLoading: removing }] = useRemoveManagedDependencySourceMutation()
   const [test, { isLoading: testing }] = useTestDependencySourceMutation()
   const [message, setMessage] = useState('')
   const [success, setSuccess] = useState(false)
   const [taskID, setTaskID] = useState('')
   const [deletingID, setDeletingID] = useState('')
+  const [removeConfirm, setRemoveConfirm] = useState(false)
   const { data: task } = useDependencySourceTaskQuery(taskID, {
     skip: !taskID,
     pollingInterval: taskID ? 1000 : 0
@@ -91,6 +94,11 @@ export function DependencySourcesPanel() {
           </div>
         </SettingsCard>
       )}
+      {data.managed && !data.writable && (
+        <SettingsCard icon={<AlertTriangle className="size-4" />} title="移除受管源" description="当前系统的软件源存在兼容风险。移除只会删除 ALemonX 创建的固定文件，不会修改系统原有仓库。">
+          <Button variant="danger" loading={removing} loadingLabel="移除中…" onClick={() => setRemoveConfirm(true)}><Trash2 className="size-3.5" />移除 ALemonX 受管源</Button>
+        </SettingsCard>
+      )}
       {(data.backups ?? []).length > 0 && (
         <SettingsCard icon={<Archive className="size-4" />} title="备份与恢复" description="恢复会将对应备份写回 ALemonX 管理文件，不会删除备份。">
           <div className="grid gap-2">{(data.backups ?? []).map(backup => <div className="flex flex-wrap items-center justify-between gap-3 text-xs" key={backup.id}><span>{new Date(backup.createdAt).toLocaleString()} · {backupLabel(backup.preset)}</span><span className="flex gap-2"><Button variant="secondary" loading={restoring} onClick={() => void run(() => restore({ id: backup.id }).unwrap(), '已恢复依赖源备份。')}><RotateCcw className="size-3.5" />恢复</Button><Button variant="secondary" onClick={() => setDeletingID(backup.id)}><Trash2 className="size-3.5" />删除</Button></span></div>)}</div>
@@ -99,6 +107,7 @@ export function DependencySourcesPanel() {
       {task && <SettingsMessage tone="info">{task.progress}% · {task.output || '正在执行依赖源操作…'}</SettingsMessage>}
       {message && <SettingsMessage tone={success ? 'success' : 'error'}>{success && <CheckCircle2 className="mr-1 inline size-4" />}{message}</SettingsMessage>}
       <ConfirmDialog open={Boolean(deletingID)} title="删除依赖源备份" message="删除后无法恢复该备份。确认继续吗？" destructive busy={deleting} onCancel={() => setDeletingID('')} onConfirm={() => { const id = deletingID; setDeletingID(''); void run(() => deleteBackup({ id }).unwrap(), '备份已删除。') }} />
+      <ConfirmDialog open={removeConfirm} title="移除 ALemonX 受管依赖源" message="这会删除 ALemonX 创建的依赖源文件，系统将继续使用原有软件源。不会修改系统原有仓库。" destructive busy={removing} onCancel={() => setRemoveConfirm(false)} onConfirm={() => { setRemoveConfirm(false); void run(() => removeManagedSource().unwrap(), '已移除 ALemonX 受管依赖源。') }} />
     </SettingsPage>
   )
 }

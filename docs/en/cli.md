@@ -85,6 +85,10 @@ alx --host 127.0.0.1 --port 17390
 
 Because it listens on all interfaces by default, enable local authentication first (`alx auth enable`) and restrict reachable IPs with a firewall; an unauthenticated workbench exposed to the public internet is equivalent to handing out control of your robots. For production deployments, also set `ALX_DEPLOYMENT=production`: missing SQLite or local authentication only prints reminders and does not block startup (an administrator account can be created from the setup guide).
 
+### Authorization semantics when authentication is disabled
+
+When local authentication is disabled, the workbench operates in trusted-local mode: it does not require login, roles, or a super administrator. Local actions such as environment installation, dependency-source management, plugin elevation, and account management are available directly. Once authentication is enabled, management APIs enforce account permissions; super-admin actions require an authenticated super administrator. Always enable authentication and configure a firewall before exposing the workbench publicly.
+
 `alx install` also accepts `--host`; the installed background service listens on the same address. `--redis-port` and `--redis-off` are persisted to the Redis configuration (`alx-redis.json`) and can be changed anytime from the settings page.
 
 `alx logs` reads the managed service logs: `~/Library/Logs/alx.log` on macOS, `journalctl --user -u alx.service` on Linux, and `%LOCALAPPDATA%\alx\alx.log` on Windows. When running in the foreground, logs only appear in the terminal that started it; on FreeBSD use its system service manager log tool.
