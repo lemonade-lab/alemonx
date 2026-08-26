@@ -371,6 +371,21 @@ func waitForSetupOperation(t *testing.T, s *server) operationTask {
 	return operationTask{}
 }
 
+func TestSettleRecoveredDependencySourceOperations(t *testing.T) {
+	s := &server{events: newRobotEventHub(), operations: []operationTask{
+		{ID: "dependency-source-active", Action: "dependency-source-apply", Status: "running"},
+		{ID: "dependency-source-done", Action: "dependency-source-apply", Status: "completed"},
+		{ID: "setup-active", Action: "setup:fixture:install", Status: "running"},
+	}}
+	s.settleRecoveredDependencySourceOperations()
+	if got := s.operations[0]; got.Status != "failed" || !strings.Contains(got.Error, "已中止") || got.FinishedAt == nil {
+		t.Fatalf("dependency operation was not settled: %#v", got)
+	}
+	if s.operations[1].Status != "completed" || s.operations[2].Status != "running" {
+		t.Fatalf("unrelated operation state changed: %#v", s.operations)
+	}
+}
+
 func TestAppendOperationStepKeepsBoundedDistinctTimeline(t *testing.T) {
 	task := operationTask{}
 	appendOperationStep(&task, 20, "下载官方运行时")

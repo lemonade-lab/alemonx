@@ -1,6 +1,6 @@
-# ALemonX - Local Workbench for Robots
+# ALemonX - Workbench for Robots
 
-> Create, run, manage, and extend AlemonJS robots from a local workbench, and let an AI Agent help maintain projects with your confirmation.
+> Create, run, manage, and extend AlemonJS robots from a workbench, and let an AI Agent help maintain projects with your confirmation.
 
 English · [中文](README.md)
 

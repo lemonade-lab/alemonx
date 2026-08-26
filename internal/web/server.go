@@ -3577,7 +3577,11 @@ func (s *server) runDependencySourceOperation(created operationTask, action, pre
 		s.updateOperation(created.ID, 100, "依赖源操作未完成；如已写入，系统已尝试自动回滚。", err.Error(), true)
 		return
 	}
-	s.updateOperation(created.ID, 100, "依赖源已写入、索引已刷新并完成验证。", "", true)
+	completed := "依赖源已写入、索引已刷新并完成验证。"
+	if action == "delete-backup" {
+		completed = "依赖源备份已删除。"
+	}
+	s.updateOperation(created.ID, 100, completed, "", true)
 }
 
 func (s *server) pluginDownloadBrokerHandler(w http.ResponseWriter, r *http.Request) {
@@ -5872,6 +5876,7 @@ func (s *server) completePendingStopTasks(root string, finished time.Time) {
 func (s *server) reconcileRecoveredOperations() {
 	s.settleUnmanagedLocalOperations("", "工作台重启后，本机运行已结束。")
 	s.settleRecoveredSetupPluginOperations()
+	s.settleRecoveredDependencySourceOperations()
 }
 
 // settleRecoveredSetupPluginOperations marks interrupted setup-plugin runs as
@@ -5885,6 +5890,29 @@ func (s *server) settleRecoveredSetupPluginOperations() {
 	for index := range s.operations {
 		item := &s.operations[index]
 		if item.Status != "running" || !strings.HasPrefix(item.Action, "setup:") {
+			continue
+		}
+		item.Status = "failed"
+		item.Error = message
+		item.FinishedAt = &finished
+		item.Output = strings.TrimSpace(item.Output+"\n"+message) + "\n"
+		updated = append(updated, *item)
+	}
+	s.mu.Unlock()
+	for index := range updated {
+		snapshot := updated[index]
+		s.publishRobotEvent(robotEvent{Type: "task", TaskID: snapshot.ID, Task: &snapshot})
+	}
+}
+
+func (s *server) settleRecoveredDependencySourceOperations() {
+	const message = "工作台重启，依赖源任务已中止；请重新检查当前源与包管理器索引。"
+	finished := time.Now()
+	s.mu.Lock()
+	updated := make([]operationTask, 0, 1)
+	for index := range s.operations {
+		item := &s.operations[index]
+		if item.Status != "running" || !strings.HasPrefix(item.Action, "dependency-source-") {
 			continue
 		}
 		item.Status = "failed"

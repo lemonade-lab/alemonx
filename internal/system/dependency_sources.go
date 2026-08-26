@@ -64,6 +64,8 @@ type dependencySourceOperation struct {
 
 const dependencySourceBackupDir = "dependency-mirrors/backups"
 
+var dependencySourceConfigRoot = defaultDependencySourceConfigDir
+
 func DependencySourceStatusSnapshot() DependencySourceStatus {
 	status := DependencySourceStatus{OS: runtime.GOOS, Architecture: runtime.GOARCH, Presets: dependencySourcePresets()}
 	status.Distribution = readOSReleaseValue("ID")
@@ -72,7 +74,7 @@ func DependencySourceStatusSnapshot() DependencySourceStatus {
 	}
 	status.Manager, _ = hostPackageManager()
 	status.Target = dependencySourceTarget(status.Manager)
-	status.Supported = (status.Manager == "apt-get" && isAPTDistribution(status.Distribution)) || ((status.Manager == "dnf" || status.Manager == "yum") && isCentOSStream(status.Distribution, readOSReleaseValue("VARIANT_ID")))
+	status.Supported = (status.Manager == "apt-get" && isAPTDistribution(status.Distribution)) || ((status.Manager == "dnf" || status.Manager == "yum") && isCentOSStream(status.Distribution, readOSReleaseValue("VARIANT_ID"), readOSReleaseValue("NAME"), readOSReleaseValue("PRETTY_NAME")))
 	status.Writable = status.Supported && status.Target != ""
 	status.ActivePreset = activeDependencySourcePreset(status.Target)
 	if !status.Supported {
@@ -280,8 +282,15 @@ func isAPTDistribution(distribution string) bool {
 	return distribution == "debian" || distribution == "ubuntu"
 }
 
-func isCentOSStream(distribution, variant string) bool {
-	return strings.EqualFold(strings.TrimSpace(distribution), "centos") && strings.EqualFold(strings.TrimSpace(variant), "stream")
+func isCentOSStream(distribution, variant, name, prettyName string) bool {
+	if !strings.EqualFold(strings.TrimSpace(distribution), "centos") {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(variant), "stream") {
+		return true
+	}
+	identity := strings.ToLower(strings.TrimSpace(name + " " + prettyName))
+	return strings.Contains(identity, "centos stream")
 }
 
 func aptContent(preset, distro, codename string) string {
@@ -324,17 +333,42 @@ func dependencySourceCheckURL(status DependencySourceStatus, preset string) (str
 }
 
 func saveDependencySourceBackup(target, preset, content string) (string, error) {
-	backupID := time.Now().UTC().Format("20060102T150405.000000000Z")
-	backupPath := filepath.Join(dependencySourceConfigDir(), dependencySourceBackupDir, backupID+".json")
-	if err := os.MkdirAll(filepath.Dir(backupPath), 0o700); err != nil {
+	directory := filepath.Join(dependencySourceConfigDir(), dependencySourceBackupDir)
+	if err := os.MkdirAll(directory, 0o700); err != nil {
 		return "", err
 	}
-	backup := map[string]any{"schema": 2, "id": backupID, "createdAt": time.Now().UTC().Format(time.RFC3339), "preset": preset, "target": target, "checksum": dependencySourceChecksum(content), "content": content}
+	baseID := time.Now().UTC().Format("20060102T150405.000000000Z")
+	backupID, backupPath := baseID, filepath.Join(directory, baseID+".json")
+	for index := 1; ; index++ {
+		if _, err := os.Stat(backupPath); os.IsNotExist(err) {
+			break
+		} else if err != nil {
+			return "", err
+		}
+		backupID = fmt.Sprintf("%s-%d", baseID, index)
+		backupPath = filepath.Join(directory, backupID+".json")
+	}
+	backup := map[string]any{"schema": 2, "id": backupID, "createdAt": time.Now().UTC().Format(time.RFC3339Nano), "preset": preset, "target": target, "checksum": dependencySourceChecksum(content), "content": content}
 	data, err := json.MarshalIndent(backup, "", "  ")
 	if err != nil {
 		return "", err
 	}
-	if err := os.WriteFile(backupPath, data, 0o600); err != nil {
+	temporary, err := os.CreateTemp(directory, ".alemonx-backup-*")
+	if err != nil {
+		return "", err
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	if _, err := temporary.Write(data); err == nil {
+		err = temporary.Chmod(0o600)
+	}
+	if closeErr := temporary.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return "", err
+	}
+	if err := os.Rename(temporaryPath, backupPath); err != nil {
 		return "", err
 	}
 	pruneDependencySourceBackups(target, 30)
@@ -490,6 +524,10 @@ func validDependencySourceTarget(target string) bool {
 }
 
 func dependencySourceConfigDir() string {
+	return dependencySourceConfigRoot()
+}
+
+func defaultDependencySourceConfigDir() string {
 	dir, err := os.UserConfigDir()
 	if err != nil {
 		return "."
@@ -524,6 +562,9 @@ func pruneDependencySourceBackups(target string, keep int) {
 		}
 	}
 	sort.Slice(filtered, func(i, j int) bool { return filtered[i].CreatedAt > filtered[j].CreatedAt })
+	if len(filtered) <= keep {
+		return
+	}
 	for _, backup := range filtered[keep:] {
 		if strings.ContainsAny(backup.ID, `/\\`) || backup.ID == "" {
 			continue

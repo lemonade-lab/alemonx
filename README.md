@@ -1,6 +1,6 @@
-# ALemonX · 机器人的本地工作台
+# ALemonX · 机器人的工作台
 
-> 在一个本地工作台中创建、运行、管理和扩展 AlemonJS 机器人；也可以让 AI Agent 在你的确认下协助维护项目。
+> 在工作台中创建、运行、管理和扩展 AlemonJS 机器人；也可以让 AI Agent 在你的确认下协助维护项目。
 
 [English](README.en.md) · 中文
 
