@@ -58,3 +58,5 @@ pnpm-lock.yaml
 /.openai
 /.agent
 /*-preview.html
+
+/alemonx

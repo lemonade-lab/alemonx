@@ -134,15 +134,24 @@ func GitWorkspaceView(root, view string) (GitWorkspaceStatus, error) {
 		}
 		// Keep Git management consistent with the release preflight. The
 		// tracking ref above is local cache; this query checks the actual remote
-		// head without changing the worktree or remote-tracking refs.
-		if status.Branch != "" && validGitRef(status.Branch) {
-			if output, err := gitRun(path, "ls-remote", "origin", "refs/heads/"+status.Branch); err == nil {
-				fields := strings.Fields(output)
-				if len(fields) >= 2 {
-					status.RemoteReachable = true
-					status.RemoteChecked = true
+		// without changing the worktree or remote-tracking refs. Reachability is
+		// intentionally independent from whether the current local branch exists
+		// on that remote: a clone may be on a stale/renamed branch while origin is
+		// still perfectly reachable.
+		if output, err := gitRun(path, "ls-remote", "origin"); err == nil {
+			status.RemoteReachable = true
+			status.RemoteChecked = true
+			remoteHeads := map[string]string{}
+			for _, line := range strings.Split(output, "\n") {
+				fields := strings.Fields(line)
+				if len(fields) >= 2 && strings.HasPrefix(fields[1], "refs/heads/") {
+					remoteHeads[strings.TrimPrefix(fields[1], "refs/heads/")] = fields[0]
+				}
+			}
+			if status.Branch != "" && validGitRef(status.Branch) {
+				if remoteHead, exists := remoteHeads[status.Branch]; exists {
 					if head, headErr := gitRun(path, "rev-parse", "HEAD"); headErr == nil {
-						status.RemoteSynced = strings.TrimSpace(head) == fields[0]
+						status.RemoteSynced = strings.TrimSpace(head) == remoteHead
 					}
 				}
 			}
