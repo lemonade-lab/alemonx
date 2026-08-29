@@ -1482,7 +1482,6 @@ func (m Manager) Run(root, action, message, packageName, version, tag, token str
 		return Result{}, err
 	}
 	dependencyOutput := ""
-	compatibilityOutput := ""
 	if map[string]bool{
 		"build": true, "dev": true, "app": true, "pm2": true,
 		"pm2-restart": true, "pm2-reload": true,
@@ -1491,13 +1490,6 @@ func (m Manager) Run(root, action, message, packageName, version, tag, token str
 		dependencyOutput, dependencyErr = m.EnsureRuntimeDependencies(root)
 		if dependencyErr != nil {
 			return Result{Path: root, Output: dependencyOutput}, dependencyErr
-		}
-		changed, compatibilityErr := EnsureRuntimeCompatibility(root)
-		if compatibilityErr != nil {
-			return Result{Path: root, Output: dependencyOutput}, compatibilityErr
-		}
-		if len(changed) > 0 {
-			compatibilityOutput = "已应用运行兼容修复：" + strings.Join(changed, "、")
 		}
 	}
 	// A robot directory may have been moved since the last PM2 start. The PM2
@@ -1678,7 +1670,7 @@ func (m Manager) Run(root, action, message, packageName, version, tag, token str
 		}
 		output = strings.TrimSpace(output + "\nPM2 进程清单已保存；请在服务器上完成一次 PM2 startup 配置以支持主机重启恢复。")
 	}
-	return Result{Path: root, Output: strings.TrimSpace(dependencyOutput + "\n" + compatibilityOutput + "\n" + output)}, runErr
+	return Result{Path: root, Output: strings.TrimSpace(dependencyOutput + "\n" + output)}, runErr
 }
 
 func (m Manager) syncLocalPackageOperation(root string, operation func() (Result, error)) (Result, error) {
@@ -1814,7 +1806,9 @@ func file(root, name string) (string, error) {
 	return filepath.Join(root, name), nil
 }
 
-// fixLegacyLvyScript upgrades templates created before lvy was called directly.
+// fixLegacyLvyScript migrates old project templates in the robot project's
+// own package.json. It deliberately never traverses node_modules or edits a
+// dependency manifest.
 func fixLegacyLvyScript(root string) error {
 	path := filepath.Join(root, "package.json")
 	data, err := os.ReadFile(path)
@@ -1833,6 +1827,7 @@ func fixLegacyLvyScript(root string) error {
 	}
 	return nil
 }
+
 func run(root, name string, args ...string) (string, error) {
 	return runWithEnv(root, nil, name, args...)
 }

@@ -5063,15 +5063,6 @@ func (s *server) robotTasksHandler(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, dependencyErr.Error())
 			return
 		}
-		// qq-bot Actions are served by the platform adapter. Current AlemonJS
-		// releases run that adapter through IPC, while their CBP server only
-		// forwards full-receive browser Actions to WebSocket platform clients.
-		// Apply the guarded compatibility bridge before booting the robot so the
-		// running adapter can actually receive and answer tool requests.
-		if _, patchErr := robot.EnsureRuntimeCompatibility(input.Root); patchErr != nil {
-			writeError(w, http.StatusBadRequest, patchErr.Error())
-			return
-		}
 		if s.developmentRunning(input.Root) {
 			writeError(w, http.StatusConflict, "当前目录已有前台或开发进程正在运行；请先停止后再启动。")
 			return
@@ -6355,13 +6346,6 @@ func (s *server) robotLiveHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if root == "" {
 		writeError(w, http.StatusBadRequest, "请选择机器人目录。")
-		return
-	}
-	// Existing robot processes were started before the workbench feature was
-	// added. Make the bridge available here too; they need one restart to load
-	// it, but new starts are patched before their platform child is forked.
-	if _, err := robot.EnsureCBPIPCActionBridge(root); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	info, err := s.robots.TestPort(root)

@@ -147,7 +147,7 @@ var pm2DiagnosticRules = []pm2DiagnosticRule{
 		severity:   "warning",
 		title:      "合并转发兼容方法缺失",
 		summary:    "Yunzai 插件访问 __forwardNodes.toJSON 时触发兼容警告，合并转发可能退化。",
-		suggestion: "重启机器人以应用 AlemonX 的 Yunzai 合并转发兼容补丁。",
+		suggestion: "请升级相关 AlemonJS/Yunzai 依赖到相互兼容的版本；ALemonX 不会修改 node_modules 中的依赖源码。",
 		match: func(text string) bool {
 			return strings.Contains(text, "__forwardNodes.toJSON") && strings.Contains(text, "缺失")
 		},
