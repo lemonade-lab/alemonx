@@ -1173,6 +1173,12 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 const authCookieName = "alx_session"
 
 func (s *server) authToken(r *http.Request) string {
+	if authorization := strings.TrimSpace(r.Header.Get("Authorization")); authorization != "" {
+		parts := strings.Fields(authorization)
+		if len(parts) == 2 && strings.EqualFold(parts[0], "Bearer") && parts[1] != "" {
+			return parts[1]
+		}
+	}
 	cookie, err := r.Cookie(authCookieName)
 	if err != nil {
 		return ""
@@ -1215,7 +1221,7 @@ func (s *server) authSetupHandler(w http.ResponseWriter, r *http.Request) {
 	// Operations roles are created only after a project explicitly opts in to
 	// advanced operations. Authentication itself must not create incident data.
 	s.setAuthCookie(w, token)
-	writeJSON(w, http.StatusCreated, map[string]any{"enabled": true, "account": strings.TrimSpace(input.Account)})
+	writeJSON(w, http.StatusCreated, map[string]any{"enabled": true, "account": strings.TrimSpace(input.Account), "token": token})
 }
 
 func (s *server) authLoginHandler(w http.ResponseWriter, r *http.Request) {
@@ -1237,7 +1243,7 @@ func (s *server) authLoginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.setAuthCookie(w, token)
-	writeJSON(w, http.StatusOK, map[string]any{"authenticated": true, "account": strings.TrimSpace(input.Account)})
+	writeJSON(w, http.StatusOK, map[string]any{"authenticated": true, "account": strings.TrimSpace(input.Account), "token": token})
 }
 
 func (s *server) authLogoutHandler(w http.ResponseWriter, r *http.Request) {
@@ -7809,7 +7815,7 @@ func (s *server) ginAccess() gin.HandlerFunc {
 			c.Next()
 			return
 		}
-		if !strings.HasPrefix(path, "/api/v1/") || path == "/api/v1/auth/status" || path == "/api/v1/auth/setup" || path == "/api/v1/auth/login" || path == "/api/v1/auth/logout" || strings.HasPrefix(path, "/api/v1/robot/webview/") || strings.HasPrefix(path, "/api/v1/robot/app/") {
+		if !strings.HasPrefix(path, "/api/v1/") || path == "/api/v1/auth/status" || path == "/api/v1/auth/setup" || path == "/api/v1/auth/login" || path == "/api/v1/auth/logout" {
 			c.Next()
 			return
 		}
@@ -7844,7 +7850,7 @@ func (s *server) ginAccess() gin.HandlerFunc {
 // a read-only workbench into a write-capable one through a handcrafted call.
 func requiredPermissionForRequest(r *http.Request) string {
 	path := r.URL.Path
-	if !strings.HasPrefix(path, "/api/v1/") || strings.HasPrefix(path, "/api/v1/auth/status") || strings.HasPrefix(path, "/api/v1/auth/setup") || strings.HasPrefix(path, "/api/v1/auth/login") || strings.HasPrefix(path, "/api/v1/auth/logout") || strings.HasPrefix(path, "/api/v1/robot/webview/") || strings.HasPrefix(path, "/api/v1/robot/app/") {
+	if !strings.HasPrefix(path, "/api/v1/") || strings.HasPrefix(path, "/api/v1/auth/status") || strings.HasPrefix(path, "/api/v1/auth/setup") || strings.HasPrefix(path, "/api/v1/auth/login") || strings.HasPrefix(path, "/api/v1/auth/logout") {
 		return ""
 	}
 	if strings.HasPrefix(path, "/api/v1/auth/") {

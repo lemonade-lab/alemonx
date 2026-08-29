@@ -1495,6 +1495,38 @@ func TestIdentityProtectionRequiresLoginAfterEnable(t *testing.T) {
 	}
 }
 
+func TestIdentityProtectionAcceptsBearerTokenForAppClients(t *testing.T) {
+	identity, err := access.NewAt(filepath.Join(t.TempDir(), "auth.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := NewServerWithAuth("test", fstest.MapFS{"dist/index.html": &fstest.MapFile{Data: []byte("<!doctype html>")}}, identity)
+	if _, err := identity.Enable("app", "secret", "secret"); err != nil {
+		t.Fatal(err)
+	}
+
+	login := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewBufferString(`{"account":"app","password":"secret"}`))
+	handler.ServeHTTP(login, request)
+	if login.Code != http.StatusOK {
+		t.Fatalf("login = %d %s", login.Code, login.Body.String())
+	}
+	var payload struct {
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal(login.Body.Bytes(), &payload); err != nil || payload.Token == "" {
+		t.Fatalf("login token = %#v, err %v", payload, err)
+	}
+
+	allowed := httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodGet, "/api/v1/goals", nil)
+	request.Header.Set("Authorization", "Bearer "+payload.Token)
+	handler.ServeHTTP(allowed, request)
+	if allowed.Code != http.StatusOK {
+		t.Fatalf("bearer authenticated status = %d, want 200: %s", allowed.Code, allowed.Body.String())
+	}
+}
+
 func TestAccountRolesControlManagementAndWorkbenchAccess(t *testing.T) {
 	identity, err := access.NewAt(filepath.Join(t.TempDir(), "auth.json"))
 	if err != nil {
@@ -1569,7 +1601,7 @@ func TestAccountRolesControlManagementAndWorkbenchAccess(t *testing.T) {
 	}
 }
 
-func TestBotAppPageUsesItsOwnFramePolicyAndBypassesManagementLogin(t *testing.T) {
+func TestBotAppPageRequiresManagementLogin(t *testing.T) {
 	identity, err := access.NewAt(filepath.Join(t.TempDir(), "auth.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -1581,8 +1613,8 @@ func TestBotAppPageUsesItsOwnFramePolicyAndBypassesManagementLogin(t *testing.T)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/robot/webview/not-a-root/plugin/", nil))
 
-	if response.Code == http.StatusUnauthorized {
-		t.Fatalf("应用页 route must not require the management cookie")
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("应用页 route = %d, want 401", response.Code)
 	}
 	if got := response.Header().Get("X-Frame-Options"); got != "" {
 		t.Fatalf("应用页 X-Frame-Options = %q, want empty for cross-loopback frame", got)
