@@ -1,13 +1,13 @@
 {
   "description": "template code",
   "devDependencies": {
-    "@alemonjs/db": "^0.0.17",
+    "@alemonjs/db": "^0.0.20",
     "@alemonjs/onebot": "^2.1.21",
-    "@alemonjs/qq-bot": "^2.1.32",
+    "@alemonjs/qq-bot": "^2.1.33",
     "@types/koa-router": "^7.4.8",
     "@types/node": "^22",
     "@types/react": "^19.0.0",
-    "alemonjs": "^2.1.95",
+    "alemonjs": "^2.1.97",
     "cssnano": "^8.0.5",
     "jsxp": "^1.4.0",
     "koa-router": "^14.0.0",
@@ -30,6 +30,7 @@
   "scripts": {
     "app": "node index.js",
     "build": "lvy build",
+    "bundle": "lvy build",
     "delete": "pm2 delete pm2.config.cjs",
     "dev": "lvy app.ts",
     "review": "npx alemonc start",

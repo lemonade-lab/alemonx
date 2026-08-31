@@ -13,12 +13,12 @@
   },
   "devDependencies": {
     "@alemonjs/onebot": "^2.1.21",
-    "@alemonjs/qq-bot": "^2.1.32",
+    "@alemonjs/qq-bot": "^2.1.33",
     "@types/node": "^22",
-    "alemonjs": "^2.1.95"
+    "alemonjs": "^2.1.97"
   },
   "dependencies": {
-    "@alemonjs/db": "^0.0.17",
+    "@alemonjs/db": "^0.0.20",
     "jsxp": "^1.4.0"
   },
   "workspaces": [

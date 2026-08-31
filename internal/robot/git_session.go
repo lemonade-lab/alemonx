@@ -141,7 +141,11 @@ func runResolvedBuild(root, kind, script string) (string, error) {
 	if kind == "script" {
 		return runPackageManager(root, "run", script)
 	}
-	return run(root, "lvy", "build")
+	// The fallback must go through npx: a Git release is built in an isolated
+	// worktree, and a bare `lvy` invocation cannot see node_modules/.bin. npx
+	// resolves the project's installed lvy package (and can fetch it when the
+	// project does not declare it directly).
+	return run(root, "npx", "lvy", "build")
 }
 
 func installBuildSubprojects(root, scriptName string) (string, error) {
