@@ -63,6 +63,12 @@ type PM2LogDay struct {
 	Last  string `json:"last,omitempty"`
 }
 
+// PM2LogDeleteResult reports the scope of a date/source log deletion.
+type PM2LogDeleteResult struct {
+	Deleted int `json:"deleted"`
+	Files   int `json:"files"`
+}
+
 // PM2LogDiagnostic is one known runtime issue detected after the latest
 // Yunzai worker start in the selected log view.
 type PM2LogDiagnostic struct {
@@ -109,6 +115,8 @@ var pm2LogPathCache struct {
 	sync.Mutex
 	entries map[string]pm2LogPathCacheEntry
 }
+
+var pm2LogMutationMu sync.Mutex
 
 func init() {
 	pm2LogPathCache.entries = make(map[string]pm2LogPathCacheEntry)
@@ -676,6 +684,74 @@ func (m Manager) PM2LogDays(root string) ([]PM2LogDay, error) {
 	sort.Slice(result, func(i, j int) bool {
 		return result[i].Date > result[j].Date
 	})
+	return result, nil
+}
+
+// DeletePM2Logs removes only timestamped records in the requested calendar
+// day. A source can narrow deletion to stdout or stderr; no date means no
+// deletion, so the current live log cannot be cleared accidentally.
+func (m Manager) DeletePM2Logs(root string, q PM2AuditQuery) (PM2LogDeleteResult, error) {
+	day, err := time.ParseInLocation("2006-01-02", strings.TrimSpace(q.Date), time.Local)
+	if err != nil {
+		return PM2LogDeleteResult{}, errors.New("请选择要删除的日志日期")
+	}
+	if q.Source != "" && q.Source != "out" && q.Source != "err" {
+		return PM2LogDeleteResult{}, errors.New("日志来源无效")
+	}
+	files, err := m.pm2LogFiles(root)
+	if err != nil {
+		return PM2LogDeleteResult{}, err
+	}
+	pm2LogMutationMu.Lock()
+	defer pm2LogMutationMu.Unlock()
+	result := PM2LogDeleteResult{}
+	for _, file := range files {
+		if q.Source != "" && file.Source != q.Source {
+			continue
+		}
+		content, readErr := os.ReadFile(file.Path)
+		if readErr != nil {
+			if os.IsNotExist(readErr) {
+				continue
+			}
+			return result, fmt.Errorf("读取日志失败：%w", readErr)
+		}
+		var kept strings.Builder
+		removed := 0
+		for _, line := range strings.SplitAfter(string(content), "\n") {
+			text := strings.TrimSuffix(line, "\n")
+			stamp, hasTime := parsePM2LogTimestamp(text)
+			if hasTime && stamp.Year() == day.Year() && stamp.YearDay() == day.YearDay() {
+				removed++
+				continue
+			}
+			kept.WriteString(line)
+		}
+		if removed == 0 {
+			continue
+		}
+		info, statErr := os.Stat(file.Path)
+		if statErr != nil {
+			return result, fmt.Errorf("读取日志属性失败：%w", statErr)
+		}
+		// Truncating the existing inode keeps PM2's open append handle valid;
+		// replacing the file would make a running PM2 process write to an
+		// unlinked old file instead.
+		handle, openErr := os.OpenFile(file.Path, os.O_WRONLY|os.O_TRUNC, info.Mode())
+		if openErr != nil {
+			return result, fmt.Errorf("写入日志失败：%w", openErr)
+		}
+		_, writeErr := io.WriteString(handle, kept.String())
+		closeErr := handle.Close()
+		if writeErr != nil {
+			return result, fmt.Errorf("写入日志失败：%w", writeErr)
+		}
+		if closeErr != nil {
+			return result, fmt.Errorf("关闭日志文件失败：%w", closeErr)
+		}
+		result.Deleted += removed
+		result.Files++
+	}
 	return result, nil
 }
 

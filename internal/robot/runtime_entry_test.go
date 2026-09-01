@@ -102,9 +102,8 @@ func TestParsePM2ProcessesMapsJListFields(t *testing.T) {
     "pid": 9896,
     "name": "alemonb",
     "pm_id": 0,
-    "status": "online",
     "restart_time": 2,
-    "pm2_env": {"script": "./index.js", "namespace": "default", "pm_uptime": 1751900000000},
+    "pm2_env": {"script": "./index.js", "namespace": "default", "status": "online", "pm_uptime": 1751900000000},
     "monit": {"memory": 123456789, "cpu": 0.5}
   }
 ]`

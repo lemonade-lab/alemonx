@@ -195,6 +195,23 @@ func RefreshGitSourceBranches(root string) (GitStatus, error) {
 	return GitReleaseStatus(path)
 }
 
+// syncPublishRemote refreshes tracking refs before a release without changing
+// the caller's checkout. In particular, it never pulls, merges, rebases, or
+// pushes the source branch. A package can therefore be built from the exact
+// commit selected by the user even when their local branch has pending work.
+// Repositories without origin are left alone here; the Git release checks can
+// still report that a remote is required when one is actually needed.
+func syncPublishRemote(root string) (string, error) {
+	if _, err := gitRun(root, "remote", "get-url", "origin"); err != nil {
+		return "", nil
+	}
+	output, err := gitRun(root, "fetch", "--prune", "origin")
+	if err != nil {
+		return output, fmt.Errorf("发布前无法刷新远程引用：%s", output)
+	}
+	return output, nil
+}
+
 // inspectRemoteRelease reads the remote without updating local refs.  Status
 // checks must not be able to fail merely because a local tracking ref is
 // locked, stale, or absent.
@@ -234,7 +251,11 @@ func inspectRemoteRelease(path string, status *GitStatus) {
 		if head, err := gitRun(path, "rev-parse", "HEAD"); err == nil && head == remoteHeads[defaultBranch] {
 			status.Checks = append(status.Checks, defaultBranch+" 已与远程同步")
 		} else {
-			status.Issues = append(status.Issues, "本地 "+defaultBranch+" 与远程不同步；请先在 Git 管理中拉取或推送。")
+			// Releases are created from an explicitly selected commit in a
+			// detached worktree. Local and remote source branches may therefore
+			// legitimately differ; turning this into a blocking error would make
+			// an otherwise reproducible release depend on manual synchronisation.
+			status.Checks = append(status.Checks, "本地 "+defaultBranch+" 与远程不同步；发布将使用所选提交，并自动刷新远程引用")
 		}
 	}
 	if remoteHeads["release"] != "" {
@@ -373,6 +394,10 @@ func GitPublishWithOptions(root, version, sourceBranch, sourceCommit string, art
 	if err != nil {
 		return Result{}, err
 	}
+	syncOutput, err := syncPublishRemote(path)
+	if err != nil {
+		return Result{}, err
+	}
 	status, err := GitReleaseStatus(path)
 	if err != nil {
 		return Result{}, err
@@ -386,7 +411,8 @@ func GitPublishWithOptions(root, version, sourceBranch, sourceCommit string, art
 	if !validGitRef(sourceBranch) {
 		return Result{}, errors.New("请选择有效的源码分支")
 	}
-	if _, err := gitRun(path, "show-ref", "--verify", "--quiet", "refs/heads/"+sourceBranch); err != nil {
+	sourceBranchRef, err := sourceBranchRef(path, sourceBranch)
+	if err != nil {
 		return Result{}, errors.New("所选源码分支不存在，请刷新后重试")
 	}
 	if !sourceCommitPattern.MatchString(sourceCommit) {
@@ -396,10 +422,13 @@ func GitPublishWithOptions(root, version, sourceBranch, sourceCommit string, art
 	if err != nil {
 		return Result{}, errors.New("所选源码提交不存在，请刷新后重新选择")
 	}
-	if _, err := gitRun(path, "merge-base", "--is-ancestor", sourceCommit, "refs/heads/"+sourceBranch); err != nil {
+	if _, err := gitRun(path, "merge-base", "--is-ancestor", sourceCommit, sourceBranchRef); err != nil {
 		return Result{}, errors.New("所选提交不属于所选源码分支，请刷新后重新选择")
 	}
-	logs := []string{"已选择源码提交 " + shortGitSHA(sourceCommit), "准备独立构建目录"}
+	logs := []string{"已刷新远程引用", "已选择源码提交 " + shortGitSHA(sourceCommit), "准备独立构建目录"}
+	if strings.TrimSpace(syncOutput) != "" {
+		logs = append(logs, syncOutput)
+	}
 	sourceWorktree, err := os.MkdirTemp("", "alx-source-")
 	if err != nil {
 		return Result{}, err

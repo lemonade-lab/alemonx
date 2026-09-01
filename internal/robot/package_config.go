@@ -249,7 +249,10 @@ func (m Manager) SaveCurrentPackageConfig(root string, values map[string]any) (R
 // the runtime cannot derive it from the login value.
 func (m Manager) SaveLogin(root, login, packageName string) (Result, error) {
 	login = strings.TrimSpace(login)
-	if login == "" || strings.ContainsAny(login, "\r\n") {
+	if login == "" {
+		return m.ClearLogin(root)
+	}
+	if strings.ContainsAny(login, "\r\n") {
 		return Result{}, errors.New("请填写有效的登录连接")
 	}
 	platformValue := ""
@@ -294,6 +297,27 @@ func (m Manager) SaveLogin(root, login, packageName string) (Result, error) {
 	return result, nil
 }
 
+// ClearLogin removes the active login and platform selectors. A launch that
+// explicitly chooses “不选择” must not inherit an earlier QR-capable adapter.
+func (m Manager) ClearLogin(root string) (Result, error) {
+	current, err := m.Read(root, "alemon.config.yaml")
+	if err != nil && !strings.Contains(err.Error(), "no such file") {
+		return Result{}, err
+	}
+	content := ""
+	if err == nil {
+		content = stripYAMLBOM(current.Output)
+	}
+	content = removeTopLevelScalar(content, "login")
+	content = removeTopLevelScalar(content, "platform")
+	result, err := m.Write(root, "alemon.config.yaml", content)
+	if err != nil {
+		return Result{}, err
+	}
+	result.Output = "已清除登录连接，将以无 login 模式启动。"
+	return result, nil
+}
+
 // setTopLevelScalar replaces or appends a quoted top-level YAML scalar.
 func setTopLevelScalar(content, key, value string) string {
 	pattern := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(key) + `:\s*.*$`)
@@ -306,6 +330,11 @@ func setTopLevelScalar(content, key, value string) string {
 		content += "\n"
 	}
 	return content + line + "\n"
+}
+
+func removeTopLevelScalar(content, key string) string {
+	pattern := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(key) + `:\s*.*(?:\r?\n|$)`)
+	return strings.TrimLeft(pattern.ReplaceAllString(content, ""), "\r\n")
 }
 
 func readConfigValues(content string, namespaces []string, fields []packageschema.Field) map[string]any {

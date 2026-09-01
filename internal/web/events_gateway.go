@@ -226,6 +226,13 @@ func (s *server) eventsHandler(w http.ResponseWriter, r *http.Request) {
 		last = earliest - 1
 	}
 	for _, item := range s.operationEvents.after(last, topics) {
+		// Login QR challenges are transient UI state. Replaying one after a
+		// browser refresh can reopen a dialog for a robot that has already
+		// stopped, and the challenge may already be expired. The live gateway
+		// publication below still delivers newly emitted challenges.
+		if item.Topic == "robot" && item.Type == "login.qrcode" {
+			continue
+		}
 		s.eventGateway.replayed.Add(1)
 		if !write(item) {
 			return

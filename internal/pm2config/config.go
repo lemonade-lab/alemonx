@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -19,6 +20,17 @@ const (
 	namespace  = "alemonx"
 	idFileName = ".alemonx-id"
 )
+
+// Options is the small, safe subset of PM2 settings exposed by the workbench.
+// Low-level ecosystem fields remain generated defaults.
+type Options struct {
+	Name        string            `json:"name"`
+	Script      string            `json:"script"`
+	Autorestart bool              `json:"autorestart"`
+	MaxRestarts int               `json:"maxRestarts"`
+	MaxMemory   string            `json:"maxMemory,omitempty"`
+	Env         map[string]string `json:"env"`
+}
 
 var unsafeName = regexp.MustCompile(`[^a-z0-9]+`)
 
@@ -101,26 +113,73 @@ func Name(root string) string {
 // does not leave PM2 pointing at a stale absolute path. The restart backoff
 // fields match the bundled project templates.
 func Config(root string) string {
+	return ConfigWithOptions(root, DefaultOptions(root))
+}
+
+// DefaultOptions describes the conventional production registration.
+func DefaultOptions(root string) Options {
+	return Options{
+		Name:        Name(root),
+		Script:      "./index.js",
+		Autorestart: true,
+		MaxRestarts: 10,
+		Env:         map[string]string{"NODE_ENV": "production"},
+	}
+}
+
+// ConfigWithOptions renders a managed ecosystem file from regular settings.
+func ConfigWithOptions(root string, options Options) string {
 	path, err := filepath.Abs(root)
 	if err != nil {
 		path = filepath.Clean(root)
 	}
-	return "module.exports = {\n" +
-		"  apps: [\n" +
-		"    {\n" +
-		"      name: " + strconv.Quote(Name(path)) + ",\n" +
-		"      namespace: " + strconv.Quote(namespace) + ",\n" +
-		"      cwd: __dirname,\n" +
-		"      script: './index.js',\n" +
-		"      autorestart: true,\n" +
-		"      min_uptime: '10s',\n" +
-		"      max_restarts: 10,\n" +
-		"      restart_delay: 3000,\n" +
-		"      exp_backoff_restart_delay: 1000,\n" +
-		"      env: {\n" +
-		"        NODE_ENV: 'production'\n" +
-		"      }\n" +
-		"    }\n" +
-		"  ]\n" +
-		"};\n"
+	defaults := DefaultOptions(path)
+	if strings.TrimSpace(options.Name) == "" {
+		options.Name = defaults.Name
+	}
+	if strings.TrimSpace(options.Script) == "" {
+		options.Script = defaults.Script
+	}
+	if options.MaxRestarts < 0 {
+		options.MaxRestarts = defaults.MaxRestarts
+	}
+	if options.Env == nil {
+		options.Env = defaults.Env
+	}
+	metadata, _ := json.Marshal(options)
+	var fields strings.Builder
+	fields.WriteString("// alemonx-pm2: " + string(metadata) + "\n")
+	fields.WriteString("const path = require('node:path')\n\nmodule.exports = {\n  apps: [\n    {\n")
+	fields.WriteString("      name: " + strconv.Quote(options.Name) + ",\n")
+	fields.WriteString("      namespace: " + strconv.Quote(namespace) + ",\n")
+	fields.WriteString("      cwd: __dirname,\n")
+	fields.WriteString("      script: " + jsSingleQuote(options.Script) + ",\n")
+	fields.WriteString("      autorestart: " + strconv.FormatBool(options.Autorestart) + ",\n")
+	fields.WriteString("      min_uptime: '10s',\n")
+	fields.WriteString("      max_restarts: " + strconv.Itoa(options.MaxRestarts) + ",\n")
+	if strings.TrimSpace(options.MaxMemory) != "" {
+		fields.WriteString("      max_memory_restart: " + strconv.Quote(options.MaxMemory) + ",\n")
+	}
+	fields.WriteString("      restart_delay: 3000,\n")
+	fields.WriteString("      exp_backoff_restart_delay: 1000,\n")
+	fields.WriteString("      env: {\n")
+	// PM2 launches outside the workbench process, so it must receive the same
+	// file transport used by foreground robots for login/QR lifecycle events.
+	fields.WriteString("        ALEMON_CBP_FILE_TRANSPORT: '1',\n")
+	fields.WriteString("        ALEMON_CBP_FILE_DIR: path.join(__dirname, '.alemon', 'cbp'),\n")
+	keys := make([]string, 0, len(options.Env))
+	for key := range options.Env {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		fields.WriteString("        " + key + ": " + jsSingleQuote(options.Env[key]) + ",\n")
+	}
+	fields.WriteString("      }\n")
+	fields.WriteString("    }\n  ]\n};\n")
+	return fields.String()
+}
+
+func jsSingleQuote(value string) string {
+	return "'" + strings.NewReplacer("\\", "\\\\", "'", "\\'", "\n", "\\n", "\r", "\\r").Replace(value) + "'"
 }

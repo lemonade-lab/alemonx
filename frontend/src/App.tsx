@@ -1,5 +1,12 @@
 import { useStoreState } from './store/guideStore'
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState
+} from 'react'
 import { useDispatch, useSelector } from 'react-redux'
 import { useLocation, useNavigate } from 'react-router-dom'
 import {
@@ -26,7 +33,7 @@ import {
   useGoalsQuery,
   useWorkspaceQuery,
   useLazyEnvironmentReportQuery,
-  useReleasesQuery,
+  useReleasesQuery
 } from './store/workspaceApi'
 import { GuideHome } from './features/guide/GuideHome'
 import { EnvironmentCheckPanel } from './features/guide/EnvironmentCheckPanel'
@@ -34,6 +41,7 @@ import { guideIcons as icons } from './features/guide/icons'
 import { recommendReleaseAssets } from './features/guide/releaseAssets'
 import {
   Activity,
+  ClipboardList,
   FlaskConical,
   GitBranch,
   Home,
@@ -65,6 +73,7 @@ type DockWindowState = { open: boolean; minimized: boolean }
 type SystemDockWindowState = DockWindowState & { label: string }
 type DockWindows = {
   terminal: DockWindowState
+  foregroundLogs: DockWindowState
   git: DockWindowState
   app: DockWindowState
   test: DockWindowState
@@ -75,7 +84,12 @@ type DockWindows = {
   system: Record<string, SystemDockWindowState>
 }
 type ResizeCorner = 'nw' | 'ne' | 'sw' | 'se'
-type WorkbenchRect = { left: number; top: number; width: number; height: number }
+type WorkbenchRect = {
+  left: number
+  top: number
+  width: number
+  height: number
+}
 
 function padWorkbenchRect(): WorkbenchRect {
   return {
@@ -112,6 +126,7 @@ function clampWorkbenchRect(rect: WorkbenchRect): WorkbenchRect {
 const closedDockWindow: DockWindowState = { open: false, minimized: false }
 const emptyDockWindows: DockWindows = {
   terminal: closedDockWindow,
+  foregroundLogs: closedDockWindow,
   git: closedDockWindow,
   app: closedDockWindow,
   test: closedDockWindow,
@@ -145,9 +160,8 @@ export default function App() {
   const guideOpen = !location.pathname.startsWith('/dashboard')
   const activeID = selectedID ?? 'install'
   const activeGoal = goals.find(goal => goal.id === activeID)
-  const [workbenchRect, setWorkbenchRect] = useState<WorkbenchRect>(
-    initialWorkbenchRect
-  )
+  const [workbenchRect, setWorkbenchRect] =
+    useState<WorkbenchRect>(initialWorkbenchRect)
   const workbenchRectRef = useRef(workbenchRect)
   // The workbench's preferred (user-chosen) size. `workbenchRect` stays the
   // viewport-clamped display rect, so shrinking the browser only shrinks the
@@ -229,10 +243,7 @@ export default function App() {
     })
   }
 
-  function commitWorkbenchPreview(
-    kind: 'drag' | 'resize',
-    changed: boolean
-  ) {
+  function commitWorkbenchPreview(kind: 'drag' | 'resize', changed: boolean) {
     const rect = previewRect.current ?? workbenchRectRef.current
     if (previewFrame.current !== null) {
       window.cancelAnimationFrame(previewFrame.current)
@@ -261,9 +272,9 @@ export default function App() {
     )
       return
     dragState.current = {
-    pointerId: event.pointerId,
-    startX: event.clientX,
-    startY: event.clientY,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
       originLeft: workbenchRectRef.current.left,
       originTop: workbenchRectRef.current.top
     }
@@ -282,17 +293,27 @@ export default function App() {
       const vertical = resize.corner.startsWith('s') ? 1 : -1
       const width = Math.max(
         minWidth,
-        Math.min(maxWidth, resize.width + horizontal * (event.clientX - resize.startX))
+        Math.min(
+          maxWidth,
+          resize.width + horizontal * (event.clientX - resize.startX)
+        )
       )
       const height = Math.max(
         minHeight,
-        Math.min(maxHeight, resize.height + vertical * (event.clientY - resize.startY))
+        Math.min(
+          maxHeight,
+          resize.height + vertical * (event.clientY - resize.startY)
+        )
       )
       previewWorkbenchRect({
         width,
         height,
-        left: resize.corner.endsWith('w') ? resize.left + resize.width - width : resize.left,
-        top: resize.corner.startsWith('n') ? resize.top + resize.height - height : resize.top
+        left: resize.corner.endsWith('w')
+          ? resize.left + resize.width - width
+          : resize.left,
+        top: resize.corner.startsWith('n')
+          ? resize.top + resize.height - height
+          : resize.top
       })
       return
     }
@@ -303,11 +324,17 @@ export default function App() {
       ...current,
       left: Math.max(
         16,
-        Math.min(window.innerWidth - current.width - 16, drag.originLeft + event.clientX - drag.startX)
+        Math.min(
+          window.innerWidth - current.width - 16,
+          drag.originLeft + event.clientX - drag.startX
+        )
       ),
       top: Math.max(
         16,
-        Math.min(window.innerHeight - current.height - 16, drag.originTop + event.clientY - drag.startY)
+        Math.min(
+          window.innerHeight - current.height - 16,
+          drag.originTop + event.clientY - drag.startY
+        )
       )
     })
   }
@@ -330,7 +357,8 @@ export default function App() {
     if (dragState.current?.pointerId !== event.pointerId) return
     const start = dragState.current
     const rect = previewRect.current ?? workbenchRectRef.current
-    const changed = rect.left !== start.originLeft || rect.top !== start.originTop
+    const changed =
+      rect.left !== start.originLeft || rect.top !== start.originTop
     dragState.current = null
     commitWorkbenchPreview('drag', changed)
     event.currentTarget.releasePointerCapture(event.pointerId)
@@ -343,7 +371,8 @@ export default function App() {
   ) {
     if (isPadView) return
     const windowElement = document.querySelector<HTMLElement>('.guide-window')
-    const stage = event.currentTarget.closest<HTMLDivElement>('.workbench-stage')
+    const stage =
+      event.currentTarget.closest<HTMLDivElement>('.workbench-stage')
     if (!windowElement || !stage) return
     const rect = windowElement.getBoundingClientRect()
     event.preventDefault()
@@ -513,6 +542,7 @@ export default function App() {
     if (
       [
         state.terminal,
+        state.foregroundLogs,
         state.git,
         state.app,
         state.live,
@@ -548,18 +578,18 @@ export default function App() {
         ))}
       </>
     )
-  const hasOpenDesktopWindow =
-    [
-      { open: settingsOpen, minimized: settingsMinimized },
-      dockWindows.terminal,
-      dockWindows.git,
-      dockWindows.app,
-      dockWindows.live,
-      dockWindows.pm2Logs,
-      dockWindows.pm2Status,
-      dockWindows.ops,
-      ...Object.values(dockWindows.system)
-    ].some(item => item.open)
+  const hasOpenDesktopWindow = [
+    { open: settingsOpen, minimized: settingsMinimized },
+    dockWindows.terminal,
+    dockWindows.foregroundLogs,
+    dockWindows.git,
+    dockWindows.app,
+    dockWindows.live,
+    dockWindows.pm2Logs,
+    dockWindows.pm2Status,
+    dockWindows.ops,
+    ...Object.values(dockWindows.system)
+  ].some(item => item.open)
 
   return (
     <div className="app-shell">
@@ -588,6 +618,11 @@ export default function App() {
           onTerminal={() =>
             window.dispatchEvent(new CustomEvent('alx:desktop-terminal-toggle'))
           }
+          onForegroundLogs={() =>
+            window.dispatchEvent(
+              new CustomEvent('alx:desktop-foreground-logs-toggle')
+            )
+          }
           onGit={() =>
             window.dispatchEvent(new CustomEvent('alx:desktop-git-toggle'))
           }
@@ -604,7 +639,9 @@ export default function App() {
             window.dispatchEvent(new CustomEvent('alx:desktop-pm2-logs-toggle'))
           }
           onPM2Status={() =>
-            window.dispatchEvent(new CustomEvent('alx:desktop-pm2-status-toggle'))
+            window.dispatchEvent(
+              new CustomEvent('alx:desktop-pm2-status-toggle')
+            )
           }
           onOps={() =>
             window.dispatchEvent(new CustomEvent('alx:desktop-ops-toggle'))
@@ -619,39 +656,14 @@ export default function App() {
           className={`workbench-window-layer${mainWindowHidden ? ' workbench-window-hidden' : ''}`}
           style={{ zIndex: workbenchLayer }}
         >
-      {guideOpen ? (
-        <GuideHome
-          loading={loading}
-          group={guideGroup}
-          goal={selectedID ? activeGoal : undefined}
-          report={report}
-          checking={checking}
-          error={error}
-          creating={creating}
-          creation={creation}
-          onSelect={id => {
-            if (id === 'manage') {
-              navigate('/dashboard/robot')
-              return
-            }
-            navigate(id ? `/guide/${id}/step/1` : '/guide')
-            setCreation(null)
-            setError('')
-          }}
-          onClose={() => navigate('/dashboard')}
-          onOpenSettings={openSettings}
-          onClearError={() => setError('')}
-          onCheck={checkEnvironment}
-          onCreate={createProject}
-          onFix={setRepairCheck}
-          windowStyle={windowStyle}
-          windowControls={workbenchWindowControls}
-          renderFlow={registerBack => (
-            <FlowView
+          {guideOpen ? (
+            <GuideHome
               loading={loading}
+              group={guideGroup}
               goal={selectedID ? activeGoal : undefined}
               report={report}
               checking={checking}
+              error={error}
               creating={creating}
               creation={creation}
               onSelect={id => {
@@ -663,14 +675,39 @@ export default function App() {
                 setCreation(null)
                 setError('')
               }}
+              onClose={() => navigate('/dashboard')}
+              onOpenSettings={openSettings}
+              onClearError={() => setError('')}
               onCheck={checkEnvironment}
               onCreate={createProject}
               onFix={setRepairCheck}
-              registerBack={registerBack}
+              windowStyle={windowStyle}
+              windowControls={workbenchWindowControls}
+              renderFlow={registerBack => (
+                <FlowView
+                  loading={loading}
+                  goal={selectedID ? activeGoal : undefined}
+                  report={report}
+                  checking={checking}
+                  creating={creating}
+                  creation={creation}
+                  onSelect={id => {
+                    if (id === 'manage') {
+                      navigate('/dashboard/robot')
+                      return
+                    }
+                    navigate(id ? `/guide/${id}/step/1` : '/guide')
+                    setCreation(null)
+                    setError('')
+                  }}
+                  onCheck={checkEnvironment}
+                  onCreate={createProject}
+                  onFix={setRepairCheck}
+                  registerBack={registerBack}
+                />
+              )}
             />
-          )}
-        />
-      ) : (
+          ) : (
             <Dashboard
               goals={goals}
               goal={activeGoal}
@@ -697,7 +734,7 @@ export default function App() {
               windowStyle={windowStyle}
               windowControls={workbenchWindowControls}
             />
-        )}
+          )}
         </div>
       </div>
       <AppSettingsPanel
@@ -705,7 +742,9 @@ export default function App() {
         open={settingsOpen}
         minimized={settingsMinimized}
         title={settingsTitle}
-        icon={<Settings className="size-4 text-brand-600 dark:text-brand-200" />}
+        icon={
+          <Settings className="size-4 text-brand-600 dark:text-brand-200" />
+        }
         onClose={() => {
           setSettingsOpen(false)
           setSettingsMinimized(false)
@@ -736,6 +775,7 @@ function WorkbenchDock({
   onToggleWindow,
   windows,
   onTerminal,
+  onForegroundLogs,
   onGit,
   onApp,
   onTest,
@@ -751,6 +791,7 @@ function WorkbenchDock({
   onToggleWindow: () => void
   windows: DockWindows
   onTerminal: () => void
+  onForegroundLogs: () => void
   onGit: () => void
   onApp: () => void
   onTest: () => void
@@ -770,14 +811,12 @@ function WorkbenchDock({
     windows.pm2Status,
     windows.ops,
     ...Object.values(windows.system)
-  ].filter(
-    item => item.open
-  ).length
+  ].filter(item => item.open).length
   return (
-        <aside
-          className={`workbench-dock${visibleApps > 0 ? ' workbench-dock-visible' : ''}`}
-          aria-label="工作台 Dock"
-        >
+    <aside
+      className={`workbench-dock${visibleApps > 0 ? ' workbench-dock-visible' : ''}`}
+      aria-label="工作台 Dock"
+    >
       <div className="workbench-dock-items">
         <button
           className={windowHidden ? '' : 'active'}
@@ -805,12 +844,32 @@ function WorkbenchDock({
             </button>
           </div>
         )}
+        {windows.foregroundLogs.open && (
+          <div className="workbench-dock-apps">
+            <button
+              className={windows.foregroundLogs.minimized ? '' : 'active'}
+              onClick={onForegroundLogs}
+              title={
+                windows.foregroundLogs.minimized
+                  ? '恢复前台日志'
+                  : '最小化前台日志'
+              }
+            >
+              <ClipboardList className="size-5" />
+              <span>日志</span>
+            </button>
+          </div>
+        )}
         {windows.git.open && (
           <div className="workbench-dock-apps">
             <button
               className={windows.git.minimized ? '' : 'active'}
               onClick={onGit}
-              title={windows.git.minimized ? '恢复 Git 仓库管理' : '最小化 Git 仓库管理'}
+              title={
+                windows.git.minimized
+                  ? '恢复 Git 仓库管理'
+                  : '最小化 Git 仓库管理'
+              }
             >
               <GitBranch className="size-5" />
               <span>Git</span>
@@ -858,7 +917,9 @@ function WorkbenchDock({
             <button
               className={windows.pm2Logs.minimized ? '' : 'active'}
               onClick={onPM2Logs}
-              title={windows.pm2Logs.minimized ? '恢复 PM2 日志' : '最小化 PM2 日志'}
+              title={
+                windows.pm2Logs.minimized ? '恢复 PM2 日志' : '最小化 PM2 日志'
+              }
             >
               <Terminal className="size-5" />
               <span>日志</span>
@@ -870,7 +931,11 @@ function WorkbenchDock({
             <button
               className={windows.pm2Status.minimized ? '' : 'active'}
               onClick={onPM2Status}
-              title={windows.pm2Status.minimized ? '恢复 PM2 状态' : '最小化 PM2 状态'}
+              title={
+                windows.pm2Status.minimized
+                  ? '恢复 PM2 状态'
+                  : '最小化 PM2 状态'
+              }
             >
               <Activity className="size-5" />
               <span>PM2</span>
@@ -894,7 +959,9 @@ function WorkbenchDock({
             <button
               className={item.minimized ? '' : 'active'}
               onClick={() => onSystem(feature)}
-              title={item.minimized ? `恢复${item.label}` : `最小化${item.label}`}
+              title={
+                item.minimized ? `恢复${item.label}` : `最小化${item.label}`
+              }
             >
               <Settings className="size-5" />
               <span>{item.label}</span>
@@ -946,11 +1013,15 @@ function FlowView({
   const project = useSelector((state: RootState) => state.guide.project)
   const routedStep = Number(location.pathname.match(/\/step\/(\d+)/)?.[1] ?? 0)
   const [step, setStep] = useStoreState(routedStep)
-  const [webEdition, setWebEdition] = useStoreState<'clean' | 'docker' | null>(null)
+  const [webEdition, setWebEdition] = useStoreState<'clean' | 'docker' | null>(
+    null
+  )
   const [buildMode, setBuildMode] = useStoreState<'npm' | 'git' | null>(null)
   const [selectedMirror, setSelectedMirror] = useStoreState<Mirror | null>(null)
   const [releaseURL, setReleaseURL] = useStoreState<string | null>(null)
-  const [selectedAssetURL, setSelectedAssetURL] = useStoreState<string | null>(null)
+  const [selectedAssetURL, setSelectedAssetURL] = useStoreState<string | null>(
+    null
+  )
   const [browserDownloadNotice, setBrowserDownloadNotice] = useStoreState('')
   const [folderError, setFolderError] = useStoreState('')
   const automaticCheck = useRef<string | null>(null)
@@ -958,8 +1029,7 @@ function FlowView({
   const capabilities = config.capabilities ?? []
   const isDeveloper = goal?.id === 'develop'
   const isInstaller = goal?.id === 'install'
-  const releaseApp =
-    goal?.id === 'web' && webEdition === 'clean' ? 'alx' : null
+  const releaseApp = goal?.id === 'web' && webEdition === 'clean' ? 'alx' : null
   const {
     data: releaseData,
     isError: releaseError,
@@ -1223,7 +1293,8 @@ function FlowView({
                   <small
                     className="truncate"
                     title={
-                      project.destinationMode === 'custom' && project.destination
+                      project.destinationMode === 'custom' &&
+                      project.destination
                         ? project.destination
                         : '在目录选择器中选择保存位置。'
                     }
@@ -1307,7 +1378,7 @@ function FlowView({
                 ['qqbot', 'QQ Bot 连接', '@alemonjs/qq-bot'],
                 ['onebot', 'OneBot 连接', '@alemonjs/onebot'],
                 ['bubble', 'bubble服务', '@alemonjs/bubble'],
-                ['discord', 'Discord 连接', '@alemonjs/discord'],
+                ['discord', 'Discord 连接', '@alemonjs/discord']
               ].map(([value, label, note]) => (
                 <button
                   className={
@@ -1320,7 +1391,8 @@ function FlowView({
                   <small
                     className="truncate"
                     title={
-                      project.destinationMode === 'custom' && project.destination
+                      project.destinationMode === 'custom' &&
+                      project.destination
                         ? project.destination
                         : '在目录选择器中选择保存位置。'
                     }
@@ -1442,7 +1514,7 @@ function FlowView({
             ) : (
               <div className="config-summary">
                 <span>
-                 位置：
+                  位置：
                   {project.destinationMode === 'current'
                     ? workspace
                       ? `${workspace.bots}/${project.name}`
@@ -1916,9 +1988,7 @@ function FlowView({
         <div className="wizard-content">
           {!goal || step === 0 ? (
             <div className="guide-question guide-choice-screen mx-auto max-w-140 text-center">
-              <p className="guide-choice-eyebrow">
-                ALemonX
-              </p>
+              <p className="guide-choice-eyebrow">ALemonX</p>
               <h1>你现在想做什么？</h1>
               <p className="guide-choice-description">
                 选择一个目标；引导会只展示必要步骤，并在需要时检查你的环境。

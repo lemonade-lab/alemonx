@@ -42,6 +42,10 @@ func PrepareGitBuild(root, branch, commit string) (GitBuildSession, error) {
 	if err != nil {
 		return GitBuildSession{}, err
 	}
+	syncOutput, err := syncPublishRemote(path)
+	if err != nil {
+		return GitBuildSession{}, err
+	}
 	status, err := GitReleaseStatus(path)
 	if err != nil || len(status.Issues) > 0 {
 		if err != nil {
@@ -71,7 +75,9 @@ func PrepareGitBuild(root, branch, commit string) (GitBuildSession, error) {
 		return GitBuildSession{}, err
 	}
 	cleanup := func() { _, _ = gitRun(path, "worktree", "remove", "--force", worktree); _ = os.RemoveAll(worktree) }
-	output, err := gitRun(path, "worktree", "add", "--detach", worktree, commit)
+	output := syncOutput
+	worktreeOutput, err := gitRun(path, "worktree", "add", "--detach", worktree, commit)
+	output = strings.TrimSpace(output + "\n" + worktreeOutput)
 	if err != nil {
 		cleanup()
 		return GitBuildSession{}, err
@@ -133,6 +139,9 @@ func resolveBuildScript(root string) (kind, script string) {
 	}
 	if _, exists := scripts["bundle"]; exists {
 		return "script", "bundle"
+	}
+	if _, exists := scripts["build"]; exists {
+		return "script", "build"
 	}
 	return "lvy", ""
 }
@@ -431,6 +440,9 @@ func publishRelease(root, sourceWorktree, sourceBranch, sourceCommit, version, s
 // publishPreparedWorktree deliberately consumes the exact worktree inspected by
 // the user. Rebuilding here would make the selected artifact list misleading.
 func publishPreparedWorktree(state *gitBuildState, version string, artifacts []string, confirmed bool) (Result, error) {
+	if _, err := syncPublishRemote(state.root); err != nil {
+		return Result{}, err
+	}
 	status, err := GitReleaseStatus(state.root)
 	if err != nil {
 		return Result{}, err

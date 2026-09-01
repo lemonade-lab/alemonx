@@ -1005,6 +1005,89 @@ type PM2Process struct {
 	OutputLog string  `json:"outputLog,omitempty"`
 }
 
+// PackageScript is one declared package.json script safe to present to the
+// workbench. The command is descriptive only; execution remains server-side.
+type PackageScript struct {
+	Name    string `json:"name"`
+	Command string `json:"command"`
+}
+
+func (Manager) PackageScripts(root string) ([]PackageScript, error) {
+	path, err := projectPath(root)
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(filepath.Join(path, "package.json"))
+	if err != nil {
+		return nil, errors.New("无法读取 package.json")
+	}
+	var manifest struct {
+		Scripts map[string]string `json:"scripts"`
+	}
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return nil, errors.New("package.json 格式无法识别")
+	}
+	items := make([]PackageScript, 0, len(manifest.Scripts))
+	for name, command := range manifest.Scripts {
+		if name = strings.TrimSpace(name); name != "" && strings.TrimSpace(command) != "" {
+			items = append(items, PackageScript{Name: name, Command: command})
+		}
+	}
+	sort.Slice(items, func(left, right int) bool { return items[left].Name < items[right].Name })
+	return items, nil
+}
+
+// UpdatePackageScript changes one declared script without accepting arbitrary
+// package.json content from the browser.
+func (Manager) UpdatePackageScript(root, previousName, name, command string) error {
+	path, err := projectPath(root)
+	if err != nil {
+		return err
+	}
+	previousName, name, command = strings.TrimSpace(previousName), strings.TrimSpace(name), strings.TrimSpace(command)
+	if !regexp.MustCompile(`^[A-Za-z0-9:_-]{1,100}$`).MatchString(name) {
+		return errors.New("脚本名称只能包含字母、数字、冒号、下划线和连字符")
+	}
+	if command == "" || len(command) > 4096 {
+		return errors.New("脚本命令不能为空，且不能超过 4096 个字符")
+	}
+	file := filepath.Join(path, "package.json")
+	data, err := os.ReadFile(file)
+	if err != nil {
+		return errors.New("无法读取 package.json")
+	}
+	var manifest map[string]json.RawMessage
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return errors.New("package.json 格式无法识别")
+	}
+	scripts := map[string]string{}
+	if raw := manifest["scripts"]; len(raw) > 0 && string(raw) != "null" {
+		if err := json.Unmarshal(raw, &scripts); err != nil {
+			return errors.New("package.json 的 scripts 格式无法识别")
+		}
+	}
+	if previousName != "" && previousName != name {
+		if _, ok := scripts[previousName]; !ok {
+			return errors.New("要修改的脚本不存在")
+		}
+		if _, exists := scripts[name]; exists {
+			return errors.New("目标脚本名称已存在")
+		}
+		delete(scripts, previousName)
+	}
+	scripts[name] = command
+	encoded, _ := json.Marshal(scripts)
+	manifest["scripts"] = encoded
+	output, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return fmt.Errorf("保存 package.json 失败：%w", err)
+	}
+	if err := os.WriteFile(file, append(output, '\n'), 0o644); err != nil {
+		return fmt.Errorf("保存 package.json 失败：%w", err)
+	}
+	return nil
+}
+
 // PM2Processes lists every process managed by the local PM2 daemon. Unlike
 // PM2Status it does not filter by this robot's directory, so the panel can
 // show the full picture; the UI highlights processes for the current root.
@@ -1017,6 +1100,23 @@ func (Manager) PM2Processes(root string) ([]PM2Process, error) {
 		return nil, fmt.Errorf("无法读取 PM2 进程：%w", err)
 	}
 	return parsePM2Processes(output)
+}
+
+// PM2ProjectProcesses returns only the PM2 entries whose working directory is
+// the selected robot. The global list remains available for the system-wide
+// PM2 window, while runtime cards must not mix in other projects.
+func (m Manager) PM2ProjectProcesses(root string) ([]PM2Process, error) {
+	items, err := m.PM2Processes(root)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]PM2Process, 0, len(items))
+	for _, item := range items {
+		if sameWorkspacePath(item.CWD, root) {
+			result = append(result, item)
+		}
+	}
+	return result, nil
 }
 
 // pm2JList reads `pm2 jlist` and tolerates a non-zero exit code: a PM2 daemon
@@ -1217,6 +1317,7 @@ func parsePM2Processes(output string) ([]PM2Process, error) {
 		PM2Env   struct {
 			Script    string `json:"script"`
 			Namespace string `json:"namespace"`
+			Status    string `json:"status"`
 			Uptime    int64  `json:"pm_uptime"`
 			ErrorLog  string `json:"pm_err_log_path"`
 			OutputLog string `json:"pm_out_log_path"`
@@ -1232,11 +1333,17 @@ func parsePM2Processes(output string) ([]PM2Process, error) {
 	}
 	processes := make([]PM2Process, 0, len(raw))
 	for _, p := range raw {
+		status := p.PM2Env.Status
+		if status == "" {
+			// Older PM2 releases exposed the state at the top level. Current
+			// jlist payloads keep it in pm2_env, so accept both shapes.
+			status = p.Status
+		}
 		processes = append(processes, PM2Process{
 			ID:        p.PMID,
 			Name:      p.Name,
 			Namespace: p.PM2Env.Namespace,
-			Status:    strings.ToLower(p.Status),
+			Status:    strings.ToLower(status),
 			PID:       p.PID,
 			CWD:       p.PM2Env.CWD,
 			Memory:    p.Monit.Memory,
@@ -1324,21 +1431,22 @@ func (Manager) DevelopmentCommand(root string) (*exec.Cmd, error) {
 	return (Manager{}).scriptCommand(root, "dev")
 }
 
-// ApplicationCommand prefers the project's development script for the embedded
-// application or test workspace. Projects without one can still expose their
-// declared foreground app script; the returned mode is persisted by the caller
-// for accurate UI state. The selected port determines whether the caller opens
-// the application or test workspace; it must not change script selection.
+// ScriptCommand creates a package-manager command for one declared script.
+// It never accepts an arbitrary shell command.
+func (Manager) ScriptCommand(root, script string) (*exec.Cmd, error) {
+	return (Manager{}).scriptCommand(root, script)
+}
+
+// ApplicationCommand resolves the foreground app command for consumers that
+// open a runnable application surface. Development mode is an explicit runtime
+// choice and must never be selected merely because an application or test
+// window was opened.
 func (Manager) ApplicationCommand(root string) (*exec.Cmd, string, error) {
-	if (Manager{}).HasScript(root, "dev") {
-		command, err := (Manager{}).DevelopmentCommand(root)
-		return command, "dev", err
-	}
 	if (Manager{}).HasScript(root, "app") {
 		command, err := (Manager{}).ForegroundCommand(root)
 		return command, "app", err
 	}
-	return nil, "", errors.New("未找到 dev 或 app 启动脚本；请先在“运行”中诊断并修复")
+	return nil, "", errors.New("未找到 app 前台启动脚本；请先在“运行”中诊断并修复")
 }
 
 // HasScript reports whether package.json declares a non-empty script. Keeping
@@ -1523,6 +1631,30 @@ func (m Manager) Run(root, action, message, packageName, version, tag, token str
 	case "install":
 		output, installErr := m.installRuntimeDependencies(root, "安装依赖")
 		return Result{Path: root, Output: output}, installErr
+	case "dependency-add", "dependency-add-dev", "dependency-link", "dependency-remove":
+		source, sourceErr := dependencyControlSource(packageName, message, action == "dependency-link")
+		if sourceErr != nil {
+			return Result{}, sourceErr
+		}
+		verb := strings.TrimPrefix(action, "dependency-")
+		if verb == "add-dev" {
+			verb = "add"
+		}
+		var commandErr error
+		name, args, commandErr = connectionPackageCommand(root, verb, source)
+		if commandErr != nil {
+			return Result{}, commandErr
+		}
+		if action == "dependency-add-dev" {
+			switch manager {
+			case "npm":
+				args = append(args, "--save-dev")
+			case "pnpm":
+				args = append(args, "--save-dev")
+			default:
+				args = append(args, "--dev")
+			}
+		}
 	case "upgrade-alemon":
 		return (Manager{}).UpgradeAlemonDependencies(root)
 	case "build":
@@ -1574,6 +1706,29 @@ func (m Manager) Run(root, action, message, packageName, version, tag, token str
 		name, args = manager, []string{"run", "start"}
 	case "pm2-stop":
 		name, args = manager, []string{"run", "stop"}
+	case "pm2-stop-project":
+		processes, processErr := m.PM2ProjectProcesses(root)
+		if processErr != nil {
+			return Result{}, processErr
+		}
+		var outputs []string
+		for _, process := range processes {
+			if process.Status != "online" && process.Status != "launching" {
+				continue
+			}
+			launcher, launcherArgs := pm2Launcher(root)
+			output, stopErr := run(root, launcher, append(launcherArgs, "stop", strconv.Itoa(process.ID))...)
+			if output != "" {
+				outputs = append(outputs, output)
+			}
+			if stopErr != nil {
+				return Result{Path: root, Output: strings.Join(outputs, "\n")}, stopErr
+			}
+		}
+		if len(outputs) == 0 {
+			outputs = append(outputs, "当前没有需要停止的后台进程。")
+		}
+		return Result{Path: root, Output: strings.Join(outputs, "\n")}, nil
 	case "pm2-restart":
 		name, args = pm2Launcher(root)
 		args = append(args, "restart", "pm2.config.cjs", "--update-env")
@@ -1589,6 +1744,17 @@ func (m Manager) Run(root, action, message, packageName, version, tag, token str
 	case "pm2-logs":
 		name, args = pm2Launcher(root)
 		args = append(args, "logs", "--lines", "120", "--nostream")
+	case "pm2-process-start", "pm2-process-stop", "pm2-process-restart", "pm2-process-reload", "pm2-process-delete":
+		target, targetErr := pm2ProcessTarget(message)
+		if targetErr != nil {
+			return Result{}, targetErr
+		}
+		command := strings.TrimPrefix(action, "pm2-process-")
+		name, args = pm2Launcher(root)
+		args = append(args, command, target)
+		if command == "start" || command == "restart" || command == "reload" {
+			args = append(args, "--update-env")
+		}
 	case "install-package":
 		if !allowedInstallPackage(packageName) {
 			return Result{}, errors.New("不支持的 AlemonJS 包")
@@ -1671,6 +1837,34 @@ func (m Manager) Run(root, action, message, packageName, version, tag, token str
 		output = strings.TrimSpace(output + "\nPM2 进程清单已保存；请在服务器上完成一次 PM2 startup 配置以支持主机重启恢复。")
 	}
 	return Result{Path: root, Output: strings.TrimSpace(dependencyOutput + "\n" + output)}, runErr
+}
+
+func dependencyControlSource(packageName, version string, link bool) (string, error) {
+	packageName, version = strings.TrimSpace(packageName), strings.TrimSpace(version)
+	if packageName == "" || strings.HasPrefix(packageName, "-") || strings.ContainsAny(packageName, "\r\n\t ") {
+		return "", errors.New("请填写有效的包名或链接目标")
+	}
+	if link && version != "" {
+		return "", errors.New("链接依赖不支持填写版本")
+	}
+	if version == "" {
+		return packageName, nil
+	}
+	if strings.ContainsAny(version, "\r\n\t ") {
+		return "", errors.New("版本不能包含空白字符")
+	}
+	return packageName + "@" + version, nil
+}
+
+// pm2ProcessTarget accepts only a PM2 numeric process id before it is used as
+// a command argument. The processes endpoint exposes the daemon-wide list, so
+// UI actions must never forward an arbitrary name or shell-like expression.
+func pm2ProcessTarget(value string) (string, error) {
+	id, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || id < 0 {
+		return "", errors.New("PM2 进程 ID 无效")
+	}
+	return strconv.Itoa(id), nil
 }
 
 func (m Manager) syncLocalPackageOperation(root string, operation func() (Result, error)) (Result, error) {

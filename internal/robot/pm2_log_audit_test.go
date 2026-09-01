@@ -1,6 +1,7 @@
 package robot
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,6 +14,65 @@ func testPM2AuditLine(at, text string) pm2AuditLogLine {
 		panic(err)
 	}
 	return pm2AuditLogLine{Text: "[" + at + "]" + text, Timestamp: timestamp, HasTime: true, Source: "out"}
+}
+
+func TestDeletePM2LogsDeletesOnlySelectedDateAndSource(t *testing.T) {
+	root := t.TempDir()
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"bot"}`)
+	outPath := filepath.Join(root, "pm2-out.log")
+	errPath := filepath.Join(root, "pm2-error.log")
+	writeAppPageFixture(t, outPath, strings.Join([]string{
+		"[2026-08-17 10:00:00][INFO] remove this output",
+		"[2026-08-18 10:00:00][INFO] keep this output",
+		"unstructured output stays",
+	}, "\n")+"\n")
+	writeAppPageFixture(t, errPath, "[2026-08-17 10:00:00][ERROR] keep this error\n")
+
+	pm2LogPathCache.Lock()
+	previous, hadPrevious := pm2LogPathCache.entries[root]
+	pm2LogPathCache.entries[root] = pm2LogPathCacheEntry{
+		files: []pm2LogFile{
+			{Source: "out", Path: outPath},
+			{Source: "err", Path: errPath},
+		},
+		fetchedAt: time.Now(),
+	}
+	pm2LogPathCache.Unlock()
+	t.Cleanup(func() {
+		pm2LogPathCache.Lock()
+		defer pm2LogPathCache.Unlock()
+		if hadPrevious {
+			pm2LogPathCache.entries[root] = previous
+		} else {
+			delete(pm2LogPathCache.entries, root)
+		}
+	})
+
+	result, err := (Manager{}).DeletePM2Logs(root, PM2AuditQuery{
+		Date: "2026-08-17", Source: "out",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Deleted != 1 || result.Files != 1 {
+		t.Fatalf("delete result = %#v", result)
+	}
+	out, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), "remove this output") ||
+		!strings.Contains(string(out), "keep this output") ||
+		!strings.Contains(string(out), "unstructured output stays") {
+		t.Fatalf("unexpected output log after deletion: %q", out)
+	}
+	errLog, err := os.ReadFile(errPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(errLog), "keep this error") {
+		t.Fatalf("error log was modified: %q", errLog)
+	}
 }
 
 func diagnosticCodes(items []PM2LogDiagnostic) map[string]PM2LogDiagnostic {

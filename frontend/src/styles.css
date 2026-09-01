@@ -5125,8 +5125,9 @@ textarea:focus-visible {
 }
 .readonly-console-body {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   min-height: 0;
+  min-width: 0;
 }
 .readonly-console-tabs {
   align-items: flex-end;
@@ -5198,12 +5199,143 @@ textarea:focus-visible {
   overflow: overlay;
   padding: 14px 16px !important;
 }
+.smart-foreground-log {
+  background: var(--theme-surface-input);
+  display: block;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+}
+.smart-log-window-action {
+  background: var(--theme-surface-raised);
+  border: 1px solid var(--theme-border-default);
+  border-radius: 999px;
+  color: var(--theme-text-secondary);
+  cursor: pointer;
+  font-size: 0.67rem;
+  line-height: 1;
+  padding: 5px 7px;
+}
+.smart-log-window-action.active {
+  background: rgb(220 38 38 / 0.1);
+  border-color: rgb(220 38 38 / 0.35);
+  color: #dc2626;
+}
+.smart-foreground-log-list {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px 14px 18px;
+}
+.smart-log-pending {
+  background: var(--theme-accent, #2563eb);
+  border: 0;
+  border-radius: 999px;
+  color: white;
+  cursor: pointer;
+  font-size: 0.68rem;
+  justify-self: center;
+  padding: 6px 10px;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+.smart-log-time-divider {
+  align-items: center;
+  color: var(--theme-text-faint);
+  display: flex;
+  font-size: 0.62rem;
+  gap: 8px;
+  justify-content: center;
+  margin: 5px 0 1px;
+}
+.smart-log-time-divider::before,
+.smart-log-time-divider::after {
+  background: var(--theme-border-default);
+  content: '';
+  height: 1px;
+  max-width: 72px;
+  width: 20%;
+}
+.smart-log-line {
+  background: var(--theme-surface-raised);
+  border: 1px solid transparent;
+  border-radius: 12px 12px 12px 4px;
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 7px 10px 8px;
+}
+.smart-log-line.is-success {
+  background: rgb(22 163 74 / 0.08);
+}
+.smart-log-line.is-warning {
+  background: rgb(217 119 6 / 0.1);
+}
+.smart-log-line.is-error {
+  background: rgb(220 38 38 / 0.09);
+}
+.smart-log-line-meta {
+  align-items: center;
+  color: var(--theme-text-secondary);
+  display: flex;
+  font-size: 0.65rem;
+  font-weight: 650;
+  gap: 8px;
+  justify-content: space-between;
+}
+.smart-log-line.is-error .smart-log-line-meta {
+  color: #dc2626;
+}
+.smart-log-line.is-warning .smart-log-line-meta {
+  color: #b45309;
+}
+.smart-log-line.is-success .smart-log-line-meta {
+  color: #15803d;
+}
+.smart-log-line-meta button {
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  text-decoration: underline;
+}
+.smart-log-line code {
+  color: var(--theme-text-primary);
+  font:
+    0.72rem/1.4 ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.smart-log-empty {
+  color: var(--theme-text-muted);
+  font-size: 0.75rem;
+  padding: 28px 16px;
+  text-align: center;
+}
 .readonly-console-shell {
   background: var(--theme-surface-input);
   color: var(--theme-text-primary);
-  display: grid;
-  grid-template-rows: minmax(0, 1fr) auto;
+  display: block;
   min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+.readonly-console-shell > div {
+  box-sizing: border-box;
+  height: 100%;
+  min-width: 0;
+  overflow: hidden;
+}
+.readonly-console-shell .xterm {
+  height: 100%;
 }
 .readonly-console-shell pre {
   background: transparent;

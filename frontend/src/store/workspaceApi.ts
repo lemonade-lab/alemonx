@@ -133,6 +133,7 @@ export type PM2Process = {
   uptime: number
   restarts: number
   script: string
+  cwd: string
 }
 export type SystemNetworkMode =
   'system' | 'manual' | 'direct' | 'mirror' | 'custom-mirror'

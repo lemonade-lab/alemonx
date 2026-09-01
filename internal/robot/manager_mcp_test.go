@@ -75,7 +75,7 @@ func TestReadMissingEditableConfigurationAsEmptyDocument(t *testing.T) {
 	}
 }
 
-func TestApplicationCommandPrefersDevAndFallsBackToApp(t *testing.T) {
+func TestApplicationCommandRequiresForegroundAppScript(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "package.json"), []byte(`{"scripts":{"app":"node index.js"}}`), 0644); err != nil {
 		t.Fatal(err)
@@ -89,13 +89,13 @@ func TestApplicationCommandPrefersDevAndFallsBackToApp(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, mode, err = manager.ApplicationCommand(root)
-	if err != nil || mode != "dev" {
-		t.Fatalf("dev preference = mode %q, err %v", mode, err)
+	if err != nil || mode != "app" {
+		t.Fatalf("app remains preferred = mode %q, err %v", mode, err)
 	}
 	if err := os.WriteFile(filepath.Join(root, "package.json"), []byte(`{"scripts":{}}`), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := manager.ApplicationCommand(root); err == nil || !strings.Contains(err.Error(), "未找到 dev 或 app") {
+	if _, _, err := manager.ApplicationCommand(root); err == nil || !strings.Contains(err.Error(), "未找到 app 前台") {
 		t.Fatalf("missing scripts error = %v", err)
 	}
 }

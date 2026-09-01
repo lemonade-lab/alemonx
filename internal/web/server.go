@@ -357,6 +357,7 @@ type server struct {
 	mu                 sync.RWMutex
 	operations         []operationTask
 	development        map[string]developmentProcess
+	scriptProcesses    map[string]scriptProcess
 	botAppPageRuntimes map[string]*botAppPageRuntime
 	stopping           map[string]bool
 	consoleCache       map[string]consoleSnapshot
@@ -759,7 +760,7 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	downloadBroker := newPluginDownloadBroker(networkManager)
 	downloadBroker.setRegistry(plugins)
 	plugins.SetRunnerEnvironmentProvider(downloadBroker.environment)
-	s := &server{version: version, frontendBuild: options.FrontendBuild, assets: assets, static: http.FileServer(http.FS(assets)), checker: system.NewChecker(), network: networkManager, plugins: plugins, auth: identity, ai: aiManager, agentSessions: sessionStore, agentTaskStore: taskStore, agentTasks: tasks, taskService: &agent.TaskService{Manager: tasks}, goalStore: goalStore, opsStore: opsStore, chatHistory: chatHistory, testoneRecords: testoneRecords, opsProjects: opsProjects, opsBackground: startBackground, opsPaused: opsStartupErr != nil, goalSchedulerStop: make(chan struct{}), goalRunning: map[string]bool{}, agentConfirms: newAgentConfirmManager(), development: map[string]developmentProcess{}, botAppPageRuntimes: map[string]*botAppPageRuntime{}, stopping: map[string]bool{}, consoleCache: map[string]consoleSnapshot{}, outputBuffers: map[string]*operationOutputBuffer{}, directoryRoots: managedDirectoryRoots(), events: newRobotEventHub(), eventGateway: newEventGateway(), operationEvents: operationEvents, operations: operationEvents.snapshot(), opsEvents: newOpsEventHub(), mcpEvents: newMCPEventHub(), mcpMonitorStop: make(chan struct{}), pluginEventsStop: make(chan struct{}), updateMonitorStop: make(chan struct{}), updateState: updateStatusState{Update: releases.Update{Current: version}}, nodeID: fmt.Sprintf("%s-%d", hostname(), os.Getpid()), pluginStatusCache: map[string]*pluginStatusSnapshot{}, hostContexts: map[string]pluginHostContext{}, privilegeStore: privileges, pluginDownloadBroker: downloadBroker, sudoAttempts: map[string]sudoAttempt{}, runPrivilegedCommand: system.RunSudoCommand, installEnvironment: system.InstallEnvironment, liveUploads: map[string]liveUpload{}}
+	s := &server{version: version, frontendBuild: options.FrontendBuild, assets: assets, static: http.FileServer(http.FS(assets)), checker: system.NewChecker(), network: networkManager, plugins: plugins, auth: identity, ai: aiManager, agentSessions: sessionStore, agentTaskStore: taskStore, agentTasks: tasks, taskService: &agent.TaskService{Manager: tasks}, goalStore: goalStore, opsStore: opsStore, chatHistory: chatHistory, testoneRecords: testoneRecords, opsProjects: opsProjects, opsBackground: startBackground, opsPaused: opsStartupErr != nil, goalSchedulerStop: make(chan struct{}), goalRunning: map[string]bool{}, agentConfirms: newAgentConfirmManager(), development: map[string]developmentProcess{}, scriptProcesses: map[string]scriptProcess{}, botAppPageRuntimes: map[string]*botAppPageRuntime{}, stopping: map[string]bool{}, consoleCache: map[string]consoleSnapshot{}, outputBuffers: map[string]*operationOutputBuffer{}, directoryRoots: managedDirectoryRoots(), events: newRobotEventHub(), eventGateway: newEventGateway(), operationEvents: operationEvents, operations: operationEvents.snapshot(), opsEvents: newOpsEventHub(), mcpEvents: newMCPEventHub(), mcpMonitorStop: make(chan struct{}), pluginEventsStop: make(chan struct{}), updateMonitorStop: make(chan struct{}), updateState: updateStatusState{Update: releases.Update{Current: version}}, nodeID: fmt.Sprintf("%s-%d", hostname(), os.Getpid()), pluginStatusCache: map[string]*pluginStatusSnapshot{}, hostContexts: map[string]pluginHostContext{}, privilegeStore: privileges, pluginDownloadBroker: downloadBroker, sudoAttempts: map[string]sudoAttempt{}, runPrivilegedCommand: system.RunSudoCommand, installEnvironment: system.InstallEnvironment, liveUploads: map[string]liveUpload{}}
 	s.redisManager = redis.NewManager(filepath.Join(filepath.Dir(taskStore.TasksDir()), "alx-redis.json"))
 	if options.RedisPort > 0 || options.RedisDisabled {
 		status := s.redisManager.Status()
@@ -1100,15 +1101,23 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	mux.HandleFunc("/api/v1/robot/validate", s.robotValidateHandler)
 	mux.HandleFunc("/api/v1/robot/console", s.robotConsoleHandler)
 	mux.HandleFunc("/api/v1/robot/terminal", s.robotTerminalHandler)
+	mux.HandleFunc("/api/v1/robot/terminal/session", s.robotTerminalSessionHandler)
+	mux.HandleFunc("/api/v1/robot/terminal/input", s.robotTerminalInputHandler)
+	mux.HandleFunc("/api/v1/robot/terminal/resize", s.robotTerminalResizeHandler)
+	mux.HandleFunc("/api/v1/robot/terminal/close", s.robotTerminalCloseHandler)
 	mux.HandleFunc("/api/v1/robot/pm2-logs", s.robotPM2LogsHandler)
 	mux.HandleFunc("/api/v1/robot/pm2-logs/days", s.robotPM2LogDaysHandler)
 	mux.HandleFunc("/api/v1/robot/pm2-logs/stream", s.robotPM2LogStreamHandler)
 	mux.HandleFunc("/api/v1/robot/pm2-logs/export", s.robotPM2LogExportHandler)
 	mux.HandleFunc("/api/v1/robot/pm2-status", s.robotPM2StatusHandler)
 	mux.HandleFunc("/api/v1/robot/pm2-processes", s.robotPM2ProcessesHandler)
+	mux.HandleFunc("/api/v1/robot/pm2-processes/stream", s.robotPM2ProcessesStreamHandler)
+	mux.HandleFunc("/api/v1/robot/pm2-registration", s.robotPM2RegistrationHandler)
+	mux.HandleFunc("/api/v1/robot/scripts", s.robotScriptsHandler)
 	mux.HandleFunc("/api/v1/robot/app-port", s.robotAppPortHandler)
 	mux.HandleFunc("/api/v1/robot/app/", s.robotAppHandler)
 	mux.HandleFunc("/api/v1/robot/test-port", s.robotTestPortHandler)
+	mux.HandleFunc("/api/v1/robot/qrcode", s.robotQRCodeHandler)
 	mux.HandleFunc("/api/v1/robot/ports", s.robotPortsHandler)
 	mux.HandleFunc("/api/v1/robot/test/", s.robotTestHandler)
 	mux.HandleFunc("/api/v1/robot/live/upload", s.robotLiveUploadHandler)
@@ -4401,7 +4410,7 @@ func parsePM2AuditQuery(r *http.Request) (robot.PM2AuditQuery, error) {
 }
 
 func (s *server) robotPM2LogsHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
+	if r.Method != http.MethodGet && r.Method != http.MethodDelete {
 		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
 		return
 	}
@@ -4413,6 +4422,15 @@ func (s *server) robotPM2LogsHandler(w http.ResponseWriter, r *http.Request) {
 	query, err := parsePM2AuditQuery(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if r.Method == http.MethodDelete {
+		result, err := s.robots.DeletePM2Logs(root, query)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
 		return
 	}
 	result, err := s.robots.PM2AuditLogs(root, query)
@@ -4562,12 +4580,145 @@ func (s *server) robotPM2ProcessesHandler(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
 		return
 	}
-	result, err := s.robots.PM2Processes(r.URL.Query().Get("root"))
+	root := r.URL.Query().Get("root")
+	var result []robot.PM2Process
+	var err error
+	if r.URL.Query().Get("scope") == "project" {
+		result, err = s.robots.PM2ProjectProcesses(root)
+	} else {
+		result, err = s.robots.PM2Processes(root)
+	}
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": result})
+}
+
+// robotPM2ProcessesStreamHandler turns daemon state changes into a small
+// server-pushed list. Browsers do not poll PM2; the server only emits when the
+// selected robot's process snapshot actually differs.
+func (s *server) robotPM2ProcessesStreamHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
+		return
+	}
+	root := strings.TrimSpace(r.URL.Query().Get("root"))
+	if root == "" {
+		writeError(w, http.StatusBadRequest, "请选择机器人目录。")
+		return
+	}
+	if _, err := s.robots.Validate(root); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "SSE 不受支持。")
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	var previous []byte
+	emit := func() bool {
+		items, err := s.robots.PM2ProjectProcesses(root)
+		payload := map[string]any{"items": items}
+		if err != nil {
+			payload = map[string]any{"error": err.Error()}
+		}
+		encoded, marshalErr := json.Marshal(payload)
+		if marshalErr != nil || bytes.Equal(encoded, previous) {
+			return true
+		}
+		previous = encoded
+		if _, err := w.Write(append(append([]byte("data: "), encoded...), '\n', '\n')); err != nil {
+			return false
+		}
+		flusher.Flush()
+		return true
+	}
+	if !emit() {
+		return
+	}
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	heartbeat := time.NewTicker(20 * time.Second)
+	defer heartbeat.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			if !emit() {
+				return
+			}
+		case <-heartbeat.C:
+			if _, err := w.Write([]byte(": ping\n\n")); err != nil {
+				return
+			}
+			flusher.Flush()
+		case <-r.Context().Done():
+			return
+		}
+	}
+}
+
+func (s *server) robotPM2RegistrationHandler(w http.ResponseWriter, r *http.Request) {
+	root := strings.TrimSpace(r.URL.Query().Get("root"))
+	if r.Method == http.MethodPut || r.Method == http.MethodPost {
+		var input struct {
+			Root      string                        `json:"root"`
+			Settings  robot.PM2RegistrationSettings `json:"settings"`
+			Overwrite bool                          `json:"overwrite"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+			writeError(w, http.StatusBadRequest, "请求内容无法识别。")
+			return
+		}
+		root = strings.TrimSpace(input.Root)
+		if root == "" {
+			writeError(w, http.StatusBadRequest, "请选择机器人目录。")
+			return
+		}
+		if r.Method == http.MethodPut {
+			settings, err := s.robots.SavePM2Registration(root, input.Settings, input.Overwrite)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, settings)
+			return
+		}
+		// Registering starts or reloads PM2, so it must follow the same
+		// foreground-stop and port-release guard as the normal PM2 action.
+		s.stopLocalForStart(root)
+		if info, portErr := s.robots.AppPort(root); portErr == nil && info.Configured && !s.waitPortFreeOn(info.Port, 0) {
+			writeError(w, http.StatusConflict, "应用端口仍被占用；请停止当前机器人自己的进程后重试。")
+			return
+		}
+		result, err := s.robots.RegisterPM2(root, input.Settings, input.Overwrite)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		go s.watchRobotLoginEvents(root, time.Now())
+		writeJSON(w, http.StatusOK, result)
+		return
+	}
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
+		return
+	}
+	if root == "" {
+		writeError(w, http.StatusBadRequest, "请选择机器人目录。")
+		return
+	}
+	settings, err := s.robots.PM2Registration(root)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, settings)
 }
 
 func (s *server) robotAppPortHandler(w http.ResponseWriter, r *http.Request) {
@@ -5099,21 +5250,23 @@ func (s *server) robotTasksHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		command, err := s.robots.DevelopmentCommand(input.Root)
-		if input.Action == "app" {
+		if input.Action == "app" || input.Action == "app-open" || readyKind == "test" {
 			command, err = s.robots.ForegroundCommand(input.Root)
 		}
-		// "应用"与"测试"只有就绪端口不同：两者都优先 dev，缺失时
-		// 自动回退 app。只有两个启动脚本都不存在时才要求用户修复。
+		// 应用 WebView 和测试沙盒是前台运行能力，不得隐式切换到开发模式。
+		// 测试入口请求 action=app 并携带 ready=test；应用入口保留 app-open
+		// 以表达“启动后打开窗口”，但运行记录统一标记为 app。
 		if input.Action == "app-open" || readyKind == "test" {
-			var mode string
-			command, mode, err = s.robots.ApplicationCommand(input.Root)
-			created.Action = mode
+			created.Action = "app"
 		}
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		configureManagedProcess(command)
+		if readyKind != "test" {
+			configureRobotCBPFileTransport(&command.Env, input.Root)
+		}
 		sandboxCleanup := func() {}
 		// testone 一律以无 login 模式启动：临时复制一份配置并注释掉
 		// login/platform/serverPort，通过项目内相对路径的 CFG_PATH 覆盖
@@ -5144,6 +5297,9 @@ func (s *server) robotTasksHandler(w http.ResponseWriter, r *http.Request) {
 		if err := command.Start(); err != nil {
 			writeError(w, http.StatusBadRequest, "运行启动失败："+err.Error())
 			return
+		}
+		if readyKind != "test" {
+			go s.watchRobotLoginEvents(input.Root, time.Now())
 		}
 		if !s.registerDevelopment(input.Root, created.ID, created.Action, command, processGroupID(command), sandboxCleanup) {
 			_ = command.Process.Kill()
@@ -5182,6 +5338,9 @@ func (s *server) robotTasksHandler(w http.ResponseWriter, r *http.Request) {
 		// must never require an AI-operations lease, budget, policy or key.
 		// GuardedPM2Executor remains reserved for advanced automatic maintenance.
 		result, err = s.robots.Run(input.Root, input.Action, input.Message, input.Package, input.Version, input.Tag, input.Token, input.Confirm == "true")
+		if err == nil && strings.HasPrefix(input.Action, "pm2-") && input.Action != "pm2-stop" && input.Action != "pm2-delete" && input.Action != "pm2-process-stop" && input.Action != "pm2-process-delete" {
+			go s.watchRobotLoginEvents(input.Root, time.Now())
+		}
 		finished := time.Now()
 		s.mu.Lock()
 		var snapshot operationTask

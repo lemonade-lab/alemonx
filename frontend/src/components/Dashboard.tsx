@@ -7,8 +7,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type FormEvent,
-  type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent,
   type PointerEvent as ReactPointerEvent,
   type CSSProperties,
@@ -26,8 +24,19 @@ import {
   type DashboardSection
 } from '../lib/dashboardNavigation'
 import { createRandomID } from '../lib/randomId'
+import {
+  foregroundLogDisplayText,
+  foregroundLogSummary as summarizeForegroundLog,
+  interpretForegroundLog,
+  type ForegroundLogAction,
+  type ForegroundLogItem,
+  type ForegroundLogMode
+} from '../lib/foregroundLogInterpreter'
 import cn from 'classnames'
 import Markdown from 'markdown-to-jsx'
+import { Terminal as XTerm } from '@xterm/xterm'
+import { FitAddon } from '@xterm/addon-fit'
+import '@xterm/xterm/css/xterm.css'
 import {
   AlertTriangle,
   Activity,
@@ -198,7 +207,7 @@ import {
   useWritePackageConfigMutation,
   useWriteRobotFileMutation,
   type RuntimeOverview,
-  type PM2Status,
+  type PM2Process,
   type RuntimePreflight,
   type RobotPortStatus,
   type PackageConfig,
@@ -247,6 +256,8 @@ type SystemWindowState = { minimized: boolean }
 
 type FloatingWindowID =
   | 'terminal'
+  | 'foregroundLogs'
+  | 'serviceWebview'
   | 'git'
   | 'app'
   | 'test'
@@ -269,6 +280,7 @@ type Props = {
   windowControls?: ReactNode
   onWindowStateChange?: (state: {
     terminal: { open: boolean; minimized: boolean }
+    foregroundLogs: { open: boolean; minimized: boolean }
     git: { open: boolean; minimized: boolean }
     app: { open: boolean; minimized: boolean }
     test: { open: boolean; minimized: boolean }
@@ -1048,6 +1060,16 @@ export function Dashboard({
   const [outputFailed, setOutputFailed] = useStoreState(false)
   const [consoleOpen, setConsoleOpen] = useStoreState(false)
   const [consoleMinimized, setConsoleMinimized] = useStoreState(false)
+  const [foregroundLogsOpen, setForegroundLogsOpen] = useStoreState(false)
+  const [foregroundLogsMinimized, setForegroundLogsMinimized] =
+    useStoreState(false)
+  const [serviceWebview, setServiceWebview] = useStoreState<{
+    title: string
+    url: string
+    src: string
+  } | null>(null)
+  const [serviceWebviewMinimized, setServiceWebviewMinimized] =
+    useStoreState(false)
   const [busy, setBusy] = useStoreState(false)
   const [catalogTitle, setCatalogTitle] = useStoreState('')
   const [catalogItem, setCatalogItem] = useStoreState<CatalogItem | null>(null)
@@ -1107,6 +1129,8 @@ export function Dashboard({
   const [windowLayers, setWindowLayers] = useStoreState<Record<string, number>>(
     {
       terminal: 101,
+      foregroundLogs: 109,
+      serviceWebview: 110,
       git: 102,
       app: 103,
       test: 104,
@@ -1173,6 +1197,10 @@ export function Dashboard({
   useEffect(() => {
     onWindowStateChange?.({
       terminal: { open: consoleOpen, minimized: consoleMinimized },
+      foregroundLogs: {
+        open: foregroundLogsOpen,
+        minimized: foregroundLogsMinimized
+      },
       git: { open: Boolean(gitProject), minimized: gitMinimized },
       app: { open: appContentOpen, minimized: appMinimized },
       test: { open: testContentOpen, minimized: testMinimized },
@@ -1196,6 +1224,8 @@ export function Dashboard({
     appMinimized,
     consoleMinimized,
     consoleOpen,
+    foregroundLogsMinimized,
+    foregroundLogsOpen,
     gitMinimized,
     gitProject,
     onWindowStateChange,
@@ -1263,6 +1293,30 @@ export function Dashboard({
   const removedProjectRoots = useRef<Set<string>>(new Set())
   const eventsRef = useRef<EventSource | null>(null)
   const opsRefreshTimer = useRef<number | null>(null)
+  const [loginDialog, setLoginDialog] = useState<{
+    root: string
+    platform: string
+    loginId: string
+    qrURL: string
+    challengeURL: string
+    refreshed: boolean
+  } | null>(null)
+  const stopLoginRobot = async () => {
+    const current = loginDialog
+    if (!current) return
+    try {
+      // A QR challenge can originate from a PM2 process as well as a local
+      // foreground process. Stop both scopes; the inactive one is a no-op.
+      const pm2Task = await startRobotTask({
+        root: current.root,
+        action: 'pm2-stop-project'
+      }).unwrap()
+      if (pm2Task.status === 'running') await waitForRobotTask(pm2Task.id)
+      await startRobotTask({ root: current.root, action: 'dev-stop' }).unwrap()
+    } finally {
+      setLoginDialog(null)
+    }
+  }
   const rawProjects = useSelector(
     (state: RootState) => state.workspace.projects
   )
@@ -1502,24 +1556,20 @@ export function Dashboard({
     isFetching: runtimeLoading,
     refetch: refetchRuntime
   } = useRobotRuntimeQuery(root, { skip: !root })
-  const {
-    data: pm2Status,
-    error: pm2StatusError,
-    refetch: refetchPM2Status
-  } = useRobotPM2StatusQuery(root, {
-    // Always query once a root is selected. Skipping on pm2Configured meant a
-    // freshly generated pm2.config.cjs (right after "修复后台运行") never woke
-    // the query, so the card stayed on "启动服务" even after PM2 came online.
-    skip: !root,
-    refetchOnMountOrArgChange: true
-  })
-  const {
-    data: extensionConfigsData,
-    isLoading: extensionConfigsLoading
-  } = usePackageConfigsQuery(
+  const { data: pm2Status, refetch: refetchPM2Status } = useRobotPM2StatusQuery(
     root,
-    { skip: !root || section !== 'config' || configEditor !== 'visual' }
+    {
+      // Always query once a root is selected. Skipping on pm2Configured meant a
+      // freshly generated pm2.config.cjs (right after "修复后台运行") never woke
+      // the query, so the card stayed on "启动服务" even after PM2 came online.
+      skip: !root,
+      refetchOnMountOrArgChange: true
+    }
   )
+  const { data: extensionConfigsData, isLoading: extensionConfigsLoading } =
+    usePackageConfigsQuery(root, {
+      skip: !root || section !== 'config' || configEditor !== 'visual'
+    })
   const extensionConfigs = extensionConfigsData?.items ?? []
   const watchDevelopmentTask = page === 'robot' && section === 'runtime'
   const { data: operationTasksData } = useRobotTasksQuery(undefined, {
@@ -1562,6 +1612,7 @@ export function Dashboard({
       appReady?: boolean
       testReady?: boolean
       timeoutMs?: number
+      readyProbe?: () => Promise<boolean>
       onTask?: (task: {
         status?: string
         progress?: number
@@ -1579,13 +1630,36 @@ export function Dashboard({
       error?: string
     }>((resolve, reject) => {
       let settled = false
-      const timeout = window.setTimeout(
-        () => {
-          finish(new Error('任务事件连接超时。'))
-        },
-        options.timeoutMs ??
-          (options.appReady || options.testReady ? 35_000 : 30 * 60 * 1000)
-      )
+      const timeout = window.setTimeout(() => {
+        // app-ready/test-ready is an edge event. If the process bound its port
+        // between the POST response and listener registration, the event may
+        // already be gone while the task snapshot correctly remains running.
+        // Probe once more before showing a failure to the user.
+        if (options.readyProbe) {
+          void options.readyProbe().then(ready => {
+            if (ready) finish()
+            else
+              finish(
+                new Error(
+                  options.appReady
+                    ? '应用端口在等待期内未就绪。'
+                    : '测试服务端口在等待期内未就绪。'
+                  )
+              )
+          }).catch(() =>
+            finish(
+              new Error(
+                options.appReady
+                  ? '应用端口在等待期内未就绪。'
+                  : '测试服务端口在等待期内未就绪。'
+              )
+            )
+          )
+          return
+        }
+        finish(new Error('任务事件连接超时。'))
+      }, options.timeoutMs ??
+        (options.appReady || options.testReady ? 45_000 : 30 * 60 * 1000))
       const finish = (
         reason?: Error,
         task?: Parameters<NonNullable<typeof options.onTask>>[0]
@@ -1655,6 +1729,10 @@ export function Dashboard({
         .unwrap()
         .then(settleTask)
         .catch(() => {})
+      if (options.readyProbe)
+        void options.readyProbe().then(ready => {
+          if (ready) finish()
+        })
     })
   const persistFile = async (
     targetRoot: string,
@@ -1700,8 +1778,8 @@ export function Dashboard({
       }, 500)
     )
   }
-  // "应用" = 机器人 + 应用端口。读取 serverPort；未配置则先让用户输入并
-  // 保存后优先启动开发脚本；没有 dev 时才安全回退到 app 前台脚本。
+  // “应用”只启动前台 app 脚本。开发模式由运行面板单独控制，不能因为打开
+  // WebView 而被隐式启用。
   const openApp = async () => {
     if (!root || appLaunching) return
     setAppLaunching(true)
@@ -1765,7 +1843,10 @@ export function Dashboard({
         action: 'app-open',
         ready: 'app'
       }).unwrap()
-      await waitForRobotTask(task.id, { appReady: true })
+      await waitForRobotTask(task.id, {
+        appReady: true,
+        readyProbe: checkAppReachable
+      })
       setAppContentOpen(true)
       setAppMinimized(false)
       activateFloatingWindow('app')
@@ -1839,7 +1920,7 @@ export function Dashboard({
       }
       const task = await startRobotTask({
         root,
-        action: 'dev',
+        action: 'app',
         ready: 'test'
       }).unwrap()
       await waitForRobotTask(task.id, { testReady: true })
@@ -1951,6 +2032,15 @@ export function Dashboard({
       }
       setPM2LogsMinimized(value => !value)
     }
+    const toggleForegroundLogs = () => {
+      activateFloatingWindow('foregroundLogs')
+      if (!foregroundLogsOpen) {
+        setForegroundLogsOpen(true)
+        setForegroundLogsMinimized(false)
+        return
+      }
+      setForegroundLogsMinimized(value => !value)
+    }
     const togglePM2Status = () => {
       activateFloatingWindow('pm2Status')
       if (!pm2ProcessesOpen) {
@@ -1984,6 +2074,10 @@ export function Dashboard({
     window.addEventListener('alx:desktop-test-toggle', toggleTest)
     window.addEventListener('alx:desktop-live-toggle', toggleLive)
     window.addEventListener('alx:desktop-pm2-logs-toggle', togglePM2Logs)
+    window.addEventListener(
+      'alx:desktop-foreground-logs-toggle',
+      toggleForegroundLogs
+    )
     window.addEventListener('alx:desktop-pm2-status-toggle', togglePM2Status)
     window.addEventListener('alx:desktop-ops-toggle', toggleOps)
     window.addEventListener('alx:desktop-system-toggle', toggleSystem)
@@ -1993,6 +2087,10 @@ export function Dashboard({
       window.removeEventListener('alx:desktop-test-toggle', toggleTest)
       window.removeEventListener('alx:desktop-live-toggle', toggleLive)
       window.removeEventListener('alx:desktop-pm2-logs-toggle', togglePM2Logs)
+      window.removeEventListener(
+        'alx:desktop-foreground-logs-toggle',
+        toggleForegroundLogs
+      )
       window.removeEventListener(
         'alx:desktop-pm2-status-toggle',
         togglePM2Status
@@ -2013,9 +2111,12 @@ export function Dashboard({
     liveContentOpen,
     setLiveMinimized,
     pm2LogsOpen,
+    foregroundLogsOpen,
     pm2ProcessesOpen,
     setPM2LogsMinimized,
     setPM2LogsOpen,
+    setForegroundLogsOpen,
+    setForegroundLogsMinimized,
     setPM2ProcessesMinimized,
     setPM2ProcessesOpen,
     setOpsMinimized,
@@ -2079,15 +2180,48 @@ export function Dashboard({
       type?: string
       data?: {
         taskId?: string
+        sessionId?: string
         text?: string
         truncated?: boolean
         running?: boolean
         task?: unknown
+        root?: string
+        Platform?: string
+        LoginId?: string
+        QRCode?: { url?: string; refreshed?: boolean }
       }
     }) => {
       if (typeof envelope.id === 'number')
         lastEventID = Math.max(lastEventID, envelope.id)
       const payload = envelope.data ?? {}
+      if (envelope.topic === 'robot' && envelope.type === 'login.qrcode') {
+        const qr = payload.QRCode
+        if (payload.root && payload.LoginId && qr?.url) {
+          const query = new URLSearchParams({
+            root: payload.root,
+            loginId: payload.LoginId,
+            event: String(envelope.id ?? Date.now())
+          })
+          setLoginDialog({
+            root: payload.root,
+            platform: payload.Platform ?? '机器人',
+            loginId: payload.LoginId,
+            qrURL: `/api/v1/robot/qrcode?${query.toString()}`,
+            challengeURL: qr.url,
+            refreshed: qr.refreshed === true
+          })
+        }
+      } else if (
+        envelope.topic === 'robot' &&
+        (envelope.type === 'login.success' ||
+          envelope.type === 'connection.ready')
+      ) {
+        setLoginDialog(current =>
+          current && (!payload.root || current.root === payload.root)
+            ? null
+            : current
+        )
+      }
       window.dispatchEvent(
         new CustomEvent('alx:unified-event', { detail: envelope })
       )
@@ -2101,6 +2235,15 @@ export function Dashboard({
                 taskId: payload.taskId,
                 text: payload.text ?? '',
                 truncated: payload.truncated === true
+              }
+            })
+          )
+        else if (envelope.type === 'terminal.output' && payload.sessionId)
+          window.dispatchEvent(
+            new CustomEvent('alx:terminal-output', {
+              detail: {
+                sessionId: payload.sessionId,
+                text: payload.text ?? ''
               }
             })
           )
@@ -2252,7 +2395,7 @@ export function Dashboard({
         opsRefreshTimer.current = null
       }
     }
-  }, [dispatch])
+  }, [dispatch, setLoginDialog])
 
   // A root link may arrive during initial hydration, after a browser back/
   // forward action, or from an edited address bar. Resolve it every time the
@@ -2498,7 +2641,7 @@ export function Dashboard({
     login: string,
     packageName = ''
   ): Promise<boolean> {
-    if (!root || !login.trim()) return false
+    if (!root) return false
     try {
       await saveRobotLogin({
         root,
@@ -2508,7 +2651,7 @@ export function Dashboard({
       await refreshConfigDraft()
       return true
     } catch (reason) {
-      showOutput(operationErrorMessage(reason, '登录连接未保存。'), true)
+      showOutput(operationErrorMessage(reason, '登录连接设置未保存。'), true)
       return false
     }
   }
@@ -2882,8 +3025,6 @@ export function Dashboard({
       {section === 'runtime' && (
         <RuntimePanel
           overview={runtime}
-          pm2Status={pm2Status}
-          pm2StatusError={Boolean(pm2StatusError)}
           root={root}
           loading={runtimeLoading}
           busy={busy}
@@ -2920,16 +3061,17 @@ export function Dashboard({
             setPM2LogsMinimized(false)
             activateFloatingWindow('pm2Logs')
           }}
-          onOpenPM2Processes={() => {
-            setPM2ProcessesOpen(true)
-            setPM2ProcessesMinimized(false)
-            activateFloatingWindow('pm2Status')
+          onOpenForegroundLogs={() => {
+            setForegroundLogsOpen(true)
+            setForegroundLogsMinimized(false)
+            activateFloatingWindow('foregroundLogs')
           }}
-          onRun={(action, packageName) =>
+          onRun={(action, packageName, message) =>
             api('POST', {
               root,
               action,
-              ...(packageName ? { package: packageName } : {})
+              ...(packageName ? { package: packageName } : {}),
+              ...(message ? { message } : {})
             }).then(async success => {
               if (success) {
                 // Refresh before the caller continues (e.g. installing a
@@ -3105,9 +3247,9 @@ export function Dashboard({
         }}
       />
     ) : systemFeature === 'plugins' ? (
-    <SystemPluginCenter
-      plugins={setupPlugins}
-      pluginsLoading={isPluginsLoading || isPluginsFetching}
+      <SystemPluginCenter
+        plugins={setupPlugins}
+        pluginsLoading={isPluginsLoading || isPluginsFetching}
         onOpen={id => selectSystemFeature(`setup:${id}`)}
         onRefresh={() => void refetchSetupPlugins()}
       />
@@ -3191,6 +3333,62 @@ export function Dashboard({
 
   return (
     <>
+      <Modal
+        open={Boolean(loginDialog)}
+        ariaLabel="机器人扫码登录"
+        onClose={() => void stopLoginRobot()}
+      >
+        {loginDialog && (
+          <section
+            className="grid w-full max-w-sm gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-[0_20px_58px_rgb(28_26_23/0.22)]"
+            onMouseDown={event => event.stopPropagation()}
+          >
+            <header className="flex items-start justify-between gap-3">
+              <div>
+                <h2 className="m-0 text-base font-semibold text-ink-950">
+                  扫码登录机器人
+                </h2>
+                <p className="m-0 mt-1 text-xs text-slate-500">
+                  {loginDialog.platform}
+                </p>
+              </div>
+              <Button
+                variant="icon"
+                onClick={() => void stopLoginRobot()}
+                aria-label="停止机器人并关闭扫码登录"
+              >
+                <X className="size-4" />
+              </Button>
+            </header>
+            <div className="grid justify-items-center gap-3">
+              <img
+                key={loginDialog.loginId + loginDialog.qrURL}
+                src={loginDialog.qrURL}
+                alt="扫码登录二维码"
+                className="size-64 rounded-lg border border-slate-200 bg-white p-2"
+              />
+              <p className="m-0 text-center text-sm font-medium text-slate-700">
+                {loginDialog.refreshed
+                  ? '二维码已刷新，请重新扫码'
+                  : '请使用手机扫码完成登录'}
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <Button
+                className="min-w-0 flex-1"
+                onClick={() =>
+                  void navigator.clipboard?.writeText(loginDialog.challengeURL)
+                }
+              >
+                复制登录链接
+              </Button>
+              <Button variant="secondary" onClick={() => void stopLoginRobot()}>
+                停止机器人
+              </Button>
+            </div>
+          </section>
+        )}
+      </Modal>
       <main className="guide-shell">
         <section
           className="guide-window dashboard-window"
@@ -3667,6 +3865,7 @@ export function Dashboard({
       {consoleOpen && (
         <ReadonlyConsole
           open
+          terminalOnly
           minimized={consoleMinimized}
           root={root}
           zIndex={windowLayers.terminal}
@@ -3675,6 +3874,79 @@ export function Dashboard({
           onClose={() => {
             setConsoleOpen(false)
             setConsoleMinimized(false)
+          }}
+        />
+      )}
+      {foregroundLogsOpen && (
+        <ReadonlyConsole
+          open
+          logsOnly
+          minimized={foregroundLogsMinimized}
+          root={root}
+          zIndex={windowLayers.foregroundLogs}
+          onInstallDependencies={() =>
+            void api('POST', { root, action: 'install' })
+          }
+          onOpenRuntime={() => {
+            markUserNavigation()
+            closeTemporaryContentPage()
+            setSystemFeature(null)
+            setPage('robot')
+            setSection('runtime')
+          }}
+          onOpenConfig={() => {
+            markUserNavigation()
+            closeTemporaryContentPage()
+            setSystemFeature(null)
+            setPage('robot')
+            setSection('config')
+          }}
+          onOpenEnvironment={() => selectSystemFeature('environment')}
+          onOpenService={url => {
+            let title = '服务预览'
+            try {
+              title = new URL(url).host || title
+            } catch {
+              // 服务地址已经过日志解释器验证；此处只保留通用标题。
+            }
+            void (async () => {
+              let src = url
+              try {
+                const service = new URL(url)
+                const configured = await loadAppPort(root, true).unwrap()
+                const servicePort = Number(
+                  service.port || (service.protocol === 'https:' ? 443 : 80)
+                )
+                if (configured.configured && servicePort === configured.port) {
+                  const path = `${service.pathname}${service.search}${service.hash}`
+                  src = `/api/v1/robot/app/${robotAppToken(root)}${path}`
+                }
+              } catch {
+                // 非当前机器人应用端口继续直接嵌入；跨源服务仍可刷新。
+              }
+              setServiceWebview({ title, url, src })
+              setServiceWebviewMinimized(false)
+              activateFloatingWindow('serviceWebview')
+            })()
+          }}
+          onActivate={() => activateFloatingWindow('foregroundLogs')}
+          onMinimize={() => setForegroundLogsMinimized(true)}
+          onClose={() => {
+            setForegroundLogsOpen(false)
+            setForegroundLogsMinimized(false)
+          }}
+        />
+      )}
+      {serviceWebview && (
+        <ServiceWebviewWindow
+          service={serviceWebview}
+          minimized={serviceWebviewMinimized}
+          zIndex={windowLayers.serviceWebview}
+          onActivate={() => activateFloatingWindow('serviceWebview')}
+          onMinimize={() => setServiceWebviewMinimized(value => !value)}
+          onClose={() => {
+            setServiceWebview(null)
+            setServiceWebviewMinimized(false)
           }}
         />
       )}
@@ -3708,6 +3980,20 @@ export function Dashboard({
         minimized={pm2ProcessesMinimized}
         root={root}
         zIndex={windowLayers.pm2Status}
+        onOpenLogs={() => {
+          setPM2LogsOpen(true)
+          setPM2LogsMinimized(false)
+          activateFloatingWindow('pm2Logs')
+        }}
+        onRun={async (action, message) => {
+          const success = await api('POST', {
+            root,
+            action,
+            ...(message ? { message } : {})
+          })
+          if (success) await refetchPM2Status()
+          return success
+        }}
         onActivate={() => activateFloatingWindow('pm2Status')}
         onMinimize={() => setPM2ProcessesMinimized(true)}
         onClose={() => {
@@ -5758,8 +6044,10 @@ function SystemPluginCenter({
   const [setEnabled, { isLoading }] = useSetSetupPluginEnabledMutation()
   const [installPlugin, { isLoading: installing }] =
     useInstallSetupPluginMutation()
-  const [loadMarket, { data: marketData, isLoading: marketLoading, isFetching: marketFetching }] =
-    useLazySetupPluginMarketQuery()
+  const [
+    loadMarket,
+    { data: marketData, isLoading: marketLoading, isFetching: marketFetching }
+  ] = useLazySetupPluginMarketQuery()
   const [uninstallPlugin, { isLoading: uninstalling }] =
     useUninstallSetupPluginMutation()
   const [migratePlugin, { isLoading: migrating }] =
@@ -6355,7 +6643,8 @@ function SystemPluginCenter({
                 plugin.installMode === 'managed-release' ||
                 Boolean(plugin.installedTag)
               const isLegacyLocal = plugin.installMode === 'legacy-local'
-              const isLegacyMigrated = plugin.installOrigin === 'legacy-migration'
+              const isLegacyMigrated =
+                plugin.installOrigin === 'legacy-migration'
               const isDevelopment = Boolean(plugin.developmentSource)
               const hasPanel = Boolean(plugin.web)
               const canOpen = isEnabled && hasPanel
@@ -6428,7 +6717,9 @@ function SystemPluginCenter({
                       ) : isLegacyLocal ? (
                         <span className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400">
                           <Circle className="size-3" />
-                          {isLegacyMigrated ? '旧版已迁移，待兼容启动' : '旧版安装，兼容待迁移'}
+                          {isLegacyMigrated
+                            ? '旧版已迁移，待兼容启动'
+                            : '旧版安装，兼容待迁移'}
                         </span>
                       ) : isEnabled ? (
                         <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
@@ -6515,7 +6806,12 @@ function SystemPluginCenter({
                         size="sm"
                         disabled={migrating}
                         onClick={() => {
-                          if (!window.confirm(`将 ${plugin.name} 复制到工作区管理目录，原目录不会删除。继续吗？`)) return
+                          if (
+                            !window.confirm(
+                              `将 ${plugin.name} 复制到工作区管理目录，原目录不会删除。继续吗？`
+                            )
+                          )
+                            return
                           void migratePlugin({ pluginID: plugin.id })
                         }}
                         className="h-7 rounded-md px-2.5 text-xs font-medium"
@@ -8132,11 +8428,12 @@ function CatalogDetail({
           <p className="m-0 text-sm text-slate-500">
             {item.description || '在线生态目录条目'}
           </p>
-          {repositoryInstall && packageName.startsWith('git+https://github.com/') && (
-            <p className="m-0 text-xs text-slate-500">
-              已识别 GitHub 仓库，安装时会自动使用 GHFast 镜像。
-            </p>
-          )}
+          {repositoryInstall &&
+            packageName.startsWith('git+https://github.com/') && (
+              <p className="m-0 text-xs text-slate-500">
+                已识别 GitHub 仓库，安装时会自动使用 GHFast 镜像。
+              </p>
+            )}
         </div>
         <div className="flex flex-wrap items-end justify-end gap-2">
           {packageName ? (
@@ -8508,10 +8805,770 @@ function MarkdownPage({ markdown }: { markdown: string }) {
     </article>
   )
 }
+
+type PM2RegistrationSettings = {
+  name: string
+  script: string
+  autorestart: boolean
+  maxRestarts: number
+  maxMemory?: string
+  env: Record<string, string>
+  registered: boolean
+  customConfig: boolean
+}
+
+function PM2RuntimeCard({
+  root,
+  onOpenLogs,
+  onProcessAction
+}: {
+  root: string
+  onOpenLogs: () => void
+  onProcessAction: (action: string, processID: number) => Promise<boolean>
+}) {
+  const [items, setItems] = useStoreState<PM2Process[]>([])
+  const [streamError, setStreamError] = useStoreState('')
+  const [settings, setSettings] = useStoreState<PM2RegistrationSettings | null>(
+    null
+  )
+  const [settingsOpen, setSettingsOpen] = useStoreState(false)
+  const [settingsBusy, setSettingsBusy] = useStoreState(false)
+  const [registerOpen, setRegisterOpen] = useStoreState(false)
+  const [overwriteAction, setOverwriteAction] = useStoreState<
+    'save' | 'apply' | null
+  >(null)
+  const [needsApply, setNeedsApply] = useStoreState(false)
+  const [actionBusy, setActionBusy] = useStoreState(false)
+  const [pendingAction, setPendingAction] = useStoreState<{
+    action: string
+    label: string
+    note: string
+    process: PM2Process
+  } | null>(null)
+  const [envText, setEnvText] = useStoreState('')
+
+  const refreshProcesses = useCallback(async () => {
+    if (!root) return
+    try {
+      const response = await fetch(
+        `/api/v1/robot/pm2-processes?${new URLSearchParams({ root, scope: 'project' })}`
+      )
+      const result = (await response.json()) as {
+        items?: PM2Process[]
+        error?: string
+      }
+      if (!response.ok)
+        throw new Error(result.error || '无法读取 PM2 进程状态。')
+      setItems(result.items ?? [])
+      setStreamError('')
+    } catch (reason) {
+      setStreamError(operationErrorMessage(reason, '无法读取 PM2 进程状态。'))
+    }
+  }, [root, setItems, setStreamError])
+
+  const loadSettings = useCallback(async () => {
+    if (!root) return
+    try {
+      const response = await fetch(
+        `/api/v1/robot/pm2-registration?${new URLSearchParams({ root })}`
+      )
+      const result = (await response.json()) as PM2RegistrationSettings & {
+        error?: string
+      }
+      if (!response.ok)
+        throw new Error(result.error || '无法读取后台运行配置。')
+      setSettings(result)
+      setEnvText(
+        Object.entries(result.env ?? {})
+          .map(([key, value]) => `${key}=${value}`)
+          .join('\n')
+      )
+      setStreamError('')
+    } catch (reason) {
+      setStreamError(operationErrorMessage(reason, '无法读取后台运行配置。'))
+    }
+  }, [root, setEnvText, setSettings, setStreamError])
+
+  useEffect(() => {
+    void loadSettings()
+  }, [loadSettings])
+
+  useEffect(() => {
+    if (!root) return
+    setItems([])
+    setStreamError('')
+    void refreshProcesses()
+    const stream = new EventSource(
+      `/api/v1/robot/pm2-processes/stream?${new URLSearchParams({ root })}`
+    )
+    stream.onmessage = event => {
+      try {
+        const payload = JSON.parse(event.data) as {
+          items?: PM2Process[]
+          error?: string
+        }
+        if (payload.error) {
+          setStreamError(payload.error)
+          return
+        }
+        setItems(payload.items ?? [])
+        setStreamError('')
+      } catch {
+        // The browser reconnects EventSource automatically; ignore one bad frame.
+      }
+    }
+    stream.onerror = () => setStreamError('PM2 状态连接暂时中断，正在重连…')
+    return () => stream.close()
+  }, [refreshProcesses, root, setItems, setStreamError])
+
+  const parseEnvironment = () => {
+    const env: Record<string, string> = {}
+    for (const raw of envText.split('\n')) {
+      const line = raw.trim()
+      if (!line) continue
+      const separator = line.indexOf('=')
+      if (separator < 1) throw new Error('环境变量应按 KEY=value 每行填写。')
+      env[line.slice(0, separator).trim()] = line.slice(separator + 1)
+    }
+    return env
+  }
+  const saveSettings = async (overwrite = false) => {
+    if (!settings || settingsBusy) return
+    setSettingsBusy(true)
+    try {
+      const response = await fetch('/api/v1/robot/pm2-registration', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          root,
+          settings: { ...settings, env: parseEnvironment() },
+          overwrite
+        })
+      })
+      const result = (await response.json()) as PM2RegistrationSettings & {
+        error?: string
+      }
+      if (!response.ok)
+        throw new Error(result.error || '保存后台运行配置失败。')
+      setSettings(result)
+      setNeedsApply(true)
+      setSettingsOpen(false)
+    } catch (reason) {
+      setStreamError(operationErrorMessage(reason, '保存后台运行配置失败。'))
+    } finally {
+      setSettingsBusy(false)
+    }
+  }
+  const register = async (overwrite = false) => {
+    if (!settings || settingsBusy) return
+    setSettingsBusy(true)
+    try {
+      const response = await fetch('/api/v1/robot/pm2-registration', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          root,
+          settings: { ...settings, env: parseEnvironment() },
+          overwrite
+        })
+      })
+      const result = (await response.json()) as { error?: string }
+      if (!response.ok) throw new Error(result.error || '注册后台服务失败。')
+      setRegisterOpen(false)
+      setNeedsApply(false)
+      await loadSettings()
+    } catch (reason) {
+      setStreamError(operationErrorMessage(reason, '注册后台服务失败。'))
+    } finally {
+      setSettingsBusy(false)
+    }
+  }
+  const confirmProcessAction = async () => {
+    if (!pendingAction || actionBusy) return
+    setActionBusy(true)
+    try {
+      if (
+        await onProcessAction(pendingAction.action, pendingAction.process.id)
+      ) {
+        await refreshProcesses()
+      }
+    } finally {
+      setActionBusy(false)
+      setPendingAction(null)
+    }
+  }
+  const statusTone = (status: string) =>
+    status === 'online'
+      ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300'
+      : status === 'launching'
+        ? 'bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300'
+        : 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400'
+  const processActionsFor = (
+    status: string
+  ): Array<{
+    action: string
+    icon: LucideIcon
+    label: string
+  }> => {
+    const remove = { action: 'pm2-process-delete', icon: Trash2, label: '删除' }
+    if (status === 'online') {
+      return [
+        { action: 'pm2-process-stop', icon: X, label: '停止' },
+        { action: 'pm2-process-reload', icon: RefreshCw, label: '重载' },
+        { action: 'pm2-process-restart', icon: RefreshCw, label: '重启' },
+        remove
+      ]
+    }
+    return [{ action: 'pm2-process-start', icon: Play, label: '启动' }, remove]
+  }
+
+  return (
+    <section className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
+        <div className="grid gap-1">
+          <strong className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+            后台运行
+            <StatusDot active={items.some(item => item.status === 'online')} />
+          </strong>
+          <span className="text-xs text-slate-500">
+            {items.length
+              ? `已连接 PM2，实时显示 ${items.length} 个后台进程。`
+              : '尚未注册后台进程；注册后会在此实时显示。'}
+          </span>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <button
+            className="secondary-button gap-1.5"
+            disabled={!settings || settingsBusy}
+            onClick={() => setSettingsOpen(true)}
+          >
+            <Settings className="size-4" />
+            修改
+          </button>
+          <button
+            className="primary-button gap-1.5"
+            disabled={!settings || settingsBusy}
+            onClick={() => setRegisterOpen(true)}
+          >
+            <Play className="size-4" />
+            {needsApply ? '应用配置' : settings?.registered ? '更新注册' : '注册'}
+          </button>
+        </div>
+      </header>
+      {streamError && (
+        <p className="m-0 border-b border-amber-100 bg-amber-50 px-4 py-2 text-xs text-amber-800">
+          {streamError}
+        </p>
+      )}
+      {items.length === 0 ? (
+        <div className="grid min-h-28 place-items-center px-4 py-8 text-center text-xs text-slate-500">
+          暂无后台进程。点击右上角“注册”即可按当前常规配置创建服务。
+        </div>
+      ) : (
+        <div className="divide-y divide-slate-100">
+          {items.map(item => (
+            <div
+              className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3 text-xs"
+              key={item.id}
+            >
+              <strong className="min-w-32 text-slate-800">{item.name}</strong>
+              <span
+                className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 font-medium ${statusTone(item.status)}`}
+              >
+                <i className="inline-block size-1.5 rounded-full bg-current" />
+                {item.status}
+              </span>
+              <span className="font-mono text-slate-500">
+                PID {item.pid || '—'}
+              </span>
+              <span className="font-mono text-slate-500">
+                CPU {item.cpu ? `${item.cpu.toFixed(1)}%` : '—'}
+              </span>
+              <span className="font-mono text-slate-500">
+                内存{' '}
+                {item.memory
+                  ? `${(item.memory / 1024 / 1024).toFixed(1)} MB`
+                  : '—'}
+              </span>
+              <span className="font-mono text-slate-500">
+                重启 {item.restarts}
+              </span>
+              <div className="ml-auto flex items-center gap-1">
+                {processActionsFor(item.status).map(
+                  ({ action, icon: ProcessIcon, label }) => {
+                    return (
+                      <button
+                        aria-label={`${label} ${item.name}`}
+                        className={cn(
+                          'icon-button size-7 p-0',
+                          action === 'pm2-process-delete' &&
+                            'text-rose-600 hover:bg-rose-50 dark:text-rose-300 dark:hover:bg-rose-950'
+                        )}
+                        disabled={actionBusy}
+                        key={action}
+                        onClick={() =>
+                          setPendingAction({
+                            action,
+                            label: `${label} ${item.name}`,
+                            note: `${label} PM2 进程 #${item.id}${action === 'pm2-process-delete' ? '；删除后可重新注册。' : '。'}`,
+                            process: item
+                          })
+                        }
+                        title={label}
+                      >
+                        <ProcessIcon className="size-3.5" />
+                      </button>
+                    )
+                  }
+                )}
+                <button
+                  className="icon-button size-7 p-0"
+                  onClick={onOpenLogs}
+                  title="日志"
+                >
+                  <ClipboardList className="size-3.5" />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      <Modal
+        open={settingsOpen}
+        onClose={() => !settingsBusy && setSettingsOpen(false)}
+        ariaLabel="修改后台运行配置"
+      >
+        <section className="grid w-full max-w-lg gap-4 rounded-xl border border-slate-200 bg-white p-5 shadow-[0_20px_58px_rgb(28_26_23/0.22)]">
+          <header>
+            <strong>修改后台运行</strong>
+            <p className="mt-1 text-xs text-slate-500">
+              仅显示常规配置，其他 PM2 参数由系统生成。保存后需点击“应用配置”才会影响运行中的进程。
+            </p>
+          </header>
+          <label className="grid gap-1.5 text-xs font-medium text-slate-600">
+            进程名称
+            <input
+              className="h-9 rounded-md border border-slate-300 bg-white px-2.5 text-sm font-normal text-slate-800 outline-none transition focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
+              value={settings?.name ?? ''}
+              onChange={event =>
+                setSettings(current =>
+                  current ? { ...current, name: event.target.value } : current
+                )
+              }
+            />
+          </label>
+          <label className="grid gap-1.5 text-xs font-medium text-slate-600">
+            启动文件
+            <input
+              className="h-9 rounded-md border border-slate-300 bg-white px-2.5 text-sm font-normal text-slate-800 outline-none transition focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
+              value={settings?.script ?? ''}
+              onChange={event =>
+                setSettings(current =>
+                  current ? { ...current, script: event.target.value } : current
+                )
+              }
+              placeholder="./index.js"
+            />
+          </label>
+          <div className="grid grid-cols-2 gap-3">
+            <label className="grid gap-1.5 text-xs font-medium text-slate-600">
+              最大重启次数
+              <input
+                className="h-9 rounded-md border border-slate-300 bg-white px-2.5 text-sm font-normal text-slate-800 outline-none transition focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
+                min="0"
+                max="1000"
+                type="number"
+                value={settings?.maxRestarts ?? 10}
+                onChange={event =>
+                  setSettings(current =>
+                    current
+                      ? { ...current, maxRestarts: Number(event.target.value) }
+                      : current
+                  )
+                }
+              />
+            </label>
+            <label className="grid gap-1.5 text-xs font-medium text-slate-600">
+              内存上限（可选）
+              <input
+                className="h-9 rounded-md border border-slate-300 bg-white px-2.5 text-sm font-normal text-slate-800 outline-none transition focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
+                value={settings?.maxMemory ?? ''}
+                onChange={event =>
+                  setSettings(current =>
+                    current
+                      ? { ...current, maxMemory: event.target.value }
+                      : current
+                  )
+                }
+                placeholder="512M"
+              />
+            </label>
+          </div>
+          <label className="settings-switch-row">
+            <span className="settings-switch">
+              <input
+                checked={settings?.autorestart ?? true}
+                type="checkbox"
+                onChange={event =>
+                  setSettings(current =>
+                    current
+                      ? { ...current, autorestart: event.target.checked }
+                      : current
+                  )
+                }
+              />
+            </span>
+            <span className="settings-switch-copy">
+              <strong>自动重启</strong>
+              <small>进程意外退出时由 PM2 自动恢复。</small>
+            </span>
+          </label>
+          <label className="grid gap-1.5 text-xs font-medium text-slate-600">
+            环境变量（每行 KEY=value）
+            <textarea
+              className="min-h-24 resize-y rounded-md border border-slate-300 bg-white px-2.5 py-2 text-sm font-normal leading-5 text-slate-800 outline-none transition focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
+              value={envText}
+              onChange={event => setEnvText(event.target.value)}
+            />
+          </label>
+          <footer className="flex justify-end gap-2">
+            <Button variant="secondary" onClick={() => setSettingsOpen(false)}>
+              取消
+            </Button>
+            <Button
+              loading={settingsBusy}
+              onClick={() =>
+                settings?.customConfig
+                  ? setOverwriteAction('save')
+                  : void saveSettings()
+              }
+            >
+              保存
+            </Button>
+          </footer>
+        </section>
+      </Modal>
+      <ConfirmDialog
+        open={registerOpen}
+        title={needsApply ? '应用后台配置' : settings?.registered ? '更新后台注册' : '注册后台服务'}
+        message={`将以 ${settings?.name ?? '当前配置'}、${settings?.script ?? './index.js'} 注册到 PM2，并立即启动或更新服务。若当前存在前台运行，会先停止前台进程释放端口。`}
+        confirmLabel={needsApply ? '应用配置' : settings?.registered ? '更新注册' : '注册'}
+        busy={settingsBusy}
+        onCancel={() => !settingsBusy && setRegisterOpen(false)}
+        onConfirm={() =>
+          settings?.customConfig
+            ? (setRegisterOpen(false), setOverwriteAction('apply'))
+            : void register()
+        }
+      />
+      <ConfirmDialog
+        open={Boolean(overwriteAction)}
+        title="接管自定义 PM2 配置"
+        message="检测到 pm2.config.cjs 不是 AlemonX 生成的配置。继续会覆盖该文件并由 AlemonX 管理；请先确认自定义字段不再需要。"
+        confirmLabel="接管并覆盖"
+        destructive
+        busy={settingsBusy}
+        onCancel={() => !settingsBusy && setOverwriteAction(null)}
+        onConfirm={() => {
+          const action = overwriteAction
+          setOverwriteAction(null)
+          if (action === 'save') void saveSettings(true)
+          if (action === 'apply') void register(true)
+        }}
+      />
+      <ConfirmDialog
+        open={Boolean(pendingAction)}
+        title={pendingAction?.label ?? ''}
+        message={pendingAction?.note ?? ''}
+        confirmLabel={'确认'}
+        destructive={pendingAction?.action === 'pm2-process-delete'}
+        busy={actionBusy}
+        onCancel={() => !actionBusy && setPendingAction(null)}
+        onConfirm={() => void confirmProcessAction()}
+      />
+    </section>
+  )
+}
+
+type ScriptControlItem = {
+  name: string
+  command: string
+  running: boolean
+  taskId?: string
+  record?: string
+}
+
+function ScriptControlCard({
+  root,
+  openRequest
+}: {
+  root: string
+  openRequest: number
+}) {
+  const [items, setItems] = useStoreState<ScriptControlItem[]>([])
+  const [collapsed, setCollapsed] = useState(true)
+  const [error, setError] = useStoreState('')
+  const [busyScript, setBusyScript] = useStoreState('')
+  const [record, setRecord] = useStoreState<{
+    name: string
+    output: string
+  } | null>(null)
+  const [editing, setEditing] = useStoreState<{
+    previousName: string
+    name: string
+    command: string
+  } | null>(null)
+  const load = useCallback(
+    async (includeRecord = false) => {
+      if (!root) return
+      try {
+        const query = new URLSearchParams({ root })
+        if (includeRecord) query.set('record', '1')
+        const response = await fetch(`/api/v1/robot/scripts?${query}`)
+        const result = (await response.json()) as {
+          items?: ScriptControlItem[]
+          error?: string
+        }
+        if (!response.ok)
+          throw new Error(result.error || '无法读取 package.json 脚本。')
+        setItems(result.items ?? [])
+        setError('')
+        return result.items ?? []
+      } catch (reason) {
+        setError(operationErrorMessage(reason, '无法读取 package.json 脚本。'))
+        return []
+      }
+    },
+    [root, setError, setItems]
+  )
+  useEffect(() => {
+    void load()
+  }, [load])
+  useEffect(() => {
+    if (openRequest > 0) setCollapsed(false)
+  }, [openRequest])
+  useEffect(() => {
+    if (!items.some(item => item.running)) return
+    const timer = window.setInterval(() => void load(), 1000)
+    return () => window.clearInterval(timer)
+  }, [items, load])
+  const control = async (script: string, action: 'run' | 'stop') => {
+    if (busyScript) return
+    setBusyScript(script)
+    try {
+      const response = await fetch('/api/v1/robot/scripts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ root, script, action })
+      })
+      const result = (await response.json()) as { error?: string }
+      if (!response.ok) throw new Error(result.error || '脚本操作失败。')
+      await load()
+    } catch (reason) {
+      setError(operationErrorMessage(reason, '脚本操作失败。'))
+    } finally {
+      setBusyScript('')
+    }
+  }
+  const openRecord = async (script: string) => {
+    const records = (await load(true)) ?? []
+    const item = records.find(candidate => candidate.name === script)
+    setRecord({
+      name: script,
+      output: item?.record || '该脚本暂时没有执行记录。'
+    })
+  }
+  const saveScript = async () => {
+    if (!editing || busyScript) return
+    setBusyScript(editing.previousName)
+    try {
+      const response = await fetch('/api/v1/robot/scripts', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ root, ...editing })
+      })
+      const result = (await response.json()) as { error?: string }
+      if (!response.ok) throw new Error(result.error || '保存脚本失败。')
+      setEditing(null)
+      await load()
+    } catch (reason) {
+      setError(operationErrorMessage(reason, '保存脚本失败。'))
+    } finally {
+      setBusyScript('')
+    }
+  }
+  return (
+    <section className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+      <header
+        className="flex cursor-pointer items-center justify-between gap-3 border-b border-slate-200 px-4 py-3"
+        role="button"
+        tabIndex={0}
+        aria-expanded={!collapsed}
+        onClick={() => setCollapsed(value => !value)}
+        onKeyDown={event => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault()
+            setCollapsed(value => !value)
+          }
+        }}
+      >
+        <div className="grid gap-1">
+          <strong className="text-sm font-semibold text-slate-800">
+            脚本控制
+          </strong>
+        </div>
+        <span className="text-xs text-slate-400">
+          {items.length} 个脚本 · {collapsed ? '展开' : '收起'}
+        </span>
+      </header>
+      {!collapsed && error && (
+        <p className="m-0 border-b border-amber-100 bg-amber-50 px-4 py-2 text-xs text-amber-800">
+          {error}
+        </p>
+      )}
+      {!collapsed && (items.length === 0 ? (
+        <div className="px-4 py-8 text-center text-xs text-slate-500">
+          package.json 暂未声明脚本。
+        </div>
+      ) : (
+        <div className="divide-y divide-slate-100">
+          {items.map(item => (
+            <div
+              className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3 text-xs"
+              key={item.name}
+            >
+              <div className="min-w-36">
+                <strong className="text-slate-800">{item.name}</strong>
+                <code className="ml-2 text-slate-500">{item.command}</code>
+              </div>
+              <span
+                className={cn(
+                  'rounded-full px-2 py-0.5',
+                  item.running
+                    ? 'bg-emerald-100 text-emerald-700'
+                    : 'bg-slate-100 text-slate-500'
+                )}
+              >
+                {item.running ? '运行中' : '未运行'}
+              </span>
+              <div className="ml-auto flex gap-2">
+                <button
+                  className="secondary-button gap-1"
+                  disabled={Boolean(busyScript)}
+                  onClick={event => {
+                    event.stopPropagation()
+                    void control(item.name, item.running ? 'stop' : 'run')
+                  }}
+                >
+                  {item.running ? (
+                    <X className="size-3.5" />
+                  ) : (
+                    <Play className="size-3.5" />
+                  )}
+                  {item.running ? '停止' : '执行'}
+                </button>
+                <button
+                  className="text-button gap-1"
+                  disabled={Boolean(busyScript)}
+                  onClick={event => {
+                    event.stopPropagation()
+                    void openRecord(item.name)
+                  }}
+                >
+                  <ClipboardList className="size-3.5" />
+                  记录
+                </button>
+                <button
+                  className="text-button gap-1"
+                  disabled={Boolean(busyScript)}
+                  onClick={event => {
+                    event.stopPropagation()
+                    setEditing({
+                      previousName: item.name,
+                      name: item.name,
+                      command: item.command
+                    })
+                  }}
+                >
+                  <Pencil className="size-3.5" />
+                  编辑
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      ))}
+      <Modal
+        open={Boolean(record)}
+        onClose={() => setRecord(null)}
+        ariaLabel="脚本执行记录"
+      >
+        <section className="grid w-full max-w-2xl gap-3 rounded-xl bg-white p-5 shadow-xl">
+          <header>
+            <strong>{record?.name} 执行记录</strong>
+          </header>
+          <pre className="max-h-96 overflow-auto rounded-lg bg-slate-950 p-3 text-xs text-slate-100">
+            {record?.output}
+          </pre>
+          <footer className="flex justify-end">
+            <Button variant="secondary" onClick={() => setRecord(null)}>
+              关闭
+            </Button>
+          </footer>
+        </section>
+      </Modal>
+      <Modal
+        open={Boolean(editing)}
+        onClose={() => !busyScript && setEditing(null)}
+        ariaLabel="编辑脚本"
+      >
+        <section className="grid w-full max-w-lg gap-4 rounded-xl border border-slate-200 bg-white p-5 shadow-[0_20px_58px_rgb(28_26_23/0.22)]">
+          <header>
+            <strong>编辑脚本</strong>
+            <p className="mt-1 text-xs text-slate-500">
+              保存后在下一次执行时生效；已运行的脚本不会被改动。
+            </p>
+          </header>
+          <label className="grid gap-1.5 text-xs font-medium text-slate-600">
+            脚本名称
+            <input
+              className="h-9 rounded-md border border-slate-300 bg-white px-2.5 text-sm font-normal text-slate-800 outline-none transition focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
+              value={editing?.name ?? ''}
+              onChange={event =>
+                setEditing(current =>
+                  current ? { ...current, name: event.target.value } : current
+                )
+              }
+            />
+          </label>
+          <label className="grid gap-1.5 text-xs font-medium text-slate-600">
+            命令
+            <textarea
+              className="min-h-24 resize-y rounded-md border border-slate-300 bg-white px-2.5 py-2 text-sm font-normal leading-5 text-slate-800 outline-none transition focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
+              value={editing?.command ?? ''}
+              onChange={event =>
+                setEditing(current =>
+                  current ? { ...current, command: event.target.value } : current
+                )
+              }
+            />
+          </label>
+          <footer className="flex justify-end gap-2">
+            <Button variant="secondary" onClick={() => setEditing(null)}>
+              取消
+            </Button>
+            <Button loading={Boolean(busyScript)} onClick={() => void saveScript()}>
+              保存
+            </Button>
+          </footer>
+        </section>
+      </Modal>
+    </section>
+  )
+}
+
 function RuntimePanel({
   overview,
-  pm2Status,
-  pm2StatusError,
   root,
   loading,
   busy,
@@ -8522,8 +9579,8 @@ function RuntimePanel({
   pm2Running,
   onRefresh,
   onRefreshOverview,
+  onOpenForegroundLogs,
   onOpenPM2Logs,
-  onOpenPM2Processes,
   onRun,
   onSaveLogin,
   onSavePackageConfig,
@@ -8531,8 +9588,6 @@ function RuntimePanel({
   developerMode
 }: {
   overview?: RuntimeOverview
-  pm2Status?: PM2Status
-  pm2StatusError: boolean
   root: string
   loading: boolean
   busy: boolean
@@ -8543,9 +9598,13 @@ function RuntimePanel({
   pm2Running: boolean
   onRefresh: () => void
   onRefreshOverview: () => Promise<RuntimeOverview | undefined>
+  onOpenForegroundLogs: () => void
   onOpenPM2Logs: () => void
-  onOpenPM2Processes: () => void
-  onRun: (action: string, packageName?: string) => Promise<boolean>
+  onRun: (
+    action: string,
+    packageName?: string,
+    message?: string
+  ) => Promise<boolean>
   onSaveLogin: (login: string, packageName?: string) => Promise<boolean>
   onSavePackageConfig: (
     packageName: string,
@@ -8600,6 +9659,15 @@ function RuntimePanel({
     void refreshPorts()
   }
   const [loginChoice, setLoginChoice] = useStoreState<LoginChoice | null>(null)
+  const [scriptControlRequest, setScriptControlRequest] = useState(0)
+  const [dependencyControl, setDependencyControl] = useStoreState<{
+    mode: 'add' | 'link' | 'remove'
+    name: string
+    version: string
+    scope: 'dependencies' | 'devDependencies'
+  } | null>(null)
+  const [dependencyControlBusy, setDependencyControlBusy] =
+    useStoreState(false)
   const [connectionConfig, setConnectionConfig] = useStoreState<{
     package: string
     fields: PackageConfigField[]
@@ -8620,10 +9688,7 @@ function RuntimePanel({
       requireLogin?: boolean
     ) => Promise<void>
   >(() => Promise.resolve())
-  const persistentReady = overview?.pm2Configured && overview.hasStartScript
-  const pm2Managed = Boolean(pm2Status?.managed)
   const pm2LocalRunning = pm2Running
-  const localRunning = developmentRunning || foregroundRunning
   // A missing dependency blocks every run action until dependencies install.
   const knownPlatform = (overview?.platforms ?? []).find(
     item => item.id === selectedPlatform
@@ -8765,6 +9830,25 @@ function RuntimePanel({
     setLoginChoice(null)
     setLoginDialogError('')
   }
+  const executeDependencyControl = async () => {
+    if (!dependencyControl || dependencyControlBusy) return
+    const name = dependencyControl.name.trim()
+    if (!name) return
+    const action =
+      dependencyControl.mode === 'add'
+        ? dependencyControl.scope === 'devDependencies'
+          ? 'dependency-add-dev'
+          : 'dependency-add'
+        : `dependency-${dependencyControl.mode}`
+    setDependencyControlBusy(true)
+    try {
+      if (await onRun(action, name, dependencyControl.version.trim())) {
+        setDependencyControl(null)
+      }
+    } finally {
+      setDependencyControlBusy(false)
+    }
+  }
   const loadConnectionConfig = async (packageName: string) => {
     if (!packageName) {
       setConnectionConfig(null)
@@ -8891,9 +9975,9 @@ function RuntimePanel({
         )
           return
       }
-      if (login) {
-        if (!(await onSaveLogin(login, connectionPackage))) return
-      }
+      // “不选择”不是保留旧设置：必须清除配置文件中的 login/platform，
+      // 否则机器人仍会启动此前的扫码连接。
+      if (!(await onSaveLogin(login, login ? connectionPackage : ''))) return
       if (await onRun(loginChoice.action)) {
         await refreshPorts()
         closeLoginDialog()
@@ -8936,6 +10020,105 @@ function RuntimePanel({
         onCancel={() => setPending(null)}
         onConfirm={confirm}
       />
+      <Modal
+        open={Boolean(dependencyControl)}
+        onClose={() => !dependencyControlBusy && setDependencyControl(null)}
+        ariaLabel="依赖控制"
+      >
+        <section className="grid w-full max-w-md gap-4 rounded-xl border border-slate-200 bg-white p-5 shadow-[0_20px_58px_rgb(28_26_23/0.22)]">
+          <header>
+            <strong>依赖控制</strong>
+            <p className="mt-1 text-xs text-slate-500">
+              使用当前项目的包管理器修改 package.json 与锁文件。
+            </p>
+          </header>
+          <div className="grid grid-cols-3 gap-2">
+            {([
+              ['add', 'add'],
+              ['link', 'link'],
+              ['remove', 'remove']
+            ] as const).map(([mode, label]) => (
+              <button
+                className={cn(
+                  'h-9 rounded-md border text-xs font-medium transition',
+                  dependencyControl?.mode === mode
+                    ? 'border-brand-600 bg-brand-600 text-white'
+                    : 'border-slate-200 bg-white text-slate-600 hover:border-brand-300 hover:bg-brand-50'
+                )}
+                key={mode}
+                onClick={() =>
+                  setDependencyControl(current =>
+                    current ? { ...current, mode } : current
+                  )
+                }
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <label className="grid gap-1.5 text-xs font-medium text-slate-600">
+            包名
+            <input
+              className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm font-normal text-slate-800 outline-none transition focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
+              value={dependencyControl?.name ?? ''}
+              onChange={event =>
+                setDependencyControl(current =>
+                  current ? { ...current, name: event.target.value } : current
+                )
+              }
+              placeholder={dependencyControl?.mode === 'link' ? '如 @scope/package 或本地链接名' : '如 @alemonjs/onebot'}
+              autoFocus
+            />
+          </label>
+          <label className="grid gap-1.5 text-xs font-medium text-slate-600">
+            版本（可选）
+            <input
+              className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm font-normal text-slate-800 outline-none transition focus:border-brand-600 focus:ring-2 focus:ring-brand-100 disabled:bg-slate-100"
+              value={dependencyControl?.version ?? ''}
+              onChange={event =>
+                setDependencyControl(current =>
+                  current ? { ...current, version: event.target.value } : current
+                )
+              }
+              placeholder="如 ^2.0.0 或 latest"
+              disabled={dependencyControl?.mode === 'link'}
+            />
+          </label>
+          <div className="grid grid-cols-2 gap-2">
+            {(['dependencies', 'devDependencies'] as const).map(scope => (
+              <button
+                className={cn(
+                  'h-9 rounded-md border text-xs font-medium transition disabled:cursor-not-allowed disabled:opacity-50',
+                  dependencyControl?.scope === scope
+                    ? 'border-brand-600 bg-brand-600 text-white'
+                    : 'border-slate-200 bg-white text-slate-600 hover:border-brand-300 hover:bg-brand-50'
+                )}
+                disabled={dependencyControl?.mode !== 'add'}
+                key={scope}
+                onClick={() =>
+                  setDependencyControl(current =>
+                    current ? { ...current, scope } : current
+                  )
+                }
+              >
+                {scope}
+              </button>
+            ))}
+          </div>
+          <footer className="flex justify-end gap-2">
+            <Button variant="secondary" onClick={() => setDependencyControl(null)}>
+              取消
+            </Button>
+            <Button
+              loading={dependencyControlBusy}
+              disabled={!dependencyControl?.name.trim()}
+              onClick={() => void executeDependencyControl()}
+            >
+              执行
+            </Button>
+          </footer>
+        </section>
+      </Modal>
       <ConfirmDialog
         open={Boolean(validationMessage)}
         title={validationTitle}
@@ -9256,6 +10439,21 @@ function RuntimePanel({
               <div className="ml-auto flex shrink-0 flex-wrap justify-end gap-2">
                 <button
                   className="secondary-button gap-1.5"
+                  disabled={busy}
+                  onClick={() =>
+                    setDependencyControl({
+                      mode: 'add',
+                      name: '',
+                      version: '',
+                      scope: 'dependencies'
+                    })
+                  }
+                >
+                  <Settings className="size-4" />
+                  控制
+                </button>
+                <button
+                  className="secondary-button gap-1.5"
                   disabled={busy || !overview?.dependenciesComplete}
                   title={
                     !overview?.dependenciesComplete
@@ -9319,6 +10517,24 @@ function RuntimePanel({
                 </span>
               </div>
               <div className="ml-auto flex gap-2 shrink-0 justify-end">
+                <button
+                  className="text-button gap-1.5"
+                  disabled={busy}
+                  onClick={() => setScriptControlRequest(value => value + 1)}
+                  title="修改 app 脚本"
+                >
+                  <Pencil className="size-4" />
+                  修改
+                </button>
+                <button
+                  className="secondary-button gap-1.5"
+                  disabled={busy}
+                  onClick={onOpenForegroundLogs}
+                  title="查看前台运行日志"
+                >
+                  <ClipboardList className="size-4" />
+                  日志
+                </button>
                 {overview?.hasAppScript ? (
                   <button
                     className={
@@ -9405,6 +10621,15 @@ function RuntimePanel({
                 </span>
               </div>
               <div className="flex shrink-0 flex-wrap justify-end gap-2">
+                <button
+                  className="text-button gap-1.5"
+                  disabled={busy}
+                  onClick={() => setScriptControlRequest(value => value + 1)}
+                  title="修改 dev 脚本"
+                >
+                  <Pencil className="size-4" />
+                  修改
+                </button>
                 {overview?.hasBuildScript && (
                   <button
                     className="secondary-button gap-1.5"
@@ -9477,164 +10702,14 @@ function RuntimePanel({
             </header>
           </section>
         )}
-        <section className="overflow-hidden rounded-xl border border-slate-200 bg-white">
-          <header className="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
-            <div className="grid gap-1">
-              <strong className="flex items-center gap-2 text-sm font-semibold text-slate-800">
-                后台运行
-                {persistentReady && (
-                  <StatusDot
-                    active={pm2Running}
-                    label={
-                      pm2Running
-                        ? '运行中'
-                        : pm2Managed
-                          ? `已注册 · ${pm2Status?.status || '未知'}`
-                          : '未启动'
-                    }
-                  />
-                )}
-              </strong>
-              <span className="text-xs text-slate-500">
-                {persistentReady
-                  ? pm2Status
-                    ? pm2Running
-                      ? '服务运行中；关闭本窗口后仍会继续运行。'
-                      : pm2Managed
-                        ? '服务已注册，当前未运行；可重启或删除。'
-                        : '服务尚未启动。'
-                    : pm2StatusError
-                      ? '无法读取服务状态；仍可尝试启动服务。'
-                      : '正在读取服务状态。'
-                  : '还未准备好，修复后可长期在线。'}
-              </span>
-            </div>
-            <button
-              className="primary-button gap-1.5"
-              disabled={busy || !persistentReady}
-              title={
-                pm2Running
-                  ? '重新加载 pm2.config（pm2 reload），使配置改动生效且尽量不中断服务。'
-                  : localRunning
-                    ? '启动会自动停止当前正在运行的进程。'
-                    : !persistentReady
-                      ? '补齐 start 脚本和 PM2 配置后可使用。'
-                      : ''
-              }
-              onClick={() =>
-                void askStart(
-                  pm2Running ? 'pm2-reload' : 'pm2',
-                  pm2Running ? '重载配置' : '启动服务',
-                  pm2Running
-                    ? '会重新加载 pm2.config（pm2 reload），使配置改动生效且尽量不中断正在运行的机器人。'
-                    : '会在后台启动机器人。'
-                )
-              }
-            >
-              {pm2Running ? (
-                <RefreshCw className="size-4" />
-              ) : (
-                <Play className="size-4" />
-              )}
-              {pm2Running ? '重载配置' : '启动服务'}
-            </button>
-          </header>
-          <div className="flex flex-wrap items-center justify-end gap-2 px-4 py-3">
-            {/* PM2 status detection can be unreliable (daemon/version mismatch,
-                sandboxed reads), so these actions stay clickable regardless of
-                the detected state. The backend reports errors per action. */}
-            {persistentReady && (
-              <>
-                <button
-                  className="secondary-button gap-1.5"
-                  disabled={busy}
-                  onClick={() =>
-                    ask('停止服务', '会停止当前项目在后台运行的机器人。', () =>
-                      onRun('pm2-stop')
-                    )
-                  }
-                >
-                  <X className="size-4" />
-                  停止服务
-                </button>
-                <button
-                  className="secondary-button gap-1.5"
-                  disabled={busy}
-                  onClick={() =>
-                    ask('重启服务', '会停止并重新启动后台运行的机器人。', () =>
-                      onRun('pm2-restart')
-                    )
-                  }
-                >
-                  <RefreshCw className="size-4" />
-                  重启
-                </button>
-                <button
-                  className="secondary-button gap-1.5"
-                  disabled={busy}
-                  onClick={() =>
-                    ask(
-                      '重载配置',
-                      '会重新加载 pm2.config（pm2 reload），使配置改动生效且尽量不中断正在运行的机器人。',
-                      () => onRun('pm2-reload')
-                    )
-                  }
-                >
-                  <RefreshCw className="size-4" />
-                  重载
-                </button>
-              </>
-            )}
-            {!persistentReady && (
-              <button
-                className="secondary-button gap-1.5"
-                disabled={busy}
-                onClick={() =>
-                  ask(
-                    '修复后台运行',
-                    '会补齐后台运行所需的设置和依赖。',
-                    () => void repairRuntime('pm2')
-                  )
-                }
-              >
-                <Settings className="size-4" />
-                修复
-              </button>
-            )}
-            <div className="runtime-persistent-utilities">
-              <button
-                className="text-button gap-1.5"
-                disabled={busy}
-                onClick={onOpenPM2Processes}
-              >
-                <Activity className="size-4" />
-                状态
-              </button>
-              <button
-                className="text-button gap-1.5"
-                disabled={busy}
-                onClick={onOpenPM2Logs}
-              >
-                <ClipboardList className="size-4" />
-                日志
-              </button>
-              <button
-                className="text-button danger-action gap-1.5"
-                disabled={busy}
-                onClick={() =>
-                  ask(
-                    '移除后台服务',
-                    '会移除后台运行记录；以后仍可再次启动。',
-                    () => onRun('pm2-delete')
-                  )
-                }
-              >
-                <Trash2 className="size-4" />
-                删除
-              </button>
-            </div>
-          </div>
-        </section>
+        <PM2RuntimeCard
+          root={root}
+          onOpenLogs={onOpenPM2Logs}
+          onProcessAction={(action, processID) =>
+            onRun(action, undefined, String(processID))
+          }
+        />
+        <ScriptControlCard root={root} openRequest={scriptControlRequest} />
       </section>
     </RobotPanel>
   )
@@ -9650,6 +10725,106 @@ function robotAppToken(root: string) {
     .replace(/\+/g, '-')
     .replace(/\//g, '_')
     .replace(/=+$/g, '')
+}
+
+function ServiceWebviewWindow({
+  service,
+  minimized,
+  zIndex,
+  onClose,
+  onMinimize,
+  onActivate
+}: {
+  service: { title: string; url: string; src: string }
+  minimized: boolean
+  zIndex: number
+  onClose: () => void
+  onMinimize: () => void
+  onActivate: () => void
+}) {
+  const frameRef = useRef<HTMLIFrameElement>(null)
+  const [frameKey, setFrameKey] = useState(0)
+  const [canNavigate, setCanNavigate] = useState(false)
+  const updateNavigationCapability = () => {
+    try {
+      // The app proxy is same-origin and exposes the iframe history. A direct
+      // LAN service is intentionally isolated by the browser, so navigation
+      // controls stay disabled instead of pretending to operate on it.
+      void frameRef.current?.contentWindow?.history.length
+      setCanNavigate(Boolean(frameRef.current?.contentWindow))
+    } catch {
+      setCanNavigate(false)
+    }
+  }
+  const navigateFrame = (delta: -1 | 1) => {
+    try {
+      frameRef.current?.contentWindow?.history.go(delta)
+    } catch {
+      setCanNavigate(false)
+    }
+  }
+  return (
+    <DesktopWindow
+      id="service-webview"
+      open
+      minimized={minimized}
+      title={service.title}
+      subtitle={service.url}
+      icon={
+        <Globe className="size-4 shrink-0 text-brand-600 dark:text-brand-200" />
+      }
+      onClose={onClose}
+      onMinimize={onMinimize}
+      zIndex={zIndex}
+      onActivate={onActivate}
+      initialPosition={{ left: 88, top: 64 }}
+      storageKey={`alx:service-webview:${stableHash(service.url)}`}
+      width={980}
+      height={680}
+      actions={
+        <div className="flex items-center gap-1">
+          <button
+            className="icon-button size-8 p-0"
+            disabled={!canNavigate}
+            onClick={() => navigateFrame(-1)}
+            aria-label="后退"
+            title={canNavigate ? '后退' : '该服务不支持宿主导航'}
+          >
+            <ArrowLeft className="size-4" />
+          </button>
+          <button
+            className="icon-button size-8 p-0"
+            disabled={!canNavigate}
+            onClick={() => navigateFrame(1)}
+            aria-label="前进"
+            title={canNavigate ? '前进' : '该服务不支持宿主导航'}
+          >
+            <ArrowRight className="size-4" />
+          </button>
+          <button
+            className="icon-button size-8 p-0"
+            onClick={() => setFrameKey(value => value + 1)}
+            aria-label="刷新服务"
+            title="刷新"
+          >
+            <RefreshCw className="size-4" />
+          </button>
+        </div>
+      }
+    >
+      <div className="min-h-0 flex-1 bg-white dark:bg-slate-900">
+        <iframe
+          key={frameKey}
+          ref={frameRef}
+          className="h-full w-full border-0"
+          src={service.src}
+          title={`${service.title} 服务预览`}
+          referrerPolicy="no-referrer"
+          onLoad={updateNavigationCapability}
+        />
+      </div>
+    </DesktopWindow>
+  )
 }
 
 function AppEmbed({
@@ -10126,20 +11301,35 @@ function StatusDot({
     </span>
   )
 }
+
 function ReadonlyConsole({
   open,
+  terminalOnly = false,
+  logsOnly = false,
   minimized,
   root,
   onClose,
   onMinimize,
+  onInstallDependencies,
+  onOpenRuntime,
+  onOpenConfig,
+  onOpenEnvironment,
+  onOpenService,
   zIndex,
   onActivate
 }: {
   open: boolean
+  terminalOnly?: boolean
+  logsOnly?: boolean
   minimized: boolean
   root: string
   onClose: () => void
   onMinimize: () => void
+  onInstallDependencies?: () => void
+  onOpenRuntime?: () => void
+  onOpenConfig?: () => void
+  onOpenEnvironment?: () => void
+  onOpenService?: (url: string) => void
   zIndex: number
   onActivate: () => void
 }) {
@@ -10153,45 +11343,61 @@ function ReadonlyConsole({
 
   type TerminalTab = { id: string; label: string; kind: 'readonly' | 'shell' }
   const [load, { data, error, isFetching }] = useLazyRobotConsoleQuery()
-  const outputRef = useRef<HTMLPreElement>(null)
-  const shellOutputRef = useRef<HTMLPreElement>(null)
-  const shellInputRef = useRef<HTMLInputElement>(null)
+  const outputRef = useRef<HTMLDivElement>(null)
+  const shellOutputRef = useRef<HTMLDivElement>(null)
+  const xtermRef = useRef<XTerm | null>(null)
+  const xtermFitRef = useRef<FitAddon | null>(null)
+  const xtermWrittenLength = useRef(0)
   const followLatest = useRef(true)
   const [tabs, setTabs] = useStoreState<TerminalTab[]>([])
   const [activeTab, setActiveTab] = useStoreState('runtime')
-  const [shellCommand, setShellCommand] = useStoreState('')
   const [shellOutput, setShellOutput] = useStoreState('')
   const [shellDirectory, setShellDirectory] = useStoreState('')
-  const [shellBusy, setShellBusy] = useStoreState(false)
-  const [shellHistory, setShellHistory] = useStoreState<string[]>([])
-  const [shellHistoryIndex, setShellHistoryIndex] = useStoreState(-1)
+  const [terminalSessionID, setTerminalSessionID] = useStoreState('')
+  const terminalSessionRef = useRef('')
   // liveOutput accumulates incremental output pushed over SSE; the initial
   // load seeds it with the current buffer so the terminal is real-time without
   // polling. The static snapshot still comes from the query.
   const [liveOutput, setLiveOutput] = useStoreState('')
+  const [foregroundLogMode, setForegroundLogMode] =
+    useStoreState<ForegroundLogMode>('simple')
+  const [foregroundLogFilter, setForegroundLogFilter] = useStoreState<
+    'all' | 'attention'
+  >('all')
+  const [pendingForegroundLogCount, setPendingForegroundLogCount] =
+    useStoreState(0)
+  const previousForegroundLogRef = useRef('')
   const runError = error
     ? operationErrorMessage(error, '无法读取当前目录的运行终端信息。')
     : ''
   const running = Boolean(data?.running)
   const message = runError || liveOutput
+  const foregroundLogItems = useMemo(
+    () =>
+      interpretForegroundLog(
+        message,
+        foregroundLogMode,
+        foregroundLogFilter === 'attention'
+      ),
+    [foregroundLogFilter, foregroundLogMode, message]
+  )
+  const foregroundLogSummary = useMemo(
+    () => summarizeForegroundLog(foregroundLogItems),
+    [foregroundLogItems]
+  )
   const activeTerminal = tabs.find(tab => tab.id === activeTab)
   const resetTerminals = useCallback(() => {
-    setTabs([{ id: 'runtime', label: '前台', kind: 'readonly' }])
-    setActiveTab('runtime')
-    setShellCommand('')
+    if (logsOnly) {
+      setTabs([{ id: 'runtime', label: '日志', kind: 'readonly' }])
+      setActiveTab('runtime')
+    } else {
+      const id = `shell-${Date.now()}`
+      setTabs([{ id, label: '终端', kind: 'shell' }])
+      setActiveTab(id)
+    }
     setShellOutput('')
     setShellDirectory('')
-    setShellHistory([])
-    setShellHistoryIndex(-1)
-  }, [
-    setActiveTab,
-    setShellCommand,
-    setShellDirectory,
-    setShellHistory,
-    setShellHistoryIndex,
-    setShellOutput,
-    setTabs
-  ])
+  }, [logsOnly, setActiveTab, setShellDirectory, setShellOutput, setTabs])
   useEffect(() => {
     if (!open || !root) return
     resetTerminals()
@@ -10221,8 +11427,117 @@ function ReadonlyConsole({
     return () => window.removeEventListener('alx:robot-output', handler)
   }, [open, setLiveOutput])
   useEffect(() => {
-    if (open) followLatest.current = true
-  }, [open, setLiveOutput])
+    if (!logsOnly || !open) return
+    const previous = previousForegroundLogRef.current
+    if (previous && message.length > previous.length && !followLatest.current)
+      setPendingForegroundLogCount(value => value + 1)
+    previousForegroundLogRef.current = message
+  }, [logsOnly, message, open, setPendingForegroundLogCount])
+  useEffect(() => {
+    if (
+      !open ||
+      !terminalOnly ||
+      activeTerminal?.kind !== 'shell' ||
+      !shellOutputRef.current
+    )
+      return
+    const terminal = new XTerm({
+      cursorBlink: true,
+      convertEol: true,
+      fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+      fontSize: 13,
+      theme: { background: '#0f172a', foreground: '#e2e8f0' }
+    })
+    const fit = new FitAddon()
+    terminal.loadAddon(fit)
+    terminal.open(shellOutputRef.current)
+    fit.fit()
+    xtermRef.current = terminal
+    xtermFitRef.current = fit
+    xtermWrittenLength.current = 0
+    const disposeInput = terminal.onData(data => sendTerminalInput(data))
+    const disposeResize = terminal.onResize(({ cols, rows }) =>
+      sendTerminalResize(cols, rows)
+    )
+    const resize = () => {
+      try {
+        fit.fit()
+      } catch {
+        // 窗口正被最小化或布局尚未完成时，下一次尺寸变化会重新同步。
+      }
+    }
+    const observer = new ResizeObserver(resize)
+    observer.observe(shellOutputRef.current)
+    window.addEventListener('resize', resize)
+    return () => {
+      window.removeEventListener('resize', resize)
+      observer.disconnect()
+      disposeInput.dispose()
+      disposeResize.dispose()
+      xtermRef.current = null
+      xtermFitRef.current = null
+      terminal.dispose()
+    }
+  }, [activeTerminal?.kind, open, terminalOnly])
+  useEffect(() => {
+    const terminal = xtermRef.current
+    if (!terminal || shellOutput.length <= xtermWrittenLength.current) return
+    terminal.write(shellOutput.slice(xtermWrittenLength.current))
+    xtermWrittenLength.current = shellOutput.length
+  }, [shellOutput])
+  useEffect(() => {
+    if (!open || !terminalOnly || !root) return
+    let disposed = false
+    void fetch('/api/v1/robot/terminal/session', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ root })
+    })
+      .then(response => response.json())
+      .then(result => {
+        if (!disposed && typeof result.sessionId === 'string') {
+          terminalSessionRef.current = result.sessionId
+          setTerminalSessionID(result.sessionId)
+          const terminal = xtermRef.current
+          if (terminal) {
+            sendTerminalResize(terminal.cols, terminal.rows)
+            window.requestAnimationFrame(() => terminal.focus())
+          }
+        }
+      })
+      .catch(() => setShellOutput('无法启动交互式终端。\n'))
+    return () => {
+      disposed = true
+      const sessionId = terminalSessionRef.current
+      if (sessionId)
+        void fetch('/api/v1/robot/terminal/close', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ root, sessionId })
+        })
+      setTerminalSessionID('')
+      terminalSessionRef.current = ''
+    }
+  }, [open, root, setShellOutput, setTerminalSessionID, terminalOnly])
+  useEffect(() => {
+    if (!open || !terminalSessionID) return
+    const handler = (event: Event) => {
+      const detail = (
+        event as CustomEvent<{ sessionId?: string; text?: string }>
+      ).detail
+      if (detail?.sessionId === terminalSessionID && detail.text)
+        setShellOutput(current =>
+          appendTerminalOutput(current, detail.text ?? '')
+        )
+    }
+    window.addEventListener('alx:terminal-output', handler)
+    return () => window.removeEventListener('alx:terminal-output', handler)
+  }, [open, setShellOutput, terminalSessionID])
+  useEffect(() => {
+    if (!open) return
+    followLatest.current = true
+    setPendingForegroundLogCount(0)
+  }, [open, setPendingForegroundLogCount])
   useEffect(() => {
     if (!open || !followLatest.current) return
     const frame = window.requestAnimationFrame(() => {
@@ -10234,10 +11549,8 @@ function ReadonlyConsole({
   useEffect(() => {
     if (!open || minimized || activeTerminal?.kind !== 'shell') return
     const frame = window.requestAnimationFrame(() => {
-      if (shellOutputRef.current) {
-        shellOutputRef.current.scrollTop = shellOutputRef.current.scrollHeight
-      }
-      shellInputRef.current?.focus()
+      xtermFitRef.current?.fit()
+      xtermRef.current?.focus()
     })
     return () => window.cancelAnimationFrame(frame)
   }, [activeTerminal?.kind, minimized, open, shellOutput])
@@ -10246,174 +11559,67 @@ function ReadonlyConsole({
     if (activeTab === id) setActiveTab('')
   }
   const addTab = () => {
-    if (!tabs.some(tab => tab.id === 'runtime')) {
-      setTabs(current => [
-        { id: 'runtime', label: '前台', kind: 'readonly' },
-        ...current
-      ])
-      setActiveTab('runtime')
-      return
-    }
     const id = `shell-${Date.now()}`
     setTabs(current => [...current, { id, label: '终端', kind: 'shell' }])
     setActiveTab(id)
     setShellOutput('')
   }
-  const executeShell = async (event: FormEvent) => {
-    event.preventDefault()
-    const command = shellCommand.trim()
-    if (!command || shellBusy) return
-    if (command === 'clear' || command === 'cls') {
-      setShellOutput('')
-      setShellCommand('')
-      setShellHistoryIndex(-1)
-      return
-    }
-    setShellBusy(true)
-    try {
-      const response = await fetch('/api/v1/robot/terminal', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ root, command, directory: shellDirectory })
-      })
-      const result = (await response.json()) as {
-        output?: string
-        error?: string
-        directory?: string
-      }
-      setShellOutput(current =>
-        appendTerminalOutput(
-          current,
-          `${current ? '\n' : ''}${response.ok ? (result.output ?? '') : `错误：${result.error ?? '命令执行失败。'}`}`
-        )
-      )
-      if (response.ok && typeof result.directory === 'string')
-        setShellDirectory(result.directory)
-      setShellHistory(current => [...current, command].slice(-50))
-    } catch {
-      setShellOutput(current =>
-        appendTerminalOutput(
-          current,
-          `${current ? '\n' : ''}错误：无法连接终端服务。`
-        )
-      )
-    } finally {
-      setShellCommand('')
-      setShellHistoryIndex(-1)
-      setShellBusy(false)
-    }
+  const sendTerminalInput = (input: string) => {
+    const sessionId = terminalSessionRef.current
+    if (!sessionId || !input) return
+    void fetch('/api/v1/robot/terminal/input', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ root, sessionId, input })
+    })
   }
-  const completeShellInput = async () => {
-    if (shellBusy) return
-    const parts = shellCommand.split(/(\s+)/)
-    const tokenIndex = parts.length - 1
-    const token = parts[tokenIndex] ?? ''
-    const commandNames = [
-      'cd',
-      'clear',
-      'cls',
-      'dir',
-      'git',
-      'go',
-      'ls',
-      'npm',
-      'node',
-      'pnpm',
-      'pwd',
-      'yarn'
-    ]
-    const completingCommand = parts.length === 1
-    if (completingCommand) {
-      const matches = commandNames.filter(name => name.startsWith(token))
-      if (matches.length === 1) setShellCommand(matches[0] + ' ')
-      return
+  const sendTerminalResize = (cols: number, rows: number) => {
+    const sessionId = terminalSessionRef.current
+    if (!sessionId || !cols || !rows) return
+    void fetch('/api/v1/robot/terminal/resize', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ root, sessionId, cols, rows })
+    })
+  }
+  const foregroundLogActionLabel = (action: ForegroundLogAction) => {
+    if (!action) return ''
+    const labels: Record<NonNullable<ForegroundLogAction>, string> = {
+      'install-dependencies': '安装依赖',
+      'open-runtime': '查看运行',
+      'open-config': '查看配置',
+      'open-environment': '环境检查',
+      'open-service': '打开服务',
+      'copy-service-url': '复制地址'
     }
-    const normalizedToken = token.replace(/\\/g, '/')
-    if (
-      normalizedToken.split('/').includes('..') ||
-      normalizedToken.startsWith('/')
-    )
-      return
-    const separator = normalizedToken.lastIndexOf('/')
-    const base = separator >= 0 ? normalizedToken.slice(0, separator + 1) : ''
-    const prefix =
-      separator >= 0 ? normalizedToken.slice(separator + 1) : normalizedToken
-    const directory = [root, shellDirectory, base].filter(Boolean).join('/')
-    try {
-      const response = await fetch(
-        `/api/v1/directories?${new URLSearchParams({ path: directory, files: 'true' })}`
-      )
-      if (!response.ok) return
-      const result = (await response.json()) as {
-        directories?: Array<{ name: string }>
-        files?: Array<{ name: string }>
-      }
-      const candidates = [
-        ...(result.directories ?? []).map(item => ({
-          name: item.name,
-          directory: true
-        })),
-        ...(result.files ?? []).map(item => ({
-          name: item.name,
-          directory: false
-        }))
-      ].filter(item => item.name.startsWith(prefix))
-      const names = candidates.map(item => item.name)
-      if (names.length === 1) {
-        const match = candidates[0]
-        parts[tokenIndex] = base + names[0] + (match?.directory ? '/' : '')
-        setShellCommand(parts.join(''))
+    return labels[action]
+  }
+  const runForegroundLogAction = (item: ForegroundLogItem) => {
+    switch (item.action) {
+      case 'install-dependencies':
+        onInstallDependencies?.()
         return
-      }
-      const commonPrefix = names.reduce((shared, name) => {
-        let index = 0
-        while (index < shared.length && shared[index] === name[index]) index++
-        return shared.slice(0, index)
-      }, names[0] ?? '')
-      if (commonPrefix.length > prefix.length) {
-        parts[tokenIndex] = base + commonPrefix
-        setShellCommand(parts.join(''))
-      } else if (names.length > 1) {
-        setShellOutput(current =>
-          appendTerminalOutput(
-            current,
-            `${current ? '\n' : ''}补全候选：${names.join('  ')}`
-          )
-        )
-      }
-    } catch {
-      // 补全失败不应打断输入。
+      case 'open-runtime':
+        onOpenRuntime?.()
+        return
+      case 'open-config':
+        onOpenConfig?.()
+        return
+      case 'open-environment':
+        onOpenEnvironment?.()
+        return
+      case 'open-service':
+        if (item.serviceURL) onOpenService?.(item.serviceURL)
+        return
+      case 'copy-service-url':
+        if (item.serviceURL) void navigator.clipboard?.writeText(item.serviceURL)
     }
   }
-  const handleShellKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
-    if (event.key === 'Tab') {
-      event.preventDefault()
-      void completeShellInput()
-      return
-    }
-    if (event.key === 'ArrowUp' && shellHistory.length > 0) {
-      event.preventDefault()
-      const next = Math.max(
-        0,
-        shellHistoryIndex < 0 ? shellHistory.length - 1 : shellHistoryIndex - 1
-      )
-      setShellHistoryIndex(next)
-      setShellCommand(shellHistory[next] ?? '')
-      return
-    }
-    if (event.key === 'ArrowDown' && shellHistoryIndex >= 0) {
-      event.preventDefault()
-      const next = shellHistoryIndex + 1
-      setShellHistoryIndex(next >= shellHistory.length ? -1 : next)
-      setShellCommand(
-        next >= shellHistory.length ? '' : (shellHistory[next] ?? '')
-      )
-      return
-    }
-    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'l') {
-      event.preventDefault()
-      setShellOutput('')
-    }
+  const jumpToLatestForegroundLog = () => {
+    const output = outputRef.current
+    if (output) output.scrollTop = output.scrollHeight
+    followLatest.current = true
+    setPendingForegroundLogCount(0)
   }
   const terminalTabs = (
     <nav className="readonly-console-tabs" aria-label="终端列表">
@@ -10454,75 +11660,173 @@ function ReadonlyConsole({
   if (!open) return null
   return (
     <DesktopWindow
-      id="terminal"
+      id={logsOnly ? 'foreground-logs' : 'terminal'}
       open={open}
       minimized={minimized}
-      title="终端"
+      title={logsOnly ? '日志' : '终端'}
       subtitle={
-        activeTerminal?.kind === 'shell'
+        terminalOnly
           ? `仅限当前机器人目录 · ${shellDirectory ? `./${shellDirectory}` : '.'}`
-          : running
-            ? `${data?.mode ?? '进程'}实时输出 · 只读`
-            : '查看最近运行输出 · 只读'
+          : activeTerminal?.kind === 'shell'
+            ? `仅限当前机器人目录 · ${shellDirectory ? `./${shellDirectory}` : '.'}`
+            : running
+              ? `${data?.mode ?? '进程'}实时输出 · 智能识别`
+              : '最近运行输出 · 智能整理'
       }
       icon={
-        <Terminal className="size-4 shrink-0 text-brand-600 dark:text-brand-200" />
+        logsOnly ? (
+          <ClipboardList className="size-4 shrink-0 text-brand-600 dark:text-brand-200" />
+        ) : (
+          <Terminal className="size-4 shrink-0 text-brand-600 dark:text-brand-200" />
+        )
       }
-      headerLeft={terminalTabs}
+      headerLeft={logsOnly ? undefined : terminalTabs}
       onClose={onClose}
       onMinimize={onMinimize}
       zIndex={zIndex}
       onActivate={() => {
         onActivate()
         if (activeTerminal?.kind === 'shell' && !minimized)
-          window.requestAnimationFrame(() => shellInputRef.current?.focus())
+          window.requestAnimationFrame(() => xtermRef.current?.focus())
       }}
       initialPosition={{ left: 16, top: 16 }}
       width={560}
       height={650}
       actions={
-        <button
-          className="icon-button size-8 p-0"
-          disabled={isFetching}
-          onClick={() => void load({ root, refresh: true })}
-          aria-label="刷新运行终端"
-          title="刷新"
-        >
-          <RefreshCw className="size-4" />
-        </button>
+        <div className="flex items-center gap-1">
+          {logsOnly && (
+            <>
+              <button
+                className={cn(
+                  'smart-log-window-action',
+                  foregroundLogFilter === 'attention' && 'active'
+                )}
+                onClick={() =>
+                  setForegroundLogFilter(value =>
+                    value === 'attention' ? 'all' : 'attention'
+                  )
+                }
+                title="仅查看异常与提醒"
+              >
+                {foregroundLogSummary.errors > 0
+                  ? `异常 ${foregroundLogSummary.errors}`
+                  : foregroundLogSummary.warnings > 0
+                    ? `提醒 ${foregroundLogSummary.warnings}`
+                    : '正常'}
+              </button>
+              <button
+                className="smart-log-window-action"
+                onClick={() =>
+                  setForegroundLogMode(mode =>
+                    mode === 'simple'
+                      ? 'common'
+                      : mode === 'common'
+                        ? 'advanced'
+                        : 'simple'
+                  )
+                }
+                title="切换日志显示层级"
+              >
+                {
+                  { simple: '简洁', common: '常用', advanced: '详细' }[
+                    foregroundLogMode
+                  ]
+                }
+              </button>
+              <button
+                className="icon-button size-8 p-0"
+                disabled={!message}
+                onClick={() => void navigator.clipboard?.writeText(message)}
+                aria-label="复制完整运行日志"
+                title="复制完整日志"
+              >
+                <ClipboardList className="size-4" />
+              </button>
+            </>
+          )}
+          <button
+            className="icon-button size-8 p-0"
+            disabled={isFetching}
+            onClick={() => void load({ root, refresh: true })}
+            aria-label={logsOnly ? '刷新运行日志' : '刷新运行终端'}
+            title="刷新"
+          >
+            <RefreshCw className="size-4" />
+          </button>
+        </div>
       }
     >
       <div className="readonly-console-body min-h-0">
         {activeTerminal?.kind === 'shell' ? (
           <div className="readonly-console-shell">
-            <pre ref={shellOutputRef}>{shellOutput || ''}</pre>
-            <form onSubmit={executeShell}>
-              <span>$</span>
-              <input
-                ref={shellInputRef}
-                autoFocus
-                value={shellCommand}
-                onChange={event => setShellCommand(event.target.value)}
-                onKeyDown={handleShellKeyDown}
-                disabled={shellBusy}
-                placeholder="输入命令 · 支持 shell 语法 · Tab 补全 · ↑↓ 历史"
-                aria-label="机器人目录终端命令"
-              />
-            </form>
+            <div
+              ref={shellOutputRef}
+              aria-label="机器人目录交互式终端"
+              onPointerDown={() =>
+                window.requestAnimationFrame(() => xtermRef.current?.focus())
+              }
+            />
           </div>
-        ) : activeTerminal ? (
-          <pre
-            ref={outputRef}
-            className="readonly-console-output"
-            onScroll={event => {
-              const output = event.currentTarget
-              followLatest.current =
-                output.scrollHeight - output.scrollTop - output.clientHeight <
-                24
-            }}
-          >
-            {isFetching && !message ? '正在读取运行输出…' : message}
-          </pre>
+        ) : logsOnly && activeTerminal ? (
+          <div className="smart-foreground-log">
+            <div
+              ref={outputRef}
+              className="smart-foreground-log-list"
+              onScroll={event => {
+                const output = event.currentTarget
+                followLatest.current =
+                  output.scrollHeight - output.scrollTop - output.clientHeight <
+                  24
+                if (followLatest.current) setPendingForegroundLogCount(0)
+              }}
+            >
+              {pendingForegroundLogCount > 0 && (
+                <button
+                  className="smart-log-pending"
+                  onClick={jumpToLatestForegroundLog}
+                >
+                  有新日志，跳到最新
+                </button>
+              )}
+              {isFetching && !message ? (
+                <div className="smart-log-empty">正在读取运行输出…</div>
+              ) : foregroundLogItems.length === 0 ? (
+                <div className="smart-log-empty">
+                  {foregroundLogFilter === 'attention'
+                    ? '未发现需要关注的异常或提醒。'
+                    : '当前没有可显示的前台日志。'}
+                </div>
+              ) : (
+                foregroundLogItems.map((item, index) => (
+                  <div key={item.id}>
+                    {foregroundLogMode === 'simple' &&
+                      item.timeLabel &&
+                      item.timeLabel !==
+                        foregroundLogItems[index - 1]?.timeLabel && (
+                        <div className="smart-log-time-divider">
+                          <span>{item.timeLabel}</span>
+                        </div>
+                      )}
+                    <article
+                      className={cn('smart-log-line', `is-${item.level}`)}
+                    >
+                      <div className="smart-log-line-meta">
+                        <span>{item.title}</span>
+                        {item.action && (
+                          <button onClick={() => runForegroundLogAction(item)}>
+                            {foregroundLogActionLabel(item.action)}
+                          </button>
+                        )}
+                      </div>
+                      <code>
+                        {foregroundLogDisplayText(item, foregroundLogMode)}
+                      </code>
+                    </article>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
         ) : null}
       </div>
     </DesktopWindow>
@@ -10686,9 +11990,11 @@ function PM2LogsPanel({
   const [error, setError] = useStoreState('')
   const [loading, setLoading] = useStoreState(false)
   const [days, setDays] = useStoreState<PM2LogDay[]>([])
-  const [live, setLive] = useStoreState(false)
+  const [live, setLive] = useStoreState(true)
   const [liveConnected, setLiveConnected] = useStoreState(false)
   const [liveLines, setLiveLines] = useStoreState<PM2AuditLine[]>([])
+  const [deleteDialogOpen, setDeleteDialogOpen] = useStoreState(false)
+  const [deleteBusy, setDeleteBusy] = useStoreState(false)
   const outputRef = useRef<HTMLDivElement>(null)
   const followLatest = useRef(true)
 
@@ -10745,9 +12051,21 @@ function PM2LogsPanel({
       setSource('all')
       setQuery('')
       setCommittedQuery('')
+      setLive(true)
+      setLiveLines([])
       void loadDays()
     }
-  }, [loadDays, open, setCommittedQuery, setDate, setPage, setQuery, setSource])
+  }, [
+    loadDays,
+    open,
+    setCommittedQuery,
+    setDate,
+    setLive,
+    setLiveLines,
+    setPage,
+    setQuery,
+    setSource
+  ])
 
   // Debounce the search box so audit filters do not hit the API per keystroke.
   useEffect(() => {
@@ -10836,11 +12154,13 @@ function PM2LogsPanel({
     dayIndex >= 0 && dayIndex + 1 < days.length ? days[dayIndex + 1].date : ''
   const newerDay = dayIndex > 0 ? days[dayIndex - 1].date : ''
   const selectDay = (target: string) => {
+    setLive(false)
     setDate(target)
     setPage(1)
     followLatest.current = true
   }
   const jumpLatest = () => {
+    setLive(true)
     setDate('')
     setPage(1)
     followLatest.current = true
@@ -10873,6 +12193,37 @@ function PM2LogsPanel({
       setError(operationErrorMessage(reason, '导出 PM2 日志失败。'))
     }
   }
+  const deleteSelectedLogs = async () => {
+    if (!date || deleteBusy) return
+    setDeleteBusy(true)
+    try {
+      // Pause the live tail before rewriting a selected day from its PM2 log
+      // files. The next open resumes live following by default.
+      setLive(false)
+      const params = new URLSearchParams({ root, date })
+      if (source !== 'all') params.set('source', source)
+      const response = await fetch(`/api/v1/robot/pm2-logs?${params}`, {
+        method: 'DELETE'
+      })
+      const result = (await response.json().catch(() => null)) as {
+        deleted?: number
+        error?: string
+      } | null
+      if (!response.ok)
+        throw new Error(result?.error || '删除指定 PM2 日志失败。')
+      setLiveLines([])
+      setDeleteDialogOpen(false)
+      setPage(1)
+      await Promise.all([loadDays(), loadPage(1)])
+    } catch (reason) {
+      setError(operationErrorMessage(reason, '删除指定 PM2 日志失败。'))
+    } finally {
+      setDeleteBusy(false)
+    }
+  }
+  const selectedLogScope = `${date} · ${
+    source === 'all' ? '全部日志' : source === 'out' ? '输出日志' : '错误日志'
+  }`
 
   if (!open) return null
   return (
@@ -11050,6 +12401,17 @@ function PM2LogsPanel({
             <Download className="size-3" />
             导出
           </button>
+          <button
+            className="pm2-audit-tool-btn text-rose-600 disabled:text-slate-400 dark:text-rose-300"
+            disabled={!date || deleteBusy}
+            onClick={() => setDeleteDialogOpen(true)}
+            title={
+              date ? `删除 ${selectedLogScope}` : '请先选择要删除的日志日期'
+            }
+          >
+            <Trash2 className="size-3" />
+            删除
+          </button>
         </div>
         {diagnostics.length > 0 && (
           <div className="max-h-[190px] overflow-auto border-b border-[var(--theme-border-default)] bg-[var(--theme-surface-raised)]">
@@ -11128,6 +12490,17 @@ function PM2LogsPanel({
           )}
         </div>
       </div>
+      <ConfirmDialog
+        open={deleteDialogOpen}
+        title="删除指定 PM2 日志"
+        subtitle={date ? selectedLogScope : ''}
+        message="会删除所选日期和来源的日志记录；删除后无法恢复。未带时间戳的记录会保留。"
+        confirmLabel="删除日志"
+        destructive
+        busy={deleteBusy}
+        onCancel={() => !deleteBusy && setDeleteDialogOpen(false)}
+        onConfirm={() => void deleteSelectedLogs()}
+      />
     </DesktopWindow>
   )
 }
@@ -11137,6 +12510,8 @@ function PM2ProcessesPanel({
   minimized,
   onClose,
   onMinimize,
+  onOpenLogs,
+  onRun,
   zIndex,
   onActivate
 }: {
@@ -11145,6 +12520,8 @@ function PM2ProcessesPanel({
   minimized: boolean
   onClose: () => void
   onMinimize: () => void
+  onOpenLogs: () => void
+  onRun: (action: string, message?: string) => Promise<boolean>
   zIndex: number
   onActivate: () => void
 }) {
@@ -11153,6 +12530,13 @@ function PM2ProcessesPanel({
       skip: !open || !root
     })
   const items = data?.items ?? []
+  const [pendingAction, setPendingAction] = useStoreState<{
+    action: string
+    label: string
+    note: string
+    process: { id: number; name: string }
+  } | null>(null)
+  const [actionBusy, setActionBusy] = useStoreState(false)
   if (!open) return null
   const formatBytes = (value: number) => {
     if (!value) return '—'
@@ -11179,6 +12563,23 @@ function PM2ProcessesPanel({
       : status === 'launching'
         ? 'bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300'
         : 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400'
+  const requestAction = (
+    action: string,
+    label: string,
+    note: string,
+    process: { id: number; name: string }
+  ) => setPendingAction({ action, label, note, process })
+  const confirmAction = async () => {
+    if (!pendingAction || actionBusy) return
+    setActionBusy(true)
+    try {
+      if (await onRun(pendingAction.action, String(pendingAction.process.id)))
+        await refetch()
+    } finally {
+      setActionBusy(false)
+      setPendingAction(null)
+    }
+  }
   return (
     <DesktopWindow
       id="pm2Status"
@@ -11267,6 +12668,7 @@ function PM2ProcessesPanel({
                   <th className="px-3 py-2 font-medium">CPU</th>
                   <th className="px-3 py-2 font-medium">重启</th>
                   <th className="px-3 py-2 font-medium">运行时长</th>
+                  <th className="px-3 py-2 font-medium">操作</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
@@ -11298,25 +12700,131 @@ function PM2ProcessesPanel({
                     <td className="px-3 py-2 font-mono">
                       {formatUptime(item.uptime)}
                     </td>
+                    <td className="px-3 py-2">
+                      <div className="flex items-center gap-1">
+                        <button
+                          className="icon-button size-7 p-0"
+                          disabled={actionBusy}
+                          onClick={() =>
+                            requestAction(
+                              'pm2-process-start',
+                              `启动 ${item.name}`,
+                              `会启动 PM2 进程 #${item.id}。`,
+                              item
+                            )
+                          }
+                          aria-label={`启动 ${item.name}`}
+                          title="启动"
+                        >
+                          <Play className="size-3.5" />
+                        </button>
+                        <button
+                          className="icon-button size-7 p-0"
+                          disabled={actionBusy}
+                          onClick={() =>
+                            requestAction(
+                              'pm2-process-restart',
+                              `重启 ${item.name}`,
+                              `会重启 PM2 进程 #${item.id}。`,
+                              item
+                            )
+                          }
+                          aria-label={`重启 ${item.name}`}
+                          title="重启"
+                        >
+                          <RefreshCw className="size-3.5" />
+                        </button>
+                        <button
+                          className="icon-button size-7 p-0"
+                          disabled={actionBusy}
+                          onClick={() =>
+                            requestAction(
+                              'pm2-process-reload',
+                              `重载 ${item.name}`,
+                              `会尽量不中断地重载 PM2 进程 #${item.id}。`,
+                              item
+                            )
+                          }
+                          aria-label={`重载 ${item.name}`}
+                          title="重载"
+                        >
+                          <RefreshCw className="size-3.5" />
+                        </button>
+                        <button
+                          className="icon-button size-7 p-0"
+                          disabled={actionBusy}
+                          onClick={() =>
+                            requestAction(
+                              'pm2-process-stop',
+                              `停止 ${item.name}`,
+                              `会停止 PM2 进程 #${item.id}。`,
+                              item
+                            )
+                          }
+                          aria-label={`停止 ${item.name}`}
+                          title="停止"
+                        >
+                          <X className="size-3.5" />
+                        </button>
+                        <button
+                          className="icon-button size-7 p-0 text-rose-600 hover:bg-rose-50 hover:text-rose-700 dark:text-rose-300 dark:hover:bg-rose-950"
+                          disabled={actionBusy}
+                          onClick={() =>
+                            requestAction(
+                              'pm2-process-delete',
+                              `删除 ${item.name}`,
+                              `会从 PM2 中删除进程 #${item.id}；之后可按需要重新启动。`,
+                              item
+                            )
+                          }
+                          aria-label={`删除 ${item.name}`}
+                          title="删除"
+                        >
+                          <Trash2 className="size-3.5" />
+                        </button>
+                      </div>
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
         )}
-        <footer className="flex items-center justify-between border-t border-slate-200 px-4 py-3 dark:border-slate-700">
+        <footer className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-200 px-4 py-3 dark:border-slate-700">
           <span className="text-xs text-slate-500">
             共 {items.length} 个进程
           </span>
-          <button
-            className="secondary-button"
-            disabled={isFetching}
-            onClick={() => void refetch()}
-          >
-            刷新
-          </button>
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <button
+              className="text-button gap-1.5"
+              disabled={actionBusy}
+              onClick={onOpenLogs}
+              title="查看 PM2 日志"
+            >
+              <ClipboardList className="size-4" />
+              日志
+            </button>
+            <button
+              className="secondary-button"
+              disabled={isFetching || actionBusy}
+              onClick={() => void refetch()}
+            >
+              刷新
+            </button>
+          </div>
         </footer>
       </section>
+      <ConfirmDialog
+        open={Boolean(pendingAction)}
+        title={pendingAction?.label ?? ''}
+        message={pendingAction?.note ?? ''}
+        confirmLabel={'确认'}
+        cancelLabel="取消"
+        destructive={pendingAction?.action === 'pm2-process-delete'}
+        busy={actionBusy}
+        onCancel={() => !actionBusy && setPendingAction(null)}
+        onConfirm={() => void confirmAction()}
+      />
     </DesktopWindow>
   )
 }
@@ -11393,9 +12901,7 @@ function OperationLog({
     >
       <header className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <i
-            className="operation-log-badge inline-flex size-5 items-center justify-center rounded-full text-xs font-bold not-italic text-white"
-          >
+          <i className="operation-log-badge inline-flex size-5 items-center justify-center rounded-full text-xs font-bold not-italic text-white">
             {failed ? '!' : '✓'}
           </i>
           <strong
@@ -11530,7 +13036,13 @@ function GitReleasePanelNext({
           reason instanceof Error ? reason.message : '无法刷新远程分支状态。'
         )
       })
-  }, [refetch, remoteRefreshNonce, root, setRemoteRefreshError, status?.gitReady])
+  }, [
+    refetch,
+    remoteRefreshNonce,
+    root,
+    setRemoteRefreshError,
+    status?.gitReady
+  ])
   useEffect(() => {
     if (!branches.some(item => item.name === sourceBranch))
       setSourceBranch(status?.branch || branches[0]?.name || '')
@@ -11979,7 +13491,9 @@ function GitReleasePanelNext({
                 </summary>
                 <div className="mt-2 grid gap-1 font-mono text-[11px]">
                   <span>本地 HEAD：{status.localHead}</span>
-                  <span>远程 {status.remoteBranch || 'main'}：{status.remoteHead}</span>
+                  <span>
+                    远程 {status.remoteBranch || 'main'}：{status.remoteHead}
+                  </span>
                 </div>
               </details>
             )}
