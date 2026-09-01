@@ -18,11 +18,6 @@ on:
         required: true
         default: alemonx
         type: string
-      tag:
-        description: 要发布的镜像标签
-        required: true
-        default: latest
-        type: string
       registry_username:
         description: 腾讯云镜像仓库登录账号
         required: true
@@ -50,6 +45,14 @@ jobs:
     steps:
       - name: 检出源码
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 获取最新 Git 标签版本
+        id: version
+        run: |
+          version="$(git describe --tags --abbrev=0 2>/dev/null || git rev-parse --short HEAD)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: 配置 QEMU
         uses: docker/setup-qemu-action@v3
@@ -74,9 +77,11 @@ jobs:
           file: ./Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ${{ env.IMAGE }}:${{ inputs.tag }}
+          tags: |
+            ${{ env.IMAGE }}:latest
+            ${{ env.IMAGE }}:${{ steps.version.outputs.version }}
           build-args: |
             ALX_RUNTIME_BASE=${{ inputs.runtime_base }}
-            VERSION=${{ inputs.tag }}
+            VERSION=${{ steps.version.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
