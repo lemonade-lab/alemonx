@@ -1,23 +1,23 @@
 services:
   alx:
-    image: ${ALX_IMAGE:-ccr.ccs.tencentyun.com/ningmengchongshui/alemonx:latest}
+    image: ${ALX_IMAGE:-ccr.ccs.tencentyun.com/ningmengchongshui/alemonx}
     container_name: ${ALX_CONTAINER_NAME:-alx}
     restart: unless-stopped
     ports:
       - "${ALX_PORT:-17390}:17390"
     environment:
       TZ: ${TZ:-Asia/Shanghai}
-      HOME: /data
-      XDG_CONFIG_HOME: /data/config
-      XDG_CACHE_HOME: /data/cache
+      HOME: /root
+      XDG_CONFIG_HOME: /root/config
+      XDG_CACHE_HOME: /root/cache
       ALX_DEPLOYMENT: ${ALX_DEPLOYMENT:-production}
       ALX_OPS_STORAGE: sqlite
       ALX_CONTAINER: "1"
       ALX_WORKSPACE: /app/workspace
       ALEMONJS_SETUP_ROOTS: /app/workspace
-      ALX_PRIVILEGED_MODE: disabled
+      ALX_PRIVILEGED_MODE: ${ALX_PRIVILEGED_MODE:-enabled}
     volumes:
-      - ./data:/data
+      - ./data:/root
       - ./workspace:/app/workspace
     shm_size: "1gb"
     healthcheck:

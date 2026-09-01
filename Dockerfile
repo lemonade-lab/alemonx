@@ -56,10 +56,15 @@ RUN mkdir -p /app /app/plugins /app/workspace /data
 WORKDIR /app
 COPY --from=builder /out/alx /app/alx
 
+# 授权
+RUN mkdir -p /root/.ssh \
+    && chmod 700 /root/.ssh \
+    && ssh-keyscan github.com >> /root/.ssh/known_hosts
+
 # 设置环境变量
-ENV HOME=/data \
-    XDG_CONFIG_HOME=/data/config \
-    XDG_CACHE_HOME=/data/cache \
+ENV HOME=/root \
+    XDG_CONFIG_HOME=/root/config \
+    XDG_CACHE_HOME=/root/cache \
     ALX_WORKSPACE=/app/workspace \
     ALEMONJS_SETUP_ROOTS=/app/workspace \
     YARN_CACHE_FOLDER=/app/.yarn_cache
