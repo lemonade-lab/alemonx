@@ -15,33 +15,78 @@ RUN apt-get install -y --no-install-recommends \
     fonts-noto-cjk fonts-noto-color-emoji \
     && echo "✅ Fonts installed"
 
-# 第三组：Chromium（容易失败）
+# Python 环境安装
+RUN apt-get install -y --no-install-recommends \
+    python3 python3-pip python3-venv python3-dev \
+    && echo "✅ Python installed" || echo "❌ Python failed"
+
+# 创建 Python 软链接
+RUN ln -sf /usr/bin/python3 /usr/bin/python \
+    && echo "✅ Python symlink created"
+
+# 创建虚拟环境并升级 pip（关键修改）
+RUN python3 -m venv /opt/venv \
+    && /opt/venv/bin/pip install --no-cache-dir --upgrade pip setuptools wheel \
+    && echo "✅ Virtual environment created and pip upgraded"
+
+# 使用虚拟环境的 pip 安装 Python 包（关键修改）
+RUN /opt/venv/bin/pip install --no-cache-dir \
+    requests httpx aiohttp \
+    aiofiles \
+    python-dotenv pyyaml \
+    click rich tqdm \
+    jieba \
+    langchain langchain-community langchain-openai langchain-anthropic \
+    openai anthropic \
+    sqlalchemy \
+    websockets \
+    pydantic pydantic-settings \
+    loguru \
+    pytest pytest-asyncio \
+    && echo "✅ Chatbot Python packages installed" || echo "❌ Python packages failed"
+
+# 第三组：Chromium（Debian 12 中可用）
 RUN apt-get install -y --no-install-recommends --fix-missing chromium \
     && echo "✅ Chromium installed" || echo "❌ Chromium failed"
 
-# 第四组：X11（容易失败）
-RUN apt-get install -y --no-install-recommends xvfb \
-    && echo "✅ xvfb installed" || echo "❌ xvfb failed"
+# 第四组：X11（Debian 12 适配）
+RUN apt-get install -y --no-install-recommends xvfb x11-utils xkb-data \
+    && echo "✅ X11 tools installed" || echo "❌ X11 tools failed"
 
-RUN apt-get install -y --no-install-recommends x11-xkb-utils xkb-data \
-    && echo "✅ X11 utils installed" || echo "❌ X11 utils failed"
+# 第五组：GUI 依赖库（Debian 12 包名确认）
+RUN apt-get install -y --no-install-recommends \
+    libnss3 \
+    libgbm1 \
+    libglib2.0-0 \
+    libatk1.0-0 \
+    libatk-bridge2.0-0 \
+    libatspi2.0-0 \
+    libgtk-3-0 \
+    libasound2 \
+    libcups2 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxfixes3 \
+    libxrandr2 \
+    libxkbcommon0 \
+    && echo "✅ GUI libraries installed" || echo "❌ Some GUI libraries failed"
 
-# 第五组：GUI 依赖库（逐个安装）
-RUN apt-get install -y --no-install-recommends libnss3 && echo "✅ libnss3" || echo "❌ libnss3"
-RUN apt-get install -y --no-install-recommends libgbm1 && echo "✅ libgbm1" || echo "❌ libgbm1"
-RUN apt-get install -y --no-install-recommends libglib2.0-0 && echo "✅ libglib2.0-0" || echo "❌ libglib2.0-0"
-RUN apt-get install -y --no-install-recommends libatk1.0-0 && echo "✅ libatk1.0-0" || echo "❌ libatk1.0-0"
-RUN apt-get install -y --no-install-recommends libatk-bridge2.0-0 && echo "✅ libatk-bridge2.0-0" || echo "❌ libatk-bridge2.0-0"
-RUN apt-get install -y --no-install-recommends libatspi2.0-0 && echo "✅ libatspi2.0-0" || echo "❌ libatspi2.0-0"
-RUN apt-get install -y --no-install-recommends libgtk-3-0 && echo "✅ libgtk-3-0" || echo "❌ libgtk-3-0"
-RUN apt-get install -y --no-install-recommends libasound2 && echo "✅ libasound2" || echo "❌ libasound2"
-RUN apt-get install -y --no-install-recommends libcups2 && echo "✅ libcups2" || echo "❌ libcups2"
-RUN apt-get install -y --no-install-recommends libxcomposite1 && echo "✅ libxcomposite1" || echo "❌ libxcomposite1"
-RUN apt-get install -y --no-install-recommends libxdamage1 && echo "✅ libxdamage1" || echo "❌ libxdamage1"
-RUN apt-get install -y --no-install-recommends libxfixes3 && echo "✅ libxfixes3" || echo "❌ libxfixes3"
-RUN apt-get install -y --no-install-recommends libxrandr2 && echo "✅ libxrandr2" || echo "❌ libxrandr2"
-RUN apt-get install -y --no-install-recommends libxkbcommon0 && echo "✅ libxkbcommon0" || echo "❌ libxkbcommon0"
-
-# 清理和配置
+# 清理
 RUN rm -rf /var/lib/apt/lists/* \
+    && /opt/venv/bin/pip cache purge \
     && corepack enable
+
+# 设置环境变量 - 优先使用虚拟环境
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PATH="/opt/venv/bin:$PATH" \
+    VIRTUAL_ENV="/opt/venv"
+
+# 验证安装
+RUN python --version && pip --version \
+    && echo "✅ Python environment ready"
+
+# 设置工作目录
+WORKDIR /app
