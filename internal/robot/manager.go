@@ -835,6 +835,23 @@ func (m Manager) UpgradeAlemonDependencies(root string) (Result, error) {
 				return Result{Path: path, Output: strings.Join(outputs, "\n")}, err
 			}
 		}
+	case "yarn":
+		// Yarn 1's `upgrade --latest` refuses a stale lockfile and a fallback
+		// `yarn install` would reconcile every project dependency. Use targeted
+		// `add` commands instead: only the allow-listed AlemonJS packages are
+		// changed in package.json, with their necessary lock entries updated.
+		// In a Yarn workspace, -W explicitly confirms that these are root
+		// dependencies; without it Yarn aborts before resolving any package.
+		if len(plan.Dependencies) > 0 {
+			if err := runUpgrade(append([]string{"add", "-W"}, latest(plan.Dependencies)...)...); err != nil {
+				return Result{Path: path, Output: strings.Join(outputs, "\n")}, err
+			}
+		}
+		if len(plan.DevDependencies) > 0 {
+			if err := runUpgrade(append([]string{"add", "--dev", "-W"}, latest(plan.DevDependencies)...)...); err != nil {
+				return Result{Path: path, Output: strings.Join(outputs, "\n")}, err
+			}
+		}
 	default:
 		args := []string{"upgrade", "--latest"}
 		if manager == "pnpm" {

@@ -119,7 +119,7 @@ export function DesktopWindow({
     top: number
   } | null>(null)
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!storageKey) return
     setLayoutReady(false)
     try {
@@ -308,7 +308,10 @@ export function DesktopWindow({
     })
   }, [id, minimized, onClose, onMinimize, open, toggleMaximize, zIndex])
 
-  if (!open) return null
+  // A persisted window must not paint at its fallback coordinates first. Read
+  // its saved geometry before the browser paints, otherwise users see a brief
+  // jump from the default top-left position to the restored position.
+  if (!open || !layoutReady) return null
   return (
     <Modal open zIndex={zIndex} className="floating-window-backdrop" ariaLabel={title}>
       <section

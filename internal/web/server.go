@@ -6782,6 +6782,29 @@ func isAbsoluteRobotRoot(root string) bool {
 // page navigations (upstream 404) are sent back to the launchpad instead of
 // rendering stray content, so the app frame never nests the management page.
 func modifyRobotAppResponse(response *http.Response, target *url.URL, appPrefix, requestPath string, request *http.Request) {
+	// The application is intentionally hosted inside AlemonX's WebView. An
+	// upstream X-Frame-Options or CSP frame-ancestors policy would otherwise
+	// make Chromium replace the document with chrome-error://chromewebdata.
+	// This is scoped to the validated local robot-app proxy; external pages are
+	// never rewritten by this handler.
+	response.Header.Del("X-Frame-Options")
+	if policy := response.Header.Get("Content-Security-Policy"); policy != "" {
+		parts := strings.Split(policy, ";")
+		kept := make([]string, 0, len(parts))
+		for _, part := range parts {
+			fields := strings.Fields(part)
+			if len(fields) > 0 && strings.EqualFold(fields[0], "frame-ancestors") {
+				continue
+			}
+			kept = append(kept, part)
+		}
+		cleaned := strings.Trim(strings.Join(kept, ";"), " ;")
+		if cleaned == "" {
+			response.Header.Del("Content-Security-Policy")
+		} else {
+			response.Header.Set("Content-Security-Policy", cleaned)
+		}
+	}
 	if isRobotAppNavigation(request) && requestPath != appPrefix && response.StatusCode == http.StatusNotFound {
 		response.Header.Set("Location", appPrefix)
 		response.StatusCode = http.StatusFound

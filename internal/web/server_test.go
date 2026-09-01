@@ -1720,6 +1720,28 @@ func TestAppProxyFramePolicy(t *testing.T) {
 	}
 }
 
+func TestModifyRobotAppResponseRemovesUpstreamFrameRestrictions(t *testing.T) {
+	response := &http.Response{Header: make(http.Header), StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("ok"))}
+	response.Header.Set("X-Frame-Options", "deny")
+	response.Header.Set("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'; img-src data:")
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/robot/app/token/", nil)
+	request.Header.Set("Accept", "text/html")
+	target, err := url.Parse("http://127.0.0.1:17390")
+	if err != nil {
+		t.Fatal(err)
+	}
+	modifyRobotAppResponse(response, target, "/api/v1/robot/app/token/", "/api/v1/robot/app/token/", request)
+	if got := response.Header.Get("X-Frame-Options"); got != "" {
+		t.Fatalf("X-Frame-Options = %q, want empty", got)
+	}
+	if got := response.Header.Get("Content-Security-Policy"); strings.Contains(got, "frame-ancestors") {
+		t.Fatalf("CSP still blocks framing: %q", got)
+	}
+	if !strings.Contains(response.Header.Get("Content-Security-Policy"), "default-src") {
+		t.Fatalf("CSP directives were not preserved: %q", response.Header.Get("Content-Security-Policy"))
+	}
+}
+
 func TestLocalServiceProxyKeepsManagementCookieIsolated(t *testing.T) {
 	var upstreamCookie string
 	upstream := newIPv4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

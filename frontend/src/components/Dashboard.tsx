@@ -1058,6 +1058,8 @@ export function Dashboard({
   const [file, setFile] = useStoreState('.npmrc')
   const [output, setOutput] = useStoreState('')
   const [outputFailed, setOutputFailed] = useStoreState(false)
+  const [operationLogMinimized, setOperationLogMinimized] =
+    useStoreState(false)
   const [consoleOpen, setConsoleOpen] = useStoreState(false)
   const [consoleMinimized, setConsoleMinimized] = useStoreState(false)
   const [foregroundLogsOpen, setForegroundLogsOpen] = useStoreState(false)
@@ -1605,6 +1607,7 @@ export function Dashboard({
   const showOutput = (message: string, failed = false) => {
     setOutput(message)
     setOutputFailed(failed)
+    setOperationLogMinimized(false)
   }
   const waitForRobotTask = (
     taskID: string,
@@ -3303,9 +3306,13 @@ export function Dashboard({
               <OperationLog
                 output={output}
                 failed={outputFailed}
+                minimized={operationLogMinimized}
+                onMinimize={() => setOperationLogMinimized(true)}
+                onRestore={() => setOperationLogMinimized(false)}
                 onClose={() => {
                   setOutput('')
                   setOutputFailed(false)
+                  setOperationLogMinimized(false)
                 }}
               />
             )}
@@ -3316,9 +3323,13 @@ export function Dashboard({
           <OperationLog
             output={output}
             failed={outputFailed}
+            minimized={operationLogMinimized}
+            onMinimize={() => setOperationLogMinimized(true)}
+            onRestore={() => setOperationLogMinimized(false)}
             onClose={() => {
               setOutput('')
               setOutputFailed(false)
+              setOperationLogMinimized(false)
             }}
           />
         )}
@@ -10744,25 +10755,105 @@ function ServiceWebviewWindow({
 }) {
   const frameRef = useRef<HTMLIFrameElement>(null)
   const [frameKey, setFrameKey] = useState(0)
+  const [frameSrc, setFrameSrc] = useState(service.src)
+  const historyRef = useRef<string[]>([])
+  const historyIndexRef = useRef(0)
+  const pendingHistoryURLRef = useRef<string | null>(null)
+  const [, setHistoryVersion] = useState(0)
   const [canNavigate, setCanNavigate] = useState(false)
+  const normalizeFrameURL = useCallback((value: string) => {
+    try {
+      return new URL(value, window.location.href).href
+    } catch {
+      return value
+    }
+  }, [])
+  const recordFrameNavigation = useCallback(
+    (value: string) => {
+      const url = normalizeFrameURL(value)
+      const pending = pendingHistoryURLRef.current
+      if (pending === url) {
+        pendingHistoryURLRef.current = null
+        setHistoryVersion(version => version + 1)
+        return
+      }
+      const current = historyRef.current[historyIndexRef.current]
+      if (current === url) return
+      const next = historyRef.current.slice(0, historyIndexRef.current + 1)
+      next.push(url)
+      historyRef.current = next
+      historyIndexRef.current = next.length - 1
+      setHistoryVersion(version => version + 1)
+    },
+    [normalizeFrameURL]
+  )
+  const installFrameHistoryTracking = useCallback(() => {
+    const frame = frameRef.current
+    if (!frame) return
+    try {
+      const frameWindow = frame.contentWindow
+      if (!frameWindow) return
+      const originalPushState = frameWindow.history.pushState
+      const originalReplaceState = frameWindow.history.replaceState
+      const sync = () => recordFrameNavigation(frameWindow.location.href)
+      frameWindow.history.pushState = function (...args) {
+        const result = originalPushState.apply(this, args)
+        sync()
+        return result
+      }
+      frameWindow.history.replaceState = function (...args) {
+        const result = originalReplaceState.apply(this, args)
+        // Treat replacement routes as a new host entry. This preserves the
+        // previous path even when an SPA deliberately replaces its URL.
+        sync()
+        return result
+      }
+      frameWindow.addEventListener('popstate', sync)
+      frameWindow.addEventListener('hashchange', sync)
+      return () => {
+        frameWindow.history.pushState = originalPushState
+        frameWindow.history.replaceState = originalReplaceState
+        frameWindow.removeEventListener('popstate', sync)
+        frameWindow.removeEventListener('hashchange', sync)
+      }
+    } catch {
+      // Direct LAN services are cross-origin. The browser still allows them
+      // to render, but intentionally prevents host-side history inspection.
+      setCanNavigate(false)
+    }
+  }, [recordFrameNavigation])
   const updateNavigationCapability = () => {
     try {
       // The app proxy is same-origin and exposes the iframe history. A direct
       // LAN service is intentionally isolated by the browser, so navigation
       // controls stay disabled instead of pretending to operate on it.
-      void frameRef.current?.contentWindow?.history.length
+      const frameWindow = frameRef.current?.contentWindow
+      void frameWindow?.history.length
+      if (frameWindow) recordFrameNavigation(frameWindow.location.href)
       setCanNavigate(Boolean(frameRef.current?.contentWindow))
+      installFrameHistoryTracking()
     } catch {
       setCanNavigate(false)
     }
   }
   const navigateFrame = (delta: -1 | 1) => {
-    try {
-      frameRef.current?.contentWindow?.history.go(delta)
-    } catch {
-      setCanNavigate(false)
-    }
+    const nextIndex = historyIndexRef.current + delta
+    const target = historyRef.current[nextIndex]
+    if (!target) return
+    historyIndexRef.current = nextIndex
+    pendingHistoryURLRef.current = normalizeFrameURL(target)
+    setFrameSrc(target)
+    setHistoryVersion(version => version + 1)
   }
+  useEffect(() => {
+    const next = normalizeFrameURL(service.src)
+    setFrameSrc(service.src)
+    if (historyRef.current.length === 0) {
+      historyRef.current = [next]
+      historyIndexRef.current = 0
+      setHistoryVersion(version => version + 1)
+    } else recordFrameNavigation(next)
+  }, [normalizeFrameURL, recordFrameNavigation, service.src])
   return (
     <DesktopWindow
       id="service-webview"
@@ -10785,7 +10876,7 @@ function ServiceWebviewWindow({
         <div className="flex items-center gap-1">
           <button
             className="icon-button size-8 p-0"
-            disabled={!canNavigate}
+            disabled={!canNavigate || historyIndexRef.current <= 0}
             onClick={() => navigateFrame(-1)}
             aria-label="后退"
             title={canNavigate ? '后退' : '该服务不支持宿主导航'}
@@ -10794,7 +10885,10 @@ function ServiceWebviewWindow({
           </button>
           <button
             className="icon-button size-8 p-0"
-            disabled={!canNavigate}
+            disabled={
+              !canNavigate ||
+              historyIndexRef.current >= historyRef.current.length - 1
+            }
             onClick={() => navigateFrame(1)}
             aria-label="前进"
             title={canNavigate ? '前进' : '该服务不支持宿主导航'}
@@ -10817,7 +10911,7 @@ function ServiceWebviewWindow({
           key={frameKey}
           ref={frameRef}
           className="h-full w-full border-0"
-          src={service.src}
+          src={frameSrc}
           title={`${service.title} 服务预览`}
           referrerPolicy="no-referrer"
           onLoad={updateNavigationCapability}
@@ -10857,6 +10951,99 @@ function AppEmbed({
   const appPageSrc = selectedAppPage
     ? `/api/v1/robot/webview/${token}/${selectedAppPage.id}/`
     : appSrc
+  const frameRef = useRef<HTMLIFrameElement>(null)
+  const [frameKey, setFrameKey] = useState(0)
+  const [frameSrc, setFrameSrc] = useState(appPageSrc)
+  const historyRef = useRef<string[]>([])
+  const historyIndexRef = useRef(0)
+  const pendingHistoryURLRef = useRef<string | null>(null)
+  const [, setHistoryVersion] = useState(0)
+  const [canNavigate, setCanNavigate] = useState(false)
+  const normalizeFrameURL = useCallback((value: string) => {
+    try {
+      return new URL(value, window.location.href).href
+    } catch {
+      return value
+    }
+  }, [])
+  const recordFrameNavigation = useCallback(
+    (value: string) => {
+      const url = normalizeFrameURL(value)
+      if (pendingHistoryURLRef.current === url) {
+        pendingHistoryURLRef.current = null
+        setHistoryVersion(version => version + 1)
+        return
+      }
+      const current = historyRef.current[historyIndexRef.current]
+      if (current === url) return
+      const next = historyRef.current.slice(0, historyIndexRef.current + 1)
+      next.push(url)
+      historyRef.current = next
+      historyIndexRef.current = next.length - 1
+      setHistoryVersion(version => version + 1)
+    },
+    [normalizeFrameURL]
+  )
+  const installFrameHistoryTracking = useCallback(() => {
+    const frameWindow = frameRef.current?.contentWindow
+    if (!frameWindow) return
+    try {
+      const originalPushState = frameWindow.history.pushState
+      const originalReplaceState = frameWindow.history.replaceState
+      const sync = () => recordFrameNavigation(frameWindow.location.href)
+      frameWindow.history.pushState = function (...args) {
+        const result = originalPushState.apply(this, args)
+        sync()
+        return result
+      }
+      frameWindow.history.replaceState = function (...args) {
+        const result = originalReplaceState.apply(this, args)
+        // Keep the previous host entry even when an application replaces its
+        // own route with history.replaceState.
+        sync()
+        return result
+      }
+      frameWindow.addEventListener('popstate', sync)
+      frameWindow.addEventListener('hashchange', sync)
+      return () => {
+        frameWindow.history.pushState = originalPushState
+        frameWindow.history.replaceState = originalReplaceState
+        frameWindow.removeEventListener('popstate', sync)
+        frameWindow.removeEventListener('hashchange', sync)
+      }
+    } catch {
+      setCanNavigate(false)
+    }
+  }, [recordFrameNavigation])
+  const updateNavigationCapability = () => {
+    try {
+      const frameWindow = frameRef.current?.contentWindow
+      void frameWindow?.history.length
+      if (frameWindow) recordFrameNavigation(frameWindow.location.href)
+      setCanNavigate(Boolean(frameWindow))
+      installFrameHistoryTracking()
+    } catch {
+      setCanNavigate(false)
+    }
+  }
+  const navigateFrame = (delta: -1 | 1) => {
+    const nextIndex = historyIndexRef.current + delta
+    const target = historyRef.current[nextIndex]
+    if (!target) return
+    historyIndexRef.current = nextIndex
+    pendingHistoryURLRef.current = normalizeFrameURL(target)
+    setFrameSrc(target)
+    setHistoryVersion(version => version + 1)
+  }
+  useEffect(() => {
+    const next = normalizeFrameURL(appPageSrc)
+    setFrameSrc(appPageSrc)
+    if (historyRef.current.length === 0) {
+      historyRef.current = [next]
+      historyIndexRef.current = 0
+      setHistoryVersion(version => version + 1)
+    } else recordFrameNavigation(next)
+  }, [appPageSrc, normalizeFrameURL, recordFrameNavigation])
   return (
     <DesktopWindow
       id="app"
@@ -10874,12 +11061,48 @@ function AppEmbed({
       initialPosition={{ left: 72, top: 56 }}
       width={980}
       height={680}
+      actions={
+        <div className="flex items-center gap-1">
+          <button
+            className="icon-button size-8 p-0"
+            disabled={!canNavigate || historyIndexRef.current <= 0}
+            onClick={() => navigateFrame(-1)}
+            aria-label="应用后退"
+            title={canNavigate ? '后退' : '应用页面无法访问宿主历史'}
+          >
+            <ArrowLeft className="size-4" />
+          </button>
+          <button
+            className="icon-button size-8 p-0"
+            disabled={
+              !canNavigate ||
+              historyIndexRef.current >= historyRef.current.length - 1
+            }
+            onClick={() => navigateFrame(1)}
+            aria-label="应用前进"
+            title={canNavigate ? '前进' : '应用页面无法访问宿主历史'}
+          >
+            <ArrowRight className="size-4" />
+          </button>
+          <button
+            className="icon-button size-8 p-0"
+            onClick={() => setFrameKey(value => value + 1)}
+            aria-label="刷新应用"
+            title="刷新应用"
+          >
+            <RefreshCw className="size-4" />
+          </button>
+        </div>
+      }
     >
       <div className="flex min-h-0 flex-1 flex-col">
         <iframe
+          key={frameKey}
+          ref={frameRef}
           className="min-h-0 flex-1 border-0"
-          src={appPageSrc}
+          src={frameSrc}
           title={selectedAppPage ? selectedAppPage.name : '机器人应用'}
+          onLoad={updateNavigationCapability}
         />
       </div>
     </DesktopWindow>
@@ -12885,50 +13108,74 @@ function FileEditor({
 function OperationLog({
   output,
   failed,
+  minimized,
+  onMinimize,
+  onRestore,
   onClose
 }: {
   output: string
   failed: boolean
+  minimized: boolean
+  onMinimize: () => void
+  onRestore: () => void
   onClose: () => void
 }) {
   const needsPermission =
     failed && /没有权限|访问权限|permission denied|eacces/i.test(output)
+  if (minimized)
+    return (
+      <button
+        className="fixed bottom-5 right-5 z-80 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-lg dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+        onClick={onRestore}
+        aria-label="恢复操作日志"
+      >
+        操作日志
+      </button>
+    )
   return (
-    <aside
-      className={`operation-log fixed bottom-5.5 right-5.5 z-80 grid max-h-[min(240px,38vh)] w-[min(420px,calc(100vw-44px))] gap-2 overflow-auto rounded-panel p-3 text-(--theme-text-primary) shadow-[0_16px_38px_rgb(28_26_23/0.13)] ${failed ? 'is-error' : 'is-success'}`}
-      aria-live="polite"
-      aria-label="最近操作结果"
+    <DesktopWindow
+      id="operation-log"
+      open
+      minimized={minimized}
+      title="操作日志"
+      subtitle={
+        needsPermission
+          ? '需要访问授权'
+          : failed
+            ? '操作未完成'
+            : '操作已完成'
+      }
+      icon={
+        failed ? (
+          <AlertTriangle className="size-4 shrink-0 text-red-600" />
+        ) : (
+          <CheckCircle2 className="size-4 shrink-0 text-emerald-600" />
+        )
+      }
+      onClose={onClose}
+      onMinimize={onMinimize}
+      zIndex={120}
+      onActivate={() => undefined}
+      initialPosition={{ left: 56, top: 76 }}
+      storageKey="alx:operation-log"
+      width={520}
+      height={380}
     >
-      <header className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <i className="operation-log-badge inline-flex size-5 items-center justify-center rounded-full text-xs font-bold not-italic text-white">
-            {failed ? '!' : '✓'}
-          </i>
-          <strong
-            className={`text-xs ${failed ? 'text-(--theme-danger-text)' : 'text-(--theme-success-text)'}`}
-          >
-            {needsPermission
-              ? '需要访问授权'
-              : failed
-                ? '操作未完成'
-                : '操作已完成'}
-          </strong>
-        </div>
-        <button
-          className="text-button size-7 min-h-7 p-0"
-          onClick={onClose}
-          aria-label="关闭操作结果"
-        >
-          ×
-        </button>
-      </header>
-      <pre className="m-0 max-h-45 overflow-auto whitespace-pre-wrap rounded-md bg-(--theme-surface-code) p-2.5 font-mono text-[0.73rem] leading-relaxed text-(--theme-text-code)">
-        {output}
-      </pre>
-      <small className="text-[11px] text-(--theme-text-muted)">
-        {needsPermission ? '授权完成后，请回到这里重新执行本次操作。' : ''}
-      </small>
-    </aside>
+      <div
+        className={`operation-log flex min-h-0 flex-1 flex-col gap-2 p-3 text-(--theme-text-primary) ${failed ? 'is-error' : 'is-success'}`}
+        aria-live="polite"
+        aria-label="最近操作结果"
+      >
+        <pre className="m-0 min-h-0 flex-1 overflow-auto whitespace-pre-wrap rounded-md bg-(--theme-surface-code) p-3 font-mono text-[0.73rem] leading-relaxed text-(--theme-text-code)">
+          {output}
+        </pre>
+        {needsPermission && (
+          <small className="text-[11px] text-(--theme-text-muted)">
+            授权完成后，请回到这里重新执行本次操作。
+          </small>
+        )}
+      </div>
+    </DesktopWindow>
   )
 }
 
