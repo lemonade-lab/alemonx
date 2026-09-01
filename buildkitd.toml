@@ -1,0 +1,20 @@
+[registry."docker.io"]
+  mirrors = [
+    "registry.cn-hangzhou.aliyuncs.com",
+    "docker.m.daocloud.io",
+    "mirror.iscas.ac.cn",
+    "mirrors.ustc.edu.cn",
+    "mirrors.sohu.com",
+    "docker.xuanyuan.me",
+    "docker.1ms.run",
+    "atomhub.openatom.cn",
+    "ccr.ccs.tencentyun.com",
+    "hub.rat.dev",
+    "xuanyuan.cloud"
+  ]
+
+[registry."mirrors.ustc.edu.cn"]
+  insecure = true
+
+[registry."mirrors.sohu.com"]
+  insecure = true

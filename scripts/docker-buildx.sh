@@ -16,7 +16,7 @@ docker info >/dev/null 2>&1 || { echo '❌ Docker 未运行，或当前账户没
 # ========== 配置 Builder ==========
 if ! docker buildx inspect "$builder" >/dev/null 2>&1; then
   echo "🔧 创建新的 builder: $builder"
-  docker buildx create --name "$builder" --use
+  docker buildx create --name "$builder" --config ./buildkitd.toml --use  --driver-opt network=host
 else
   echo "🔧 使用已有 builder: $builder"
   docker buildx use "$builder"
