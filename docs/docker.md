@@ -96,7 +96,11 @@ ALX_IMAGE=alemonx:local docker compose up -d
 
 ## 发布与构建边界
 
-Docker 不使用 GitHub Actions。基础镜像和应用镜像均由本机 Builder 手动构建；`alemonbase` 发布到腾讯云后，隔离的 Buildx builder 即可读取它并构建多架构应用镜像：
+应用镜像可通过 GitHub Actions 的 **发布腾讯云 Docker 镜像** 工作流手动发布。进入仓库的 **Actions** 页面，选择该工作流并点击 **Run workflow**，然后填写腾讯云 TCR/CCR 仓库域名、命名空间、镜像仓库、标签和登录账号。表单默认使用当前的腾讯云镜像地址，也允许填写自定义的腾讯云仓库域名。登录密码不在页面输入：请先在仓库的 **Settings → Secrets and variables → Actions** 创建 `DOCKER_PASSWORD`，其值应为腾讯云镜像仓库的密码或访问令牌。工作流会构建并推送 `linux/amd64` 和 `linux/arm64` 两个架构。
+
+基础镜像可通过 **发布腾讯云 alemonbase 镜像** 工作流手动发布。填写版本标签（例如 `20260901`）后，工作流会同时发布该版本和 `latest` 标签；应用镜像工作流的运行时基础镜像应使用已发布的版本标签或 `latest`。
+
+基础镜像仍由本机 Builder 手动构建；`alemonbase` 发布到腾讯云后，GitHub Actions 或隔离的 Buildx builder 均可读取它并构建多架构应用镜像：
 
 ```sh
 # 仅验证应用镜像

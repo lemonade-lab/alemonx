@@ -1,0 +1,67 @@
+name: 发布腾讯云 alemonbase 镜像
+
+on:
+  workflow_dispatch:
+    inputs:
+      tencent_registry:
+        description: 腾讯云 TCR/CCR 仓库域名
+        required: true
+        default: ccr.ccs.tencentyun.com
+        type: string
+      namespace:
+        description: 腾讯云镜像命名空间
+        required: true
+        default: ningmengchongshui
+        type: string
+      image_name:
+        description: 腾讯云基础镜像仓库名称
+        required: true
+        default: alemonbase
+        type: string
+      version:
+        description: 基础镜像版本标签，例如 20260901；同时会更新 latest
+        required: true
+        type: string
+      registry_username:
+        description: 腾讯云镜像仓库登录账号
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-push:
+    name: 构建并发布基础镜像
+    runs-on: ubuntu-latest
+    env:
+      IMAGE: ${{ inputs.tencent_registry }}/${{ inputs.namespace }}/${{ inputs.image_name }}
+    steps:
+      - name: 检出源码
+        uses: actions/checkout@v4
+
+      - name: 配置 QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: 配置 Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 登录腾讯云镜像仓库
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ inputs.tencent_registry }}
+          username: ${{ inputs.registry_username }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: 构建并发布多架构基础镜像
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile.base
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:latest
+            ${{ env.IMAGE }}:${{ inputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

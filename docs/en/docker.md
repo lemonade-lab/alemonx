@@ -94,7 +94,11 @@ It also preinstalls the Linux runtime required by QQ/NapCat: Xvfb, XKB, GTK/NSS/
 
 ## Publishing and build boundary
 
-Docker does not use GitHub Actions. Both the base and application images are built manually by the local Builder. Once `alemonbase` is published to Tencent Cloud, the isolated Buildx builder can read it and build a multi-platform application image:
+The application image can be released manually through the GitHub Actions **发布腾讯云 Docker 镜像** workflow. On the repository's **Actions** page, choose the workflow and select **Run workflow**, then enter the Tencent Cloud TCR/CCR registry domain, namespace, image repository, tag, and login username. The form defaults to the current Tencent Cloud registry and also accepts a custom Tencent Cloud registry domain. Do not enter a password in the workflow form: create a repository Actions secret named `DOCKER_PASSWORD` first, with the Tencent Cloud registry password or access token as its value. The workflow builds and pushes both `linux/amd64` and `linux/arm64` images.
+
+The base image can be released manually through the **发布腾讯云 alemonbase 镜像** workflow. Provide a version tag (for example, `20260901`) and the workflow publishes both that version and `latest`; the application-image workflow should use that published version or `latest` as its runtime base image.
+
+The base image is still built manually by the local Builder. Once `alemonbase` is published to Tencent Cloud, either GitHub Actions or the isolated Buildx builder can read it and build the multi-platform application image:
 
 ```sh
 # Validate the application image only
