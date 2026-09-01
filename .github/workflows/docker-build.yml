@@ -1,4 +1,4 @@
-name: 发布腾讯云 Docker 镜像
+name: Docker alemonx push
 
 on:
   workflow_dispatch:
