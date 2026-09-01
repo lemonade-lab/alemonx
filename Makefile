@@ -1,11 +1,8 @@
-.PHONY: help dev bundle-resources build test test-agent test-all test-sqlite test-space format lint dev-fe build-frontend test-sse verify-sse release-check docker-build docker-buildx docker-buildx-push docker-base-build docker-base-buildx docker-base-buildx-push docker-up docker-down docker-logs yunzai-resources docker-yunzai-build docker-yunzai-buildx docker-yunzai-buildx-push docker-yunzai-up docker-yunzai-down docker-yunzai-logs
+.PHONY: help dev bundle-resources build test test-agent test-all test-sqlite test-space format lint dev-fe build-frontend test-sse verify-sse release-check docker-build docker-buildx docker-buildx-push docker-base-build docker-base-buildx docker-base-buildx-push docker-up docker-down docker-logs
 
 .DEFAULT_GOAL := help
 
 ALX_RUNTIME_BASE ?= ccr.ccs.tencentyun.com/ningmengchongshui/alemonbase:latest
-YUNZAI_LOADER_SOURCE ?= ../alemonjs-load-yunzai
-YUNZAI_IMAGE ?= alemonx-yunzai:local
-YUNZAI_BASE_IMAGE ?= alemonx:local
 
 help: ## Show available commands
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -122,18 +119,3 @@ docker-buildx: ## Manually validate or publish the multi-architecture Docker ima
 
 docker-buildx-push: ## Manually validate or publish the multi-architecture Docker image
 	ALX_PUSH=1 ./scripts/docker-buildx.sh
-
-yunzai-resources: ## Package the prebuilt Yunzai loader and refresh local resource checksums
-	sh ./scripts/docker-yunzai-package-loader.sh "$(YUNZAI_LOADER_SOURCE)" .resources/alemonjs-load-yunzai.tar.gz
-	cd .resources && shasum -a 256 Miao-Yunzai-master.zip miao-plugin-master.zip alemonjs-load-yunzai.tar.gz > yunzai-resources.sha256
-
-docker-yunzai-build: yunzai-resources docker-build ## Build the local Yunzai image without cloning Yunzai repositories
-	# Docker Desktop BuildKit resolves an unqualified local base through a registry.
-	# Use the native image store here so the just-built alemonx:local is reusable.
-	DOCKER_BUILDKIT=0 docker build --build-arg BASE_IMAGE=$(YUNZAI_BASE_IMAGE) -f Dockerfile.yunzai -t $(YUNZAI_IMAGE) .
-
-docker-yunzai-buildx: yunzai-resources ## Validate the multi-architecture Yunzai image build
-	sh ./scripts/docker-yunzai-buildx.sh
-
-docker-yunzai-buildx-push: yunzai-resources ## Build and push the multi-architecture Yunzai image
-	YUNZAI_PUSH=1 sh ./scripts/docker-yunzai-buildx.sh
