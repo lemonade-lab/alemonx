@@ -11457,6 +11457,20 @@ function completeBrowserAddress(input: string): BrowserAddress | null {
   }
   try {
     const url = new URL(scheme + '//' + authority + suffix)
+    // A Hash route is handled entirely by the document; it is never included
+    // in the HTTP request. Directory-hosted SPAs commonly require their entry
+    // document to end with `/`, e.g. `/console/#/config` rather than
+    // `/console#/config`. Canonicalize only extensionless Hash entry paths so
+    // a direct deep link does not become an upstream 404 before the SPA runs.
+    const finalSegment = url.pathname.split('/').at(-1) ?? ''
+    if (
+      url.hash &&
+      finalSegment !== '' &&
+      !finalSegment.includes('.') &&
+      !url.pathname.endsWith('/')
+    ) {
+      url.pathname += '/'
+    }
     const port = url.port || (scheme === 'https:' ? '443' : '80')
     const host = url.hostname.includes(':') && !url.hostname.startsWith('[')
       ? `[${url.hostname}]`
@@ -11486,18 +11500,22 @@ function MiniBrowserWindow({
   onActivate: () => void
 }) {
   const [homeQuery, setHomeQuery] = useState('')
-  // Like a desktop browser, opening the browser itself opens a real home tab.
-  // It is not a placeholder that appears only after the first navigation.
-  const [tabs, setTabs] = useState<BrowserTab[]>(() => [createBrowserHomeTab()])
-  const [activeTabID, setActiveTabID] = useState(() => tabs[0].id)
+  // Opening the browser itself creates a home tab. Opening a concrete URL
+  // (service preview, robot application, or system-plugin URL) does not: the
+  // requested document is the first real tab, with no disposable blank tab.
+  const startsWithNavigation = Boolean(
+    browserCommand?.kind === 'open' && browserCommand.url
+  )
+  const [tabs, setTabs] = useState<BrowserTab[]>(() =>
+    startsWithNavigation ? [] : [createBrowserHomeTab()]
+  )
+  const [activeTabID, setActiveTabID] = useState(() => tabs[0]?.id ?? '')
   const [error, setError] = useState('')
   const lastBrowserCommandID = useRef('')
-  const frameRef = useRef<HTMLIFrameElement>(null)
-  const tabListRef = useRef<HTMLDivElement>(null)
+  const frameRefs = useRef(new Map<string, HTMLIFrameElement>())
   const activeTab = tabs.find(tab => tab.id === activeTabID)
   const query = activeTab?.query ?? homeQuery
   const pageURL = activeTab?.pageURL ?? ''
-  const frameKey = activeTab?.frameKey ?? 0
   const history = activeTab?.history ?? []
   const historyIndex = activeTab?.historyIndex ?? -1
   const updateActiveTab = (update: (tab: BrowserTab) => BrowserTab) => {
@@ -11601,14 +11619,27 @@ function MiniBrowserWindow({
             (next.port || (next.protocol === 'https:' ? '443' : '80'))
       )
       if (!sameSite) {
-        const classified = await fetch('/api/v1/browser/classify', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url: complete.displayURL })
-        })
-        const result = (await classified.json().catch(() => ({}))) as { scope?: string }
-        if (!classified.ok) throw new Error('地址分类失败')
-        if (next.protocol === 'https:' || result.scope !== 'private') {
+        let scope = 'public'
+        try {
+          const classified = await fetch('/api/v1/browser/classify', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: complete.displayURL })
+          })
+          const result = (await classified.json().catch(() => ({}))) as {
+            scope?: string
+          }
+          if (!classified.ok) throw new Error('地址分类失败')
+          scope = result.scope ?? scope
+        } catch (reason) {
+          // HTTP is served through our compatibility proxy. When host
+          // classification itself is unavailable, still create the requested
+          // tab and let the proxy show the real connection result instead of
+          // silently discarding the user's new-tab action.
+          if (next.protocol !== 'http:') throw reason
+          scope = 'private'
+        }
+        if (next.protocol === 'https:' || scope !== 'private') {
           await openInSystemBrowser(complete)
           return
         }
@@ -11632,8 +11663,12 @@ function MiniBrowserWindow({
       } else {
         setTabs(current => current.map(tab => (tab.id === activeTab.id ? { ...nextTab, id: tab.id } : tab)))
       }
-    } catch {
-      setError('请输入有效的网址或搜索内容。')
+    } catch (reason) {
+      setError(
+        reason instanceof Error && reason.message
+          ? reason.message
+          : '请输入有效的网址或搜索内容。'
+      )
     }
   }
   const navigateHistory = (delta: -1 | 1) => {
@@ -11650,25 +11685,31 @@ function MiniBrowserWindow({
     }))
     setError('')
   }
-  const syncFrameNavigation = () => {
-    if (!activeTab || !frameRef.current) return
+  const syncFrameNavigation = (tabID: string) => {
+    const frame = frameRefs.current.get(tabID)
+    if (!frame) return
     try {
-      const frameURL = new URL(frameRef.current.contentWindow?.location.href ?? '')
+      const frameURL = new URL(frame.contentWindow?.location.href ?? '')
       const match = frameURL.pathname.match(/^\/api\/v1\/browser\/http\/([^/]+)\/(.*)$/)
       if (!match) return
       const targetOrigin = window
         .atob(match[1].replace(/-/g, '+').replace(/_/g, '/'))
       const logical = new URL(`/${match[2]}${frameURL.search}${frameURL.hash}`, targetOrigin)
-      if (activeTab.history[activeTab.historyIndex] === logical.href) return
-      const nextHistory = activeTab.history.slice(0, activeTab.historyIndex + 1)
-      nextHistory.push(logical.href)
-      updateActiveTab(tab => ({
-        ...tab,
-        query: addressTextFor(logical),
-        pageURL: `${frameURL.pathname}${frameURL.search}${frameURL.hash}`,
-        history: nextHistory,
-        historyIndex: nextHistory.length - 1
-      }))
+      setTabs(current =>
+        current.map(tab => {
+          if (tab.id !== tabID || tab.history[tab.historyIndex] === logical.href)
+            return tab
+          const nextHistory = tab.history.slice(0, tab.historyIndex + 1)
+          nextHistory.push(logical.href)
+          return {
+            ...tab,
+            query: addressTextFor(logical),
+            pageURL: `${frameURL.pathname}${frameURL.search}${frameURL.hash}`,
+            history: nextHistory,
+            historyIndex: nextHistory.length - 1
+          }
+        })
+      )
     } catch {
       // HTTPS pages are direct and intentionally remain inaccessible to the
       // workbench document; their address stays as the user entered it.
@@ -11699,6 +11740,10 @@ function MiniBrowserWindow({
       if (event.origin !== window.location.origin) return
       const data = event.data as { source?: string; type?: string; url?: string } | null
       if (data?.source !== 'alx-browser' || !data.url) return
+      const sourceTab = tabs.find(
+        tab => frameRefs.current.get(tab.id)?.contentWindow === event.source
+      )
+      if (!sourceTab) return
       if (data.type === 'form-blocked') {
         setError('已阻止跨站 POST 提交：系统浏览器无法安全复用当前页面的表单数据与会话。')
         return
@@ -11707,19 +11752,27 @@ function MiniBrowserWindow({
         navigate(data.url, true)
         return
       }
-      if (data.type !== 'navigate' || !activeTab) return
+      if (data.type !== 'navigate') return
       try {
         const logical = new URL(data.url)
-        if (activeTab.history[activeTab.historyIndex] === logical.href) return
-        const nextHistory = activeTab.history.slice(0, activeTab.historyIndex + 1)
-        nextHistory.push(logical.href)
-        updateActiveTab(tab => ({
-          ...tab,
-          query: addressTextFor(logical),
-          pageURL: frameURLFor(logical),
-          history: nextHistory,
-          historyIndex: nextHistory.length - 1
-        }))
+        setTabs(current =>
+          current.map(tab => {
+            if (
+              tab.id !== sourceTab.id ||
+              tab.history[tab.historyIndex] === logical.href
+            )
+              return tab
+            const nextHistory = tab.history.slice(0, tab.historyIndex + 1)
+            nextHistory.push(logical.href)
+            return {
+              ...tab,
+              query: addressTextFor(logical),
+              pageURL: frameURLFor(logical),
+              history: nextHistory,
+              historyIndex: nextHistory.length - 1
+            }
+          })
+        )
       } catch {
         // Ignore malformed messages from an embedded document.
       }
@@ -11761,33 +11814,20 @@ function MiniBrowserWindow({
       icon={<Globe2 className="size-4 shrink-0 text-brand-600 dark:text-brand-200" />}
       headerLeft={
         tabs.length > 0 ? (
-          <div className="flex min-w-0 flex-1 items-center gap-1 py-1" data-window-interactive>
-            <div
-              ref={tabListRef}
-              className="mini-browser-tab-list flex min-w-0 items-center gap-1 overflow-x-auto overflow-y-hidden"
-              data-window-interactive
-              onWheel={event => {
-                if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return
-                const list = tabListRef.current
-                if (!list) return
-                list.scrollLeft += event.deltaY
-                event.preventDefault()
-              }}
-            >
-              {tabs.map(tab => (
-                <div
-                  key={tab.id}
-                  className={`mini-browser-tab flex max-w-52 items-center gap-1 rounded-t-md border border-b-0 px-2 py-1 text-xs ${tab.id === activeTabID ? 'bg-white text-slate-800 dark:bg-slate-700 dark:text-slate-100' : 'border-transparent text-slate-500 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700/70'}`}
-                >
-                  <button className="min-w-0 flex-1 truncate text-left" type="button" onClick={event => { setActiveTabID(tab.id); event.currentTarget.scrollIntoView({ block: 'nearest', inline: 'nearest' }) }} title={tab.query}>
-                    {tab.query || '首页'}
-                  </button>
-                  <button className="shrink-0 rounded p-0.5 hover:bg-slate-200 dark:hover:bg-slate-600" type="button" onClick={() => closeTab(tab.id)} aria-label="关闭标签页">
-                    <X className="size-3" />
-                  </button>
-                </div>
-              ))}
-            </div>
+          <div className="flex w-full items-center gap-1 overflow-x-auto py-1">
+            {tabs.map(tab => (
+              <div
+                key={tab.id}
+                className={`flex min-w-28 max-w-52 items-center gap-1 rounded-t-md border border-b-0 px-2 py-1 text-xs ${tab.id === activeTabID ? 'bg-white text-slate-800 dark:bg-slate-700 dark:text-slate-100' : 'border-transparent text-slate-500 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700/70'}`}
+              >
+                <button className="min-w-0 flex-1 truncate text-left" type="button" onClick={() => setActiveTabID(tab.id)} title={tab.query}>
+                  {tab.query || '首页'}
+                </button>
+                <button className="shrink-0 rounded p-0.5 hover:bg-slate-200 dark:hover:bg-slate-600" type="button" onClick={() => closeTab(tab.id)} aria-label="关闭标签页">
+                  <X className="size-3" />
+                </button>
+              </div>
+            ))}
             <button
               className="icon-button size-8 shrink-0 p-0"
               type="button"
@@ -11816,7 +11856,7 @@ function MiniBrowserWindow({
       height={700}
     >
       <section className="mini-browser flex min-h-0 flex-1 flex-col bg-slate-50 dark:bg-slate-900">
-        {pageURL ? (
+        {pageURL && (
           <>
             <form className="flex shrink-0 items-center gap-2 border-b border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-800" onSubmit={event => { event.preventDefault(); void navigate() }}>
               <button className="icon-button size-8 shrink-0 p-0" type="button" onClick={() => navigateHistory(-1)} disabled={historyIndex <= 0} aria-label="后退" title="后退"><ArrowLeft className="size-4" /></button>
@@ -11830,22 +11870,30 @@ function MiniBrowserWindow({
                 {error}
               </p>
             )}
-          <iframe
-            ref={frameRef}
-            className="min-h-0 flex-1 border-0 bg-white"
-            key={frameKey}
-            src={pageURL}
-            title="迷你浏览器页面"
-            referrerPolicy={
-              pageURL.startsWith('/api/v1/browser/http/')
-                ? 'strict-origin-when-cross-origin'
-                : 'no-referrer'
-            }
-            onLoad={syncFrameNavigation}
-          />
-        </>
-      ) : (
-        <div className="grid flex-1 place-items-center bg-white p-8 dark:bg-slate-900">
+          </>
+        )}
+        <div className="relative min-h-0 flex-1 overflow-hidden">
+          {tabs.filter(tab => tab.pageURL).map(tab => (
+            <iframe
+              key={`${tab.id}:${tab.frameKey}`}
+              ref={node => {
+                if (node) frameRefs.current.set(tab.id, node)
+                else frameRefs.current.delete(tab.id)
+              }}
+              className={`absolute inset-0 h-full w-full border-0 bg-white ${tab.id === activeTabID ? '' : 'invisible pointer-events-none'}`}
+              name={`alx-browser-tab:${tab.id}`}
+              src={tab.pageURL}
+              title={tab.query || '迷你浏览器页面'}
+              referrerPolicy={
+                tab.pageURL.startsWith('/api/v1/browser/http/')
+                  ? 'strict-origin-when-cross-origin'
+                  : 'no-referrer'
+              }
+              onLoad={() => syncFrameNavigation(tab.id)}
+            />
+          ))}
+          {!pageURL && (
+            <div className="grid h-full place-items-center bg-white p-8 dark:bg-slate-900">
           <form
             className="grid w-full max-w-2xl gap-7"
             onSubmit={event => {
@@ -11885,8 +11933,9 @@ function MiniBrowserWindow({
               </p>
             )}
           </form>
+            </div>
+          )}
         </div>
-      )}
       </section>
     </DesktopWindow>
   )

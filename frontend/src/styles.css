@@ -2718,37 +2718,9 @@ button {
 
 .floating-window-header-custom > div:first-child {
   align-self: stretch;
-  /* The tab/title region receives only the space left after the window
-   * controls. Using a zero flex basis prevents its intrinsic tab width from
-   * competing with — and eventually pushing out — minimize/close controls. */
-  flex: 1 1 0%;
+  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
-}
-
-.floating-window-header-custom > div:last-child {
-  /* Window controls are chrome, not page content: never let a custom header
-   * (browser tabs, terminal tabs, etc.) shrink or displace them. */
-  flex: 0 0 auto;
-}
-
-/* Browser tabs own their overflow region. Keep the new-tab control outside
- * this scroller so it remains reachable even when many tabs are open. */
-.mini-browser-tab-list {
-  flex: 0 1 auto;
-  max-width: calc(100% - 2.25rem);
-  overscroll-behavior-x: contain;
-  scrollbar-width: thin;
-}
-
-.mini-browser-tab {
-  flex: 1 1 11rem;
-  min-width: 5rem;
-}
-
-.mini-browser-tab-list::-webkit-scrollbar {
-  display: block;
-  height: 5px;
 }
 
 .floating-window-header-custom .readonly-console-tabs {

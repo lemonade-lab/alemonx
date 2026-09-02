@@ -1843,7 +1843,7 @@ func TestBrowserHTTPProxyStorageBootstrapUsesTargetNamespace(t *testing.T) {
 		t.Fatalf("storage bootstrap = %d %s", recorder.Code, recorder.Body.String())
 	}
 	body := recorder.Body.String()
-	if !strings.Contains(body, "__alx_browser_storage_"+token+":") || !strings.Contains(body, "install('localStorage')") || !strings.Contains(body, "install('sessionStorage')") || !strings.Contains(body, "installCookieScope") || !strings.Contains(body, "nativeIDB") || !strings.Contains(body, "nativeCaches") || !strings.Contains(body, browserHTTPCookiePrefix(token)) {
+	if !strings.Contains(body, "__alx_browser_storage_"+token+":") || !strings.Contains(body, "install('localStorage',prefix)") || !strings.Contains(body, "install('sessionStorage',sessionPrefix)") || !strings.Contains(body, "window.name") || !strings.Contains(body, "installCookieScope") || !strings.Contains(body, "nativeIDB") || !strings.Contains(body, "nativeCaches") || !strings.Contains(body, browserHTTPCookiePrefix(token)) {
 		t.Fatalf("storage bootstrap missing namespace or storage shims: %q", body)
 	}
 }
