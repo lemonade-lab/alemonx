@@ -85,9 +85,22 @@ const embeddedAPICompatScript = `<script>(function(){var m=%q,h=%q;if(!m||window
 // fragment-only token first, then holds the first API calls until NapCat's
 // short-lived credential exists. Axios chooses fetch in some Chromium builds
 // and XHR in others, hence the matching post-bootstrap XHR gate below.
-const embeddedAPIAuthGate = `<script>(function(){var m=%q,z=new URLSearchParams(window.location.hash.slice(1)).get("alx-napcat-token");if(!z||!window.fetch||!window.crypto||!crypto.subtle)return;history.replaceState(null,"",window.location.pathname+window.location.search);var f=window.fetch.bind(window),c="",b=crypto.subtle.digest("SHA-256",new TextEncoder().encode(z+".napcat")).then(function(x){return Array.from(new Uint8Array(x)).map(function(v){return v.toString(16).padStart(2,"0")}).join("")}).then(function(h){return f(m+"api/auth/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({hash:h})})}).then(function(r){return r.json()}).then(function(v){c=v&&v.data&&v.data.Credential;if(!c)throw new Error("NapCat WebUI login failed");localStorage.setItem("token",JSON.stringify(c));return c}).catch(function(e){console.warn("NapCat embedded WebUI login failed",e);return ""});window.__alxNapcatCredentialBoot=b;window.fetch=function(i,n){return b.then(function(k){if(k){n=Object.assign({},n||{});var h=new Headers(n.headers||(i&&i.headers));h.set("Authorization","Bearer "+k);n.headers=h}return f(i,n)})}})();</script>`
+const embeddedAPIAuthGate = `<script>(function(){var m=%q,z=new URLSearchParams(window.location.hash.slice(1)).get("alx-napcat-token");if(!z||!window.fetch||!window.crypto||!crypto.subtle)return;history.replaceState(null,"",window.location.pathname+window.location.search);var f=window.fetch.bind(window),c="",b=crypto.subtle.digest("SHA-256",new TextEncoder().encode(z+".napcat")).then(function(x){return Array.from(new Uint8Array(x)).map(function(v){return v.toString(16).padStart(2,"0")}).join("")}).then(function(h){return f(m+"api/auth/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({hash:h})})}).then(function(r){return r.json()}).then(function(v){c=v&&v.data&&v.data.Credential;if(!c)throw new Error("NapCat WebUI login failed");localStorage.setItem("token",JSON.stringify(c));return c}).catch(function(e){console.warn("NapCat embedded WebUI login failed",e);return ""});window.__alxNapcatCredentialBoot=b;window.fetch=function(i,n){return b.then(function(k){if(k){n=Object.assign({},n||{});var h=new Headers(n.headers||(i&&i.headers));h.delete("Authorization");h.set("X-ALX-Upstream-Authorization","Bearer "+k);n.headers=h}return f(i,n)})}})();</script>`
 
-const embeddedAPIAuthXHRGate = `<script>(function(){var b=window.__alxNapcatCredentialBoot;if(!b)return;var h=XMLHttpRequest.prototype.setRequestHeader,s=XMLHttpRequest.prototype.send;XMLHttpRequest.prototype.setRequestHeader=function(k,v){if(String(k).toLowerCase()==="authorization"&&(!v||String(v).trim()==="Bearer")){this.__alxAuthPending=true;return}return h.call(this,k,v)};XMLHttpRequest.prototype.send=function(v){var x=this;if(x.__alxAuthPending){b.then(function(c){if(c)h.call(x,"Authorization","Bearer "+c);s.call(x,v)});return}return s.call(x,v)}})();</script>`
+// embeddedAPIAuthXHRGate keeps NapCat's credential out of the ordinary
+// Authorization header.  ALX authenticates the outer request with its own
+// session cookie; a service credential in Authorization would otherwise be
+// parsed by ginAccess as an ALX credential and rejected before proxying.
+//
+// This also covers a later manual visit to the WebUI URL, where NapCat has a
+// token in localStorage but no one-click fragment and therefore no bootstrap
+// promise to wait for.
+const embeddedAPIAuthXHRGate = `<script>(function(){var b=window.__alxNapcatCredentialBoot||Promise.resolve("");var h=XMLHttpRequest.prototype.setRequestHeader,s=XMLHttpRequest.prototype.send;XMLHttpRequest.prototype.setRequestHeader=function(k,v){if(String(k).toLowerCase()==="authorization"){this.__alxOriginalAuthorization=String(v);return}return h.call(this,k,v)};XMLHttpRequest.prototype.send=function(v){var x=this,original=x.__alxOriginalAuthorization;if(original){b.then(function(c){var value=c?"Bearer "+c:original;if(/^Bearer\\s+\\S+/i.test(value))h.call(x,"X-ALX-Upstream-Authorization",value);s.call(x,v)});return}return s.call(x,v)}})();</script>`
+
+// Fetch has no setRequestHeader hook.  Install this final wrapper after the
+// compatibility runtime so every existing and future NapCat fetch call (not
+// only calls made during the first one-click login) uses the namespaced header.
+const embeddedAPIAuthFetchNamespace = `<script>(function(){if(!window.fetch||window.__alxNapcatFetchNamespace)return;window.__alxNapcatFetchNamespace=true;var f=window.fetch.bind(window);window.fetch=function(i,n){var h=new Headers((n&&n.headers)||(i&&i.headers)),a=h.get("Authorization");if(a&&/^Bearer\s+\S+/i.test(a)){h.delete("Authorization");h.set("X-ALX-Upstream-Authorization",a);n=Object.assign({},n||{},{headers:h})}return f(i,n)}})();</script>`
 
 // injectEmbeddedAPIBootstrap adds the compatibility script to a rewritten
 // HTML document. Compressed bodies are left untouched, mirroring the HTML
@@ -104,7 +117,7 @@ func injectEmbeddedAPIBootstrap(response *http.Response, mount, upstreamHost str
 		return
 	}
 	_ = response.Body.Close()
-	script := fmt.Sprintf(embeddedAPIAuthGate, mount) + fmt.Sprintf(embeddedAPICompatScript, mount, upstreamHost) + embeddedAPIAuthXHRGate
+	script := fmt.Sprintf(embeddedAPIAuthGate, mount) + fmt.Sprintf(embeddedAPICompatScript, mount, upstreamHost) + embeddedAPIAuthXHRGate + embeddedAPIAuthFetchNamespace
 	document := string(body)
 	if head := htmlHeadPattern.FindString(document); head != "" {
 		document = strings.Replace(document, head, head+script, 1)
@@ -297,8 +310,9 @@ func (s *server) localServiceProxyWith(w http.ResponseWriter, r *http.Request, p
 			// that service-local credential with an ALX management credential and
 			// strip it: doing so makes login succeed in the browser but guarantees
 			// every following upstream request is Unauthorized.
-			authorization := request.Header.Get("Authorization")
+			authorization := request.Header.Get("X-ALX-Upstream-Authorization")
 			request.Header.Del("Authorization")
+			request.Header.Del("X-ALX-Upstream-Authorization")
 			if service.RewriteAPIBase && strings.HasPrefix(strings.TrimSpace(authorization), "Bearer ") {
 				request.Header.Set("Authorization", authorization)
 			}

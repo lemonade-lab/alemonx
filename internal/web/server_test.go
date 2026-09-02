@@ -2187,6 +2187,40 @@ func TestLocalServiceStatusReportsGatewayCapability(t *testing.T) {
 	}
 }
 
+func TestLocalServiceProxyForwardsNamespacedWebUICredential(t *testing.T) {
+	var authorization string
+	upstream := newIPv4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authorization = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+	parsed, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, rawPort, err := net.SplitHostPort(parsed.Host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pluginsRoot := t.TempDir()
+	pluginRoot := filepath.Join(pluginsRoot, "alemonx-qq")
+	if err := os.MkdirAll(filepath.Join(pluginRoot, "web"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := fmt.Sprintf(`{"id":"alemonx-qq","name":"QQ","version":"1.0.0","web":{"root":"web"},"services":[{"id":"napcat-webui","name":"NapCat","host":"127.0.0.1","port":%s,"rewriteApiBase":true}]}`, rawPort)
+	if err := os.WriteFile(filepath.Join(pluginRoot, "alx.json"), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := &server{plugins: setupplugin.NewRegistry(pluginsRoot)}
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/services/alemonx-qq/napcat-webui/api/auth/check", nil)
+	request.Header.Set("Authorization", "Bearer management-token")
+	request.Header.Set("X-ALX-Upstream-Authorization", "Bearer napcat-token")
+	s.localServiceProxyHandler(httptest.NewRecorder(), request)
+	if authorization != "Bearer napcat-token" {
+		t.Fatalf("upstream authorization = %q, want namespaced NapCat credential", authorization)
+	}
+}
+
 func TestLocalServiceAPIBootstrapInjectedWhenDeclared(t *testing.T) {
 	upstream := newIPv4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
