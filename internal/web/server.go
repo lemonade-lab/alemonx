@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	webhtml "golang.org/x/net/html"
 
 	"alemonx/internal/access"
 	"alemonx/internal/agent"
@@ -6535,6 +6536,21 @@ func (s *server) browserHTTPProxyHandler(w http.ResponseWriter, r *http.Request)
 		requestPath = "/" + parts[1]
 	}
 	proxyPrefix := mount + parts[0] + "/"
+	// Older injected documents (and a cached page from before the URL-rewrite
+	// fix) can still request /browser/http/<token>/browser/http/<token>/asset.
+	// Normalize that at the gateway so stale browser state self-heals instead of
+	// forwarding an AlemonX API path to the upstream web service.
+	if nestedToken, nestedPath, ok := browserHTTPNestedMount(requestPath); ok {
+		if nestedToken != parts[0] {
+			location := mount + nestedToken + "/" + nestedPath
+			if r.URL.RawQuery != "" {
+				location += "?" + r.URL.RawQuery
+			}
+			http.Redirect(w, r, location, http.StatusTemporaryRedirect)
+			return
+		}
+		requestPath = "/" + nestedPath
+	}
 	if strings.TrimPrefix(requestPath, "/") == "__alx_browser_storage.js" {
 		browserStorageBootstrapHandler(w, r, parts[0])
 		return
@@ -6584,6 +6600,29 @@ func (s *server) browserHTTPProxyHandler(w http.ResponseWriter, r *http.Request)
 	proxy.ServeHTTP(w, r)
 }
 
+// browserHTTPNestedMount returns the token and resource path from a proxy path
+// that has been accidentally nested below another proxy mount.
+func browserHTTPNestedMount(requestPath string) (token, resourcePath string, ok bool) {
+	const nestedPrefix = "/api/v1/browser/http/"
+	if !strings.HasPrefix(requestPath, nestedPrefix) {
+		return "", "", false
+	}
+	rest := strings.TrimPrefix(requestPath, nestedPrefix)
+	parts := strings.SplitN(rest, "/", 2)
+	if len(parts) != 2 || parts[0] == "" {
+		return "", "", false
+	}
+	rawTarget, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return "", "", false
+	}
+	target, err := url.Parse(string(rawTarget))
+	if err != nil || target.Scheme != "http" || target.Host == "" || target.User != nil {
+		return "", "", false
+	}
+	return parts[0], parts[1], true
+}
+
 // modifyBrowserHTTPResponse deliberately keeps the visual injections shared
 // with robot apps, but not their launchpad-specific 404 handling. A normal
 // website must be allowed to render its own 404 page and follow redirects to
@@ -6607,10 +6646,10 @@ func modifyBrowserHTTPResponse(response *http.Response, target *url.URL, proxyPr
 		return
 	}
 	_ = response.Body.Close()
-	rewritten := rewriteRobotAppHTML(body, target, proxyPrefix, requestPath)
-	response.Body = io.NopCloser(bytes.NewReader(rewritten))
-	response.ContentLength = int64(len(rewritten))
-	response.Header.Set("Content-Length", strconv.Itoa(len(rewritten)))
+	document := injectRobotAppDocumentChrome(string(body), requestPath)
+	response.Body = io.NopCloser(strings.NewReader(document))
+	response.ContentLength = int64(len(document))
+	response.Header.Set("Content-Length", strconv.Itoa(len(document)))
 }
 
 func browserHTTPCookiePrefix(targetToken string) string {
@@ -6652,7 +6691,8 @@ func browserStorageBootstrapHandler(w http.ResponseWriter, r *http.Request, targ
 func browserStorageBootstrap(targetToken string) string {
 	prefix := "__alx_browser_storage_" + targetToken + ":"
 	cookiePrefix := browserHTTPCookiePrefix(targetToken)
-	return `(function(){var prefix=` + strconv.Quote(prefix) + `,cookiePrefix=` + strconv.Quote(cookiePrefix) + `;function scoped(storage){return Object.freeze({get length(){var count=0;for(var i=0;i<storage.length;i++){var key=storage.key(i);if(key&&key.indexOf(prefix)===0)count++}return count},key:function(index){var count=0;for(var i=0;i<storage.length;i++){var key=storage.key(i);if(key&&key.indexOf(prefix)===0){if(count++===Number(index))return key.slice(prefix.length)}}return null},getItem:function(key){return storage.getItem(prefix+String(key))},setItem:function(key,value){storage.setItem(prefix+String(key),String(value))},removeItem:function(key){storage.removeItem(prefix+String(key))},clear:function(){for(var keys=[],i=0;i<storage.length;i++){var key=storage.key(i);if(key&&key.indexOf(prefix)===0)keys.push(key)}keys.forEach(function(key){storage.removeItem(key)})}})}function install(name){try{var value=scoped(window[name]);Object.defineProperty(window,name,{value:value,configurable:false,enumerable:true})}catch(_){}}function installCookieScope(){try{var descriptor=Object.getOwnPropertyDescriptor(Document.prototype,'cookie');if(!descriptor||!descriptor.get||!descriptor.set)return;Object.defineProperty(document,'cookie',{configurable:false,get:function(){return descriptor.get.call(document).split(/;\s*/).filter(function(item){return item.indexOf(cookiePrefix)===0}).map(function(item){return item.slice(cookiePrefix.length)}).join('; ')},set:function(value){var first=String(value).indexOf('=');if(first<1)return;return descriptor.set.call(document,cookiePrefix+String(value))}})}catch(_){}}install('localStorage');install('sessionStorage');installCookieScope()})();`
+	bootstrap := `(function(){var prefix=` + strconv.Quote(prefix) + `,cookiePrefix=` + strconv.Quote(cookiePrefix) + `;function scoped(storage){return Object.freeze({get length(){var count=0;for(var i=0;i<storage.length;i++){var key=storage.key(i);if(key&&key.indexOf(prefix)===0)count++}return count},key:function(index){var count=0;for(var i=0;i<storage.length;i++){var key=storage.key(i);if(key&&key.indexOf(prefix)===0){if(count++===Number(index))return key.slice(prefix.length)}}return null},getItem:function(key){return storage.getItem(prefix+String(key))},setItem:function(key,value){storage.setItem(prefix+String(key),String(value))},removeItem:function(key){storage.removeItem(prefix+String(key))},clear:function(){for(var keys=[],i=0;i<storage.length;i++){var key=storage.key(i);if(key&&key.indexOf(prefix)===0)keys.push(key)}keys.forEach(function(key){storage.removeItem(key)})}})}function install(name){try{var value=scoped(window[name]);Object.defineProperty(window,name,{value:value,configurable:false,enumerable:true})}catch(_){}}function installCookieScope(){try{var descriptor=Object.getOwnPropertyDescriptor(Document.prototype,'cookie');if(!descriptor||!descriptor.get||!descriptor.set)return;Object.defineProperty(document,'cookie',{configurable:false,get:function(){return descriptor.get.call(document).split(/;\s*/).filter(function(item){return item.indexOf(cookiePrefix)===0}).map(function(item){return item.slice(cookiePrefix.length)}).join('; ')},set:function(value){var first=String(value).indexOf('=');if(first<1)return;return descriptor.set.call(document,cookiePrefix+String(value))}})}catch(_){}}install('localStorage');install('sessionStorage');installCookieScope()})();`
+	return bootstrap + `(function(){var prefix=` + strconv.Quote(prefix) + `;try{var nativeIDB=window.indexedDB;if(nativeIDB){var idb=Object.create(nativeIDB);idb.open=function(name,version){return arguments.length>1?nativeIDB.open(prefix+String(name),version):nativeIDB.open(prefix+String(name))};idb.deleteDatabase=function(name){return nativeIDB.deleteDatabase(prefix+String(name))};if(nativeIDB.databases)idb.databases=function(){return nativeIDB.databases().then(function(items){return items.filter(function(item){return item.name&&item.name.indexOf(prefix)===0}).map(function(item){return {name:item.name.slice(prefix.length),version:item.version}})})};Object.defineProperty(window,'indexedDB',{value:idb,configurable:false})}}catch(_){}try{var nativeCaches=window.caches;if(nativeCaches){var caches=Object.freeze({open:function(name){return nativeCaches.open(prefix+String(name))},has:function(name){return nativeCaches.has(prefix+String(name))},delete:function(name){return nativeCaches.delete(prefix+String(name))},keys:function(){return nativeCaches.keys().then(function(keys){return keys.filter(function(key){return key.indexOf(prefix)===0}).map(function(key){return key.slice(prefix.length)})})},match:function(request,options){return nativeCaches.keys().then(function(keys){keys=keys.filter(function(key){return key.indexOf(prefix)===0});var next=function(index){return index>=keys.length?undefined:nativeCaches.open(keys[index]).then(function(cache){return cache.match(request,options).then(function(result){return result||next(index+1)})})};return next(0)})}});Object.defineProperty(window,'caches',{value:caches,configurable:false})}}catch(_){}})();`
 }
 
 // rewriteBrowserHTTPResponse extends the generic app rewriting for the mini
@@ -6718,50 +6758,116 @@ func browserProxyURL(value string) string {
 }
 
 func rewriteBrowserHTML(document string, target *url.URL, proxyPrefix string) string {
-	// Attributes which may initiate a network request or navigation. Generic
-	// matching deliberately leaves data:, javascript:, and HTTPS untouched.
-	for _, attr := range []string{"href", "src", "action", "poster", "data", "formaction"} {
-		for _, quote := range []string{`"`, `'`} {
-			pattern := regexp.MustCompile(`(?i)(\b` + attr + `=` + quote + `)([^` + quote + `]*)` + quote)
-			document = pattern.ReplaceAllStringFunc(document, func(match string) string {
-				parts := pattern.FindStringSubmatch(match)
-				value := parts[2]
-				return parts[1] + rewriteBrowserResourceURL(value, proxyPrefix) + quote
-			})
+	mapper := browserURLMapper{target: target, proxyPrefix: proxyPrefix}
+	parser := webhtml.NewTokenizer(strings.NewReader(document))
+	var output strings.Builder
+	stack := make([]string, 0, 8)
+	for {
+		kind := parser.Next()
+		if kind == webhtml.ErrorToken {
+			if parser.Err() != io.EOF {
+				// Keep malformed documents usable rather than dropping a page.
+				return document
+			}
+			break
+		}
+		token := parser.Token()
+		switch kind {
+		case webhtml.StartTagToken, webhtml.SelfClosingTagToken:
+			browserRewriteHTMLAttributes(&token, mapper)
+			if kind == webhtml.StartTagToken {
+				stack = append(stack, strings.ToLower(token.Data))
+			}
+		case webhtml.EndTagToken:
+			if len(stack) > 0 {
+				stack = stack[:len(stack)-1]
+			}
+		case webhtml.TextToken:
+			if len(stack) > 0 {
+				switch stack[len(stack)-1] {
+				case "style":
+					token.Data = rewriteBrowserCSS(token.Data, proxyPrefix)
+				case "script":
+					token.Data = rewriteBrowserJavaScript(token.Data)
+				}
+			}
+		}
+		output.WriteString(token.String())
+	}
+	return output.String()
+}
+
+type browserURLMapper struct {
+	target      *url.URL
+	proxyPrefix string
+}
+
+func (m browserURLMapper) rewrite(value string) string {
+	return rewriteBrowserResourceURL(value, m.proxyPrefix)
+}
+
+func browserRewriteHTMLAttributes(token *webhtml.Token, mapper browserURLMapper) {
+	for index := range token.Attr {
+		attribute := &token.Attr[index]
+		switch strings.ToLower(attribute.Key) {
+		case "href", "src", "action", "formaction", "poster", "data":
+			attribute.Val = mapper.rewrite(attribute.Val)
+		case "srcset", "imagesrcset":
+			attribute.Val = rewriteBrowserSrcSet(attribute.Val, mapper)
+		case "style":
+			attribute.Val = rewriteBrowserCSS(attribute.Val, mapper.proxyPrefix)
+		case "integrity":
+			// Rewritten modules no longer match the upstream digest.
+			attribute.Key = ""
 		}
 	}
-	// srcset has a comma-separated list of resource URLs. Only its URL portion
-	// is changed; density/width descriptors remain untouched.
-	for _, quote := range []string{`"`, `'`} {
-		pattern := regexp.MustCompile(`(?i)(\bsrcset=` + quote + `)([^` + quote + `]*)` + quote)
-		document = pattern.ReplaceAllStringFunc(document, func(match string) string {
-			parts := pattern.FindStringSubmatch(match)
-			entries := strings.Split(parts[2], ",")
-			for index, entry := range entries {
-				fields := strings.Fields(strings.TrimSpace(entry))
-				if len(fields) == 0 {
-					continue
-				}
-				fields[0] = rewriteBrowserResourceURL(fields[0], proxyPrefix)
-				entries[index] = strings.Join(fields, " ")
-			}
-			return parts[1] + strings.Join(entries, ", ") + quote
-		})
+	filtered := token.Attr[:0]
+	for _, attribute := range token.Attr {
+		if attribute.Key != "" {
+			filtered = append(filtered, attribute)
+		}
 	}
-	// A transformed module no longer matches the upstream hash. The proxy mount
-	// is already isolated by target token, so remove SRI only for this response.
-	document = regexp.MustCompile(`(?i)\s+integrity\s*=\s*(?:"[^"]*"|'[^']*')`).ReplaceAllString(document, "")
-	styleTag := regexp.MustCompile(`(?is)(<style[^>]*>)(.*?)(</style>)`)
-	document = styleTag.ReplaceAllStringFunc(document, func(match string) string {
-		parts := styleTag.FindStringSubmatch(match)
-		return parts[1] + rewriteBrowserCSS(parts[2], proxyPrefix) + parts[3]
-	})
-	styleAttr := regexp.MustCompile(`(?i)(\bstyle\s*=\s*["'])(.*?)(["'])`)
-	document = styleAttr.ReplaceAllStringFunc(document, func(match string) string {
-		parts := styleAttr.FindStringSubmatch(match)
-		return parts[1] + rewriteBrowserCSS(parts[2], proxyPrefix) + parts[3]
-	})
-	return document
+	token.Attr = filtered
+	if strings.EqualFold(token.Data, "meta") {
+		browserRewriteMetaRefresh(token, mapper)
+	}
+}
+
+func rewriteBrowserSrcSet(value string, mapper browserURLMapper) string {
+	entries := strings.Split(value, ",")
+	for index, entry := range entries {
+		fields := strings.Fields(strings.TrimSpace(entry))
+		if len(fields) == 0 {
+			continue
+		}
+		fields[0] = mapper.rewrite(fields[0])
+		entries[index] = strings.Join(fields, " ")
+	}
+	return strings.Join(entries, ", ")
+}
+
+func browserRewriteMetaRefresh(token *webhtml.Token, mapper browserURLMapper) {
+	var refresh *webhtml.Attribute
+	for index := range token.Attr {
+		if strings.EqualFold(token.Attr[index].Key, "http-equiv") && strings.EqualFold(token.Attr[index].Val, "refresh") {
+			for valueIndex := range token.Attr {
+				if strings.EqualFold(token.Attr[valueIndex].Key, "content") {
+					refresh = &token.Attr[valueIndex]
+					break
+				}
+			}
+			break
+		}
+	}
+	if refresh == nil {
+		return
+	}
+	parts := regexp.MustCompile(`(?i)^(.*?\burl\s*=\s*)(.*)$`).FindStringSubmatch(refresh.Val)
+	if len(parts) != 3 {
+		return
+	}
+	value := strings.Trim(parts[2], " '\"")
+	refresh.Val = parts[1] + mapper.rewrite(value)
 }
 
 func rewriteBrowserResourceURL(value, proxyPrefix string) string {
@@ -6840,7 +6946,7 @@ func injectBrowserStorageBootstrap(response *http.Response, proxyPrefix, targetT
 func browserHTTPRuntime(targetToken string, target *url.URL, requestPath string) string {
 	logicalBase := "http://" + target.Host + requestPath
 	proxyPrefix := "/api/v1/browser/http/"
-	return `(function(){var logicalBase=` + strconv.Quote(logicalBase) + `,mount=` + strconv.Quote(proxyPrefix) + `;function token(origin){try{return btoa(origin).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')}catch(_){return''}}function proxied(value,websocket){try{if(typeof value==='string'&&value.indexOf(mount)===0)return websocket?(location.protocol==='https:'?'wss://':'ws://')+location.host+value:value;var u=new URL(value,logicalBase);if(websocket&&(u.protocol==='ws:'||u.protocol==='wss:')){if(u.protocol==='wss:')return u.href;u.protocol='http:'}if(u.protocol!=='http:')return u.href;var p=mount+token(u.origin)+u.pathname+u.search+u.hash;return websocket?(location.protocol==='https:'?'wss://':'ws://')+location.host+p:p}catch(_){return value}}function map(input,websocket){if(input instanceof Request)return proxied(input.url,websocket);if(input instanceof URL)return proxied(input.href,websocket);return proxied(String(input),websocket)}var nativeFetch=window.fetch;window.fetch=function(input,init){try{if(input instanceof Request)return nativeFetch.call(this,new Request(map(input),input),init);return nativeFetch.call(this,map(input),init)}catch(_){return nativeFetch.apply(this,arguments)}};var NativeXHR=window.XMLHttpRequest;function ProxyXHR(){var xhr=new NativeXHR(),open=xhr.open;xhr.open=function(method,url){arguments[1]=map(url);return open.apply(xhr,arguments)};return xhr}ProxyXHR.prototype=NativeXHR.prototype;window.XMLHttpRequest=ProxyXHR;var NativeEventSource=window.EventSource;if(NativeEventSource)window.EventSource=function(url,init){return new NativeEventSource(map(url),init)};var NativeSocket=window.WebSocket;if(NativeSocket){function ProxySocket(url,protocols){return protocols===undefined?new NativeSocket(map(url,true)):new NativeSocket(map(url,true),protocols)}ProxySocket.prototype=NativeSocket.prototype;['CONNECTING','OPEN','CLOSING','CLOSED'].forEach(function(key){ProxySocket[key]=NativeSocket[key]});window.WebSocket=ProxySocket}function proxyWorker(Native){if(!Native)return null;function Wrapped(url,options){return options===undefined?new Native(map(url)):new Native(map(url),options)}Wrapped.prototype=Native.prototype;return Wrapped}window.Worker=proxyWorker(window.Worker)||window.Worker;window.SharedWorker=proxyWorker(window.SharedWorker)||window.SharedWorker;if(navigator.serviceWorker&&navigator.serviceWorker.register){var register=navigator.serviceWorker.register.bind(navigator.serviceWorker);navigator.serviceWorker.register=function(url,options){return register(map(url),options)}}var nativeBeacon=navigator.sendBeacon&&navigator.sendBeacon.bind(navigator);if(nativeBeacon)navigator.sendBeacon=function(url,data){return nativeBeacon(map(url),data)};var nativeOpen=window.open;window.open=function(url,target,features){if(typeof url==='string'&&url){parent.postMessage({source:'alx-browser',type:'open',url:new URL(url,logicalBase).href},location.origin);return null}return nativeOpen.apply(this,arguments)};document.addEventListener('click',function(event){var anchor=event.target&&event.target.closest&&event.target.closest('a[target="_blank"]');if(!anchor||!anchor.href)return;event.preventDefault();parent.postMessage({source:'alx-browser',type:'open',url:new URL(anchor.href,logicalBase).href},location.origin)},true)})();`
+	return `(function(){var logicalBase=` + strconv.Quote(logicalBase) + `,logicalOrigin=` + strconv.Quote("http://"+target.Host) + `,mount=` + strconv.Quote(proxyPrefix) + `;function token(origin){try{return btoa(origin).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')}catch(_){return''}}function toLogical(value){try{var u=new URL(value,logicalBase);if(u.origin===location.origin&&u.pathname.indexOf(mount)!==0)return new URL(u.pathname+u.search+u.hash,logicalOrigin);return u}catch(_){return null}}function proxied(value,websocket){try{if(typeof value==='string'&&value.indexOf(mount)===0)return websocket?(location.protocol==='https:'?'wss://':'ws://')+location.host+value:value;var u=toLogical(value);if(!u)return value;if(websocket&&(u.protocol==='ws:'||u.protocol==='wss:')){if(u.protocol==='wss:')return u.href;u.protocol='http:'}if(u.protocol!=='http:')return u.href;var p=mount+token(u.origin)+u.pathname+u.search+u.hash;return websocket?(location.protocol==='https:'?'wss://':'ws://')+location.host+p:p}catch(_){return value}}function map(input,websocket){if(input instanceof Request)return proxied(input.url,websocket);if(input instanceof URL)return proxied(input.href,websocket);return proxied(String(input),websocket)}function report(){try{var path=location.pathname.indexOf(mount)===0?location.pathname.slice(location.pathname.indexOf('/',mount.length)+1):location.pathname;parent.postMessage({source:'alx-browser',type:'navigate',url:new URL(path+location.search+location.hash,logicalOrigin).href},location.origin)}catch(_){}}var nativeFetch=window.fetch;window.fetch=function(input,init){try{if(input instanceof Request)return nativeFetch.call(this,new Request(map(input),input),init);return nativeFetch.call(this,map(input),init)}catch(_){return nativeFetch.apply(this,arguments)}};var NativeXHR=window.XMLHttpRequest;function ProxyXHR(){var xhr=new NativeXHR(),open=xhr.open;xhr.open=function(method,url){arguments[1]=map(url);return open.apply(xhr,arguments)};return xhr}ProxyXHR.prototype=NativeXHR.prototype;window.XMLHttpRequest=ProxyXHR;var NativeEventSource=window.EventSource;if(NativeEventSource)window.EventSource=function(url,init){return new NativeEventSource(map(url),init)};var NativeSocket=window.WebSocket;if(NativeSocket){function ProxySocket(url,protocols){return protocols===undefined?new NativeSocket(map(url,true)):new NativeSocket(map(url,true),protocols)}ProxySocket.prototype=NativeSocket.prototype;['CONNECTING','OPEN','CLOSING','CLOSED'].forEach(function(key){ProxySocket[key]=NativeSocket[key]});window.WebSocket=ProxySocket}function proxyWorker(Native){if(!Native)return null;function Wrapped(url,options){return options===undefined?new Native(map(url)):new Native(map(url),options)}Wrapped.prototype=Native.prototype;return Wrapped}window.Worker=proxyWorker(window.Worker)||window.Worker;window.SharedWorker=proxyWorker(window.SharedWorker)||window.SharedWorker;if(navigator.serviceWorker&&navigator.serviceWorker.register){var register=navigator.serviceWorker.register.bind(navigator.serviceWorker);navigator.serviceWorker.register=function(url,options){return register(map(url),options)}}var nativeBeacon=navigator.sendBeacon&&navigator.sendBeacon.bind(navigator);if(nativeBeacon)navigator.sendBeacon=function(url,data){return nativeBeacon(map(url),data)};['pushState','replaceState'].forEach(function(name){var nativeHistory=history[name];history[name]=function(state,title,next){if(next!==undefined&&next!==null)arguments[2]=map(next);var result=nativeHistory.apply(this,arguments);report();return result}});addEventListener('popstate',report);addEventListener('hashchange',report);var nativeOpen=window.open;window.open=function(url,target,features){if(typeof url==='string'&&url){parent.postMessage({source:'alx-browser',type:'open',url:toLogical(url).href},location.origin);return null}return nativeOpen.apply(this,arguments)};document.addEventListener('click',function(event){var anchor=event.target&&event.target.closest&&event.target.closest('a[target="_blank"]');if(!anchor||!anchor.href)return;event.preventDefault();parent.postMessage({source:'alx-browser',type:'open',url:toLogical(anchor.href).href},location.origin)},true);report()})();`
 }
 
 // robotTestHandler reverse-proxies the robot's CBP/sandbox WebSocket service
@@ -7249,6 +7355,13 @@ func rewriteRobotAppHTML(body []byte, target *url.URL, prefix, requestPath strin
 	// href> (itself a root-relative path) is added.
 	document = rewriteRootRelativeAttr(document, prefix)
 	document = rewriteTargetAbsoluteAttr(document, target, prefix)
+	return []byte(injectRobotAppDocumentChrome(document, requestPath))
+}
+
+// injectRobotAppDocumentChrome contains only the visual/document-directory
+// additions shared by robot apps and the mini browser. URL rewriting must stay
+// outside this helper so each proxy owns exactly one rewrite pass.
+func injectRobotAppDocumentChrome(document, requestPath string) string {
 	injections := alemonjsThemeStyleTag + baseHrefFor(requestPath) + robotAppScrollbarStyle
 	if head := regexp.MustCompile(`(?i)<head[^>]*>`).FindString(document); head != "" {
 		document = strings.Replace(document, head, head+injections, 1)
@@ -7257,7 +7370,7 @@ func rewriteRobotAppHTML(body []byte, target *url.URL, prefix, requestPath strin
 	} else {
 		document = injections + document
 	}
-	return []byte(document)
+	return document
 }
 
 // robotAppScrollbarStyle hides the app document's scrollbars (Chrome/Edge/Safari
@@ -7897,21 +8010,8 @@ func (s *server) robotOneBotSyncHandler(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "请求内容无法识别。")
 		return
 	}
-	if strings.TrimSpace(input.URL) == "" || strings.TrimSpace(input.Token) == "" {
-		writeError(w, http.StatusBadRequest, "OneBot URL 和 Token 均不能为空，空 Token 不会覆盖机器人配置。")
-		return
-	}
-	definition, err := s.robots.PackageConfig(input.Root, "@alemonjs/onebot")
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "目标机器人未安装或未声明 @alemonjs/onebot；请先在工作台安装连接包。")
-		return
-	}
-	fields := map[string]bool{}
-	for _, field := range definition.Fields {
-		fields[field.Name] = true
-	}
-	if !fields["url"] || !fields["token"] {
-		writeError(w, http.StatusBadRequest, "@alemonjs/onebot 未声明 url 和 token 配置，不能安全同步。")
+	if strings.TrimSpace(input.URL) == "" {
+		writeError(w, http.StatusBadRequest, "请填写 OneBot WebSocket URL。")
 		return
 	}
 	previous, err := s.robots.Read(input.Root, "alemon.config.yaml")
@@ -7919,11 +8019,11 @@ func (s *server) robotOneBotSyncHandler(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if _, err := s.robots.SavePackageConfig(input.Root, "@alemonjs/onebot", map[string]any{"url": input.URL, "token": input.Token}); err != nil {
+	if _, err := s.robots.SaveOneBotConfig(input.Root, input.URL, input.Token); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if _, err := s.robots.SaveLogin(input.Root, "onebot", "@alemonjs/onebot"); err != nil {
+	if _, err := s.robots.SaveLogin(input.Root, "onebot", ""); err != nil {
 		if _, restoreErr := s.robots.Write(input.Root, "alemon.config.yaml", previous.Output); restoreErr != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("同步登录失败，且恢复原配置失败：%v", restoreErr))
 			return

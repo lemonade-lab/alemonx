@@ -11398,8 +11398,27 @@ function MiniBrowserWindow({
     const receive = (event: MessageEvent) => {
       if (event.origin !== window.location.origin) return
       const data = event.data as { source?: string; type?: string; url?: string } | null
-      if (data?.source !== 'alx-browser' || data.type !== 'open' || !data.url) return
-      navigate(data.url, true)
+      if (data?.source !== 'alx-browser' || !data.url) return
+      if (data.type === 'open') {
+        navigate(data.url, true)
+        return
+      }
+      if (data.type !== 'navigate' || !activeTab) return
+      try {
+        const logical = new URL(data.url)
+        if (activeTab.history[activeTab.historyIndex] === logical.href) return
+        const nextHistory = activeTab.history.slice(0, activeTab.historyIndex + 1)
+        nextHistory.push(logical.href)
+        updateActiveTab(tab => ({
+          ...tab,
+          query: addressTextFor(logical),
+          pageURL: frameURLFor(logical),
+          history: nextHistory,
+          historyIndex: nextHistory.length - 1
+        }))
+      } catch {
+        // Ignore malformed messages from an embedded document.
+      }
     }
     window.addEventListener('message', receive)
     return () => window.removeEventListener('message', receive)

@@ -208,6 +208,23 @@ func (m Manager) SavePackageConfig(root, name string, values map[string]any) (Re
 	return m.savePackageConfigDefinition(root, definition, values)
 }
 
+// SaveOneBotConfig writes the conventional runtime onebot section without
+// requiring a particular adapter package to be installed. A system service
+// already knows the address and optional token it is synchronizing; package
+// discovery is unrelated and would prevent custom or separately managed
+// OneBot adapters from receiving that configuration.
+func (m Manager) SaveOneBotConfig(root, url, token string) (Result, error) {
+	definition := PackageConfig{
+		Package:   "@alemonjs/onebot",
+		Namespace: "onebot",
+		Fields: []packageschema.Field{
+			{Name: "url", Type: "string"},
+			{Name: "token", Type: "string"},
+		},
+	}
+	return m.savePackageConfigDefinition(root, definition, map[string]any{"url": url, "token": token})
+}
+
 func (m Manager) savePackageConfigDefinition(root string, definition PackageConfig, values map[string]any) (Result, error) {
 	allowed := make(map[string]bool, len(definition.Fields))
 	for _, field := range definition.Fields {

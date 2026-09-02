@@ -760,6 +760,31 @@ func TestSystemPickerUsesOnlyDeclaredWebFinderPicker(t *testing.T) {
 	}
 }
 
+func TestRobotOneBotSyncAllowsEmptyTokenAndClearsExistingValue(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "package.json"), []byte(`{"name":"robot"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "alemon.config.yaml"), []byte("onebot:\n  url: ws://127.0.0.1:3001\n  token: old-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	body := fmt.Sprintf(`{"root":%q,"url":"ws://127.0.0.1:7199","token":""}`, root)
+	recorder := httptest.NewRecorder()
+	(&server{robots: robot.Manager{}}).robotOneBotSyncHandler(recorder, httptest.NewRequest(http.MethodPost, "/api/v1/robot/onebot-sync", strings.NewReader(body)))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("empty-token sync = %d %s", recorder.Code, recorder.Body.String())
+	}
+	content, err := os.ReadFile(filepath.Join(root, "alemon.config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := string(content)
+	if !strings.Contains(output, `url: "ws://127.0.0.1:7199"`) || strings.Contains(output, "old-token") || !strings.Contains(output, `login: "onebot"`) {
+		t.Fatalf("sync must write URL, clear Token, and select OneBot login:\n%s", output)
+	}
+}
+
 func TestEnvironmentInstallRequiresConfirmationAndUsesFixedCheckID(t *testing.T) {
 	called := ""
 	s := &server{
@@ -1818,7 +1843,7 @@ func TestBrowserHTTPProxyStorageBootstrapUsesTargetNamespace(t *testing.T) {
 		t.Fatalf("storage bootstrap = %d %s", recorder.Code, recorder.Body.String())
 	}
 	body := recorder.Body.String()
-	if !strings.Contains(body, "__alx_browser_storage_"+token+":") || !strings.Contains(body, "install('localStorage')") || !strings.Contains(body, "install('sessionStorage')") || !strings.Contains(body, "installCookieScope") || !strings.Contains(body, browserHTTPCookiePrefix(token)) {
+	if !strings.Contains(body, "__alx_browser_storage_"+token+":") || !strings.Contains(body, "install('localStorage')") || !strings.Contains(body, "install('sessionStorage')") || !strings.Contains(body, "installCookieScope") || !strings.Contains(body, "nativeIDB") || !strings.Contains(body, "nativeCaches") || !strings.Contains(body, browserHTTPCookiePrefix(token)) {
 		t.Fatalf("storage bootstrap missing namespace or storage shims: %q", body)
 	}
 }
@@ -1883,7 +1908,8 @@ func TestBrowserRewriteDoesNotNestExistingProxyMount(t *testing.T) {
 	response := &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"text/html"}},
-		Body:       io.NopCloser(strings.NewReader(`<script src="/guoba-plugin-mock-root/_app.config.js?v=1"></script>`)),
+		Body: io.NopCloser(strings.NewReader(`<script src="/guoba-plugin-mock-root/_app.config.js?v=1"></script>` +
+			`<script src="` + prefix + `already-proxied.js"></script>`)),
 	}
 	modifyBrowserHTTPResponse(response, target, prefix, prefix)
 	rewriteBrowserHTTPResponse(response, target, prefix, prefix)
@@ -1894,6 +1920,53 @@ func TestBrowserRewriteDoesNotNestExistingProxyMount(t *testing.T) {
 	}
 	if strings.Contains(string(body), prefix+"api/v1/browser/http/") {
 		t.Fatalf("proxy mount was nested: %s", body)
+	}
+}
+
+func TestRewriteBrowserHTMLStructuredAttributes(t *testing.T) {
+	target, err := url.Parse("http://10.0.6.2:50831")
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefix := browserHTTPProxyPrefix(target)
+	cross := browserHTTPProxyPrefix(&url.URL{Scheme: "http", Host: "10.0.6.3:8080"})
+	document := rewriteBrowserHTML(`<!doctype html><meta http-equiv=refresh content="0; url=/login"><link href=/assets/site.css rel=stylesheet><img src=/logo.png srcset="/one.png 1x, http://10.0.6.3:8080/two.png 2x" style="background:url(/bg.png)"><iframe src=http://10.0.6.3:8080/panel></iframe><script src="`+prefix+`already.js"></script>`, target, prefix)
+	for _, want := range []string{
+		`content="0; url=` + prefix + `login"`,
+		`href="` + prefix + `assets/site.css"`,
+		`src="` + prefix + `logo.png"`,
+		prefix + `one.png 1x`,
+		cross + `two.png 2x`,
+		cross + `panel`,
+		prefix + `bg.png`,
+		prefix + `already.js`,
+	} {
+		if !strings.Contains(document, want) {
+			t.Errorf("structured HTML rewrite missing %q:\n%s", want, document)
+		}
+	}
+	if strings.Contains(document, prefix+"api/v1/browser/http/") {
+		t.Fatalf("structured HTML rewrite nested proxy: %s", document)
+	}
+}
+
+func TestBrowserHTTPProxyHandlerNormalizesNestedProxyPath(t *testing.T) {
+	var requestedPath string
+	upstream := newIPv4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestedPath = r.URL.RequestURI()
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer upstream.Close()
+	target, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := base64.RawURLEncoding.EncodeToString([]byte(target.Scheme + "://" + target.Host))
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/browser/http/"+token+"/api/v1/browser/http/"+token+"/guoba-plugin-mock-root/_app.config.js?v=1", nil)
+	recorder := httptest.NewRecorder()
+	(&server{}).browserHTTPProxyHandler(recorder, request)
+	if recorder.Code != http.StatusOK || requestedPath != "/guoba-plugin-mock-root/_app.config.js?v=1" {
+		t.Fatalf("nested request = status %d, upstream path %q", recorder.Code, requestedPath)
 	}
 }
 
@@ -2028,6 +2101,9 @@ func TestLocalServiceAPIBootstrapInjectedWhenDeclared(t *testing.T) {
 	}
 	if !strings.Contains(body, "EventSource") {
 		t.Fatalf("compat bootstrap must also rebase EventSource URLs: %s", body)
+	}
+	if !strings.Contains(body, "window.WebSocket=S") || !strings.Contains(body, "ws://") {
+		t.Fatalf("compat bootstrap must rebase WebSocket URLs: %s", body)
 	}
 	if !strings.Contains(body, "<base href=") {
 		t.Fatalf("rewritten HTML lacks base href: %s", body)
