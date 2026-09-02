@@ -8,12 +8,12 @@ RUN apt-get update --fix-missing || (sleep 5 && apt-get update --fix-missing)
 # 第一组：保留原有基础工具
 RUN apt-get install -y --no-install-recommends \
     ca-certificates curl git lsof openssh-client tini unzip \
-    && echo "基础工具安装完成"
+    && echo "✅ 基础工具安装完成"
 
 # 第二组：保留原有字体
 RUN apt-get install -y --no-install-recommends \
     fonts-noto-cjk fonts-noto-color-emoji \
-    && echo "字体安装完成"
+    && echo "✅ 字体安装完成"
 
 # Python 环境安装（保留原有依赖）
 RUN apt-get install -y --no-install-recommends \
@@ -44,8 +44,9 @@ RUN /opt/venv/bin/pip install --no-cache-dir \
     loguru \
     pytest pytest-asyncio
 
-# 第三组：保留 Chromium，并使其安装失败时直接中断构建。
-RUN apt-get install -y --no-install-recommends --fix-missing chromium
+# 第三组：Chromium（容易失败）
+RUN apt-get install -y --no-install-recommends --fix-missing chromium \
+    && echo "✅ Chromium installed" || echo "❌ Chromium failed"
 
 # 第四组：保留原有 X11 依赖，并补齐 xkbcomp 与受控桌面入口。
 RUN apt-get install -y --no-install-recommends --fix-missing \

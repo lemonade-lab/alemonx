@@ -2581,11 +2581,17 @@ export function Dashboard({
         setConsoleOpen(true)
         return true
       }
-      if (data.action === 'dev-stop' || data.action === 'app-stop') {
+      if (
+        data.action === 'dev-stop' ||
+        data.action === 'app-stop' ||
+        data.action === 'pm2-process-stop'
+      ) {
         // Stopping is asynchronous: the task state keeps only the affected
-        // runtime controls disabled. Do not retain the panel-wide busy lock while
-        // a process handles SIGINT or the server performs its force-stop fallback.
-        showOutput(task.output || '已请求停止，正在等待进程退出…')
+        // runtime controls disabled. A PM2 command may be accepted before its
+        // completion event arrives, so never leave the confirmation dialog in
+        // “处理中”; the PM2 status stream is authoritative for its final state.
+        if (data.action !== 'pm2-process-stop')
+          showOutput(task.output || '已请求停止，正在等待进程退出…')
         return task.status !== 'failed'
       }
       showOutput('操作已开始，正在等待完成…')
@@ -3107,6 +3113,11 @@ export function Dashboard({
             setForegroundLogsOpen(true)
             setForegroundLogsMinimized(false)
             activateFloatingWindow('foregroundLogs')
+          }}
+          onClearOperationLog={() => {
+            setOutput('')
+            setOutputFailed(false)
+            setOperationLogMinimized(false)
           }}
           onRun={(action, packageName, message) =>
             api('POST', {
@@ -8878,10 +8889,12 @@ type PM2RegistrationSettings = {
 function PM2RuntimeCard({
   root,
   onOpenLogs,
+  onClearOperationLog,
   onProcessAction
 }: {
   root: string
   onOpenLogs: () => void
+  onClearOperationLog: () => void
   onProcessAction: (action: string, processID: number) => Promise<boolean>
 }) {
   const [items, setItems] = useStoreState<PM2Process[]>([])
@@ -9106,7 +9119,12 @@ function PM2RuntimeCard({
           <button
             className="primary-button gap-1.5"
             disabled={!settings || settingsBusy}
-            onClick={() => setRegisterOpen(true)}
+            onClick={() => {
+              // Registration is synchronous and has its own inline error.
+              // Do not leave an unrelated command-result window in front of it.
+              onClearOperationLog()
+              setRegisterOpen(true)
+            }}
           >
             <Play className="size-4" />
             {needsApply ? '应用配置' : settings?.registered ? '更新注册' : '注册'}
@@ -9356,13 +9374,7 @@ type ScriptControlItem = {
   record?: string
 }
 
-function ScriptControlCard({
-  root,
-  openRequest
-}: {
-  root: string
-  openRequest: number
-}) {
+function ScriptControlCard({ root }: { root: string }) {
   const [items, setItems] = useStoreState<ScriptControlItem[]>([])
   const [collapsed, setCollapsed] = useState(true)
   const [error, setError] = useStoreState('')
@@ -9402,9 +9414,6 @@ function ScriptControlCard({
   useEffect(() => {
     void load()
   }, [load])
-  useEffect(() => {
-    if (openRequest > 0) setCollapsed(false)
-  }, [openRequest])
   useEffect(() => {
     if (!items.some(item => item.running)) return
     const timer = window.setInterval(() => void load(), 1000)
@@ -9561,11 +9570,11 @@ function ScriptControlCard({
         onClose={() => setRecord(null)}
         ariaLabel="脚本执行记录"
       >
-        <section className="grid w-full max-w-2xl gap-3 rounded-xl bg-white p-5 shadow-xl">
+        <section className="grid max-h-[min(82vh,36rem)] w-full max-w-2xl grid-rows-[auto_minmax(0,1fr)_auto] gap-3 rounded-xl bg-white p-5 shadow-xl">
           <header>
             <strong>{record?.name} 执行记录</strong>
           </header>
-          <pre className="max-h-96 overflow-auto rounded-lg bg-slate-950 p-3 text-xs text-slate-100">
+          <pre className="m-0 min-h-0 overflow-y-auto whitespace-pre-wrap rounded-lg bg-slate-950 p-3 text-xs text-slate-100">
             {record?.output}
           </pre>
           <footer className="flex justify-end">
@@ -9639,6 +9648,7 @@ function RuntimePanel({
   onRefreshOverview,
   onOpenForegroundLogs,
   onOpenPM2Logs,
+  onClearOperationLog,
   onRun,
   onSaveLogin,
   onSavePackageConfig,
@@ -9658,6 +9668,7 @@ function RuntimePanel({
   onRefreshOverview: () => Promise<RuntimeOverview | undefined>
   onOpenForegroundLogs: () => void
   onOpenPM2Logs: () => void
+  onClearOperationLog: () => void
   onRun: (
     action: string,
     packageName?: string,
@@ -9717,7 +9728,6 @@ function RuntimePanel({
     void refreshPorts()
   }
   const [loginChoice, setLoginChoice] = useStoreState<LoginChoice | null>(null)
-  const [scriptControlRequest, setScriptControlRequest] = useState(0)
   const [dependencyControl, setDependencyControl] = useStoreState<{
     mode: 'add' | 'link' | 'remove'
     name: string
@@ -10576,15 +10586,6 @@ function RuntimePanel({
               </div>
               <div className="ml-auto flex gap-2 shrink-0 justify-end">
                 <button
-                  className="text-button gap-1.5"
-                  disabled={busy}
-                  onClick={() => setScriptControlRequest(value => value + 1)}
-                  title="修改 app 脚本"
-                >
-                  <Pencil className="size-4" />
-                  修改
-                </button>
-                <button
                   className="secondary-button gap-1.5"
                   disabled={busy}
                   onClick={onOpenForegroundLogs}
@@ -10679,15 +10680,6 @@ function RuntimePanel({
                 </span>
               </div>
               <div className="flex shrink-0 flex-wrap justify-end gap-2">
-                <button
-                  className="text-button gap-1.5"
-                  disabled={busy}
-                  onClick={() => setScriptControlRequest(value => value + 1)}
-                  title="修改 dev 脚本"
-                >
-                  <Pencil className="size-4" />
-                  修改
-                </button>
                 {overview?.hasBuildScript && (
                   <button
                     className="secondary-button gap-1.5"
@@ -10763,11 +10755,12 @@ function RuntimePanel({
         <PM2RuntimeCard
           root={root}
           onOpenLogs={onOpenPM2Logs}
+          onClearOperationLog={onClearOperationLog}
           onProcessAction={(action, processID) =>
             onRun(action, undefined, String(processID))
           }
         />
-        <ScriptControlCard root={root} openRequest={scriptControlRequest} />
+        <ScriptControlCard root={root} />
       </section>
     </RobotPanel>
   )
@@ -11304,28 +11297,39 @@ function ControlCard({
         ? 'backpack'
         : section === 'runtime'
           ? 'runtime'
-          : 'config'
+        : 'config'
       : page
-  const subitems = agentOpen
-    ? []
-    : activePrimary === 'config'
-      ? developerMode
-        ? [
-            { id: 'npmrc', label: 'npm 源' },
-            { id: 'env', label: '环境变量' }
-          ]
-        : []
-      : activePrimary === 'build'
-        ? [
-            { id: 'manifest', label: '包配置' },
-            { id: 'git', label: 'GIT 发布' },
-            { id: 'npm', label: 'NPM 发布' }
-          ]
-        : activePrimary === 'plugins' ||
-            activePrimary === 'connections' ||
-            activePrimary === 'modules'
-          ? catalog.map(item => ({ id: item.title, label: item.title }))
+  const subitems =
+    agentOpen
+      ? []
+      : activePrimary === 'config'
+        ? developerMode
+          ? [
+              { id: 'npmrc', label: 'npm 源' },
+              { id: 'env', label: '环境变量' }
+            ]
           : []
+        : activePrimary === 'build'
+          ? [
+              { id: 'manifest', label: '包配置' },
+              { id: 'git', label: 'GIT 发布' },
+              { id: 'npm', label: 'NPM 发布' }
+            ]
+          : activePrimary === 'plugins' ||
+              activePrimary === 'connections' ||
+              activePrimary === 'modules'
+            ? catalog.map(item => ({ id: item.title, label: item.title }))
+            : []
+  const [rootNavigationVisible, setRootNavigationVisible] = useState(false)
+  const previousPrimaryRef = useRef(activePrimary)
+  useEffect(() => {
+    if (previousPrimaryRef.current === activePrimary) return
+    previousPrimaryRef.current = activePrimary
+    setRootNavigationVisible(false)
+  }, [activePrimary])
+  const showingSubNavigation = subitems.length > 0 && !rootNavigationVisible
+  const primaryLabel =
+    directoryActions.find(item => item.id === activePrimary)?.label ?? '机器人'
   const activeSecondary =
     activePrimary === 'config'
       ? section
@@ -11333,6 +11337,7 @@ function ControlCard({
         ? buildMode
         : catalogTitle
   function selectPrimary(item: (typeof directoryActions)[number]) {
+    setRootNavigationVisible(false)
     if (item.kind === 'section') {
       onPage('robot')
       onSection(item.id as Section)
@@ -11398,67 +11403,83 @@ function ControlCard({
             ) : null}
           </div>
         )}
-        <div
-          className="control-primary-nav grid gap-0.5"
-          aria-label="机器人功能"
-        >
-          {directoryActions
-            .filter(item => developerMode || item.id !== 'build')
-            .map(item => (
+        {showingSubNavigation ? (
+          <>
+            <div className="control-subnav-header flex items-center gap-2 pt-2">
+              <button
+                className="inline-flex min-h-8 items-center gap-1 rounded-md px-2 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-800 dark:text-slate-400 dark:hover:bg-slate-700 dark:hover:text-slate-100"
+                onClick={() => setRootNavigationVisible(true)}
+                aria-label={`返回机器人功能，当前为${primaryLabel}`}
+              >
+                <ArrowLeft className="size-3.5" />
+                <span>返回</span>
+              </button>
+              <span className="min-w-0 truncate text-xs font-medium text-slate-500 dark:text-slate-400">
+                {primaryLabel}
+              </span>
+            </div>
+            <div
+              className="control-secondary-nav control-secondary-page grid gap-0.5"
+              aria-label={`${primaryLabel}子菜单`}
+            >
+              {subitems.map(item => (
+                <button
+                  className={cn(
+                    'flex min-h-8 items-center rounded-md px-2 text-left text-xs transition-colors',
+                    activeSecondary === item.id
+                      ? 'workspace-nav-sub-active'
+                      : 'text-slate-500 hover:bg-slate-200/40 dark:text-slate-400 dark:hover:bg-slate-700/40'
+                  )}
+                  onClick={() => selectSecondary(item.id)}
+                  key={item.id}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
+          </>
+        ) : (
+          <div
+            className="control-primary-nav grid gap-0.5"
+            aria-label="机器人功能"
+          >
+            {directoryActions
+              .filter(item => developerMode || item.id !== 'build')
+              .map(item => (
+                <button
+                  className={cn(
+                    'flex min-h-8 items-center gap-2 rounded-md px-2 text-left text-xs font-medium transition-colors',
+                    activePrimary === item.id
+                      ? 'workspace-nav-active'
+                      : 'text-slate-600 hover:bg-slate-200/40 dark:text-slate-400 dark:hover:bg-slate-700/40'
+                  )}
+                  onClick={() => selectPrimary(item)}
+                  key={item.id}
+                >
+                  <i className="inline-flex size-4 items-center justify-center not-italic">
+                    {item.icon}
+                  </i>
+                  <span className="min-w-0 flex-1">{item.label}</span>
+                </button>
+              ))}
+            {project && (
               <button
                 className={cn(
                   'flex min-h-8 items-center gap-2 rounded-md px-2 text-left text-xs font-medium transition-colors',
-                  activePrimary === item.id
+                  agentOpen
                     ? 'workspace-nav-active'
                     : 'text-slate-600 hover:bg-slate-200/40 dark:text-slate-400 dark:hover:bg-slate-700/40'
                 )}
-                onClick={() => selectPrimary(item)}
-                key={item.id}
+                onClick={onOpenAI}
+                aria-label="使用 Agent 协助当前机器人"
+                title="使用 Agent 协助当前机器人"
               >
                 <i className="inline-flex size-4 items-center justify-center not-italic">
-                  {item.icon}
+                  <MessageSquare className="size-4" />
                 </i>
-                <span className="min-w-0 flex-1">{item.label}</span>
+                <span className="min-w-0 flex-1">Code</span>
               </button>
-            ))}
-          {project && (
-            <button
-              className={cn(
-                'flex min-h-8 items-center gap-2 rounded-md px-2 text-left text-xs font-medium transition-colors',
-                agentOpen
-                  ? 'workspace-nav-active'
-                  : 'text-slate-600 hover:bg-slate-200/40 dark:text-slate-400 dark:hover:bg-slate-700/40'
-              )}
-              onClick={onOpenAI}
-              aria-label="使用 Agent 协助当前机器人"
-              title="使用 Agent 协助当前机器人"
-            >
-              <i className="inline-flex size-4 items-center justify-center not-italic">
-                <MessageSquare className="size-4" />
-              </i>
-              <span className="min-w-0 flex-1">Code</span>
-            </button>
-          )}
-        </div>
-        {subitems.length > 0 && (
-          <div
-            className="control-secondary-nav grid gap-0.5"
-            aria-label="当前功能子菜单"
-          >
-            {subitems.map(item => (
-              <button
-                className={cn(
-                  'flex min-h-7 items-center rounded-md pl-7 pr-2 text-left text-xs transition-colors',
-                  activeSecondary === item.id
-                    ? 'workspace-nav-sub-active'
-                    : 'text-slate-500 hover:bg-slate-200/40 dark:text-slate-400 dark:hover:bg-slate-700/40'
-                )}
-                onClick={() => selectSecondary(item.id)}
-                key={item.id}
-              >
-                {item.label}
-              </button>
-            ))}
+            )}
           </div>
         )}
         {project && (
@@ -13209,11 +13230,11 @@ function OperationLog({
       height={380}
     >
       <div
-        className={`operation-log flex min-h-0 flex-1 flex-col gap-2 p-3 text-(--theme-text-primary) ${failed ? 'is-error' : 'is-success'}`}
+        className={`operation-log  overflow-auto flex min-h-0 flex-1 flex-col gap-2 p-3 text-(--theme-text-primary) ${failed ? 'is-error' : 'is-success'}`}
         aria-live="polite"
         aria-label="最近操作结果"
       >
-        <pre className="m-0 min-h-0 flex-1 overflow-auto whitespace-pre-wrap rounded-md bg-(--theme-surface-code) p-3 font-mono text-[0.73rem] leading-relaxed text-(--theme-text-code)">
+        <pre className="m-0 min-h-0 flex-1  overflow-auto whitespace-pre rounded-md bg-(--theme-surface-code) p-3 font-mono text-[0.73rem] leading-relaxed text-(--theme-text-code)">
           {output}
         </pre>
         {needsPermission && (

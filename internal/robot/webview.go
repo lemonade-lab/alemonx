@@ -333,8 +333,9 @@ func (Manager) EnabledApps(root string) ([]string, error) {
 	}
 }
 
-// SetAppEnabled adds or removes a local package's npm name from the
-// alemon.config.yaml apps array, controlling whether the robot loads it.
+// SetAppEnabled updates one local package's apps switch. AlemonJS accepts an
+// older array form, but AlemonX always writes the boolean-map form so the
+// visual config editor and backpack panel preserve disabled packages alike.
 func (m Manager) SetAppEnabled(root, packageName string, enabled bool) (Result, error) {
 	if strings.TrimSpace(packageName) == "" {
 		return Result{}, errors.New("请选择要启动的本地包")
@@ -357,36 +358,29 @@ func (m Manager) SetAppEnabled(root, packageName string, enabled bool) (Result, 
 	if config == nil {
 		config = map[string]any{}
 	}
-	apps := []string{}
+	apps := map[string]bool{}
 	switch existing := config["apps"].(type) {
 	case []any:
 		for _, item := range existing {
 			if name, ok := item.(string); ok && name != "" {
-				apps = append(apps, name)
+				apps[name] = true
 			}
 		}
 	case []string:
-		apps = append(apps, existing...)
+		for _, name := range existing {
+			if name != "" {
+				apps[name] = true
+			}
+		}
 	case map[string]any:
 		for name, active := range existing {
-			if value, ok := active.(bool); ok && value && name != "" {
-				apps = append(apps, name)
+			if value, ok := active.(bool); ok && name != "" {
+				apps[name] = value
 			}
 		}
 	}
-	found := false
-	filtered := apps[:0]
-	for _, name := range apps {
-		if name == packageName {
-			found = true
-			continue
-		}
-		filtered = append(filtered, name)
-	}
-	if enabled && !found {
-		filtered = append(filtered, packageName)
-	}
-	text := setTopLevelStringList(string(content), "apps", filtered)
+	apps[packageName] = enabled
+	text := setTopLevelBooleanMap(string(content), "apps", apps)
 	result, err := m.Write(root, "alemon.config.yaml", text)
 	if err != nil {
 		return Result{}, err
@@ -400,9 +394,9 @@ func (m Manager) SetAppEnabled(root, packageName string, enabled bool) (Result, 
 	return result, nil
 }
 
-// setTopLevelStringList replaces exactly one top-level YAML list while leaving
+// setTopLevelBooleanMap replaces exactly one top-level YAML map while leaving
 // every unrelated section, comment, and ordering decision untouched.
-func setTopLevelStringList(content, key string, values []string) string {
+func setTopLevelBooleanMap(content, key string, values map[string]bool) string {
 	lines := strings.Split(strings.TrimRight(content, "\n"), "\n")
 	start, end := -1, len(lines)
 	pattern := regexp.MustCompile(`^` + regexp.QuoteMeta(key) + `\s*:`)
@@ -419,10 +413,15 @@ func setTopLevelStringList(content, key string, values []string) string {
 		}
 	}
 	section := []string{key + ":"}
-	for _, value := range values {
-		if value = strings.TrimSpace(value); value != "" {
-			section = append(section, "  - "+strconv.Quote(value))
+	names := make([]string, 0, len(values))
+	for name := range values {
+		if strings.TrimSpace(name) != "" {
+			names = append(names, name)
 		}
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		section = append(section, "  "+yamlKey(name)+": "+strconv.FormatBool(values[name]))
 	}
 	if start < 0 {
 		if len(lines) == 1 && lines[0] == "" {

@@ -11,7 +11,7 @@ type Props = {
   extensionConfig?: ReactNode
   onChange: (content: string) => void
 }
-type AccessKey = 'masterID' | 'masterKey' | 'botID' | 'botKey'
+type ToggleKey = 'masterID' | 'masterKey' | 'botID' | 'botKey' | 'apps'
 type AccessItem = { value: string; enabled: boolean }
 type TextKey =
   | 'port'
@@ -30,7 +30,6 @@ type TextKey =
   | 'mappingTarget'
   | 'repeatedEventTime'
   | 'repeatedUserTime'
-  | 'apps'
   | 'cbpTimeout'
   | 'cbpReconnect'
   | 'cbpHeartbeat'
@@ -38,7 +37,8 @@ type TextKey =
   | 'cbpUserAgent'
   | 'cbpDeviceID'
   | 'cbpFullReceive'
-type Values = Record<TextKey, string> & Record<AccessKey, AccessItem[]>
+  | 'autoPort'
+type Values = Record<TextKey, string> & Record<ToggleKey, AccessItem[]>
 const empty: Values = {
   port: '',
   serverPort: '',
@@ -60,7 +60,8 @@ const empty: Values = {
   mappingTarget: '',
   repeatedEventTime: '',
   repeatedUserTime: '',
-  apps: '',
+  apps: [],
+  autoPort: '',
   cbpTimeout: '',
   cbpReconnect: '',
   cbpHeartbeat: '',
@@ -94,6 +95,7 @@ const managed = new Set([
   'redirect_text_target',
   'mapping_text',
   'processor',
+  'autoPort',
   'apps',
   'cbp'
 ])
@@ -115,13 +117,6 @@ const stringMapLines = (key: string, values: string) => {
   return entries.length
     ? [`${key}:`, ...entries.map(value => `  ${quote(value)}: true`)]
     : []
-}
-const listLines = (key: string, values: string) => {
-  const entries = values
-    .split(',')
-    .map(value => value.trim())
-    .filter(Boolean)
-  return entries.length ? [`${key}:`, ...entries.map(value => `  - ${quote(value)}`)] : []
 }
 const record = (value: unknown): Record<string, unknown> | null =>
   value && typeof value === 'object' && !Array.isArray(value)
@@ -180,7 +175,8 @@ function readValues(source: string): Values | null {
   values.disabledSelects = list(root.disabled_selects)
   values.disabledUserID = list(root.disabled_user_id)
   values.disabledUserKey = list(root.disabled_user_key)
-  values.apps = list(root.apps)
+  values.apps = accessItems(root.apps)
+  values.autoPort = text(root.autoPort)
   const mappings = Array.isArray(root.mapping_text) ? root.mapping_text : []
   const mapping = record(mappings[0])
   values.mappingRegular = text(mapping?.regular)
@@ -210,6 +206,7 @@ function toYaml(values: Values, includeMapping = true) {
   add('login', values.login)
   add('url', values.url)
   if (values.fullReceive) lines.push(`is_full_receive: ${values.fullReceive}`)
+  if (values.autoPort) lines.push(`autoPort: ${values.autoPort}`)
   lines.push(
     ...mapLines('master_id', values.masterID),
     ...mapLines('master_key', values.masterKey),
@@ -237,7 +234,7 @@ function toYaml(values: Values, includeMapping = true) {
     if (values.repeatedUserTime.trim())
       lines.push(`  repeated_user_time: ${values.repeatedUserTime.trim()}`)
   }
-  if (values.apps.trim()) lines.push(...listLines('apps', values.apps))
+  lines.push(...mapLines('apps', values.apps))
   const cbp = [
     ['timeout', values.cbpTimeout],
     ['reconnectInterval', values.cbpReconnect],
@@ -322,7 +319,7 @@ export function RobotConfigForm({ content, toolbar, onChange, extensionConfig }:
   }
   const set = (key: TextKey, value: string) =>
     saveValues({ ...values, [key]: value }, key)
-  const setAccessItems = (key: AccessKey, items: AccessItem[]) =>
+  const setAccessItems = (key: ToggleKey, items: AccessItem[]) =>
     saveValues({ ...values, [key]: items }, key)
   const inputClass =
     'min-h-9 w-full rounded-md border border-slate-300 bg-white px-2.5 text-sm font-normal text-slate-800 outline-none transition focus:border-brand-600 focus:ring-2 focus:ring-brand-100'
@@ -339,7 +336,7 @@ export function RobotConfigForm({ content, toolbar, onChange, extensionConfig }:
       />
     </label>
   )
-  const accessItemsField = (key: AccessKey, label: string, hint: string) => {
+  const accessItemsField = (key: ToggleKey, label: string, hint: string) => {
     const items = values[key]
     const updateItem = (index: number, patch: Partial<AccessItem>) =>
       setAccessItems(
@@ -495,6 +492,21 @@ export function RobotConfigForm({ content, toolbar, onChange, extensionConfig }:
             '18110',
             '机器人应用对外提供服务的端口；不确定时保持为空。'
           )}
+          <label
+            className={labelClass}
+            title="端口已被占用时，AlemonJS 会从配置端口开始依次尝试下一个可用端口；实际端口由运行期状态返回，不会写回配置文件。"
+          >
+            端口漂移
+            <select
+              className={inputClass}
+              disabled={invalidConfig}
+              value={values.autoPort}
+              onChange={event => set('autoPort', event.target.value)}
+            >
+              <option value="">关闭</option>
+              <option value="true">开启：冲突时自动尝试下一端口</option>
+            </select>
+          </label>
           {field(
             'input',
             '应用入口',
@@ -574,7 +586,7 @@ export function RobotConfigForm({ content, toolbar, onChange, extensionConfig }:
         <>
           {field('repeatedEventTime', '重复事件窗口（毫秒）', '60000')}
           {field('repeatedUserTime', '重复用户窗口（毫秒）', '1000')}
-          {field('apps', '启用模块', 'alemonjs-openai, alemonjs-xianyu')}
+          {accessItemsField('apps', '启用模块', '例如 alemonjs-openai')}
         </>
         )}
       {advanced &&

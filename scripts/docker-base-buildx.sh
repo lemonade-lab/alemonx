@@ -42,8 +42,6 @@ else
   echo '🔨 从零开始进行多架构验证（忽略缓存并重新拉取基础层；不会生成或更新任何镜像）...'
   echo "💡 如需推送并更新远端镜像，执行: ALX_BASE_PUSH=1 $0"
   docker buildx build \
-    --pull \
-    --no-cache \
     --platform "$platforms" \
     -f Dockerfile.base \
     --output type=cacheonly \

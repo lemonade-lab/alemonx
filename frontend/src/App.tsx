@@ -22,11 +22,6 @@ import { registerDesktopWindowShortcut } from './components/desktopWindowShortcu
 import { EnvironmentFixDialog } from './components/EnvironmentFixDialog'
 import { DownloadProgress } from './components/DownloadProgress'
 import { ErrorNotice } from './components/ErrorNotice'
-import {
-  isPadViewport,
-  PAD_BREAKPOINT,
-  useIsPadViewport
-} from './hooks/useIsPadViewport'
 import { clampWindowRectToViewport } from './lib/windowRect'
 import {
   workspaceApi,
@@ -91,7 +86,11 @@ type WorkbenchRect = {
   height: number
 }
 
-function padWorkbenchRect(): WorkbenchRect {
+// Keep this in lockstep with the wide-screen Dock media query in styles.css.
+// Below this width the workbench is the page itself, not a floating window.
+const WORKBENCH_DOCK_BREAKPOINT = '(min-width: 1440px)'
+
+function responsiveWorkbenchRect(): WorkbenchRect {
   return {
     left: 0,
     top: 0,
@@ -101,7 +100,8 @@ function padWorkbenchRect(): WorkbenchRect {
 }
 
 function initialWorkbenchRect(): WorkbenchRect {
-  if (isPadViewport()) return padWorkbenchRect()
+  if (!window.matchMedia(WORKBENCH_DOCK_BREAKPOINT).matches)
+    return responsiveWorkbenchRect()
   const width = Math.min(1240, Math.max(640, window.innerWidth - 48))
   const height = Math.min(760, Math.max(420, window.innerHeight - 56))
   return {
@@ -113,7 +113,8 @@ function initialWorkbenchRect(): WorkbenchRect {
 }
 
 function clampWorkbenchRect(rect: WorkbenchRect): WorkbenchRect {
-  if (isPadViewport()) return padWorkbenchRect()
+  if (!window.matchMedia(WORKBENCH_DOCK_BREAKPOINT).matches)
+    return responsiveWorkbenchRect()
   return clampWindowRectToViewport(rect, {
     minWidth: 640,
     minHeight: 420,
@@ -171,8 +172,10 @@ export default function App() {
   const previewFrame = useRef<number | null>(null)
   const [workbenchMaximized, setWorkbenchMaximized] = useState(false)
   const workbenchMaximizedRef = useRef(workbenchMaximized)
-  const isPadView = useIsPadViewport()
-  const padRestoreRef = useRef<WorkbenchRect | null>(null)
+  const [isResponsiveWorkbench, setIsResponsiveWorkbench] = useState(
+    () => !window.matchMedia(WORKBENCH_DOCK_BREAKPOINT).matches
+  )
+  const wasResponsiveWorkbench = useRef(isResponsiveWorkbench)
   const [workbenchLayer, setWorkbenchLayer] = useState(100)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsMinimized, setSettingsMinimized] = useState(false)
@@ -261,7 +264,7 @@ export default function App() {
   }
 
   function beginWorkbenchDrag(event: React.PointerEvent<HTMLDivElement>) {
-    if (isPadView) return
+    if (isResponsiveWorkbench) return
     const target = event.target as HTMLElement
     if (target.closest('.guide-window') && !hasOpenDesktopWindow)
       activateWorkbench()
@@ -369,7 +372,7 @@ export default function App() {
     corner: ResizeCorner,
     event: React.PointerEvent<HTMLButtonElement>
   ) {
-    if (isPadView) return
+    if (isResponsiveWorkbench) return
     const windowElement = document.querySelector<HTMLElement>('.guide-window')
     const stage =
       event.currentTarget.closest<HTMLDivElement>('.workbench-stage')
@@ -399,7 +402,7 @@ export default function App() {
   }
 
   function toggleWorkbenchMaximize(event: React.MouseEvent<HTMLDivElement>) {
-    if (isPadView) return
+    if (isResponsiveWorkbench) return
     const target = event.target as HTMLElement
     const topbar = target.closest('.topbar')
     if (
@@ -437,18 +440,35 @@ export default function App() {
       window.removeEventListener('alx:desktop-window-layer', syncWindowLayer)
   }, [])
   useLayoutEffect(() => {
-    const media = window.matchMedia(PAD_BREAKPOINT)
+    const media = window.matchMedia(WORKBENCH_DOCK_BREAKPOINT)
     const applyWorkbenchLayout = () => {
-      if (media.matches) {
-        if (!padRestoreRef.current)
-          padRestoreRef.current = workbenchPreferredRef.current
-        setWorkbenchRect(padWorkbenchRect())
+      const responsive = !media.matches
+      setIsResponsiveWorkbench(responsive)
+      if (responsive) {
+        wasResponsiveWorkbench.current = true
+        workbenchMaximizedRef.current = false
+        setWorkbenchRect(responsiveWorkbenchRect())
         setWorkbenchMaximized(false)
         return
       }
-      if (padRestoreRef.current) {
-        workbenchPreferredRef.current = padRestoreRef.current
-        padRestoreRef.current = null
+      // Crossing into the desktop/Dock layout must not resurrect a smaller
+      // remembered rectangle. Capture the viewport's largest available size at
+      // this exact transition, then keep that captured size as the baseline.
+      if (wasResponsiveWorkbench.current) {
+        const maximumRect = {
+          left: 16,
+          top: 16,
+          width: Math.max(640, window.innerWidth - 48),
+          height: Math.max(420, window.innerHeight - 56)
+        }
+        wasResponsiveWorkbench.current = false
+        workbenchPreferredRef.current = maximumRect
+        workbenchMaximizedRef.current = false
+        setWorkbenchRect(maximumRect)
+        // This is a captured window size, not live maximization: later browser
+        // resizes must not keep expanding the workbench.
+        setWorkbenchMaximized(false)
+        return
       }
       if (workbenchMaximizedRef.current) {
         setWorkbenchRect({
@@ -565,7 +585,7 @@ export default function App() {
     maxHeight: 'none'
   }
   const workbenchWindowControls =
-    workbenchMaximized || isPadView ? null : (
+    workbenchMaximized || isResponsiveWorkbench ? null : (
       <>
         {(['nw', 'ne', 'sw', 'se'] as ResizeCorner[]).map(corner => (
           <button

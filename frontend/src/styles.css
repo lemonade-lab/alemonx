@@ -5449,7 +5449,8 @@ textarea:focus-visible {
   }
 }
 
-@media (max-width: 940px) {
+/* Keep the desktop two-column console on tablets; only phone widths use the stacked order. */
+@media (max-width: 700px) {
   .console-page {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -6487,7 +6488,9 @@ textarea:hover {
 .environment-check-list article {
   border-color: var(--theme-border-default);
 }
-@media (max-width: 940px) {
+/* At compact tablet widths, the project rail becomes a row above the workspace.
+ * The robot workspace itself remains a two-column desktop layout until phone width. */
+@media (max-width: 1120px) {
   .console-layout {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -6501,6 +6504,9 @@ textarea:hover {
     overflow-y: overlay;
     overflow-x: hidden;
   }
+}
+
+@media (max-width: 700px) {
   .console-page {
     grid-template-rows: auto minmax(0, 1fr);
   }
@@ -8168,6 +8174,11 @@ button > svg,
   margin: 3px 0 0 12px;
   padding: 2px 0 2px 8px;
 }
+.control-secondary-page {
+  border-left: 0;
+  margin: 4px 0 0;
+  padding: 2px 0;
+}
 .workspace-nav-sub-active {
   background: var(--theme-accent-soft) !important;
   color: var(--theme-accent-text) !important;
@@ -8688,7 +8699,8 @@ button > svg,
   }
 }
 
-@container workbench-window (max-width: 759px) {
+/* Keep the rail's tablet arrangement independent from the robot panel's phone layout. */
+@container workbench-window (max-width: 1120px) {
   .console-layout {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -8702,6 +8714,9 @@ button > svg,
     overflow-x: hidden;
     overflow-y: overlay;
   }
+}
+
+@container workbench-window (max-width: 700px) {
   .console-page {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: auto minmax(0, 1fr);
