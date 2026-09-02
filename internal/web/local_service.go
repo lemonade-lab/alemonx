@@ -79,7 +79,15 @@ var (
 // WebUI port to its frontend; that port is rewritten to the workbench port, so
 // its WebSocket must also be mapped back under the service mount rather than
 // attempting an upgrade at the workbench root.
-const embeddedAPICompatScript = `<script>(function(){var m=%q,h=%q;if(!m||window.__alxApiCompat)return;window.__alxApiCompat=true;function p(u){if(typeof u==="string"&&u.charAt(0)==="/"&&u.charAt(1)!=="/")return m+u.slice(1);return u}function w(u){try{var x=new URL(String(u),window.location.href),same=x.host===window.location.host||x.host===h||x.hostname==="::",root=x.pathname.charAt(0)==="/"?x.pathname.slice(1):x.pathname;if((same||typeof u==="string"&&u.charAt(0)==="/")&&(x.protocol==="ws:"||x.protocol==="wss:"||x.protocol==="http:"||x.protocol==="https:")){return (window.location.protocol==="https:"?"wss://":"ws://")+window.location.host+m+root+x.search+x.hash}}catch(e){}return u}var f=window.fetch?window.fetch.bind(window):null;if(f){window.fetch=function(i,n){var u=null,x=i;if(typeof i==="string"){u=i;x=p(i)}else if(i&&typeof i.url==="string"){u=i.url;x=new Request(p(i.url),i)}var q=f(x,n);if(!u||u.indexOf("/api/login-info")===-1)return q;return q.then(function(r){return r.clone().text().then(function(t){try{var d=JSON.parse(t),port=Number(window.location.port)||(window.location.protocol==="https:"?443:80);if(d&&d.data&&d.data.webui&&d.data.webui.port){d.data.webui.port=port;var h=new Headers(r.headers);h.set("Content-Length",String(JSON.stringify(d).length));return new Response(JSON.stringify(d),{status:r.status,statusText:r.statusText,headers:h})}}catch(e){}return r})})}}var o=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(a,u){arguments[1]=p(u);return o.apply(this,arguments)};var E=window.EventSource;if(E){function P(u,c){return new E(p(u),c)}P.prototype=E.prototype;P.CONNECTING=E.CONNECTING;P.OPEN=E.OPEN;P.CLOSED=E.CLOSED;window.EventSource=P}var W=window.WebSocket;if(W){function S(u,c){return c===undefined?new W(w(u)):new W(w(u),c)}S.prototype=W.prototype;S.CONNECTING=W.CONNECTING;S.OPEN=W.OPEN;S.CLOSING=W.CLOSING;S.CLOSED=W.CLOSED;window.WebSocket=S}if(navigator.serviceWorker){navigator.serviceWorker.register=function(){return Promise.reject(new Error("embedded service worker disabled"))}}})();</script>`
+const embeddedAPICompatScript = `<script>(function(){var m=%q,h=%q;if(!m||window.__alxApiCompat)return;window.__alxApiCompat=true;var nf=window.fetch?window.fetch.bind(window):null,z=new URLSearchParams(window.location.hash.slice(1)).get("alx-napcat-token"),cred="",boot=Promise.resolve("");if(z&&nf&&window.crypto&&crypto.subtle){boot=crypto.subtle.digest("SHA-256",new TextEncoder().encode(z+".napcat")).then(function(b){return Array.from(new Uint8Array(b)).map(function(v){return v.toString(16).padStart(2,"0")}).join("")}).then(function(hash){return nf(m+"api/auth/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({hash:hash})})}).then(function(r){return r.json()}).then(function(v){cred=v&&v.data&&v.data.Credential;if(!cred)throw new Error("NapCat WebUI login failed");localStorage.setItem("token",JSON.stringify(cred));history.replaceState(null,"",window.location.pathname+window.location.search);return cred}).catch(function(e){console.warn("NapCat embedded WebUI login failed",e);return ""})}function p(u){if(typeof u==="string"&&u.charAt(0)==="/"&&u.charAt(1)!=="/")return m+u.slice(1);return u}function w(u){try{var x=new URL(String(u),window.location.href),same=x.host===window.location.host||x.host===h||x.hostname==="::",root=x.pathname.charAt(0)==="/"?x.pathname.slice(1):x.pathname;if((same||typeof u==="string"&&u.charAt(0)==="/")&&(x.protocol==="ws:"||x.protocol==="wss:"||x.protocol==="http:"||x.protocol==="https:")){return (window.location.protocol==="https:"?"wss://":"ws://")+window.location.host+m+root+x.search+x.hash}}catch(e){}return u}var f=nf;if(f){window.fetch=function(i,n){var u=null,x=i;if(typeof i==="string"){u=i;x=p(i)}else if(i&&typeof i.url==="string"){u=i.url;x=new Request(p(i.url),i)}var q=f(x,n);if(!u||u.indexOf("/api/login-info")===-1)return q;return q.then(function(r){return r.clone().text().then(function(t){try{var d=JSON.parse(t),port=Number(window.location.port)||(window.location.protocol==="https:"?443:80);if(d&&d.data&&d.data.webui&&d.data.webui.port){d.data.webui.port=port;var h=new Headers(r.headers);h.set("Content-Length",String(JSON.stringify(d).length));return new Response(JSON.stringify(d),{status:r.status,statusText:r.statusText,headers:h})}}catch(e){}return r})})}}var o=XMLHttpRequest.prototype.open,oh=XMLHttpRequest.prototype.setRequestHeader,os=XMLHttpRequest.prototype.send;XMLHttpRequest.prototype.open=function(a,u){this.__alxURL=String(u);arguments[1]=p(u);return o.apply(this,arguments)};XMLHttpRequest.prototype.setRequestHeader=function(k,v){if(String(k).toLowerCase()==="authorization"&&(!v||String(v).trim()==="Bearer")){this.__alxAuthPending=true;return}return oh.call(this,k,v)};XMLHttpRequest.prototype.send=function(b){var q=this;if(q.__alxAuthPending&&z){boot.then(function(c){if(c)oh.call(q,"Authorization","Bearer "+c);os.call(q,b)});return}return os.call(q,b)};var E=window.EventSource;if(E){function P(u,c){return new E(p(u),c)}P.prototype=E.prototype;P.CONNECTING=E.CONNECTING;P.OPEN=E.OPEN;P.CLOSED=E.CLOSED;window.EventSource=P}var W=window.WebSocket;if(W){function S(u,c){return c===undefined?new W(w(u)):new W(w(u),c)}S.prototype=W.prototype;S.CONNECTING=W.CONNECTING;S.OPEN=W.OPEN;S.CLOSING=W.CLOSING;S.CLOSED=W.CLOSED;window.WebSocket=S}if(navigator.serviceWorker){navigator.serviceWorker.register=function(){return Promise.reject(new Error("embedded service worker disabled"))}}})();</script>`
+
+// This runs before the third-party page's module scripts. It exchanges the
+// fragment-only token first, then holds the first API calls until NapCat's
+// short-lived credential exists. Axios chooses fetch in some Chromium builds
+// and XHR in others, hence the matching post-bootstrap XHR gate below.
+const embeddedAPIAuthGate = `<script>(function(){var m=%q,z=new URLSearchParams(window.location.hash.slice(1)).get("alx-napcat-token");if(!z||!window.fetch||!window.crypto||!crypto.subtle)return;history.replaceState(null,"",window.location.pathname+window.location.search);var f=window.fetch.bind(window),c="",b=crypto.subtle.digest("SHA-256",new TextEncoder().encode(z+".napcat")).then(function(x){return Array.from(new Uint8Array(x)).map(function(v){return v.toString(16).padStart(2,"0")}).join("")}).then(function(h){return f(m+"api/auth/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({hash:h})})}).then(function(r){return r.json()}).then(function(v){c=v&&v.data&&v.data.Credential;if(!c)throw new Error("NapCat WebUI login failed");localStorage.setItem("token",JSON.stringify(c));return c}).catch(function(e){console.warn("NapCat embedded WebUI login failed",e);return ""});window.__alxNapcatCredentialBoot=b;window.fetch=function(i,n){return b.then(function(k){if(k){n=Object.assign({},n||{});var h=new Headers(n.headers||(i&&i.headers));h.set("Authorization","Bearer "+k);n.headers=h}return f(i,n)})}})();</script>`
+
+const embeddedAPIAuthXHRGate = `<script>(function(){var b=window.__alxNapcatCredentialBoot;if(!b)return;var h=XMLHttpRequest.prototype.setRequestHeader,s=XMLHttpRequest.prototype.send;XMLHttpRequest.prototype.setRequestHeader=function(k,v){if(String(k).toLowerCase()==="authorization"&&(!v||String(v).trim()==="Bearer")){this.__alxAuthPending=true;return}return h.call(this,k,v)};XMLHttpRequest.prototype.send=function(v){var x=this;if(x.__alxAuthPending){b.then(function(c){if(c)h.call(x,"Authorization","Bearer "+c);s.call(x,v)});return}return s.call(x,v)}})();</script>`
 
 // injectEmbeddedAPIBootstrap adds the compatibility script to a rewritten
 // HTML document. Compressed bodies are left untouched, mirroring the HTML
@@ -96,7 +104,7 @@ func injectEmbeddedAPIBootstrap(response *http.Response, mount, upstreamHost str
 		return
 	}
 	_ = response.Body.Close()
-	script := fmt.Sprintf(embeddedAPICompatScript, mount, upstreamHost)
+	script := fmt.Sprintf(embeddedAPIAuthGate, mount) + fmt.Sprintf(embeddedAPICompatScript, mount, upstreamHost) + embeddedAPIAuthXHRGate
 	document := string(body)
 	if head := htmlHeadPattern.FindString(document); head != "" {
 		document = strings.Replace(document, head, head+script, 1)
@@ -116,6 +124,44 @@ func injectEmbeddedAPIBootstrap(response *http.Response, mount, upstreamHost str
 	if policy := response.Header.Get("Content-Security-Policy"); policy != "" && scriptSrcPolicy.MatchString(policy) {
 		response.Header.Set("Content-Security-Policy", scriptSrcPolicy.ReplaceAllString(policy, "$1 'unsafe-inline'"))
 	}
+}
+
+// rewriteNapcatWebUIAssets makes NapCat's compiled BrowserRouter and dynamic
+// imports work beneath an authenticated ALX service mount. NapCat hard-codes
+// both basename:"/webui/" and /webui/ asset URLs; changing browser history
+// loses the proxy on refresh and module loads, so rewrite the served assets
+// instead. Other local services are unchanged because they do not contain the
+// NapCat-specific marker.
+func rewriteNapcatWebUIAssets(response *http.Response, mount string) {
+	contentType := response.Header.Get("Content-Type")
+	if response.StatusCode != http.StatusOK || (!strings.Contains(contentType, "javascript") && !strings.Contains(contentType, "text/css")) {
+		return
+	}
+	if encoding := response.Header.Get("Content-Encoding"); encoding != "" && encoding != "identity" {
+		return
+	}
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		return
+	}
+	_ = response.Body.Close()
+	document := string(body)
+	if !strings.Contains(document, "/webui/") {
+		response.Body = io.NopCloser(bytes.NewReader(body))
+		return
+	}
+	assetPrefix := mount + "webui/"
+	if strings.Contains(contentType, "javascript") {
+		// Preserve the Router mount separately; its basename must be the ALX
+		// proxy root, whereas all assets remain under upstream /webui/.
+		document = strings.ReplaceAll(document, `basename:"/webui/"`, `basename:"`+mount+`"`)
+	}
+	document = strings.ReplaceAll(document, "/webui/", assetPrefix)
+	rewritten := []byte(document)
+	response.Body = io.NopCloser(bytes.NewReader(rewritten))
+	response.ContentLength = int64(len(rewritten))
+	response.Header.Set("Content-Length", strconv.Itoa(len(rewritten)))
+	response.Header.Set("Cache-Control", "no-store")
 }
 
 func (s *server) localServicesHandler(w http.ResponseWriter, r *http.Request) {
@@ -246,7 +292,16 @@ func (s *server) localServiceProxyWith(w http.ResponseWriter, r *http.Request, p
 			request.URL.Scheme, request.URL.Host, request.URL.Path, request.URL.RawPath = target.Scheme, target.Host, target.Path, ""
 			request.URL.RawQuery = r.URL.RawQuery
 			request.Host = target.Host
+			// A rewritten embedded WebUI (NapCat in particular) authenticates its
+			// own API calls with a short-lived Bearer credential. Do not confuse
+			// that service-local credential with an ALX management credential and
+			// strip it: doing so makes login succeed in the browser but guarantees
+			// every following upstream request is Unauthorized.
+			authorization := request.Header.Get("Authorization")
 			request.Header.Del("Authorization")
+			if service.RewriteAPIBase && strings.HasPrefix(strings.TrimSpace(authorization), "Bearer ") {
+				request.Header.Set("Authorization", authorization)
+			}
 			request.Header.Del("Cookie")
 			// HTML rewritten below contains a service-specific base URL and API/
 			// WebSocket shim. A browser normally requests gzip; rewriting only an
@@ -273,6 +328,7 @@ func (s *server) localServiceProxyWith(w http.ResponseWriter, r *http.Request, p
 			}
 			if service.RewriteHTML && service.RewriteAPIBase {
 				injectEmbeddedAPIBootstrap(response, mount, target.Host)
+				rewriteNapcatWebUIAssets(response, mount)
 			}
 			isolateLocalServiceCookies(response, cookiePrefix, mount)
 			if service.Embed {
@@ -448,7 +504,12 @@ func localServiceTransport(sse bool) *http.Transport {
 }
 
 func isUpgradeRequest(r *http.Request) bool {
-	return strings.EqualFold(r.Header.Get("Upgrade"), "websocket") || strings.Contains(strings.ToLower(r.Header.Get("Connection")), "upgrade")
+	// Connection: Upgrade alone is not a WebSocket handshake. Some WebUI
+	// navigation and streaming requests retain that hop-by-hop token; routing
+	// those ordinary HTTP requests to websocket.Handler makes x/net reject them
+	// with “not websocket protocol”. The Upgrade header must explicitly name
+	// websocket before the proxy takes the WebSocket path.
+	return strings.EqualFold(strings.TrimSpace(r.Header.Get("Upgrade")), "websocket")
 }
 
 func localServiceLocationAllowed(location string, target *url.URL) bool {

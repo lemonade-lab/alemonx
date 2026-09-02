@@ -593,7 +593,7 @@ export default function App() {
           <button
             className={`desktop-window-resize desktop-window-resize-${corner}`}
             onPointerDown={event => beginWorkbenchResize(corner, event)}
-            aria-label="调整工作台窗口大小"
+            aria-label="Workbench Resize Handle"
             title="调整窗口大小"
             key={corner}
           />
@@ -633,7 +633,7 @@ export default function App() {
         onDoubleClick={toggleWorkbenchMaximize}
       >
         <WorkbenchDock
-          windowLabel={guideOpen ? '引导' : '工作台'}
+          windowLabel={guideOpen ? 'Guide' : 'Work'}
           windowHidden={mainWindowHidden}
           hasOpenDesktopWindow={hasOpenDesktopWindow}
           launchpadOpen={launchpadOpen}
@@ -772,7 +772,7 @@ export default function App() {
       </div>
       {launchpadOpen && (
         <Launchpad
-          mainWindowLabel={guideOpen ? '引导' : '工作台'}
+          mainWindowLabel={guideOpen ? 'Guide' : 'Workbench'}
           windows={dockWindows}
           onClose={() => setLaunchpadOpen(false)}
           onOpenMainWindow={() => {
@@ -881,7 +881,7 @@ function WorkbenchDock({
   return (
     <aside
       className={`workbench-dock${visibleApps >= 0 ? ' workbench-dock-visible' : ''}`}
-      aria-label="工作台 Dock"
+      aria-label="Workbench Dock"
     >
       <div className="workbench-dock-items">
         <button

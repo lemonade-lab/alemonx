@@ -2653,7 +2653,12 @@ export function Dashboard({
       const task = await startRobotTask(data).unwrap()
       if (data.action === 'dev' || data.action === 'app') {
         setOutput('')
-        setConsoleOpen(true)
+        // Starting a robot should surface its supervised output in the
+        // dedicated foreground-log window. The interactive terminal is a
+        // separate user tool and must never open as a side effect of launch.
+        setForegroundLogsOpen(true)
+        setForegroundLogsMinimized(false)
+        activateFloatingWindow('foregroundLogs')
         return true
       }
       if (
@@ -11500,15 +11505,10 @@ function MiniBrowserWindow({
   onActivate: () => void
 }) {
   const [homeQuery, setHomeQuery] = useState('')
-  // Opening the browser itself creates a home tab. Opening a concrete URL
-  // (service preview, robot application, or system-plugin URL) does not: the
-  // requested document is the first real tab, with no disposable blank tab.
-  const startsWithNavigation = Boolean(
-    browserCommand?.kind === 'open' && browserCommand.url
-  )
-  const [tabs, setTabs] = useState<BrowserTab[]>(() =>
-    startsWithNavigation ? [] : [createBrowserHomeTab()]
-  )
+  // A visible browser always owns at least one tab. In particular, a URL that
+  // is handed off to the system browser must not leave this window displaying
+  // the home screen without a matching "首页" tab.
+  const [tabs, setTabs] = useState<BrowserTab[]>(() => [createBrowserHomeTab()])
   const [activeTabID, setActiveTabID] = useState(() => tabs[0]?.id ?? '')
   const [error, setError] = useState('')
   const lastBrowserCommandID = useRef('')
@@ -11596,15 +11596,23 @@ function MiniBrowserWindow({
         setError('端口号必须在 1 到 65535 之间。')
         return
       }
-      const isLocalPath = input.startsWith('/')
+      const currentEntry = activeTab?.history[activeTab.historyIndex]
+      const isPathReference =
+        input.startsWith('/') ||
+        input.startsWith('./') ||
+        input.startsWith('../') ||
+        input.startsWith('?') ||
+        input.startsWith('#') ||
+        /^[^/?#\s]+\/[^/?#\s].*$/.test(input)
       const looksLikeAddress =
         input.includes('.') || input.startsWith('localhost') || input.includes(':')
       const searchURL = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(input)}`
-      const currentEntry = activeTab?.history[activeTab.historyIndex]
-      const complete = isLocalPath
-        ? completeBrowserAddress(
-            new URL(input, currentEntry ?? window.location.origin).href
-          )
+      if (isPathReference && !currentEntry) {
+        setError('请先打开一个网站，再输入相对路径、查询或锚点。')
+        return
+      }
+      const complete = isPathReference
+        ? completeBrowserAddress(new URL(input, currentEntry).href)
         : completeBrowserAddress(looksLikeAddress || portOnly ? input : searchURL)
       if (!complete) throw new Error('地址无效')
       const next = complete.url
@@ -11788,7 +11796,11 @@ function MiniBrowserWindow({
         new CustomEvent('alx-browser-tab-closed', { detail: { id } })
       )
     if (remaining.length === 0) {
-      onClose()
+      const homeTab = createBrowserHomeTab()
+      setTabs([homeTab])
+      setActiveTabID(homeTab.id)
+      setHomeQuery('')
+      setError('')
       return
     }
     setTabs(remaining)
