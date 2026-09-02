@@ -31,6 +31,50 @@ func TestEnableLoginAndDisable(t *testing.T) {
 	}
 }
 
+func TestResetSuperAdminRevokesSessionsAndOtherAdministrators(t *testing.T) {
+	manager, err := NewAt(filepath.Join(t.TempDir(), "auth.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldToken, err := manager.Enable("root", "old-password", "old-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.CreateAccount("other", "password", "password", nil); err != nil {
+		t.Fatal(err)
+	}
+	manager.mu.Lock()
+	manager.data.Accounts[1].SuperAdmin = true
+	if err := manager.persist(); err != nil {
+		manager.mu.Unlock()
+		t.Fatal(err)
+	}
+	manager.mu.Unlock()
+	otherToken, err := manager.Login("other", "password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	newToken, err := manager.ResetSuperAdmin("recovery", "new-password", "new-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manager.Authenticate(oldToken) || manager.Authenticate(otherToken) {
+		t.Fatal("old sessions must be invalid after emergency reset")
+	}
+	if status, err := manager.Status(newToken); err != nil || !status.SuperAdmin || status.Account != "recovery" {
+		t.Fatalf("recovery status = %#v, %v", status, err)
+	}
+	if _, err := manager.Login("root", "old-password"); err == nil {
+		t.Fatal("old administrator password must no longer work")
+	}
+	if _, err := manager.Login("other", "password"); err == nil {
+		t.Fatal("other super administrator must be disabled")
+	}
+	if _, err := manager.Login("recovery", "new-password"); err != nil {
+		t.Fatalf("new recovery administrator cannot log in: %v", err)
+	}
+}
+
 func TestAccountsRolesAndPermissions(t *testing.T) {
 	manager, err := NewAt(filepath.Join(t.TempDir(), "auth.json"))
 	if err != nil {

@@ -248,7 +248,7 @@ workspace/
 
 **Q14：忘记工作台管理员密码？**
 
-重新执行 `alx auth enable --account ... --password ... --confirm-password ...` 重新配置账户；`alx auth status` 查看当前状态。生产部署建议配合防火墙限制访问来源。
+认证已开启时，使用紧急恢复命令重设超级管理员：`alx auth reset-super-admin --account ... --password ... --confirm-password ... --yes`。它会立即使旧会话失效，并禁用其他超级管理员账号；普通账号、角色和工作台数据会保留。`alx auth status` 可查看当前状态。生产部署建议配合防火墙限制访问来源。
 
 ### AI 与 MCP
 

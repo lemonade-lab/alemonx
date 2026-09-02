@@ -11,6 +11,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -41,26 +42,33 @@ type Config struct {
 	// Native selects the host Redis service. It is intentionally optional so
 	// configurations written by older ALemonX versions remain compatible.
 	Native bool `json:"native,omitempty"`
+	// PrivateInitialized is written only after the miniredis snapshot has been
+	// imported into an application-private runtime. Later starts trust the
+	// runtime's own AOF/RDB rather than replaying an old fallback snapshot.
+	PrivateInitialized bool `json:"privateInitialized,omitempty"`
 }
 
 // Status is the manager state returned to the workbench.
 type Status struct {
-	Running         bool   `json:"running"`
-	Managed         bool   `json:"managed"`
-	External        bool   `json:"external"`
-	Skipped         bool   `json:"skipped"`
-	Port            int    `json:"port"`
-	Address         string `json:"address"`
-	Message         string `json:"message"`
-	AutoStart       bool   `json:"autoStart"`
-	Disabled        bool   `json:"disabled"`
-	Persistent      bool   `json:"persistent"`
-	LastSaved       string `json:"lastSaved,omitempty"`
-	NativeSupported bool   `json:"nativeSupported"`
-	NativeInstalled bool   `json:"nativeInstalled"`
-	NativeRunning   bool   `json:"nativeRunning"`
-	NativeEnabled   bool   `json:"nativeEnabled"`
-	NativeService   string `json:"nativeService,omitempty"`
+	Running          bool   `json:"running"`
+	Managed          bool   `json:"managed"`
+	External         bool   `json:"external"`
+	Skipped          bool   `json:"skipped"`
+	Port             int    `json:"port"`
+	Address          string `json:"address"`
+	Message          string `json:"message"`
+	AutoStart        bool   `json:"autoStart"`
+	Disabled         bool   `json:"disabled"`
+	Persistent       bool   `json:"persistent"`
+	LastSaved        string `json:"lastSaved,omitempty"`
+	NativeSupported  bool   `json:"nativeSupported"`
+	NativeInstalled  bool   `json:"nativeInstalled"`
+	NativeRunning    bool   `json:"nativeRunning"`
+	NativeEnabled    bool   `json:"nativeEnabled"`
+	NativeService    string `json:"nativeService,omitempty"`
+	PrivateInstalled bool   `json:"privateInstalled"`
+	PrivateRunning   bool   `json:"privateRunning"`
+	RuntimePath      string `json:"runtimePath,omitempty"`
 }
 
 // Manager owns the built-in Redis lifecycle and its persisted settings.
@@ -69,13 +77,15 @@ type Manager struct {
 	snapshotPath string
 	mu           sync.Mutex
 
-	config       Config
-	server       *miniredis.Miniredis
-	external     bool
-	skipped      bool
-	message      string
-	lastSaved    time.Time
-	snapshotStop chan struct{}
+	config         Config
+	server         *miniredis.Miniredis
+	private        bool
+	privateProcess *exec.Cmd
+	external       bool
+	skipped        bool
+	message        string
+	lastSaved      time.Time
+	snapshotStop   chan struct{}
 }
 
 // NewManager returns a manager backed by the given configuration file. A
@@ -174,6 +184,14 @@ func (m *Manager) Stop() (string, error) {
 		m.message = "当前连接的是外部 Redis，无需停止。"
 		return m.message, nil
 	}
+	if m.private {
+		if err := m.stopPrivateLocked(); err != nil {
+			return "", err
+		}
+		m.skipped = false
+		m.message = "应用私有 Redis 已停止，数据已持久化。"
+		return m.message, nil
+	}
 	if m.server == nil {
 		m.message = "内置 Redis 未在运行。"
 		return m.message, nil
@@ -195,6 +213,11 @@ func (m *Manager) Stop() (string, error) {
 func (m *Manager) Restart() (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.private {
+		if err := m.stopPrivateLocked(); err != nil {
+			return "", err
+		}
+	}
 	if m.server != nil {
 		if err := m.saveSnapshotLocked(); err != nil {
 			log.Printf("保存内置 Redis 数据失败：%v", err)
@@ -221,12 +244,17 @@ func (m *Manager) Configure(port int, autoStart, disabled bool) error {
 	if m.config.Native && port != m.config.Port {
 		return fmt.Errorf("独立 Redis 使用系统默认端口 6379，不能修改为自定义端口")
 	}
-	portChanged := m.server != nil && port != m.config.Port
-	m.config = Config{Port: port, AutoStart: autoStart, Disabled: disabled, Native: m.config.Native}
+	portChanged := (m.server != nil || m.private) && port != m.config.Port
+	m.config = Config{Port: port, AutoStart: autoStart, Disabled: disabled, Native: m.config.Native, PrivateInitialized: m.config.PrivateInitialized}
 	if err := m.saveLocked(); err != nil {
 		return err
 	}
 	if disabled || portChanged {
+		if m.private {
+			if err := m.stopPrivateLocked(); err != nil {
+				return err
+			}
+		}
 		if m.server != nil {
 			if err := m.saveSnapshotLocked(); err != nil {
 				log.Printf("保存内置 Redis 数据失败：%v", err)
@@ -262,6 +290,11 @@ func (m *Manager) Close() {
 		m.server.Close()
 		m.server = nil
 	}
+	if m.private {
+		if err := m.stopPrivateLocked(); err != nil {
+			log.Printf("关闭应用私有 Redis 失败：%v", err)
+		}
+	}
 	m.skipped = false
 }
 
@@ -287,6 +320,10 @@ func (m *Manager) startLocked() error {
 		m.message = "正在使用独立 Redis；服务由 systemd 管理，ALemonX 重启不会影响它。"
 		return nil
 	}
+	if m.private {
+		m.message = fmt.Sprintf("应用私有 Redis 已在运行，地址 %s。", net.JoinHostPort(bindHost, strconv.Itoa(m.config.Port)))
+		return nil
+	}
 	if m.server != nil {
 		m.message = fmt.Sprintf("内置 Redis 已在运行，地址 %s。", m.server.Addr())
 		return nil
@@ -303,6 +340,27 @@ func (m *Manager) startLocked() error {
 		m.external = false
 		m.skipped = false
 		return fmt.Errorf("端口 %d 已被其他程序占用，且不是可用的 Redis 服务", port)
+	}
+	if m.privateInstalledLocked() {
+		if err := m.startPrivateLocked(address); err == nil {
+			if !m.config.PrivateInitialized {
+				if err := restoreSnapshotToPrivateRedis(address, m.snapshotPath); err != nil {
+					_ = m.stopPrivateLocked()
+					log.Printf("私有 Redis 首次恢复失败，回退 miniredis：%v", err)
+				} else {
+					m.config.PrivateInitialized = true
+					if err := m.saveLocked(); err != nil {
+						log.Printf("保存私有 Redis 初始化状态失败：%v", err)
+					}
+					m.message = "应用私有 Redis 已启动，已导入 miniredis 历史数据。"
+					return nil
+				}
+			} else {
+				return nil
+			}
+		} else {
+			log.Printf("私有 Redis 启动失败，回退 miniredis：%v", err)
+		}
 	}
 	server := miniredis.NewMiniRedis()
 	if err := server.StartAddr(address); err != nil {
@@ -331,7 +389,7 @@ func (m *Manager) statusLocked() Status {
 		}
 	}
 	native := inspectNative(port)
-	managed := m.server != nil
+	managed := m.server != nil || m.private
 	external := m.external
 	if m.config.Native {
 		external = native.Running
@@ -343,6 +401,8 @@ func (m *Manager) statusLocked() Status {
 		message = "独立 Redis 已安装但当前未运行；可点击启用独立 Redis。"
 	} else if message == "" {
 		switch {
+		case m.private:
+			message = "应用私有 Redis 正在运行，数据持久化到本机。"
 		case managed:
 			message = "内置 Redis 正在运行，数据会自动持久化到本机。"
 		case external:
@@ -356,22 +416,25 @@ func (m *Manager) statusLocked() Status {
 		lastSaved = m.lastSaved.Format(time.RFC3339)
 	}
 	return Status{
-		Running:         managed || external,
-		Managed:         managed,
-		External:        external,
-		Skipped:         m.skipped,
-		Port:            port,
-		Address:         net.JoinHostPort(bindHost, strconv.Itoa(port)),
-		Message:         message,
-		AutoStart:       m.config.AutoStart,
-		Disabled:        m.config.Disabled,
-		Persistent:      managed || (m.config.Native && native.Running),
-		LastSaved:       lastSaved,
-		NativeSupported: native.Supported,
-		NativeInstalled: native.Installed,
-		NativeRunning:   native.Running,
-		NativeEnabled:   native.Enabled,
-		NativeService:   native.Service,
+		Running:          managed || external,
+		Managed:          managed,
+		External:         external,
+		Skipped:          m.skipped,
+		Port:             port,
+		Address:          net.JoinHostPort(bindHost, strconv.Itoa(port)),
+		Message:          message,
+		AutoStart:        m.config.AutoStart,
+		Disabled:         m.config.Disabled,
+		Persistent:       managed || (m.config.Native && native.Running),
+		LastSaved:        lastSaved,
+		NativeSupported:  native.Supported,
+		NativeInstalled:  native.Installed,
+		NativeRunning:    native.Running,
+		NativeEnabled:    native.Enabled,
+		NativeService:    native.Service,
+		PrivateInstalled: m.privateInstalledLocked(),
+		PrivateRunning:   m.private,
+		RuntimePath:      m.privateRuntime(),
 	}
 }
 

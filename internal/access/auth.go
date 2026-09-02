@@ -274,6 +274,61 @@ func (m *Manager) Disable() error {
 	return m.persist()
 }
 
+// ResetSuperAdmin is the emergency recovery path for a lost or leaked
+// super-administrator credential. It preserves roles and ordinary accounts,
+// but rotates the session key and disables every other super administrator so
+// an old password cannot immediately regain control.
+func (m *Manager) ResetSuperAdmin(account, password, confirmation string) (string, error) {
+	account, err := normalizeAccount(account)
+	if err != nil {
+		return "", err
+	}
+	if password == "" {
+		return "", errors.New("请填写密码")
+	}
+	if password != confirmation {
+		return "", errors.New("两次输入的密码不一致")
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return "", fmt.Errorf("无法保护密码：%w", err)
+	}
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		return "", fmt.Errorf("无法生成登录密钥：%w", err)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.reload(); err != nil {
+		return "", err
+	}
+	if !m.data.Enabled {
+		return "", errors.New("身份认证尚未开启；请使用 auth enable 创建首个管理员")
+	}
+	now := time.Now()
+	index := accountIndex(m.data.Accounts, account)
+	if index < 0 {
+		m.data.Accounts = append(m.data.Accounts, Account{Account: account, PasswordHash: string(hash), SuperAdmin: true, Enabled: true, Created: now, Updated: now})
+	} else {
+		m.data.Accounts[index].PasswordHash = string(hash)
+		m.data.Accounts[index].SuperAdmin = true
+		m.data.Accounts[index].Enabled = true
+		m.data.Accounts[index].Updated = now
+	}
+	for index := range m.data.Accounts {
+		if m.data.Accounts[index].Account != account && m.data.Accounts[index].SuperAdmin {
+			m.data.Accounts[index].SuperAdmin = false
+			m.data.Accounts[index].Enabled = false
+			m.data.Accounts[index].Updated = now
+		}
+	}
+	m.data.SessionKey = base64.RawURLEncoding.EncodeToString(key)
+	if err := m.persist(); err != nil {
+		return "", err
+	}
+	return m.issueToken(m.data, account)
+}
+
 func (m *Manager) Login(account, password string) (string, error) {
 	data, err := m.current()
 	if err != nil {

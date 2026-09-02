@@ -60,8 +60,10 @@ export function RedisSettingsPanel() {
   const statusLabel = data.disabled
     ? '已禁用'
     : data.running
-      ? data.managed
-        ? '运行中 · 内置持久化 Redis'
+      ? data.privateRunning
+        ? '运行中 · 应用私有 Redis'
+        : data.managed
+          ? '运行中 · 内置持久化 Redis'
         : data.nativeRunning
           ? '运行中 · 独立 Redis（systemd）'
           : '使用中 · 外部 Redis'
@@ -119,9 +121,11 @@ export function RedisSettingsPanel() {
     >
       <SettingsCard
         icon={<Database className="size-4" />}
-        title={data.nativeRunning ? 'Redis 独立服务' : 'Redis 内置服务'}
+        title={data.privateRunning ? 'Redis 应用私有服务' : data.nativeRunning ? 'Redis 独立服务' : 'Redis 内置服务'}
         description={
-          data.nativeRunning
+          data.privateRunning
+            ? '由 ALemonX 受控启动与关闭，数据持久化在应用目录。'
+            : data.nativeRunning
             ? '由 Linux systemd 独立管理，ALemonX 重启不会影响 Redis。'
             : '工作台内置的持久化 Redis 服务，供机器人与插件使用。'
         }

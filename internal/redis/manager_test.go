@@ -128,6 +128,69 @@ func TestManagerRestoresPersistedDataAfterRestart(t *testing.T) {
 	}
 }
 
+func TestSnapshotImportsIntoRESPRedis(t *testing.T) {
+	manager := newTestManager(t)
+	if err := manager.Configure(freePort(t), false, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Start(); err != nil {
+		t.Fatal(err)
+	}
+	database := manager.server.DB(0)
+	if err := database.Set("string", "value"); err != nil {
+		t.Fatal(err)
+	}
+	database.HSet("hash", "field", "value")
+	if _, err := database.Push("list", "one", "two"); err != nil {
+		t.Fatal(err)
+	}
+	database.SetTTL("string", time.Minute)
+	if err := manager.server.DB(1).Set("db1", "value"); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.saveSnapshotLocked(); err != nil {
+		t.Fatal(err)
+	}
+	manager.Close()
+
+	destination := miniredis.NewMiniRedis()
+	if err := destination.StartAddr("127.0.0.1:0"); err != nil {
+		t.Fatal(err)
+	}
+	defer destination.Close()
+	if err := restoreSnapshotToPrivateRedis(destination.Addr(), manager.snapshotPath); err != nil {
+		t.Fatal(err)
+	}
+	restored := destination.DB(0)
+	if value, err := restored.Get("string"); err != nil || value != "value" {
+		t.Fatalf("imported string = %q, %v", value, err)
+	}
+	if value := restored.HGet("hash", "field"); value != "value" {
+		t.Fatalf("imported hash = %q", value)
+	}
+	if values, err := restored.List("list"); err != nil || strings.Join(values, ",") != "one,two" {
+		t.Fatalf("imported list = %#v, %v", values, err)
+	}
+	if ttl := restored.TTL("string"); ttl <= 0 {
+		t.Fatalf("imported ttl = %s", ttl)
+	}
+	if value, err := destination.DB(1).Get("db1"); err != nil || value != "value" {
+		t.Fatalf("imported db1 value = %q, %v", value, err)
+	}
+}
+
+func TestPrivateInitializationStatePersists(t *testing.T) {
+	manager := newTestManager(t)
+	manager.config.PrivateInitialized = true
+	if err := manager.saveLocked(); err != nil {
+		t.Fatal(err)
+	}
+	reloaded := NewManager(manager.path)
+	if !reloaded.config.PrivateInitialized {
+		t.Fatal("private runtime initialization state was not persisted")
+	}
+}
+
 func TestManagerSkipsStartWhenExternalRedisOccupiesPort(t *testing.T) {
 	external := miniredis.NewMiniRedis()
 	if err := external.StartAddr("127.0.0.1:0"); err != nil {

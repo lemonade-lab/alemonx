@@ -2,23 +2,49 @@
 # security updates or runtime system dependencies need to change.
 FROM node:22
 
-# 先更新源
-RUN apt-get update --fix-missing || (sleep 5 && apt-get update --fix-missing)
+# Keep package indexes and downloaded archives in BuildKit's cache.  The helper
+# refreshes indexes immediately before an install, so a rebuilt layer cannot use
+# an index cached independently from its packages.  It also retries transient
+# mirror/CDN errors such as HTTP 502 without masking a final failure.
+RUN printf '%s\n' \
+    '#!/bin/sh' \
+    'set -eu' \
+    'attempt=1' \
+    'while [ "$attempt" -le 4 ]; do' \
+    '  if apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update; then' \
+    '    if apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y --no-install-recommends "$@"; then' \
+    '      exit 0' \
+    '    fi' \
+    '  fi' \
+    '  if [ "$attempt" -eq 4 ]; then' \
+    '    exit 1' \
+    '  fi' \
+    '  sleep "$((attempt * 5))"' \
+    '  attempt=$((attempt + 1))' \
+    'done' \
+    > /usr/local/bin/alx-apt-install \
+    && chmod 0755 /usr/local/bin/alx-apt-install
 
 # 第一组：保留原有基础工具
-RUN apt-get install -y --no-install-recommends \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    alx-apt-install \
     ca-certificates curl git lsof openssh-client tini unzip \
     && echo "✅ 基础工具安装完成"
 
 # 第二组：保留原有字体
-RUN apt-get install -y --no-install-recommends \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    alx-apt-install \
     fonts-noto-cjk fonts-noto-color-emoji \
     && echo "✅ 字体安装完成"
 
 # Python 环境安装（保留原有依赖）
-RUN apt-get install -y --no-install-recommends \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    alx-apt-install \
     python3 python3-pip python3-venv python3-dev \
-    && echo "✅ Python installed" || echo "❌ Python failed"
+    && echo "✅ Python installed"
 
 # 创建 Python 软链接
 RUN ln -sf /usr/bin/python3 /usr/bin/python \
@@ -45,15 +71,20 @@ RUN /opt/venv/bin/pip install --no-cache-dir \
     pytest pytest-asyncio
 
 # 第三组：Chromium（容易失败）
-RUN apt-get install -y --no-install-recommends --fix-missing chromium \
-    && echo "✅ Chromium installed" || echo "❌ Chromium failed"
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    alx-apt-install chromium
 
 # 第四组：保留原有 X11 依赖，并补齐 xkbcomp 与受控桌面入口。
-RUN apt-get install -y --no-install-recommends --fix-missing \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    alx-apt-install \
     xvfb x11-utils x11-xkb-utils xkb-data xauth procps x11vnc novnc websockify
 
 # 第五组：保留原有 GUI 依赖库。
-RUN apt-get install -y --no-install-recommends \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    alx-apt-install \
     libnss3 \
     libgbm1 \
     libglib2.0-0 \
@@ -70,8 +101,7 @@ RUN apt-get install -y --no-install-recommends \
     libxkbcommon0
 
 # 清理
-RUN rm -rf /var/lib/apt/lists/* \
-    && /opt/venv/bin/pip cache purge \
+RUN /opt/venv/bin/pip cache purge \
     && corepack enable
 
 # 设置环境变量 - 优先使用虚拟环境

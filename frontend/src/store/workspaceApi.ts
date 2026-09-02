@@ -230,6 +230,9 @@ export type SystemRedisStatus = {
   nativeRunning: boolean
   nativeEnabled: boolean
   nativeService?: string
+  privateInstalled: boolean
+  privateRunning: boolean
+  runtimePath?: string
 }
 export type SystemCurrentRobot = {
   root: string

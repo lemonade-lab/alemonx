@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"embed"
+	"encoding/json"
 	"fmt"
 	"io"
 	"io/fs"
@@ -284,6 +285,9 @@ func main() {
 		case "auth":
 			authCommand(arguments[1:], yes, account, password, confirmation)
 			return
+		case "redis":
+			redisCommand(arguments[1:], port, account, password)
+			return
 		case "npm":
 			if len(arguments) != 2 || arguments[1] != "publish" {
 				usage()
@@ -354,7 +358,108 @@ func authCommand(arguments []string, confirmed bool, account, password, confirma
 		fmt.Println("身份认证已关闭。")
 		return
 	}
+	if len(arguments) == 1 && arguments[0] == "reset-super-admin" {
+		if !confirmed {
+			fmt.Println("此操作会使全部现有登录会话失效，并禁用其他超级管理员。请使用 --yes 确认。")
+			return
+		}
+		if _, err := manager.ResetSuperAdmin(account, password, confirmation); err != nil {
+			log.Fatal(err)
+		}
+		fmt.Printf("超级管理员已重设为：%s；旧会话已全部失效。\n", strings.TrimSpace(account))
+		return
+	}
 	usage()
+}
+
+// redisCommand delegates lifecycle control to the running workbench. The
+// server owns the Redis manager, so this command never guesses whether an
+// arbitrary process bound to port 6379 is safe to stop.
+func redisCommand(arguments []string, workbenchPort, account, password string) {
+	if len(arguments) != 1 {
+		usage()
+		return
+	}
+	action := arguments[0]
+	if action != "status" && action != "start" && action != "stop" && action != "restart" {
+		usage()
+		return
+	}
+	baseURL := "http://127.0.0.1:" + workbenchPort + "/api/v1/system/redis"
+	client := &http.Client{Timeout: 8 * time.Second}
+	token := strings.TrimSpace(os.Getenv("ALX_AUTH_TOKEN"))
+	if token == "" && strings.TrimSpace(account) != "" && password != "" {
+		loginBody, _ := json.Marshal(map[string]string{"account": account, "password": password})
+		loginRequest, err := http.NewRequest(http.MethodPost, "http://127.0.0.1:"+workbenchPort+"/api/v1/auth/login", strings.NewReader(string(loginBody)))
+		if err != nil {
+			log.Fatal(err)
+		}
+		loginRequest.Header.Set("Content-Type", "application/json")
+		loginResponse, err := client.Do(loginRequest)
+		if err != nil {
+			log.Fatalf("无法连接正在运行的 ALemonX 服务：%v", err)
+		}
+		var login struct {
+			Token string `json:"token"`
+		}
+		if loginResponse.StatusCode == http.StatusOK {
+			_ = json.NewDecoder(io.LimitReader(loginResponse.Body, 1<<20)).Decode(&login)
+			token = login.Token
+		}
+		_ = loginResponse.Body.Close()
+	}
+	method := http.MethodGet
+	var body io.Reader
+	if action != "status" {
+		method = http.MethodPost
+		body = strings.NewReader(`{"action":"` + action + `"}`)
+	}
+	request, err := http.NewRequest(method, baseURL, body)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if body != nil {
+		request.Header.Set("Content-Type", "application/json")
+	}
+	if token != "" {
+		request.Header.Set("Authorization", "Bearer "+token)
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		log.Fatalf("无法连接正在运行的 ALemonX 服务：%v", err)
+	}
+	defer response.Body.Close()
+	var result struct {
+		Running  bool   `json:"running"`
+		Managed  bool   `json:"managed"`
+		External bool   `json:"external"`
+		Address  string `json:"address"`
+		Message  string `json:"message"`
+		Error    string `json:"error"`
+	}
+	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&result); err != nil {
+		log.Fatalf("Redis 控制响应无效：%v", err)
+	}
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		if response.StatusCode == http.StatusUnauthorized {
+			log.Fatal("Redis 控制需要登录：设置 ALX_AUTH_TOKEN，或使用 --account 和 --password。")
+		}
+		if result.Error != "" {
+			log.Fatal(result.Error)
+		}
+		log.Fatalf("Redis 控制失败：%s", response.Status)
+	}
+	state := "已停止"
+	if result.Running {
+		if result.Managed {
+			state = "运行中（ALemonX 管理）"
+		} else if result.External {
+			state = "运行中（外部 Redis，仅复用）"
+		} else {
+			state = "运行中"
+		}
+	}
+	fmt.Printf("Redis：%s\n地址：%s\n%s\n", state, result.Address, result.Message)
 }
 
 func serve(host, port, redisPort string, redisOff bool, workspaceRoot string) {
@@ -643,6 +748,8 @@ func usage() {
       --redis-port <端口>             调整内置 Redis 端口（默认 6379，会持久化到配置）
       --redis-off                     禁止启动内置 Redis
 
+  alx redis status|start|stop|restart  控制运行中工作台管理的 Redis（认证开启时使用 ALX_AUTH_TOKEN，或 --account/--password）
+
   alx mcp                            启动本机 stdio MCP 服务
   MCP_TOKEN=... alx mcp-http         启动受保护的本机 HTTP MCP 服务
   alx install --port 17390 [--host 0.0.0.0] [--workspace <目录>]   注册当前程序为后台常驻服务（默认 0.0.0.0；工作区以安装时为准）
@@ -664,6 +771,8 @@ func usage() {
   alx auth enable --account <账户> --password <密码> --confirm-password <确认密码>
                                      开启本机身份认证（也支持 alx_AUTH_* 环境变量注入）
   alx auth disable --yes               关闭身份认证
+  alx auth reset-super-admin --account <账户> --password <密码> --confirm-password <确认密码> --yes
+                                     紧急重设超级管理员；使旧会话失效并禁用其他超级管理员
   alx [--cwd /项目目录] npm publish  发布到 npm 官方仓库
   alx [--cwd /项目目录] git publish --yes  创建 GitHub Release 标签`)
 }

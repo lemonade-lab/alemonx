@@ -110,6 +110,7 @@ import { Tabs } from './Tabs'
 import { NpmrcConfigForm } from './NpmrcConfigForm'
 import { EnvConfigForm } from './EnvConfigForm'
 import { RobotPanel } from './RobotPanel'
+import meLogo from '../assets/images/me.png'
 import { OpsCenter } from './OpsCenter'
 import { OpsOverview } from './OpsOverview'
 import { NpmPublishPanel } from './NpmPublishPanel'
@@ -302,6 +303,7 @@ const coreFeatureCatalog: Array<{
   status?: string
 }> = [
   { id: 'plugins', label: '插件', icon: <Plug /> },
+  { id: 'browser', label: '浏览', icon: <Globe2 /> },
   { id: 'ops-overview', label: '运维', icon: <ShieldCheck /> }
 ]
 
@@ -1058,8 +1060,7 @@ export function Dashboard({
   const [file, setFile] = useStoreState('.npmrc')
   const [output, setOutput] = useStoreState('')
   const [outputFailed, setOutputFailed] = useStoreState(false)
-  const [operationLogMinimized, setOperationLogMinimized] =
-    useStoreState(false)
+  const [operationLogMinimized, setOperationLogMinimized] = useStoreState(false)
   const [consoleOpen, setConsoleOpen] = useStoreState(false)
   const [consoleMinimized, setConsoleMinimized] = useStoreState(false)
   const [foregroundLogsOpen, setForegroundLogsOpen] = useStoreState(false)
@@ -1072,6 +1073,7 @@ export function Dashboard({
   } | null>(null)
   const [serviceWebviewMinimized, setServiceWebviewMinimized] =
     useStoreState(false)
+  const [browserRequestedURL, setBrowserRequestedURL] = useStoreState('')
   const [busy, setBusy] = useStoreState(false)
   const [catalogTitle, setCatalogTitle] = useStoreState('')
   const [catalogItem, setCatalogItem] = useStoreState<CatalogItem | null>(null)
@@ -1112,14 +1114,11 @@ export function Dashboard({
   const [livePortBusy, setLivePortBusy] = useStoreState(false)
   const [liveLoginRequest, setLiveLoginRequest] = useStoreState(0)
   const [appLaunching, setAppLaunching] = useStoreState(false)
-  const [appContentOpen, setAppContentOpen] = useStoreState(false)
-  const [appMinimized, setAppMinimized] = useStoreState(false)
   const [testLaunching, setTestLaunching] = useStoreState(false)
   const [testContentOpen, setTestContentOpen] = useStoreState(false)
   const [testMinimized, setTestMinimized] = useStoreState(false)
   const [liveContentOpen, setLiveContentOpen] = useStoreState(false)
   const [liveMinimized, setLiveMinimized] = useStoreState(false)
-  const [selectedAppPageID, setSelectedAppPageID] = useStoreState('')
   const [pendingAppPageID, setPendingAppPageID] = useStoreState('')
   const [gitMinimized, setGitMinimized] = useStoreState(false)
   const [pm2LogsOpen, setPM2LogsOpen] = useStoreState(false)
@@ -1204,7 +1203,10 @@ export function Dashboard({
         minimized: foregroundLogsMinimized
       },
       git: { open: Boolean(gitProject), minimized: gitMinimized },
-      app: { open: appContentOpen, minimized: appMinimized },
+      app: {
+        open: Boolean(systemWindows.browser),
+        minimized: Boolean(systemWindows.browser?.minimized)
+      },
       test: { open: testContentOpen, minimized: testMinimized },
       live: { open: liveContentOpen, minimized: liveMinimized },
       pm2Logs: { open: pm2LogsOpen, minimized: pm2LogsMinimized },
@@ -1222,8 +1224,6 @@ export function Dashboard({
       )
     })
   }, [
-    appContentOpen,
-    appMinimized,
     consoleMinimized,
     consoleOpen,
     foregroundLogsMinimized,
@@ -1628,8 +1628,10 @@ export function Dashboard({
   // All alemon.config.yaml mutations share one queue per robot. Several panels
   // edit different parts of this same file, so letting their requests race can
   // make a later response overwrite a value saved by another panel.
-  const queueConfigSave = <T,>(targetRoot: string, operation: () => Promise<T>) =>
-    queueFileSave(`${targetRoot}:alemon.config.yaml`, operation)
+  const queueConfigSave = <T,>(
+    targetRoot: string,
+    operation: () => Promise<T>
+  ) => queueFileSave(`${targetRoot}:alemon.config.yaml`, operation)
   const waitForRobotTask = (
     taskID: string,
     options: {
@@ -1654,36 +1656,42 @@ export function Dashboard({
       error?: string
     }>((resolve, reject) => {
       let settled = false
-      const timeout = window.setTimeout(() => {
-        // app-ready/test-ready is an edge event. If the process bound its port
-        // between the POST response and listener registration, the event may
-        // already be gone while the task snapshot correctly remains running.
-        // Probe once more before showing a failure to the user.
-        if (options.readyProbe) {
-          void options.readyProbe().then(ready => {
-            if (ready) finish()
-            else
-              finish(
-                new Error(
-                  options.appReady
-                    ? '应用端口在等待期内未就绪。'
-                    : '测试服务端口在等待期内未就绪。'
+      const timeout = window.setTimeout(
+        () => {
+          // app-ready/test-ready is an edge event. If the process bound its port
+          // between the POST response and listener registration, the event may
+          // already be gone while the task snapshot correctly remains running.
+          // Probe once more before showing a failure to the user.
+          if (options.readyProbe) {
+            void options
+              .readyProbe()
+              .then(ready => {
+                if (ready) finish()
+                else
+                  finish(
+                    new Error(
+                      options.appReady
+                        ? '应用端口在等待期内未就绪。'
+                        : '测试服务端口在等待期内未就绪。'
+                    )
                   )
+              })
+              .catch(() =>
+                finish(
+                  new Error(
+                    options.appReady
+                      ? '应用端口在等待期内未就绪。'
+                      : '测试服务端口在等待期内未就绪。'
+                  )
+                )
               )
-          }).catch(() =>
-            finish(
-              new Error(
-                options.appReady
-                  ? '应用端口在等待期内未就绪。'
-                  : '测试服务端口在等待期内未就绪。'
-              )
-            )
-          )
-          return
-        }
-        finish(new Error('任务事件连接超时。'))
-      }, options.timeoutMs ??
-        (options.appReady || options.testReady ? 45_000 : 30 * 60 * 1000))
+            return
+          }
+          finish(new Error('任务事件连接超时。'))
+        },
+        options.timeoutMs ??
+          (options.appReady || options.testReady ? 45_000 : 30 * 60 * 1000)
+      )
       const finish = (
         reason?: Error,
         task?: Parameters<NonNullable<typeof options.onTask>>[0]
@@ -1802,7 +1810,10 @@ export function Dashboard({
           void queueConfigSave(root, () =>
             persistFile(root, targetFile, nextContent)
           )
-        else void queueFileSave(key, () => persistFile(root, targetFile, nextContent))
+        else
+          void queueFileSave(key, () =>
+            persistFile(root, targetFile, nextContent)
+          )
       }, 500)
     )
   }
@@ -1842,11 +1853,15 @@ export function Dashboard({
       setAppLaunching(true)
       await launchApp()
       if (pendingAppPageID) {
-        setSelectedAppPageID(pendingAppPageID)
+        const selectedPage = botAppPages.find(
+          item => item.id === pendingAppPageID
+        )
+        openMiniBrowser(
+          selectedPage
+            ? `/api/v1/robot/webview/${robotAppToken(root)}/${selectedPage.id}/`
+            : `/api/v1/robot/app/${robotAppToken(root)}/`
+        )
         setPendingAppPageID('')
-        setAppContentOpen(true)
-        setAppMinimized(false)
-        activateFloatingWindow('app')
       }
     } catch (reason) {
       showOutput(operationErrorMessage(reason, '应用端口保存失败。'), true)
@@ -1861,9 +1876,7 @@ export function Dashboard({
       // If the app is already serving, render it in-page instead of starting
       // another dev/app process (which would conflict with the running one).
       if (await checkAppReachable()) {
-        setAppContentOpen(true)
-        setAppMinimized(false)
-        activateFloatingWindow('app')
+        openMiniBrowser(`/api/v1/robot/app/${robotAppToken(root)}/`)
         return
       }
       const task = await startRobotTask({
@@ -1875,9 +1888,7 @@ export function Dashboard({
         appReady: true,
         readyProbe: checkAppReachable
       })
-      setAppContentOpen(true)
-      setAppMinimized(false)
-      activateFloatingWindow('app')
+      openMiniBrowser(`/api/v1/robot/app/${robotAppToken(root)}/`)
     } catch (reason) {
       showOutput(operationErrorMessage(reason, '应用启动失败。'), true)
     }
@@ -2028,9 +2039,13 @@ export function Dashboard({
       if (gitProject) setGitMinimized(value => !value)
     }
     const toggleApp = () => {
-      activateFloatingWindow('app')
-      if (appContentOpen) {
-        setAppMinimized(value => !value)
+      const browser = systemWindows.browser
+      if (browser) {
+        setSystemWindows(current => ({
+          ...current,
+          browser: { minimized: !browser.minimized }
+        }))
+        activateFloatingWindow('system:browser')
         return
       }
       openAppRef.current()
@@ -2129,9 +2144,7 @@ export function Dashboard({
   }, [
     activeProject,
     activateFloatingWindow,
-    appContentOpen,
     gitProject,
-    setAppMinimized,
     setGitMinimized,
     setGitProject,
     setTestMinimized,
@@ -2972,6 +2985,10 @@ export function Dashboard({
     }))
     activateFloatingWindow(`system:${nextFeature}`)
     setOutput('')
+  }
+  function openMiniBrowser(url: string) {
+    setBrowserRequestedURL(url)
+    selectSystemFeature('browser')
   }
 
   const currentCatalog =
@@ -3839,6 +3856,7 @@ export function Dashboard({
                     buildMode={buildMode}
                     catalog={catalog}
                     catalogTitle={catalogTitle}
+                    catalogLoading={catalogLoading}
                     developerMode={developerMode}
                     agentOpen={aiOpen}
                     onOpenConsole={() => {
@@ -3880,21 +3898,6 @@ export function Dashboard({
           {windowControls}
         </section>
       </main>
-      {appContentOpen && (
-        <AppEmbed
-          root={root}
-          minimized={appMinimized}
-          zIndex={windowLayers.app}
-          appPages={botAppPages}
-          selectedAppPageID={selectedAppPageID}
-          onActivate={() => activateFloatingWindow('app')}
-          onMinimize={() => setAppMinimized(true)}
-          onClose={() => {
-            setAppContentOpen(false)
-            setAppMinimized(false)
-          }}
-        />
-      )}
       {testContentOpen && (
         <TestCenterWindow
           root={root}
@@ -3964,12 +3967,6 @@ export function Dashboard({
           }}
           onOpenEnvironment={() => selectSystemFeature('environment')}
           onOpenService={url => {
-            let title = '服务预览'
-            try {
-              title = new URL(url).host || title
-            } catch {
-              // 服务地址已经过日志解释器验证；此处只保留通用标题。
-            }
             void (async () => {
               let src = url
               try {
@@ -3985,9 +3982,7 @@ export function Dashboard({
               } catch {
                 // 非当前机器人应用端口继续直接嵌入；跨源服务仍可刷新。
               }
-              setServiceWebview({ title, url, src })
-              setServiceWebviewMinimized(false)
-              activateFloatingWindow('serviceWebview')
+              openMiniBrowser(src)
             })()
           }}
           onActivate={() => activateFloatingWindow('foregroundLogs')}
@@ -4078,6 +4073,27 @@ export function Dashboard({
         const windowID: FloatingWindowID = `system:${feature}`
         const zIndex = windowLayers[windowID] ?? 107
         const offset = (index % 6) * 28
+        if (feature === 'browser') {
+          return (
+            <MiniBrowserWindow
+              key={feature}
+              minimized={state.minimized}
+              requestedURL={browserRequestedURL}
+              zIndex={zIndex}
+              onClose={() => closeSystemWindow(feature)}
+              onMinimize={() =>
+                setSystemWindows(current => ({
+                  ...current,
+                  [feature]: { minimized: true }
+                }))
+              }
+              onActivate={() => {
+                setSystemWindowFeature(feature)
+                activateFloatingWindow(windowID)
+              }}
+            />
+          )
+        }
         if (usesSystemFeatureSidebar(feature)) {
           return (
             <SidebarWindow
@@ -9127,7 +9143,11 @@ function PM2RuntimeCard({
             }}
           >
             <Play className="size-4" />
-            {needsApply ? '应用配置' : settings?.registered ? '更新注册' : '注册'}
+            {needsApply
+              ? '应用配置'
+              : settings?.registered
+                ? '更新注册'
+                : '注册'}
           </button>
         </div>
       </header>
@@ -9218,7 +9238,8 @@ function PM2RuntimeCard({
           <header>
             <strong>修改后台运行</strong>
             <p className="mt-1 text-xs text-slate-500">
-              仅显示常规配置，其他 PM2 参数由系统生成。保存后需点击“应用配置”才会影响运行中的进程。
+              仅显示常规配置，其他 PM2
+              参数由系统生成。保存后需点击“应用配置”才会影响运行中的进程。
             </p>
           </header>
           <label className="grid gap-1.5 text-xs font-medium text-slate-600">
@@ -9326,9 +9347,17 @@ function PM2RuntimeCard({
       </Modal>
       <ConfirmDialog
         open={registerOpen}
-        title={needsApply ? '应用后台配置' : settings?.registered ? '更新后台注册' : '注册后台服务'}
+        title={
+          needsApply
+            ? '应用后台配置'
+            : settings?.registered
+              ? '更新后台注册'
+              : '注册后台服务'
+        }
         message={`将以 ${settings?.name ?? '当前配置'}、${settings?.script ?? './index.js'} 注册到 PM2，并立即启动或更新服务。若当前存在前台运行，会先停止前台进程释放端口。`}
-        confirmLabel={needsApply ? '应用配置' : settings?.registered ? '更新注册' : '注册'}
+        confirmLabel={
+          needsApply ? '应用配置' : settings?.registered ? '更新注册' : '注册'
+        }
         busy={settingsBusy}
         onCancel={() => !settingsBusy && setRegisterOpen(false)}
         onConfirm={() =>
@@ -9493,78 +9522,79 @@ function ScriptControlCard({ root }: { root: string }) {
           {error}
         </p>
       )}
-      {!collapsed && (items.length === 0 ? (
-        <div className="px-4 py-8 text-center text-xs text-slate-500">
-          package.json 暂未声明脚本。
-        </div>
-      ) : (
-        <div className="divide-y divide-slate-100">
-          {items.map(item => (
-            <div
-              className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3 text-xs"
-              key={item.name}
-            >
-              <div className="min-w-36">
-                <strong className="text-slate-800">{item.name}</strong>
-                <code className="ml-2 text-slate-500">{item.command}</code>
-              </div>
-              <span
-                className={cn(
-                  'rounded-full px-2 py-0.5',
-                  item.running
-                    ? 'bg-emerald-100 text-emerald-700'
-                    : 'bg-slate-100 text-slate-500'
-                )}
+      {!collapsed &&
+        (items.length === 0 ? (
+          <div className="px-4 py-8 text-center text-xs text-slate-500">
+            package.json 暂未声明脚本。
+          </div>
+        ) : (
+          <div className="divide-y divide-slate-100">
+            {items.map(item => (
+              <div
+                className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3 text-xs"
+                key={item.name}
               >
-                {item.running ? '运行中' : '未运行'}
-              </span>
-              <div className="ml-auto flex gap-2">
-                <button
-                  className="secondary-button gap-1"
-                  disabled={Boolean(busyScript)}
-                  onClick={event => {
-                    event.stopPropagation()
-                    void control(item.name, item.running ? 'stop' : 'run')
-                  }}
-                >
-                  {item.running ? (
-                    <X className="size-3.5" />
-                  ) : (
-                    <Play className="size-3.5" />
+                <div className="min-w-36">
+                  <strong className="text-slate-800">{item.name}</strong>
+                  <code className="ml-2 text-slate-500">{item.command}</code>
+                </div>
+                <span
+                  className={cn(
+                    'rounded-full px-2 py-0.5',
+                    item.running
+                      ? 'bg-emerald-100 text-emerald-700'
+                      : 'bg-slate-100 text-slate-500'
                   )}
-                  {item.running ? '停止' : '执行'}
-                </button>
-                <button
-                  className="text-button gap-1"
-                  disabled={Boolean(busyScript)}
-                  onClick={event => {
-                    event.stopPropagation()
-                    void openRecord(item.name)
-                  }}
                 >
-                  <ClipboardList className="size-3.5" />
-                  记录
-                </button>
-                <button
-                  className="text-button gap-1"
-                  disabled={Boolean(busyScript)}
-                  onClick={event => {
-                    event.stopPropagation()
-                    setEditing({
-                      previousName: item.name,
-                      name: item.name,
-                      command: item.command
-                    })
-                  }}
-                >
-                  <Pencil className="size-3.5" />
-                  编辑
-                </button>
+                  {item.running ? '运行中' : '未运行'}
+                </span>
+                <div className="ml-auto flex gap-2">
+                  <button
+                    className="secondary-button gap-1"
+                    disabled={Boolean(busyScript)}
+                    onClick={event => {
+                      event.stopPropagation()
+                      void control(item.name, item.running ? 'stop' : 'run')
+                    }}
+                  >
+                    {item.running ? (
+                      <X className="size-3.5" />
+                    ) : (
+                      <Play className="size-3.5" />
+                    )}
+                    {item.running ? '停止' : '执行'}
+                  </button>
+                  <button
+                    className="text-button gap-1"
+                    disabled={Boolean(busyScript)}
+                    onClick={event => {
+                      event.stopPropagation()
+                      void openRecord(item.name)
+                    }}
+                  >
+                    <ClipboardList className="size-3.5" />
+                    记录
+                  </button>
+                  <button
+                    className="text-button gap-1"
+                    disabled={Boolean(busyScript)}
+                    onClick={event => {
+                      event.stopPropagation()
+                      setEditing({
+                        previousName: item.name,
+                        name: item.name,
+                        command: item.command
+                      })
+                    }}
+                  >
+                    <Pencil className="size-3.5" />
+                    编辑
+                  </button>
+                </div>
               </div>
-            </div>
-          ))}
-        </div>
-      ))}
+            ))}
+          </div>
+        ))}
       <Modal
         open={Boolean(record)}
         onClose={() => setRecord(null)}
@@ -9615,7 +9645,9 @@ function ScriptControlCard({ root }: { root: string }) {
               value={editing?.command ?? ''}
               onChange={event =>
                 setEditing(current =>
-                  current ? { ...current, command: event.target.value } : current
+                  current
+                    ? { ...current, command: event.target.value }
+                    : current
                 )
               }
             />
@@ -9624,7 +9656,10 @@ function ScriptControlCard({ root }: { root: string }) {
             <Button variant="secondary" onClick={() => setEditing(null)}>
               取消
             </Button>
-            <Button loading={Boolean(busyScript)} onClick={() => void saveScript()}>
+            <Button
+              loading={Boolean(busyScript)}
+              onClick={() => void saveScript()}
+            >
               保存
             </Button>
           </footer>
@@ -9734,8 +9769,7 @@ function RuntimePanel({
     version: string
     scope: 'dependencies' | 'devDependencies'
   } | null>(null)
-  const [dependencyControlBusy, setDependencyControlBusy] =
-    useStoreState(false)
+  const [dependencyControlBusy, setDependencyControlBusy] = useStoreState(false)
   const [connectionConfig, setConnectionConfig] = useStoreState<{
     package: string
     fields: PackageConfigField[]
@@ -10101,11 +10135,13 @@ function RuntimePanel({
             </p>
           </header>
           <div className="grid grid-cols-3 gap-2">
-            {([
-              ['add', 'add'],
-              ['link', 'link'],
-              ['remove', 'remove']
-            ] as const).map(([mode, label]) => (
+            {(
+              [
+                ['add', 'add'],
+                ['link', 'link'],
+                ['remove', 'remove']
+              ] as const
+            ).map(([mode, label]) => (
               <button
                 className={cn(
                   'h-9 rounded-md border text-xs font-medium transition',
@@ -10134,7 +10170,11 @@ function RuntimePanel({
                   current ? { ...current, name: event.target.value } : current
                 )
               }
-              placeholder={dependencyControl?.mode === 'link' ? '如 @scope/package 或本地链接名' : '如 @alemonjs/onebot'}
+              placeholder={
+                dependencyControl?.mode === 'link'
+                  ? '如 @scope/package 或本地链接名'
+                  : '如 @alemonjs/onebot'
+              }
               autoFocus
             />
           </label>
@@ -10145,7 +10185,9 @@ function RuntimePanel({
               value={dependencyControl?.version ?? ''}
               onChange={event =>
                 setDependencyControl(current =>
-                  current ? { ...current, version: event.target.value } : current
+                  current
+                    ? { ...current, version: event.target.value }
+                    : current
                 )
               }
               placeholder="如 ^2.0.0 或 latest"
@@ -10174,7 +10216,10 @@ function RuntimePanel({
             ))}
           </div>
           <footer className="flex justify-end gap-2">
-            <Button variant="secondary" onClick={() => setDependencyControl(null)}>
+            <Button
+              variant="secondary"
+              onClick={() => setDependencyControl(null)}
+            >
               取消
             </Button>
             <Button
@@ -10961,7 +11006,241 @@ function ServiceWebviewWindow({
   )
 }
 
-function AppEmbed({
+function MiniBrowserWindow({
+  minimized,
+  requestedURL,
+  zIndex,
+  onClose,
+  onMinimize,
+  onActivate
+}: {
+  minimized: boolean
+  requestedURL: string
+  zIndex: number
+  onClose: () => void
+  onMinimize: () => void
+  onActivate: () => void
+}) {
+  const [query, setQuery] = useState('')
+  const [pageURL, setPageURL] = useState('')
+  const [frameKey, setFrameKey] = useState(0)
+  const [error, setError] = useState('')
+  const [history, setHistory] = useState<string[]>([])
+  const [historyIndex, setHistoryIndex] = useState(-1)
+  const lastRequestedURL = useRef('')
+  const navigate = (value = query) => {
+    const input = value.trim()
+    if (!input) return
+    try {
+      const isPortOnly = /^\d{1,5}$/.test(input)
+      const port = isPortOnly ? Number(input) : 0
+      if (isPortOnly && (port < 1 || port > 65535)) {
+        setError('端口号必须在 1 到 65535 之间。')
+        return
+      }
+      const hasScheme = /^[a-z][a-z\d+.-]*:/i.test(input)
+      const isLocalPath = input.startsWith('/')
+      const looksLikeAddress =
+        input.includes('.') || input.startsWith('localhost') || input.includes(':')
+      const isLoopbackAddress = /^(?:localhost|127(?:\.\d{1,3}){3}|0(?:\.\d{1,3}){3})(?::\d{1,5})?(?:[/?#].*)?$/i.test(
+        input
+      )
+      const next = port
+        ? new URL(`http://127.0.0.1:${port}`)
+        : isLocalPath
+          ? new URL(input, window.location.origin)
+        : hasScheme
+          ? new URL(input)
+          : looksLikeAddress
+            ? new URL(`${isLoopbackAddress ? 'http' : 'https'}://${input}`)
+            : new URL(
+                `https://html.duckduckgo.com/html/?q=${encodeURIComponent(input)}`
+              )
+      if (!['http:', 'https:'].includes(next.protocol)) {
+        setError('仅支持打开 HTTP 或 HTTPS 地址。')
+        return
+      }
+      setError('')
+      setQuery(next.href)
+      setPageURL(next.href)
+      setHistory(current => {
+        const nextHistory = current.slice(0, historyIndex + 1)
+        if (nextHistory.at(-1) !== next.href) nextHistory.push(next.href)
+        setHistoryIndex(nextHistory.length - 1)
+        return nextHistory
+      })
+      setFrameKey(value => value + 1)
+    } catch {
+      setError('请输入有效的网址或搜索内容。')
+    }
+  }
+  const navigateHistory = (delta: -1 | 1) => {
+    const nextIndex = historyIndex + delta
+    const nextURL = history[nextIndex]
+    if (!nextURL) return
+    setHistoryIndex(nextIndex)
+    setQuery(nextURL)
+    setPageURL(nextURL)
+    setError('')
+    setFrameKey(value => value + 1)
+  }
+  useEffect(() => {
+    if (!requestedURL || requestedURL === lastRequestedURL.current) return
+    lastRequestedURL.current = requestedURL
+    navigate(requestedURL)
+  }, [requestedURL])
+  return (
+    <DesktopWindow
+      id="mini-browser"
+      open
+      minimized={minimized}
+      title="浏览器"
+      subtitle={pageURL || '搜索与访问网页'}
+      icon={<Globe2 className="size-4 shrink-0 text-brand-600 dark:text-brand-200" />}
+      headerLeft={
+        pageURL ? (
+          <form
+            className="flex w-full items-center gap-2"
+            onSubmit={event => {
+              event.preventDefault()
+              navigate()
+            }}
+          >
+            <button
+              className="icon-button size-9 shrink-0 p-0"
+              type="button"
+              onClick={() => {
+                setError('')
+                setPageURL('')
+                setQuery('')
+              }}
+              aria-label="浏览器首页"
+              title="首页"
+            >
+              <Globe2 className="size-4" />
+            </button>
+            <button
+              className="icon-button size-8 shrink-0 p-0"
+              type="button"
+              disabled={historyIndex <= 0}
+              onClick={() => navigateHistory(-1)}
+              aria-label="后退"
+              title="后退"
+            >
+              <ArrowLeft className="size-4" />
+            </button>
+            <button
+              className="icon-button size-8 shrink-0 p-0"
+              type="button"
+              disabled={historyIndex >= history.length - 1}
+              onClick={() => navigateHistory(1)}
+              aria-label="前进"
+              title="前进"
+            >
+              <ArrowRight className="size-4" />
+            </button>
+            <button
+              className="icon-button size-8 shrink-0 p-0"
+              type="button"
+              onClick={() => setFrameKey(value => value + 1)}
+              aria-label="刷新"
+              title="刷新"
+            >
+              <RefreshCw className="size-4" />
+            </button>
+            <input
+              className="min-w-0 flex-1 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-800 outline-none placeholder:text-slate-400 focus:border-brand-600 focus:ring-2 focus:ring-brand-100 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100"
+              value={query}
+              onChange={event => setQuery(event.target.value)}
+              placeholder="输入网址或搜索内容"
+              aria-label="网址或搜索内容"
+              autoComplete="off"
+              spellCheck={false}
+            />
+            <button
+              className="icon-button size-9 shrink-0 p-0"
+              type="submit"
+              aria-label="前往"
+              title="前往"
+            >
+              <Search className="size-4" />
+            </button>
+          </form>
+        ) : undefined
+      }
+      onClose={onClose}
+      onMinimize={onMinimize}
+      zIndex={zIndex}
+      onActivate={onActivate}
+      initialPosition={{ left: 144, top: 96 }}
+      width={1020}
+      height={700}
+    >
+      <section className="mini-browser flex min-h-0 flex-1 flex-col bg-slate-50 dark:bg-slate-900">
+        {pageURL ? (
+          <>
+            {error && (
+              <p className="m-0 border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-700 dark:border-amber-900/70 dark:bg-amber-950/30 dark:text-amber-300">
+                {error}
+              </p>
+            )}
+          <iframe
+            className="min-h-0 flex-1 border-0 bg-white"
+            key={frameKey}
+            src={pageURL}
+            title="迷你浏览器页面"
+            referrerPolicy="no-referrer"
+          />
+        </>
+      ) : (
+        <div className="grid flex-1 place-items-center bg-white p-8 dark:bg-slate-900">
+          <form
+            className="grid w-full max-w-2xl gap-7"
+            onSubmit={event => {
+              event.preventDefault()
+              navigate()
+            }}
+          >
+            <img
+              className="mx-auto h-auto w-52 max-w-[62%] dark:brightness-125"
+              src={meLogo}
+              alt="Alemon"
+            />
+            <div className="flex items-center rounded-full border border-slate-300 bg-white px-4 shadow-sm transition-shadow focus-within:border-brand-500 focus-within:ring-4 focus-within:ring-brand-100 dark:border-slate-600 dark:bg-slate-800 dark:focus-within:ring-brand-900/40">
+              <Plus className="mr-3 size-5 shrink-0 text-slate-700 dark:text-slate-300" />
+              <input
+                className="h-12 min-w-0 flex-1 bg-transparent text-base text-slate-800 outline-none placeholder:text-slate-400 dark:text-slate-100"
+                value={query}
+                onChange={event => setQuery(event.target.value)}
+                placeholder="搜索、输入网址或端口号"
+                aria-label="搜索或输入网址"
+                autoComplete="off"
+                autoFocus
+                spellCheck={false}
+              />
+              <button
+                className="inline-flex size-8 shrink-0 items-center justify-center rounded-full text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-800 dark:text-slate-400 dark:hover:bg-slate-700 dark:hover:text-slate-100"
+                type="submit"
+                aria-label="搜索或前往网址"
+                title="搜索或前往网址"
+              >
+                <Search className="size-4" />
+              </button>
+            </div>
+            {error && (
+              <p className="m-0 text-center text-xs text-amber-700 dark:text-amber-300">
+                {error}
+              </p>
+            )}
+          </form>
+        </div>
+      )}
+      </section>
+    </DesktopWindow>
+  )
+}
+
+export function AppEmbed({
   root,
   onClose,
   onMinimize,
@@ -11233,6 +11512,7 @@ function ControlCard({
   buildMode,
   catalog,
   catalogTitle,
+  catalogLoading,
   developerMode,
   agentOpen,
   appLaunching,
@@ -11255,6 +11535,7 @@ function ControlCard({
   buildMode: 'manifest' | 'npm' | 'git'
   catalog: CatalogGroup[]
   catalogTitle: string
+  catalogLoading: boolean
   developerMode: boolean
   agentOpen: boolean
   appLaunching: boolean
@@ -11297,47 +11578,80 @@ function ControlCard({
         ? 'backpack'
         : section === 'runtime'
           ? 'runtime'
-        : 'config'
+          : 'config'
       : page
-  const subitems =
-    agentOpen
+  function subitemsFor(primary: Section | Page | null) {
+    return agentOpen
       ? []
-      : activePrimary === 'config'
+      : primary === 'config'
         ? developerMode
           ? [
+              { id: 'config', label: '机器人' },
               { id: 'npmrc', label: 'npm 源' },
               { id: 'env', label: '环境变量' }
             ]
-          : []
-        : activePrimary === 'build'
+          : [{ id: 'config', label: '机器人' }]
+        : primary === 'build'
           ? [
               { id: 'manifest', label: '包配置' },
               { id: 'git', label: 'GIT 发布' },
               { id: 'npm', label: 'NPM 发布' }
             ]
-          : activePrimary === 'plugins' ||
-              activePrimary === 'connections' ||
-              activePrimary === 'modules'
+          : primary === 'plugins' ||
+              primary === 'connections' ||
+              primary === 'modules'
             ? catalog.map(item => ({ id: item.title, label: item.title }))
             : []
+  }
+  const [navigationPrimary, setNavigationPrimary] = useState<
+    Section | Page | null
+  >(activePrimary)
   const [rootNavigationVisible, setRootNavigationVisible] = useState(false)
+  const [pendingCatalogPrimary, setPendingCatalogPrimary] = useState<
+    'plugins' | 'connections' | 'modules' | null
+  >(null)
   const previousPrimaryRef = useRef(activePrimary)
   useEffect(() => {
     if (previousPrimaryRef.current === activePrimary) return
     previousPrimaryRef.current = activePrimary
+    setNavigationPrimary(activePrimary)
     setRootNavigationVisible(false)
   }, [activePrimary])
-  const showingSubNavigation = subitems.length > 0 && !rootNavigationVisible
-  const primaryLabel =
-    directoryActions.find(item => item.id === activePrimary)?.label ?? '机器人'
-  const activeSecondary =
-    activePrimary === 'config'
-      ? section
-      : activePrimary === 'build'
-        ? buildMode
-        : catalogTitle
-  function selectPrimary(item: (typeof directoryActions)[number]) {
+  useEffect(() => {
+    if (!pendingCatalogPrimary || activePrimary !== pendingCatalogPrimary) return
+    if (catalogLoading) return
+    setPendingCatalogPrimary(null)
     setRootNavigationVisible(false)
+  }, [activePrimary, catalogLoading, pendingCatalogPrimary])
+  const currentNavigationPrimary = navigationPrimary ?? activePrimary
+  const subitems = subitemsFor(currentNavigationPrimary)
+  const showingSubNavigation =
+    subitems.length > 0 && !rootNavigationVisible && !pendingCatalogPrimary
+  const primaryLabel =
+    directoryActions.find(item => item.id === currentNavigationPrimary)
+      ?.label ?? '机器人'
+  const activeSecondary =
+    activePrimary !== currentNavigationPrimary
+      ? ''
+      : currentNavigationPrimary === 'config'
+        ? section
+        : currentNavigationPrimary === 'build'
+          ? buildMode
+          : catalogTitle
+  function selectPrimary(item: (typeof directoryActions)[number]) {
+    setNavigationPrimary(item.id)
+    setRootNavigationVisible(false)
+    if (
+      item.id === 'plugins' ||
+      item.id === 'connections' ||
+      item.id === 'modules'
+    ) {
+      setPendingCatalogPrimary(item.id)
+      setRootNavigationVisible(true)
+      onPage(item.id)
+      return
+    }
+    if (subitemsFor(item.id).length > 0) return
     if (item.kind === 'section') {
       onPage('robot')
       onSection(item.id as Section)
@@ -11346,13 +11660,22 @@ function ControlCard({
     onPage(item.id as Page)
   }
   function selectSecondary(id: string) {
-    if (activePrimary === 'config') {
+    if (currentNavigationPrimary === 'config') {
+      onPage('robot')
       onSection(id as Section)
       return
     }
-    if (activePrimary === 'build') {
+    if (currentNavigationPrimary === 'build') {
+      onPage('build')
       onBuildMode(id as 'manifest' | 'npm' | 'git')
       return
+    }
+    if (
+      currentNavigationPrimary === 'plugins' ||
+      currentNavigationPrimary === 'connections' ||
+      currentNavigationPrimary === 'modules'
+    ) {
+      onPage(currentNavigationPrimary)
     }
     onCatalog(id)
   }
@@ -11412,11 +11735,10 @@ function ControlCard({
                 aria-label={`返回机器人功能，当前为${primaryLabel}`}
               >
                 <ArrowLeft className="size-3.5" />
-                <span>返回</span>
+                <span className="min-w-0 truncate text-xs font-medium text-slate-500 dark:text-slate-400">
+                  {primaryLabel}
+                </span>
               </button>
-              <span className="min-w-0 truncate text-xs font-medium text-slate-500 dark:text-slate-400">
-                {primaryLabel}
-              </span>
             </div>
             <div
               className="control-secondary-nav control-secondary-page grid gap-0.5"
@@ -11460,6 +11782,12 @@ function ControlCard({
                     {item.icon}
                   </i>
                   <span className="min-w-0 flex-1">{item.label}</span>
+                  {pendingCatalogPrimary === item.id && (
+                    <Loader2
+                      className="size-3.5 shrink-0 animate-spin text-brand-600"
+                      aria-label="正在加载子菜单"
+                    />
+                  )}
                 </button>
               ))}
             {project && (
@@ -11903,7 +12231,8 @@ function ReadonlyConsole({
         if (item.serviceURL) onOpenService?.(item.serviceURL)
         return
       case 'copy-service-url':
-        if (item.serviceURL) void navigator.clipboard?.writeText(item.serviceURL)
+        if (item.serviceURL)
+          void navigator.clipboard?.writeText(item.serviceURL)
     }
   }
   const jumpToLatestForegroundLog = () => {
@@ -13207,11 +13536,7 @@ function OperationLog({
       minimized={minimized}
       title="操作日志"
       subtitle={
-        needsPermission
-          ? '需要访问授权'
-          : failed
-            ? '操作未完成'
-            : '操作已完成'
+        needsPermission ? '需要访问授权' : failed ? '操作未完成' : '操作已完成'
       }
       icon={
         failed ? (

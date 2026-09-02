@@ -246,7 +246,7 @@ The workspace paths also appear in the robot creation destination step (default 
 
 **Q14: I forgot the workbench admin password?**
 
-Reconfigure the account with `alx auth enable --account ... --password ... --confirm-password ...`; `alx auth status` shows the current state. In production, also restrict access with a firewall.
+When authentication is already enabled, use `alx auth reset-super-admin --account ... --password ... --confirm-password ... --yes` for emergency recovery. It immediately invalidates old sessions and disables other super administrators while preserving ordinary accounts, roles, and workbench data. `alx auth status` shows the current state. In production, also restrict access with a firewall.
 
 ### AI and MCP
 
