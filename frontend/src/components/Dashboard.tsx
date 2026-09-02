@@ -34,6 +34,7 @@ import {
 } from '../lib/foregroundLogInterpreter'
 import cn from 'classnames'
 import Markdown from 'markdown-to-jsx'
+import { load as loadYAML } from 'js-yaml'
 import { Terminal as XTerm } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
@@ -1087,6 +1088,7 @@ export function Dashboard({
   const [serviceWebviewMinimized, setServiceWebviewMinimized] =
     useStoreState(false)
   const [browserRequestedURL, setBrowserRequestedURL] = useStoreState('')
+  const [browserHomeVersion, setBrowserHomeVersion] = useStoreState(0)
   const [busy, setBusy] = useStoreState(false)
   const [catalogTitle, setCatalogTitle] = useStoreState('')
   const [catalogItem, setCatalogItem] = useStoreState<CatalogItem | null>(null)
@@ -1542,6 +1544,21 @@ export function Dashboard({
   const hasRobotConfig = useSelector(
     (state: RootState) => Boolean(root) && root in state.workspace.robotConfigs
   )
+  const masterAuthorizationIDs = useMemo(() => {
+    try {
+      const document = loadYAML(configContent)
+      if (!document || typeof document !== 'object' || Array.isArray(document))
+        return []
+      const values = (document as Record<string, unknown>).master_id
+      if (Array.isArray(values)) return values.map(String)
+      if (!values || typeof values !== 'object') return []
+      return Object.entries(values as Record<string, unknown>)
+        .filter(([, enabled]) => enabled === true)
+        .map(([id]) => id)
+    } catch {
+      return []
+    }
+  }, [configContent])
   const catalogKind =
     page === 'plugins'
       ? 'apps'
@@ -2537,7 +2554,8 @@ export function Dashboard({
     if (root) void validateRobot(root)
   }, [root, validateRobot])
   useEffect(() => {
-    if (!root || section !== 'config' || hasRobotConfig) return
+    if (!root || (section !== 'config' && !foregroundLogsOpen) || hasRobotConfig)
+      return
     void readRobotFile({ root, file: 'alemon.config.yaml' }, true)
       .unwrap()
       .then(result =>
@@ -2549,7 +2567,14 @@ export function Dashboard({
         )
       )
       .catch(() => dispatch(setRobotConfig({ root, content: '' })))
-  }, [dispatch, hasRobotConfig, readRobotFile, root, section])
+  }, [
+    dispatch,
+    foregroundLogsOpen,
+    hasRobotConfig,
+    readRobotFile,
+    root,
+    section
+  ])
   useEffect(() => {
     if (developerMode) return
     if (page === 'build') setPage('robot')
@@ -2722,6 +2747,38 @@ export function Dashboard({
     } catch (reason) {
       showOutput(operationErrorMessage(reason, '登录连接设置未保存。'), true)
       return false
+    }
+  }
+
+  async function setMasterAuthorization(userID: string, currentlyAuthorized: boolean) {
+    if (!root) return
+    try {
+      const result = await queueConfigSave(root, async () => {
+        const response = await fetch('/api/v1/robot/master', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            root,
+            userId: userID,
+            enabled: !currentlyAuthorized
+          })
+        })
+        const result = (await response.json()) as {
+          content?: string
+          error?: string
+          output?: string
+        }
+        if (!response.ok)
+          throw new Error(result.error || '主人权限更新失败。')
+        return result
+      })
+      dispatch(setRobotConfig({ root, content: result.content ?? '' }))
+      showOutput(
+        result.output ||
+          (currentlyAuthorized ? '已取消主人授权。' : '已授权为主人。')
+      )
+    } catch (reason) {
+      showOutput(operationErrorMessage(reason, '主人权限更新失败。'), true)
     }
   }
 
@@ -3003,9 +3060,16 @@ export function Dashboard({
     })
     setSystemWindowFeature(current => (current === feature ? null : current))
   }
-  function selectSystemFeature(nextFeature: SystemFeature) {
+  function selectSystemFeature(
+    nextFeature: SystemFeature,
+    resetBrowserHome = nextFeature === 'browser'
+  ) {
     closeTemporaryContentPage()
     setSystemFeature(null)
+    if (nextFeature === 'browser' && resetBrowserHome) {
+      setBrowserRequestedURL('')
+      setBrowserHomeVersion(version => version + 1)
+    }
     setSystemWindowFeature(nextFeature)
     setSystemWindows(current => ({
       ...current,
@@ -3016,7 +3080,7 @@ export function Dashboard({
   }
   function openMiniBrowser(url: string) {
     setBrowserRequestedURL(url)
-    selectSystemFeature('browser')
+    selectSystemFeature('browser', false)
   }
 
   const currentCatalog =
@@ -3994,6 +4058,10 @@ export function Dashboard({
             setSection('config')
           }}
           onOpenEnvironment={() => selectSystemFeature('environment')}
+          masterAuthorizationIDs={masterAuthorizationIDs}
+          onToggleMasterAuthorization={(userID, currentlyAuthorized) =>
+            void setMasterAuthorization(userID, currentlyAuthorized)
+          }
           onOpenService={url => {
             void (async () => {
               let src = url
@@ -4104,7 +4172,7 @@ export function Dashboard({
         if (feature === 'browser') {
           return (
             <MiniBrowserWindow
-              key={feature}
+              key={`${feature}-${browserHomeVersion}`}
               minimized={state.minimized}
               requestedURL={browserRequestedURL}
               zIndex={zIndex}
@@ -4650,6 +4718,8 @@ function GitCloneDialog({
   } | null>(null)
   const [targetError, setTargetError] = useStoreState('')
   const [authorizationOpen, setAuthorizationOpen] = useStoreState(false)
+  const [authorizationChecking, setAuthorizationChecking] = useStoreState(false)
+  const [authorizationError, setAuthorizationError] = useStoreState('')
   const [authorizationUsername, setAuthorizationUsername] = useStoreState('')
   const [authorizationToken, setAuthorizationToken] = useStoreState('')
   useEffect(() => {
@@ -4666,6 +4736,8 @@ function GitCloneDialog({
       setTarget(null)
       setTargetError('')
       setAuthorizationOpen(false)
+      setAuthorizationChecking(false)
+      setAuthorizationError('')
       setAuthorizationUsername('')
       setAuthorizationToken('')
     }
@@ -4684,6 +4756,8 @@ function GitCloneDialog({
     setTarget,
     setTargetError,
     setAuthorizationOpen,
+    setAuthorizationChecking,
+    setAuthorizationError,
     setAuthorizationToken,
     setAuthorizationUsername
   ])
@@ -4819,6 +4893,33 @@ function GitCloneDialog({
   if (!open) return null
   const usesSSH = /^(git@|ssh:\/\/)/.test(repository.trim())
   const submitClone = async (authorization?: GitHTTPSAuthorization) => {
+    if (!authorization && /^https:\/\//i.test(repository.trim())) {
+      setAuthorizationChecking(true)
+      setAuthorizationError('')
+      try {
+        const response = await fetch(
+          `/api/v1/robot/git-clone/auth-check?${new URLSearchParams({ repository: repository.trim() })}`
+        )
+        const data = (await response.json()) as {
+          authorizationRequired?: boolean
+          error?: string
+        }
+        if (!response.ok)
+          throw new Error(data.error || '无法检查仓库认证状态。')
+        if (data.authorizationRequired) {
+          setAuthorizationOpen(true)
+          setAuthorizationToken('')
+          return
+        }
+      } catch (reason) {
+        setAuthorizationError(
+          operationErrorMessage(reason, '无法检查仓库认证状态。')
+        )
+        return
+      } finally {
+        setAuthorizationChecking(false)
+      }
+    }
     const attempt = await onConfirm(
       repository.trim(),
       branch.trim(),
@@ -4897,6 +4998,11 @@ function GitCloneDialog({
                 autoFocus
                 placeholder="GitHub / Gitee 账号"
               />
+              {authorizationError && (
+                <small className="font-normal text-red-700">
+                  {authorizationError}
+                </small>
+              )}
             </label>
             <label className="grid gap-1 text-xs font-semibold text-slate-600">
               个人访问令牌
@@ -4926,7 +5032,7 @@ function GitCloneDialog({
               </button>
               <button
                 className="primary-button"
-                disabled={busy || !authorizationUsername.trim() || !authorizationToken}
+              disabled={busy || !authorizationUsername.trim() || !authorizationToken}
               >
                 {busy ? '正在授权并克隆…' : '授权并重试'}
               </button>
@@ -4951,7 +5057,7 @@ function GitCloneDialog({
                   : connection === 'ssh' && !sshKeys.length
                     ? 'SSH 未配置'
                     : connection === 'https'
-                      ? ''
+                      ? 'HTTPS 已选择'
                       : ''}
               </small>
             </header>
@@ -4995,6 +5101,7 @@ function GitCloneDialog({
                 onChange={event => {
                   const value = event.target.value
                   setRepository(value)
+                  setAuthorizationError('')
                   setBranch(mode === 'package' ? 'release' : '')
                   if (/^(git@|ssh:\/\/)/.test(value.trim()))
                     setConnection('ssh')
@@ -5013,6 +5120,11 @@ function GitCloneDialog({
                     : 'https://github.com/组织/机器人仓库.git'
                 }
               />
+              {authorizationError && (
+                <small className="font-normal text-red-700">
+                  {authorizationError}
+                </small>
+              )}
             </label>
             <div className="grid gap-3 sm:grid-cols-2">
               <label className="grid gap-1 text-xs font-semibold text-slate-600">
@@ -5141,6 +5253,7 @@ function GitCloneDialog({
             className="primary-button gap-1.5"
             disabled={
               busy ||
+              authorizationChecking ||
               ((connection === 'ssh' || usesSSH) &&
                 !sshLoading &&
                 !sshKeys.length) ||
@@ -5155,6 +5268,8 @@ function GitCloneDialog({
           >
             {busy
               ? '正在下载…'
+              : authorizationChecking
+                ? '正在检查认证…'
               : mode === 'package'
                 ? '克隆到背包'
                 : '克隆并添加'}
@@ -11145,6 +11260,10 @@ function MiniBrowserWindow({
   const [history, setHistory] = useState<string[]>([])
   const [historyIndex, setHistoryIndex] = useState(-1)
   const lastRequestedURL = useRef('')
+  const addressTextFor = (target: URL) =>
+    target.origin === window.location.origin
+      ? `${target.pathname}${target.search}${target.hash}` || '/'
+      : target.href
   const frameURLFor = (target: URL) => {
     if (target.origin === window.location.origin)
       return `${target.pathname}${target.search}${target.hash}`
@@ -11189,7 +11308,7 @@ function MiniBrowserWindow({
         return
       }
       setError('')
-      setQuery(next.href)
+      setQuery(addressTextFor(next))
       setPageURL(frameURLFor(next))
       setHistory(current => {
         const nextHistory = current.slice(0, historyIndex + 1)
@@ -11207,8 +11326,9 @@ function MiniBrowserWindow({
     const nextURL = history[nextIndex]
     if (!nextURL) return
     setHistoryIndex(nextIndex)
-    setQuery(nextURL)
-    setPageURL(frameURLFor(new URL(nextURL)))
+    const target = new URL(nextURL)
+    setQuery(addressTextFor(target))
+    setPageURL(frameURLFor(target))
     setError('')
     setFrameKey(value => value + 1)
   }
@@ -12061,6 +12181,8 @@ function ReadonlyConsole({
   onOpenRuntime,
   onOpenConfig,
   onOpenEnvironment,
+  masterAuthorizationIDs = [],
+  onToggleMasterAuthorization,
   onOpenService,
   zIndex,
   onActivate
@@ -12076,6 +12198,11 @@ function ReadonlyConsole({
   onOpenRuntime?: () => void
   onOpenConfig?: () => void
   onOpenEnvironment?: () => void
+  masterAuthorizationIDs?: string[]
+  onToggleMasterAuthorization?: (
+    userID: string,
+    currentlyAuthorized: boolean
+  ) => void
   onOpenService?: (url: string) => void
   zIndex: number
   onActivate: () => void
@@ -12329,17 +12456,21 @@ function ReadonlyConsole({
       body: JSON.stringify({ root, sessionId, cols, rows })
     })
   }
-  const foregroundLogActionLabel = (action: ForegroundLogAction) => {
-    if (!action) return ''
+  const foregroundLogActionLabel = (item: ForegroundLogItem) => {
+    if (!item.action) return ''
     const labels: Record<NonNullable<ForegroundLogAction>, string> = {
       'install-dependencies': '安装依赖',
       'open-runtime': '查看运行',
       'open-config': '查看配置',
       'open-environment': '环境检查',
       'open-service': '打开服务',
-      'copy-service-url': '复制地址'
+      'copy-service-url': '复制地址',
+      'manage-master':
+        item.masterUserID && masterAuthorizationIDs.includes(item.masterUserID)
+          ? '取消主人授权'
+          : '授权为主人'
     }
-    return labels[action]
+    return labels[item.action]
   }
   const runForegroundLogAction = (item: ForegroundLogItem) => {
     switch (item.action) {
@@ -12361,6 +12492,13 @@ function ReadonlyConsole({
       case 'copy-service-url':
         if (item.serviceURL)
           void navigator.clipboard?.writeText(item.serviceURL)
+        return
+      case 'manage-master':
+        if (!item.masterUserID) return
+        onToggleMasterAuthorization?.(
+          item.masterUserID,
+          masterAuthorizationIDs.includes(item.masterUserID)
+        )
     }
   }
   const jumpToLatestForegroundLog = () => {
@@ -12562,7 +12700,7 @@ function ReadonlyConsole({
                         <span>{item.title}</span>
                         {item.action && (
                           <button onClick={() => runForegroundLogAction(item)}>
-                            {foregroundLogActionLabel(item.action)}
+                            {foregroundLogActionLabel(item)}
                           </button>
                         )}
                       </div>
@@ -12743,6 +12881,7 @@ function PM2LogsPanel({
   const [liveLines, setLiveLines] = useStoreState<PM2AuditLine[]>([])
   const [deleteDialogOpen, setDeleteDialogOpen] = useStoreState(false)
   const [deleteBusy, setDeleteBusy] = useStoreState(false)
+  const [diagnosticsExpanded, setDiagnosticsExpanded] = useStoreState(true)
   const outputRef = useRef<HTMLDivElement>(null)
   const followLatest = useRef(true)
 
@@ -12801,6 +12940,7 @@ function PM2LogsPanel({
       setCommittedQuery('')
       setLive(true)
       setLiveLines([])
+      setDiagnosticsExpanded(true)
       void loadDays()
     }
   }, [
@@ -12808,6 +12948,7 @@ function PM2LogsPanel({
     open,
     setCommittedQuery,
     setDate,
+    setDiagnosticsExpanded,
     setLive,
     setLiveLines,
     setPage,
@@ -13162,44 +13303,61 @@ function PM2LogsPanel({
           </button>
         </div>
         {diagnostics.length > 0 && (
-          <div className="max-h-[190px] overflow-auto border-b border-[var(--theme-border-default)] bg-[var(--theme-surface-raised)]">
-            <div className="flex items-center gap-1.5 px-2.5 pb-[5px] pt-[7px] text-[0.72rem] text-[var(--theme-text-secondary)]">
+          <section className="pm2-audit-diagnostics">
+            <button
+              className="pm2-audit-diagnostics-header"
+              onClick={() => setDiagnosticsExpanded(value => !value)}
+              aria-expanded={diagnosticsExpanded}
+              aria-controls="pm2-log-diagnostics"
+            >
               <AlertTriangle className="size-3.5" />
               <strong>当前日志诊断</strong>
               <span className="ml-auto text-[var(--theme-text-muted)]">
                 {diagnostics.length} 项
               </span>
-            </div>
-            <div className="grid">
-              {diagnostics.map(item => (
-                <div
-                  key={item.code}
-                  className={cn(
-                    'grid gap-0.5 border-l-[3px] border-t border-t-[var(--theme-border-default)] px-2.5 py-[7px]',
-                    item.severity === 'error' && 'border-l-[#dc2626]',
-                    item.severity === 'warning' && 'border-l-[#d97706]',
-                    item.severity === 'info' && 'border-l-[#0284c7]'
-                  )}
-                >
-                  <div className="flex items-baseline gap-2">
-                    <strong className="text-[0.73rem] text-[var(--theme-text-primary)]">
-                      {item.title}
-                    </strong>
-                    <span className="ml-auto whitespace-nowrap text-[0.66rem] text-[var(--theme-text-muted)]">
-                      {item.count > 1 ? `${item.count} 次 · ` : ''}
-                      {item.lastSeen || '当前日志'}
-                    </span>
+              <ChevronRight
+                className={cn(
+                  'size-3.5 transition-transform',
+                  diagnosticsExpanded && 'rotate-90'
+                )}
+              />
+            </button>
+            {diagnosticsExpanded && (
+              <div
+                id="pm2-log-diagnostics"
+                className="pm2-audit-diagnostics-list"
+                aria-label="当前日志诊断详情"
+              >
+                {diagnostics.map(item => (
+                  <div
+                    key={item.code}
+                    className={cn(
+                      'grid gap-0.5 border-l-[3px] border-t border-t-[var(--theme-border-default)] px-2.5 py-[7px]',
+                      item.severity === 'error' && 'border-l-[#dc2626]',
+                      item.severity === 'warning' && 'border-l-[#d97706]',
+                      item.severity === 'info' && 'border-l-[#0284c7]'
+                    )}
+                  >
+                    <div className="flex items-baseline gap-2">
+                      <strong className="text-[0.73rem] text-[var(--theme-text-primary)]">
+                        {item.title}
+                      </strong>
+                      <span className="ml-auto whitespace-nowrap text-[0.66rem] text-[var(--theme-text-muted)]">
+                        {item.count > 1 ? `${item.count} 次 · ` : ''}
+                        {item.lastSeen || '当前日志'}
+                      </span>
+                    </div>
+                    <p className="m-0 text-[0.69rem] leading-[1.4] text-[var(--theme-text-secondary)]">
+                      {item.summary}
+                    </p>
+                    <small className="m-0 text-[0.66rem] leading-[1.4] text-[var(--theme-text-muted)]">
+                      {item.suggestion}
+                    </small>
                   </div>
-                  <p className="m-0 text-[0.69rem] leading-[1.4] text-[var(--theme-text-secondary)]">
-                    {item.summary}
-                  </p>
-                  <small className="m-0 text-[0.66rem] leading-[1.4] text-[var(--theme-text-muted)]">
-                    {item.suggestion}
-                  </small>
-                </div>
-              ))}
-            </div>
-          </div>
+                ))}
+              </div>
+            )}
+          </section>
         )}
         <div
           className="pm2-audit-body"

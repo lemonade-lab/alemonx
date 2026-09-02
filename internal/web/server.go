@@ -1098,6 +1098,7 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	mux.HandleFunc("/api/v1/services/", s.localServiceProxyHandler)
 	mux.HandleFunc("/api/v1/browser/http/", s.browserHTTPProxyHandler)
 	mux.HandleFunc("/api/v1/robot", s.robotHandler)
+	mux.HandleFunc("/api/v1/robot/master", s.robotMasterAuthorizationHandler)
 	mux.HandleFunc("/api/v1/robot/projects", s.robotProjectsHandler)
 	mux.HandleFunc("/api/v1/robot/validate", s.robotValidateHandler)
 	mux.HandleFunc("/api/v1/robot/console", s.robotConsoleHandler)
@@ -1159,6 +1160,7 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	mux.HandleFunc("/api/v1/robot/git", s.robotGitHandler)
 	mux.HandleFunc("/api/v1/robot/git/diff", s.robotGitDiffHandler)
 	mux.HandleFunc("/api/v1/robot/git-clone", s.robotGitCloneHandler)
+	mux.HandleFunc("/api/v1/robot/git-clone/auth-check", s.robotGitCloneAuthorizationHandler)
 	mux.HandleFunc("/api/v1/robot/git-clone/check", s.robotGitCloneCheckHandler)
 	mux.HandleFunc("/api/v1/robot/git-clone/branches", s.robotGitCloneBranchesHandler)
 	mux.HandleFunc("/api/v1/publish/npm/status", s.npmPublishStatusHandler)
@@ -4123,6 +4125,33 @@ func (s *server) robotHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
+func (s *server) robotMasterAuthorizationHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
+		return
+	}
+	var input struct {
+		Root    string `json:"root"`
+		UserID  string `json:"userId"`
+		Enabled bool   `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, "主人授权内容无法识别。")
+		return
+	}
+	result, err := s.robots.SetMasterAuthorization(input.Root, input.UserID, input.Enabled)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	current, err := s.robots.Read(input.Root, "alemon.config.yaml")
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "主人授权已保存，但无法刷新配置："+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"output": result.Output, "content": current.Output})
+}
+
 // robotProjectsHandler exposes only valid AlemonJS project directories below
 // the workbench's managed roots. System-plugin pages use it to offer a safe
 // target picker instead of accepting an arbitrary filesystem path.
@@ -6506,6 +6535,11 @@ func (s *server) browserHTTPProxyHandler(w http.ResponseWriter, r *http.Request)
 		requestPath = "/" + parts[1]
 	}
 	proxyPrefix := mount + parts[0] + "/"
+	if strings.TrimPrefix(requestPath, "/") == "__alx_browser_storage.js" {
+		browserStorageBootstrapHandler(w, r, parts[0])
+		return
+	}
+	cookiePrefix := browserHTTPCookiePrefix(parts[0])
 	proxy := &httputil.ReverseProxy{
 		Director: func(request *http.Request) {
 			request.URL.Scheme = target.Scheme
@@ -6516,9 +6550,21 @@ func (s *server) browserHTTPProxyHandler(w http.ResponseWriter, r *http.Request)
 			request.Host = target.Host
 			request.Header.Del("Authorization")
 			request.Header.Del("Cookie")
+			for _, cookie := range r.Cookies() {
+				if strings.HasPrefix(cookie.Name, cookiePrefix) {
+					request.AddCookie(&http.Cookie{Name: strings.TrimPrefix(cookie.Name, cookiePrefix), Value: cookie.Value})
+				}
+			}
+			// The embedded page is presented through the workbench origin, but the
+			// upstream must observe its own origin just as it would in a normal tab.
+			if request.Header.Get("Origin") != "" {
+				request.Header.Set("Origin", target.Scheme+"://"+target.Host)
+			}
 		},
 		ModifyResponse: func(response *http.Response) error {
 			modifyRobotAppResponse(response, target, proxyPrefix, r.URL.Path, r)
+			isolateBrowserHTTPCookies(response, cookiePrefix, proxyPrefix)
+			injectBrowserStorageBootstrap(response, proxyPrefix)
 			response.Header.Del("X-Frame-Options")
 			return nil
 		},
@@ -6527,6 +6573,71 @@ func (s *server) browserHTTPProxyHandler(w http.ResponseWriter, r *http.Request)
 		},
 	}
 	proxy.ServeHTTP(w, r)
+}
+
+func browserHTTPCookiePrefix(targetToken string) string {
+	return "alxbrowser_" + targetToken + "_"
+}
+
+// isolateBrowserHTTPCookies keeps every HTTP target's session separate from
+// both the workbench session and every other embedded site. The upstream sees
+// its original cookie names on the next request; only the browser-facing names
+// are prefixed and mounted below this one proxy target.
+func isolateBrowserHTTPCookies(response *http.Response, prefix, mount string) {
+	cookies := response.Cookies()
+	response.Header.Del("Set-Cookie")
+	for _, cookie := range cookies {
+		cookie.Name = prefix + cookie.Name
+		cookie.Path = mount
+		// The browser receives this cookie from the workbench host, never from
+		// the LAN target host. Retaining the target Domain would make browsers
+		// reject it instead of preserving the authenticated session.
+		cookie.Domain = ""
+		response.Header.Add("Set-Cookie", cookie.String())
+	}
+}
+
+func browserStorageBootstrapHandler(w http.ResponseWriter, r *http.Request, targetToken string) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		writeError(w, http.StatusMethodNotAllowed, "该浏览器资源不支持此请求方式。")
+		return
+	}
+	w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	_, _ = io.WriteString(w, browserStorageBootstrap(targetToken))
+}
+
+// browserStorageBootstrap provides each proxied HTTP origin with its own
+// localStorage/sessionStorage namespace even though the reverse proxy itself
+// lives under the workbench host. It executes before the target document's own
+// scripts, preserving the synchronous Storage API expected by login pages.
+func browserStorageBootstrap(targetToken string) string {
+	prefix := "__alx_browser_storage_" + targetToken + ":"
+	cookiePrefix := browserHTTPCookiePrefix(targetToken)
+	return `(function(){var prefix=` + strconv.Quote(prefix) + `,cookiePrefix=` + strconv.Quote(cookiePrefix) + `;function scoped(storage){return Object.freeze({get length(){var count=0;for(var i=0;i<storage.length;i++){var key=storage.key(i);if(key&&key.indexOf(prefix)===0)count++}return count},key:function(index){var count=0;for(var i=0;i<storage.length;i++){var key=storage.key(i);if(key&&key.indexOf(prefix)===0){if(count++===Number(index))return key.slice(prefix.length)}}return null},getItem:function(key){return storage.getItem(prefix+String(key))},setItem:function(key,value){storage.setItem(prefix+String(key),String(value))},removeItem:function(key){storage.removeItem(prefix+String(key))},clear:function(){for(var keys=[],i=0;i<storage.length;i++){var key=storage.key(i);if(key&&key.indexOf(prefix)===0)keys.push(key)}keys.forEach(function(key){storage.removeItem(key)})}})}function install(name){try{var value=scoped(window[name]);Object.defineProperty(window,name,{value:value,configurable:false,enumerable:true})}catch(_){}}function installCookieScope(){try{var descriptor=Object.getOwnPropertyDescriptor(Document.prototype,'cookie');if(!descriptor||!descriptor.get||!descriptor.set)return;Object.defineProperty(document,'cookie',{configurable:false,get:function(){return descriptor.get.call(document).split(/;s*/).filter(function(item){return item.indexOf(cookiePrefix)===0}).map(function(item){return item.slice(cookiePrefix.length)}).join('; ')},set:function(value){var first=String(value).indexOf('=');if(first<1)return;return descriptor.set.call(document,cookiePrefix+String(value))}})}catch(_){}}install('localStorage');install('sessionStorage');installCookieScope()})();`
+}
+
+func injectBrowserStorageBootstrap(response *http.Response, proxyPrefix string) {
+	if response.StatusCode != http.StatusOK || !strings.HasPrefix(response.Header.Get("Content-Type"), "text/html") || response.Header.Get("Content-Encoding") != "" {
+		return
+	}
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		return
+	}
+	_ = response.Body.Close()
+	script := `<script src="` + html.EscapeString(proxyPrefix+"__alx_browser_storage.js") + `"></script>`
+	document := string(body)
+	if head := regexp.MustCompile(`(?i)<head[^>]*>`).FindString(document); head != "" {
+		document = strings.Replace(document, head, head+script, 1)
+	} else if htmlTag := regexp.MustCompile(`(?i)<html[^>]*>`).FindString(document); htmlTag != "" {
+		document = strings.Replace(document, htmlTag, htmlTag+"<head>"+script+"</head>", 1)
+	} else {
+		document = script + document
+	}
+	response.Body = io.NopCloser(strings.NewReader(document))
+	response.ContentLength = int64(len(document))
+	response.Header.Set("Content-Length", strconv.Itoa(len(document)))
 }
 
 // robotTestHandler reverse-proxies the robot's CBP/sandbox WebSocket service
@@ -7703,6 +7814,19 @@ func (s *server) robotGitCloneHandler(w http.ResponseWriter, r *http.Request) {
 		s.updateOperation(created.ID, 100, result.Output, "", true)
 	}()
 	writeJSON(w, http.StatusAccepted, created)
+}
+
+func (s *server) robotGitCloneAuthorizationHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
+		return
+	}
+	required, err := robot.CloneAuthorizationRequired(r.URL.Query().Get("repository"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"authorizationRequired": required})
 }
 
 func (s *server) updateOperation(id string, progress int, output, failure string, finished bool) {

@@ -29,6 +29,21 @@ func TestHTTPSAuthorizationOnlyAllowsOfficialHTTPSClone(t *testing.T) {
 	}
 }
 
+func TestHTTPSAuthorizationErrorDetection(t *testing.T) {
+	for _, message := range []string{
+		"fatal: could not read Username for 'https://github.com': terminal prompts disabled",
+		"remote: HTTP Basic: Access denied",
+		"fatal: Authentication failed for 'https://gitee.com/acme/private.git'",
+	} {
+		if !isHTTPSAuthorizationError(message) {
+			t.Fatalf("authorization error was not detected: %q", message)
+		}
+	}
+	if isHTTPSAuthorizationError("fatal: unable to access: Could not resolve host") {
+		t.Fatal("network failure must not be classified as authorization")
+	}
+}
+
 func TestApplyHTTPSAuthorizationUsesAskPassEnvironment(t *testing.T) {
 	command := exec.Command("git", "clone", "https://github.com/acme/private.git")
 	cleanup, err := applyHTTPSAuthorization(command, HTTPSAuthorization{

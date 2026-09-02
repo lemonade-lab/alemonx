@@ -1773,10 +1773,12 @@ func TestModifyRobotAppResponseRemovesUpstreamFrameRestrictions(t *testing.T) {
 }
 
 func TestBrowserHTTPProxyHandlerForwardsHTTPWithoutManagementCredentials(t *testing.T) {
-	var authorization, cookie string
+	var authorization, cookie, origin string
 	upstream := newIPv4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		authorization = r.Header.Get("Authorization")
 		cookie = r.Header.Get("Cookie")
+		origin = r.Header.Get("Origin")
+		http.SetCookie(w, &http.Cookie{Name: "session", Value: "upstream", Path: "/", HttpOnly: true})
 		_, _ = w.Write([]byte(r.URL.Path + "?" + r.URL.RawQuery))
 	}))
 	defer upstream.Close()
@@ -1788,13 +1790,36 @@ func TestBrowserHTTPProxyHandlerForwardsHTTPWithoutManagementCredentials(t *test
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/browser/http/"+token+"/status?ready=1", nil)
 	request.Header.Set("Authorization", "Bearer management")
-	request.Header.Set("Cookie", "management=session")
+	request.Header.Set("Origin", "http://workbench.test")
+	request.AddCookie(&http.Cookie{Name: "management", Value: "session"})
+	request.AddCookie(&http.Cookie{Name: browserHTTPCookiePrefix(token) + "known", Value: "visitor"})
 	(&server{}).browserHTTPProxyHandler(recorder, request)
 	if recorder.Code != http.StatusOK || recorder.Body.String() != "/status?ready=1" {
 		t.Fatalf("proxy response = %d %q", recorder.Code, recorder.Body.String())
 	}
-	if authorization != "" || cookie != "" {
+	if authorization != "" || cookie != "known=visitor" {
 		t.Fatalf("management credentials leaked: authorization=%q cookie=%q", authorization, cookie)
+	}
+	if origin != target.Scheme+"://"+target.Host {
+		t.Fatalf("upstream origin = %q", origin)
+	}
+	cookies := recorder.Result().Cookies()
+	if len(cookies) != 1 || cookies[0].Name != browserHTTPCookiePrefix(token)+"session" || cookies[0].Path != "/api/v1/browser/http/"+token+"/" || !cookies[0].HttpOnly {
+		t.Fatalf("isolated cookie = %#v", cookies)
+	}
+}
+
+func TestBrowserHTTPProxyStorageBootstrapUsesTargetNamespace(t *testing.T) {
+	token := base64.RawURLEncoding.EncodeToString([]byte("http://10.0.6.2:50831"))
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/browser/http/"+token+"/__alx_browser_storage.js", nil)
+	(&server{}).browserHTTPProxyHandler(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("storage bootstrap = %d %s", recorder.Code, recorder.Body.String())
+	}
+	body := recorder.Body.String()
+	if !strings.Contains(body, "__alx_browser_storage_"+token+":") || !strings.Contains(body, "install('localStorage')") || !strings.Contains(body, "install('sessionStorage')") || !strings.Contains(body, "installCookieScope") || !strings.Contains(body, browserHTTPCookiePrefix(token)) {
+		t.Fatalf("storage bootstrap missing namespace or storage shims: %q", body)
 	}
 }
 

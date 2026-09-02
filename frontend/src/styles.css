@@ -9033,6 +9033,35 @@ button > svg,
   color: var(--theme-accent-text);
   font-weight: 700;
 }
+.pm2-audit-diagnostics {
+  background: var(--theme-surface-raised);
+  border-bottom: 1px solid var(--theme-border-default);
+  min-height: 0;
+}
+.pm2-audit-diagnostics-header {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  color: var(--theme-text-secondary);
+  cursor: pointer;
+  display: flex;
+  font-size: 0.72rem;
+  gap: 6px;
+  padding: 7px 10px 5px;
+  text-align: left;
+  width: 100%;
+}
+.pm2-audit-diagnostics-header:hover {
+  background: var(--theme-surface-hover);
+  color: var(--theme-text-strong);
+}
+.pm2-audit-diagnostics-list {
+  max-height: 190px;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
 .pm2-audit-body {
   background: #020617;
   color: #a7f3d0;
@@ -9043,7 +9072,9 @@ button > svg,
     monospace;
   min-height: 0;
   overflow: auto;
+  overscroll-behavior: contain;
   padding: 10px 12px 14px;
+  scrollbar-gutter: stable;
 }
 .pm2-audit-line {
   white-space: pre-wrap;

@@ -18,6 +18,7 @@ export type ForegroundLogAction =
   | 'open-environment'
   | 'open-service'
   | 'copy-service-url'
+  | 'manage-master'
   | null
 
 export type ForegroundLogItem = {
@@ -30,6 +31,7 @@ export type ForegroundLogItem = {
   domain: ForegroundLogDomain
   action: ForegroundLogAction
   serviceURL: string | null
+  masterUserID: string | null
 }
 
 const MAX_CONTENT_CHARS = 48 * 1024
@@ -63,6 +65,8 @@ const NOISE_PATTERN =
 const URL_PATTERN = /https?:\/\/[^\s'"<>]+/gi
 const BARE_LOCAL_SERVICE_PATTERN =
   /(?:localhost|127\.0\.0\.1|0\.0\.0\.0|(?:10|192\.168)\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}):\d{2,5}(?:\/[^\s'"<>]*)?/i
+const MASTER_COMMAND_PATTERN = /\[MessageText:[^\]\r\n]*\/我是主人[^\]\r\n]*\]/
+const MESSAGE_USER_ID_PATTERN = /\[UserId:([^\]\r\n]+)\]/i
 
 function trimContent(value: string) {
   if (value.length <= MAX_CONTENT_CHARS) return value
@@ -146,17 +150,28 @@ function localService(url: string | null) {
   }
 }
 
+function masterCommandUserID(raw: string) {
+  if (!MASTER_COMMAND_PATTERN.test(raw)) return null
+  const userID = raw.match(MESSAGE_USER_ID_PATTERN)?.[1]?.trim() ?? ''
+  return /^[A-Za-z0-9._:-]{1,160}$/.test(userID) ? userID : null
+}
+
 function classify(raw: string, index: number): ForegroundLogItem {
   const firstLine = raw.split(/\r?\n/, 1)[0] ?? raw
   const text = sanitizeSimpleText(firstLine)
   const url = serviceURL(raw)
   const common = stripLogPrefix(firstLine)
+  const masterUserID = masterCommandUserID(raw)
   let domain: ForegroundLogDomain = 'unknown'
   let level: ForegroundLogLevel = 'info'
   let title = '运行输出'
   let action: ForegroundLogAction = null
 
-  if (DEPENDENCY_PATTERN.test(raw)) {
+  if (masterUserID) {
+    domain = 'login'
+    title = '主人权限请求'
+    action = 'manage-master'
+  } else if (DEPENDENCY_PATTERN.test(raw)) {
     domain = 'dependency'
     level = 'error'
     title = '缺少运行依赖'
@@ -217,7 +232,8 @@ function classify(raw: string, index: number): ForegroundLogItem {
     level,
     domain,
     action,
-    serviceURL: url
+    serviceURL: url,
+    masterUserID
   }
 }
 

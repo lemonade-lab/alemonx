@@ -85,6 +85,32 @@ func ValidateCloneRepository(repository string) error {
 	return requireSSHKey(parsed)
 }
 
+// CloneAuthorizationRequired probes an HTTPS remote without creating a local
+// checkout. It reports only whether Git needs credentials; connectivity and
+// URL errors remain ordinary errors instead of being mislabelled as private.
+func CloneAuthorizationRequired(repository string) (bool, error) {
+	parsed, _, err := cloneRepositoryURL(repository)
+	if err != nil {
+		return false, err
+	}
+	if err := requireSSHKey(parsed); err != nil || parsed.Scheme != "https" {
+		return false, err
+	}
+	remote := parsed.String()
+	output, err := runWithEnv(os.TempDir(), map[string]string{"GIT_TERMINAL_PROMPT": "0"}, "git", "ls-remote", "--heads", remote)
+	if err == nil {
+		return false, nil
+	}
+	if isHTTPSAuthorizationError(output + "\n" + err.Error()) {
+		return true, nil
+	}
+	return false, fmt.Errorf("无法连接远程仓库：%w", err)
+}
+
+func isHTTPSAuthorizationError(message string) bool {
+	return regexp.MustCompile(`(?i)could not read (?:username|password)|terminal prompts disabled|authentication failed|http basic: access denied|authentication is required`).MatchString(message)
+}
+
 // CloneBranches silently reads remote heads for a completed repository URL.
 // It is read-only and does not create any local directory.
 func CloneBranches(repository string) ([]string, string, error) {
