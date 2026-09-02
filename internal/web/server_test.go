@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -241,6 +242,35 @@ func TestDirectoryLocationsReplacesWorkspaceEntry(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("workspace path appears %d times in %#v", count, items)
+	}
+}
+
+func TestCurrentDirectoryRootsKeepsHomeSeparateFromWorkspace(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		t.Skip("current environment has no user home directory")
+	}
+	t.Setenv("ALEMONJS_SETUP_ROOTS", workspaceRoot)
+	s := &server{
+		directoryRoots: []string{workspaceRoot},
+		workspace:      workspace.Layout{Root: workspaceRoot},
+	}
+	locations := s.directoryLocations(s.currentDirectoryRoots())
+	var homePath, workspacePath string
+	for _, item := range locations {
+		switch item["kind"] {
+		case "home":
+			homePath = item["path"]
+		case "workspace":
+			workspacePath = item["path"]
+		}
+	}
+	if filepath.Clean(homePath) != filepath.Clean(home) {
+		t.Fatalf("home location = %q, want %q", homePath, home)
+	}
+	if filepath.Clean(workspacePath) != filepath.Clean(workspaceRoot) {
+		t.Fatalf("workspace location = %q, want %q", workspacePath, workspaceRoot)
 	}
 }
 
@@ -1739,6 +1769,32 @@ func TestModifyRobotAppResponseRemovesUpstreamFrameRestrictions(t *testing.T) {
 	}
 	if !strings.Contains(response.Header.Get("Content-Security-Policy"), "default-src") {
 		t.Fatalf("CSP directives were not preserved: %q", response.Header.Get("Content-Security-Policy"))
+	}
+}
+
+func TestBrowserHTTPProxyHandlerForwardsHTTPWithoutManagementCredentials(t *testing.T) {
+	var authorization, cookie string
+	upstream := newIPv4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authorization = r.Header.Get("Authorization")
+		cookie = r.Header.Get("Cookie")
+		_, _ = w.Write([]byte(r.URL.Path + "?" + r.URL.RawQuery))
+	}))
+	defer upstream.Close()
+	target, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := base64.RawURLEncoding.EncodeToString([]byte(target.Scheme + "://" + target.Host))
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/browser/http/"+token+"/status?ready=1", nil)
+	request.Header.Set("Authorization", "Bearer management")
+	request.Header.Set("Cookie", "management=session")
+	(&server{}).browserHTTPProxyHandler(recorder, request)
+	if recorder.Code != http.StatusOK || recorder.Body.String() != "/status?ready=1" {
+		t.Fatalf("proxy response = %d %q", recorder.Code, recorder.Body.String())
+	}
+	if authorization != "" || cookie != "" {
+		t.Fatalf("management credentials leaked: authorization=%q cookie=%q", authorization, cookie)
 	}
 }
 

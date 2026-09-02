@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -32,6 +33,29 @@ type CloneTarget struct {
 type CloneProgress struct {
 	Percent int
 	Detail  string
+}
+
+// HTTPSAuthorization is transient HTTPS Basic authentication for one clone.
+// It is intentionally not persisted in Git configuration or repository URLs.
+type HTTPSAuthorization struct {
+	Username string
+	Token    string
+}
+
+func (authorization HTTPSAuthorization) validFor(repository *url.URL, mirror string) error {
+	if authorization.Username == "" && authorization.Token == "" {
+		return nil
+	}
+	if repository.Scheme != "https" {
+		return errors.New("仅 HTTPS 仓库可以使用账号授权")
+	}
+	if mirror != "" && mirror != "official" {
+		return errors.New("私有 HTTPS 仓库请使用 Git 官方来源，不能通过加速镜像授权")
+	}
+	if strings.TrimSpace(authorization.Username) == "" || strings.TrimSpace(authorization.Token) == "" {
+		return errors.New("请同时填写代码平台账号和个人访问令牌")
+	}
+	return nil
 }
 
 func cloneRepositoryURL(repository string) (*url.URL, string, error) {
@@ -140,6 +164,12 @@ func LocalPackageCloneDestination(root, repository, name string) (CloneTarget, e
 // robot's backpack. It creates the packages directory when this is the first
 // local package, but never accepts a caller-controlled destination.
 func CloneLocalPackageWithProgress(root, repository, branch, name, mirror string, depth int, onProgress func(CloneProgress)) (Result, error) {
+	return CloneLocalPackageWithAuthorization(root, repository, branch, name, mirror, depth, HTTPSAuthorization{}, onProgress)
+}
+
+// CloneLocalPackageWithAuthorization clones a package with ephemeral HTTPS
+// credentials when the repository is private.
+func CloneLocalPackageWithAuthorization(root, repository, branch, name, mirror string, depth int, authorization HTTPSAuthorization, onProgress func(CloneProgress)) (Result, error) {
 	project, err := projectPath(root)
 	if err != nil {
 		return Result{}, err
@@ -163,7 +193,7 @@ func CloneLocalPackageWithProgress(root, repository, branch, name, mirror string
 		}
 		return Result{}, errors.New("packages 必须是普通目录")
 	}
-	return CloneRepositoryWithProgress(destination, repository, branch, name, mirror, depth, onProgress)
+	return CloneRepositoryWithAuthorization(destination, repository, branch, name, mirror, depth, authorization, onProgress)
 }
 
 // CloneRepository clones a remote robot repository into an existing parent
@@ -178,11 +208,20 @@ func CloneRepository(destination, repository, branch, name, mirror string, depth
 // object compression (0–5%), receiving objects (5–90%), and resolving deltas
 // (90–99%). 100% is only emitted after Git exits successfully.
 func CloneRepositoryWithProgress(destination, repository, branch, name, mirror string, depth int, onProgress func(CloneProgress)) (Result, error) {
+	return CloneRepositoryWithAuthorization(destination, repository, branch, name, mirror, depth, HTTPSAuthorization{}, onProgress)
+}
+
+// CloneRepositoryWithAuthorization clones a repository while keeping HTTPS
+// credentials out of URLs, config files, and command output.
+func CloneRepositoryWithAuthorization(destination, repository, branch, name, mirror string, depth int, authorization HTTPSAuthorization, onProgress func(CloneProgress)) (Result, error) {
 	parsed, _, err := cloneRepositoryURL(repository)
 	if err != nil {
 		return Result{}, err
 	}
 	if err := requireSSHKey(parsed); err != nil {
+		return Result{}, err
+	}
+	if err := authorization.validFor(parsed, mirror); err != nil {
 		return Result{}, err
 	}
 	branch = strings.TrimSpace(branch)
@@ -231,7 +270,7 @@ func CloneRepositoryWithProgress(destination, repository, branch, name, mirror s
 		args = append(args, "--branch", branch)
 	}
 	args = append(args, remote, target.Path)
-	output, err := runCloneWithProgress(destination, onProgress, args...)
+	output, err := runCloneWithProgress(destination, onProgress, authorization, args...)
 	if err != nil {
 		return Result{Path: target.Path, Output: output}, fmt.Errorf("克隆仓库失败：%w", err)
 	}
@@ -281,7 +320,7 @@ func cloneProgressFromGitOutput(value string) (CloneProgress, bool) {
 	}
 }
 
-func runCloneWithProgress(root string, onProgress func(CloneProgress), args ...string) (string, error) {
+func runCloneWithProgress(root string, onProgress func(CloneProgress), authorization HTTPSAuthorization, args ...string) (string, error) {
 	// Clone-specific temporary Git config is placed before the clone subcommand,
 	// so infer the timeout from the operation rather than args[0].
 	timeout := commandTimeout("git", "clone")
@@ -293,12 +332,17 @@ func runCloneWithProgress(root string, onProgress func(CloneProgress), args ...s
 	}
 	command := exec.CommandContext(ctx, git, args...)
 	command.Dir = root
+	cleanupAuthorization, err := applyHTTPSAuthorization(command, authorization)
+	if err != nil {
+		return "", err
+	}
+	defer cleanupAuthorization()
 	HideWindow(command)
 	var output bytes.Buffer
 	progressOutput := &cloneProgressWriter{output: &output, onProgress: onProgress}
 	command.Stdout = progressOutput
 	command.Stderr = progressOutput
-	err := command.Run()
+	err = command.Run()
 	text := strings.TrimSpace(output.String())
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return text, fmt.Errorf("操作超时（%s）；请检查网络、登录状态或代理后重试", timeout.Round(time.Second))
@@ -316,6 +360,57 @@ func runCloneWithProgress(root string, onProgress func(CloneProgress), args ...s
 		return text, fmt.Errorf("执行 git 失败：%w", err)
 	}
 	return text, nil
+}
+
+func applyHTTPSAuthorization(command *exec.Cmd, authorization HTTPSAuthorization) (func(), error) {
+	if authorization.Username == "" && authorization.Token == "" {
+		return func() {}, nil
+	}
+	directory, err := os.MkdirTemp("", "alemonx-git-askpass-")
+	if err != nil {
+		return nil, fmt.Errorf("无法准备 HTTPS 授权：%w", err)
+	}
+	cleanup := func() { _ = os.RemoveAll(directory) }
+	script := filepath.Join(directory, "askpass")
+	content := "#!/bin/sh\ncase \"$1\" in\n  *Username*) printf '%s\\n' \"$ALEMONX_GIT_USERNAME\" ;;\n  *) printf '%s\\n' \"$ALEMONX_GIT_TOKEN\" ;;\nesac\n"
+	if runtime.GOOS == "windows" {
+		script += ".cmd"
+		content = "@echo off\r\necho %1 | findstr /I \"Username\" >nul\r\nif not errorlevel 1 (echo %ALEMONX_GIT_USERNAME%) else (echo %ALEMONX_GIT_TOKEN%)\r\n"
+	}
+	if err := os.WriteFile(script, []byte(content), 0700); err != nil {
+		cleanup()
+		return nil, fmt.Errorf("无法准备 HTTPS 授权：%w", err)
+	}
+	setCloneEnvironment(command,
+		"GIT_ASKPASS="+script,
+		"GIT_TERMINAL_PROMPT=0",
+		"ALEMONX_GIT_USERNAME="+authorization.Username,
+		"ALEMONX_GIT_TOKEN="+authorization.Token,
+	)
+	return cleanup, nil
+}
+
+func setCloneEnvironment(command *exec.Cmd, values ...string) {
+	environment := append([]string(nil), os.Environ()...)
+	for _, value := range values {
+		key, _, found := strings.Cut(value, "=")
+		if !found {
+			continue
+		}
+		prefix := key + "="
+		updated := false
+		for index := range environment {
+			if strings.HasPrefix(environment[index], prefix) {
+				environment[index] = value
+				updated = true
+				break
+			}
+		}
+		if !updated {
+			environment = append(environment, value)
+		}
+	}
+	command.Env = environment
 }
 
 type cloneProgressWriter struct {

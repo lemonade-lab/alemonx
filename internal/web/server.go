@@ -1096,6 +1096,7 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	mux.HandleFunc("/api/v1/services", s.localServicesHandler)
 	mux.HandleFunc("/api/v1/services/dynamic/", s.dynamicLocalServiceProxyHandler)
 	mux.HandleFunc("/api/v1/services/", s.localServiceProxyHandler)
+	mux.HandleFunc("/api/v1/browser/http/", s.browserHTTPProxyHandler)
 	mux.HandleFunc("/api/v1/robot", s.robotHandler)
 	mux.HandleFunc("/api/v1/robot/projects", s.robotProjectsHandler)
 	mux.HandleFunc("/api/v1/robot/validate", s.robotValidateHandler)
@@ -3265,9 +3266,15 @@ func directoryLocation(root, home, goos string) (string, string) {
 }
 
 func (s *server) currentDirectoryRoots() []string {
-	roots := s.directoryRoots
+	roots := append([]string(nil), s.directoryRoots...)
 	if os.Getenv("ALEMONJS_SETUP_ROOTS") == "" {
 		roots = managedDirectoryRoots()
+	}
+	// The Finder's 主目录 is the runtime user's HOME, not the configured
+	// AlemonX workspace. ALEMONJS_SETUP_ROOTS can narrow deployment roots, but
+	// must not make the sidebar relabel the workspace as a user's home folder.
+	if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
+		roots = appendDirectoryRoot(roots, home)
 	}
 	if s.workspace.Root != "" {
 		clean := filepath.Clean(s.workspace.Root)
@@ -6468,6 +6475,60 @@ func (s *server) robotAppHandler(w http.ResponseWriter, r *http.Request) {
 	proxy.ServeHTTP(w, r)
 }
 
+// browserHTTPProxyHandler serves plain HTTP pages through the management
+// origin. HTTPS pages remain direct in the mini browser; proxying HTTP keeps
+// loopback and LAN services reachable from embedded WebViews while preserving
+// their relative assets and navigation under one same-origin mount.
+func (s *server) browserHTTPProxyHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodPost && r.Method != http.MethodPut && r.Method != http.MethodPatch && r.Method != http.MethodDelete {
+		writeError(w, http.StatusMethodNotAllowed, "该浏览器请求方式暂不支持。")
+		return
+	}
+	const mount = "/api/v1/browser/http/"
+	rest := strings.TrimPrefix(r.URL.Path, mount)
+	parts := strings.SplitN(rest, "/", 2)
+	if len(parts) == 0 || parts[0] == "" {
+		writeError(w, http.StatusBadRequest, "缺少 HTTP 浏览地址。")
+		return
+	}
+	rawTarget, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "HTTP 浏览地址无效。")
+		return
+	}
+	target, err := url.Parse(string(rawTarget))
+	if err != nil || target.Scheme != "http" || target.Host == "" || target.User != nil {
+		writeError(w, http.StatusBadRequest, "仅支持无凭据的 HTTP 浏览地址。")
+		return
+	}
+	requestPath := "/"
+	if len(parts) == 2 && parts[1] != "" {
+		requestPath = "/" + parts[1]
+	}
+	proxyPrefix := mount + parts[0] + "/"
+	proxy := &httputil.ReverseProxy{
+		Director: func(request *http.Request) {
+			request.URL.Scheme = target.Scheme
+			request.URL.Host = target.Host
+			request.URL.Path = requestPath
+			request.URL.RawPath = ""
+			request.URL.RawQuery = r.URL.RawQuery
+			request.Host = target.Host
+			request.Header.Del("Authorization")
+			request.Header.Del("Cookie")
+		},
+		ModifyResponse: func(response *http.Response) error {
+			modifyRobotAppResponse(response, target, proxyPrefix, r.URL.Path, r)
+			response.Header.Del("X-Frame-Options")
+			return nil
+		},
+		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, _ error) {
+			writeError(w, http.StatusBadGateway, "HTTP 服务无法连接。")
+		},
+	}
+	proxy.ServeHTTP(w, r)
+}
+
 // robotTestHandler reverse-proxies the robot's CBP/sandbox WebSocket service
 // (the testone endpoint on the robot's top-level port) so the migrated test
 // center connects to the workbench origin instead of opening a different port
@@ -7595,12 +7656,16 @@ func (s *server) robotGitCloneHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var input struct {
-		Destination string `json:"destination"`
-		Repository  string `json:"repository"`
-		Branch      string `json:"branch"`
-		Name        string `json:"name"`
-		Mirror      string `json:"mirror"`
-		Depth       int    `json:"depth"`
+		Destination   string `json:"destination"`
+		Repository    string `json:"repository"`
+		Branch        string `json:"branch"`
+		Name          string `json:"name"`
+		Mirror        string `json:"mirror"`
+		Depth         int    `json:"depth"`
+		Authorization struct {
+			Username string `json:"username"`
+			Token    string `json:"token"`
+		} `json:"authorization"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 		writeError(w, http.StatusBadRequest, "Git 信息无法识别。")
@@ -7627,7 +7692,8 @@ func (s *server) robotGitCloneHandler(w http.ResponseWriter, r *http.Request) {
 	created := operationTask{ID: "clone-" + time.Now().Format("20060102150405.000000000"), Root: destination, Path: target.Path, Action: "git-clone", Status: "running", Output: "正在启动 Git…", Progress: 0, CreatedAt: time.Now()}
 	s.addOperation(created)
 	go func() {
-		result, err := robot.CloneRepositoryWithProgress(destination, input.Repository, input.Branch, input.Name, input.Mirror, input.Depth, func(progress robot.CloneProgress) {
+		authorization := robot.HTTPSAuthorization{Username: strings.TrimSpace(input.Authorization.Username), Token: strings.TrimSpace(input.Authorization.Token)}
+		result, err := robot.CloneRepositoryWithAuthorization(destination, input.Repository, input.Branch, input.Name, input.Mirror, input.Depth, authorization, func(progress robot.CloneProgress) {
 			s.updateOperation(created.ID, progress.Percent, progress.Detail, "", false)
 		})
 		if err != nil {
@@ -7743,12 +7809,16 @@ func (s *server) robotPackageGitCloneHandler(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	var input struct {
-		Root       string `json:"root"`
-		Repository string `json:"repository"`
-		Branch     string `json:"branch"`
-		Name       string `json:"name"`
-		Mirror     string `json:"mirror"`
-		Depth      int    `json:"depth"`
+		Root          string `json:"root"`
+		Repository    string `json:"repository"`
+		Branch        string `json:"branch"`
+		Name          string `json:"name"`
+		Mirror        string `json:"mirror"`
+		Depth         int    `json:"depth"`
+		Authorization struct {
+			Username string `json:"username"`
+			Token    string `json:"token"`
+		} `json:"authorization"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 		writeError(w, http.StatusBadRequest, "Git 信息无法识别。")
@@ -7777,7 +7847,8 @@ func (s *server) robotPackageGitCloneHandler(w http.ResponseWriter, r *http.Requ
 	created := operationTask{ID: "clone-package-" + time.Now().Format("20060102150405.000000000"), Root: input.Root, Path: target.Path, Action: "git-clone-package", Status: "running", Output: "正在启动 Git…", Progress: 0, CreatedAt: time.Now()}
 	s.addOperation(created)
 	go func() {
-		result, err := robot.CloneLocalPackageWithProgress(input.Root, input.Repository, input.Branch, input.Name, input.Mirror, input.Depth, func(progress robot.CloneProgress) {
+		authorization := robot.HTTPSAuthorization{Username: strings.TrimSpace(input.Authorization.Username), Token: strings.TrimSpace(input.Authorization.Token)}
+		result, err := robot.CloneLocalPackageWithAuthorization(input.Root, input.Repository, input.Branch, input.Name, input.Mirror, input.Depth, authorization, func(progress robot.CloneProgress) {
 			s.updateOperation(created.ID, progress.Percent, progress.Detail, "", false)
 		})
 		if err != nil {
@@ -7976,6 +8047,7 @@ func (s *server) ginHeaders() gin.HandlerFunc {
 		// SAMEORIGIN for them. Their responses carry their own CSP.
 		if !strings.HasPrefix(c.Request.URL.Path, "/api/v1/robot/webview/") &&
 			!strings.HasPrefix(c.Request.URL.Path, "/api/v1/robot/app/") &&
+			!strings.HasPrefix(c.Request.URL.Path, "/api/v1/browser/http/") &&
 			!strings.HasPrefix(c.Request.URL.Path, "/api/v1/services/") &&
 			!strings.HasPrefix(c.Request.URL.Path, "/api/v1/setup/plugins/development/") &&
 			!strings.HasPrefix(c.Request.URL.Path, "/api/v1/setup/plugins/web/") {

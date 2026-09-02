@@ -443,6 +443,19 @@ function operationErrorMessage(reason: unknown, fallback: string) {
   return fallback
 }
 
+type GitHTTPSAuthorization = {
+  username: string
+  token: string
+}
+
+type GitCloneAttempt = 'completed' | 'authorization-required' | 'failed'
+
+function needsGitHTTPSAuthorization(message: string) {
+  return /could not read username|terminal prompts disabled|authentication failed|http basic: access denied|could not read password/i.test(
+    message
+  )
+}
+
 export function DirectoryPicker({
   open,
   title = '选择目录',
@@ -617,10 +630,10 @@ export function DirectoryPicker({
     path: string
     kind: 'home' | 'workspace' | 'folder'
   }> = [
-    { name: '主目录', path: home, kind: 'home' },
     ...(workspacePath
       ? [{ name: '工作区', path: workspacePath, kind: 'workspace' as const }]
       : []),
+    { name: '主目录', path: home, kind: 'home' },
     ...[
       ['桌面', 'Desktop'],
       ['文稿', 'Documents'],
@@ -2755,9 +2768,10 @@ export function Dashboard({
     branch: string,
     name: string,
     mirror: string,
-    depth: number
-  ) {
-    if (!gitDestination) return
+    depth: number,
+    authorization?: GitHTTPSAuthorization
+  ): Promise<GitCloneAttempt> {
+    if (!gitDestination) return 'failed'
     setBusy(true)
     setCloneProgress(0)
     setCloneStatus('正在启动 Git…')
@@ -2771,7 +2785,8 @@ export function Dashboard({
           branch,
           name,
           mirror,
-          depth
+          depth,
+          authorization
         })
       })
       const data = (await response.json()) as {
@@ -2794,12 +2809,15 @@ export function Dashboard({
       showOutput(task.output || '仓库已克隆。')
       setGitCloneOpen(false)
       await addSelectedDirectories([targetPath])
-      return
+      return 'completed'
     } catch (reason) {
-      showOutput(
-        operationErrorMessage(reason, '克隆仓库失败，请检查 Git 地址和网络。'),
-        true
+      const message = operationErrorMessage(
+        reason,
+        '克隆仓库失败，请检查 Git 地址和网络。'
       )
+      if (needsGitHTTPSAuthorization(message)) return 'authorization-required'
+      showOutput(message, true)
+      return 'failed'
     } finally {
       setBusy(false)
       setCloneProgress(0)
@@ -2812,9 +2830,10 @@ export function Dashboard({
     branch: string,
     name: string,
     mirror: string,
-    depth: number
-  ) {
-    if (!root) return
+    depth: number,
+    authorization?: GitHTTPSAuthorization
+  ): Promise<GitCloneAttempt> {
+    if (!root) return 'failed'
     setBusy(true)
     setCloneProgress(0)
     setCloneStatus('正在启动 Git…')
@@ -2822,7 +2841,15 @@ export function Dashboard({
       const response = await fetch('/api/v1/robot/packages/git-clone', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ root, repository, branch, name, mirror, depth })
+        body: JSON.stringify({
+          root,
+          repository,
+          branch,
+          name,
+          mirror,
+          depth,
+          authorization
+        })
       })
       const data = (await response.json()) as {
         id?: string
@@ -2841,14 +2868,15 @@ export function Dashboard({
       await refetchPackages()
       showOutput(task.output || '插件包已克隆到背包。')
       setGitCloneOpen(false)
+      return 'completed'
     } catch (reason) {
-      showOutput(
-        operationErrorMessage(
-          reason,
-          '克隆插件包失败，请检查 Git 地址和网络。'
-        ),
-        true
+      const message = operationErrorMessage(
+        reason,
+        '克隆插件包失败，请检查 Git 地址和网络。'
       )
+      if (needsGitHTTPSAuthorization(message)) return 'authorization-required'
+      showOutput(message, true)
+      return 'failed'
     } finally {
       setBusy(false)
       setCloneProgress(0)
@@ -4602,8 +4630,9 @@ function GitCloneDialog({
     branch: string,
     name: string,
     mirror: string,
-    depth: number
-  ) => Promise<void>
+    depth: number,
+    authorization?: GitHTTPSAuthorization
+  ) => Promise<GitCloneAttempt>
 }) {
   const [repository, setRepository] = useStoreState('')
   const [branch, setBranch] = useStoreState('')
@@ -4620,6 +4649,9 @@ function GitCloneDialog({
     exists: boolean
   } | null>(null)
   const [targetError, setTargetError] = useStoreState('')
+  const [authorizationOpen, setAuthorizationOpen] = useStoreState(false)
+  const [authorizationUsername, setAuthorizationUsername] = useStoreState('')
+  const [authorizationToken, setAuthorizationToken] = useStoreState('')
   useEffect(() => {
     if (open) {
       setRepository('')
@@ -4633,6 +4665,9 @@ function GitCloneDialog({
       setSSHKeys([])
       setTarget(null)
       setTargetError('')
+      setAuthorizationOpen(false)
+      setAuthorizationUsername('')
+      setAuthorizationToken('')
     }
   }, [
     open,
@@ -4647,7 +4682,10 @@ function GitCloneDialog({
     setRepository,
     setSSHKeys,
     setTarget,
-    setTargetError
+    setTargetError,
+    setAuthorizationOpen,
+    setAuthorizationToken,
+    setAuthorizationUsername
   ])
   useEffect(() => {
     if (!open) return
@@ -4780,6 +4818,20 @@ function GitCloneDialog({
   }, [mode, open, repository, setBranch, setBranches, setBranchesLoading])
   if (!open) return null
   const usesSSH = /^(git@|ssh:\/\/)/.test(repository.trim())
+  const submitClone = async (authorization?: GitHTTPSAuthorization) => {
+    const attempt = await onConfirm(
+      repository.trim(),
+      branch.trim(),
+      name.trim(),
+      mirror,
+      depth,
+      authorization
+    )
+    if (attempt === 'authorization-required') {
+      setAuthorizationOpen(true)
+      setAuthorizationToken('')
+    }
+  }
   return (
     <Modal
       open
@@ -4803,12 +4855,84 @@ function GitCloneDialog({
           </div>
           <button
             className="icon-button size-8 p-0"
-            onClick={onClose}
+            onClick={() => {
+              if (authorizationOpen) {
+                setAuthorizationOpen(false)
+                setAuthorizationToken('')
+                return
+              }
+              onClose()
+            }}
             aria-label="关闭"
           >
             <X className="size-4" />
           </button>
         </header>
+        {authorizationOpen ? (
+          <form
+            className="grid gap-4 overflow-auto p-4"
+            onSubmit={event => {
+              event.preventDefault()
+              void submitClone({
+                username: authorizationUsername.trim(),
+                token: authorizationToken
+              })
+            }}
+          >
+            <div className="grid gap-1">
+              <strong className="text-sm font-semibold text-slate-900">
+                HTTPS 授权
+              </strong>
+              <p className="text-xs leading-5 text-slate-500">
+                该仓库需要身份验证。请输入代码平台账号和个人访问令牌后重试；令牌只用于本次克隆，不会写入仓库地址、配置或操作日志。
+              </p>
+            </div>
+            <label className="grid gap-1 text-xs font-semibold text-slate-600">
+              账号
+              <input
+                className="h-9 rounded-md border border-slate-300 bg-white px-2.5 text-sm font-normal text-slate-800 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
+                value={authorizationUsername}
+                onChange={event => setAuthorizationUsername(event.target.value)}
+                autoComplete="username"
+                autoFocus
+                placeholder="GitHub / Gitee 账号"
+              />
+            </label>
+            <label className="grid gap-1 text-xs font-semibold text-slate-600">
+              个人访问令牌
+              <input
+                className="h-9 rounded-md border border-slate-300 bg-white px-2.5 text-sm font-normal text-slate-800 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
+                value={authorizationToken}
+                onChange={event => setAuthorizationToken(event.target.value)}
+                autoComplete="new-password"
+                type="password"
+                placeholder="PAT / Access Token"
+              />
+              <small className="font-normal leading-5 text-slate-500">
+                GitHub 请使用有仓库读取权限的 token；Gitee 请使用私人令牌。密码登录通常已不被支持。
+              </small>
+            </label>
+            <footer className="flex justify-end gap-2 border-t border-slate-200 pt-3">
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => {
+                  setAuthorizationOpen(false)
+                  setAuthorizationToken('')
+                }}
+                disabled={busy}
+              >
+                返回
+              </button>
+              <button
+                className="primary-button"
+                disabled={busy || !authorizationUsername.trim() || !authorizationToken}
+              >
+                {busy ? '正在授权并克隆…' : '授权并重试'}
+              </button>
+            </footer>
+          </form>
+        ) : (
         <div className="grid gap-3 overflow-auto p-4">
           <section aria-label="仓库连接方式">
             <header className="flex items-center justify-between gap-2">
@@ -4827,7 +4951,7 @@ function GitCloneDialog({
                   : connection === 'ssh' && !sshKeys.length
                     ? 'SSH 未配置'
                     : connection === 'https'
-                      ? 'HTTPS 已选择'
+                      ? ''
                       : ''}
               </small>
             </header>
@@ -4994,7 +5118,8 @@ function GitCloneDialog({
             </label>
           </section>
         </div>
-        <footer className="flex justify-end gap-2 border-t border-slate-200 px-4 py-3">
+        )}
+        {!authorizationOpen && <footer className="flex justify-end gap-2 border-t border-slate-200 px-4 py-3">
           {busy && (
             <div className="mr-auto grid min-w-44 gap-1 self-center">
               <div className="flex justify-between text-[11px] text-slate-500">
@@ -5026,15 +5151,7 @@ function GitCloneDialog({
               target.exists ||
               Boolean(targetError)
             }
-            onClick={() =>
-              void onConfirm(
-                repository.trim(),
-                branch.trim(),
-                name.trim(),
-                mirror,
-                depth
-              )
-            }
+            onClick={() => void submitClone()}
           >
             {busy
               ? '正在下载…'
@@ -5042,7 +5159,7 @@ function GitCloneDialog({
                 ? '克隆到背包'
                 : '克隆并添加'}
           </button>
-        </footer>
+        </footer>}
       </section>
     </Modal>
   )
@@ -11028,6 +11145,17 @@ function MiniBrowserWindow({
   const [history, setHistory] = useState<string[]>([])
   const [historyIndex, setHistoryIndex] = useState(-1)
   const lastRequestedURL = useRef('')
+  const frameURLFor = (target: URL) => {
+    if (target.origin === window.location.origin)
+      return `${target.pathname}${target.search}${target.hash}`
+    if (target.protocol !== 'http:') return target.href
+    const token = window
+      .btoa(target.origin)
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/g, '')
+    return `/api/v1/browser/http/${token}${target.pathname}${target.search}${target.hash}`
+  }
   const navigate = (value = query) => {
     const input = value.trim()
     if (!input) return
@@ -11062,7 +11190,7 @@ function MiniBrowserWindow({
       }
       setError('')
       setQuery(next.href)
-      setPageURL(next.href)
+      setPageURL(frameURLFor(next))
       setHistory(current => {
         const nextHistory = current.slice(0, historyIndex + 1)
         if (nextHistory.at(-1) !== next.href) nextHistory.push(next.href)
@@ -11080,7 +11208,7 @@ function MiniBrowserWindow({
     if (!nextURL) return
     setHistoryIndex(nextIndex)
     setQuery(nextURL)
-    setPageURL(nextURL)
+    setPageURL(frameURLFor(new URL(nextURL)))
     setError('')
     setFrameKey(value => value + 1)
   }
