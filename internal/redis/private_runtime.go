@@ -40,11 +40,12 @@ func (m *Manager) privateOwnerPath() string {
 }
 
 type privateOwner struct {
-	PID       int    `json:"pid"`
-	Port      int    `json:"port"`
-	Binary    string `json:"binary"`
-	SHA256    string `json:"sha256"`
-	StartedAt string `json:"startedAt"`
+	InstanceID string `json:"instanceId"`
+	PID        int    `json:"pid"`
+	Port       int    `json:"port"`
+	Binary     string `json:"binary"`
+	SHA256     string `json:"sha256"`
+	StartedAt  string `json:"startedAt"`
 }
 
 func (m *Manager) privateInstalledLocked() bool {
@@ -60,8 +61,21 @@ func (m *Manager) startPrivateLocked(address string) error {
 	if err := os.MkdirAll(m.privateDataDir(), 0o700); err != nil {
 		return fmt.Errorf("创建私有 Redis 数据目录失败：%w", err)
 	}
+	_, portText, err := net.SplitHostPort(address)
+	if err != nil {
+		return fmt.Errorf("私有 Redis 后端地址无效：%w", err)
+	}
+	if portText == "0" {
+		listener, listenErr := net.Listen("tcp", net.JoinHostPort(bindHost, "0"))
+		if listenErr != nil {
+			return listenErr
+		}
+		portText = strconv.Itoa(listener.Addr().(*net.TCPAddr).Port)
+		_ = listener.Close()
+		address = net.JoinHostPort(bindHost, portText)
+	}
 	config := filepath.Join(m.privateDataDir(), "redis.conf")
-	contents := fmt.Sprintf("bind 127.0.0.1\nport %d\ndir %s\ndbfilename dump.rdb\nappendonly yes\nappendfsync everysec\ndaemonize no\nprotected-mode yes\nlogfile %s\n", m.config.Port, redisConfigPath(m.privateDataDir()), redisConfigPath(filepath.Join(m.privateDataDir(), "redis.log")))
+	contents := fmt.Sprintf("bind 127.0.0.1\nport %s\ndir %s\ndbfilename dump.rdb\nappendonly yes\nappendfsync everysec\nrequirepass %s\ndaemonize no\nprotected-mode yes\nlogfile %s\n", portText, redisConfigPath(m.privateDataDir()), m.config.Password, redisConfigPath(filepath.Join(m.privateDataDir(), "redis.log")))
 	if err := os.WriteFile(config, []byte(contents), 0o600); err != nil {
 		return fmt.Errorf("写入私有 Redis 配置失败：%w", err)
 	}
@@ -75,6 +89,7 @@ func (m *Manager) startPrivateLocked(address string) error {
 		if ok, _ := probeRedis(address, 300*time.Millisecond); ok {
 			m.privateProcess = command
 			m.private = true
+			m.backendAddress = address
 			m.external = false
 			m.skipped = false
 			m.writePrivateOwnerLocked(command.Process.Pid, binary)
@@ -95,7 +110,13 @@ func redisConfigPath(path string) string { return strings.ReplaceAll(path, "\\",
 
 func (m *Manager) writePrivateOwnerLocked(pid int, binary string) {
 	hash, _ := fileSHA256(binary)
-	owner := privateOwner{PID: pid, Port: m.config.Port, Binary: binary, SHA256: hash, StartedAt: time.Now().UTC().Format(time.RFC3339)}
+	port := m.config.Port
+	if _, value, err := net.SplitHostPort(m.backendAddress); err == nil {
+		if parsed, parseErr := strconv.Atoi(value); parseErr == nil {
+			port = parsed
+		}
+	}
+	owner := privateOwner{InstanceID: m.config.InstanceID, PID: pid, Port: port, Binary: binary, SHA256: hash, StartedAt: time.Now().UTC().Format(time.RFC3339)}
 	raw, err := json.Marshal(owner)
 	if err == nil {
 		_ = os.WriteFile(m.privateOwnerPath(), raw, 0o600)
@@ -107,6 +128,10 @@ func (m *Manager) stopPrivateLocked() error {
 		return nil
 	}
 	address := net.JoinHostPort(bindHost, strconv.Itoa(m.config.Port))
+	if m.backendAddress != "" {
+		address = m.backendAddress
+	}
+	_ = redisRESP(address, 3*time.Second, []byte("AUTH"), []byte(m.config.Password))
 	_ = redisRESP(address, 3*time.Second, []byte("SHUTDOWN"), []byte("SAVE"))
 	if m.privateProcess != nil && m.privateProcess.Process != nil {
 		done := make(chan error, 1)
@@ -168,10 +193,10 @@ func redisRESP(address string, timeout time.Duration, args ...[]byte) error {
 	return nil
 }
 
-// ActivatePrivateRuntime migrates the currently managed miniredis snapshot to
-// an already verified private runtime. Callers must only invoke it after the
-// downloader has atomically activated the binary. If the private server fails,
-// the embedded server is restored from the same snapshot before returning.
+// ActivatePrivateRuntime upgrades only while no authenticated proxy clients
+// are active. That conservative cutover rule preserves every existing TCP
+// session: callers retry later instead of disconnecting a client or risking a
+// write split between the fallback and private runtime.
 func (m *Manager) ActivatePrivateRuntime() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -187,29 +212,44 @@ func (m *Manager) ActivatePrivateRuntime() error {
 	if m.server == nil {
 		return errors.New("当前没有可迁移的 miniredis 实例")
 	}
+	if m.proxy == nil {
+		return errors.New("Redis 本地代理未运行")
+	}
+	if m.proxy.activeClients() != 0 {
+		m.phase, m.retryable = "waiting-for-idle", true
+		m.message = "正在等待现有 Redis 连接空闲后安全迁移。"
+		return errors.New("仍有 Redis 客户端连接，迁移将在连接空闲后重试")
+	}
 	if err := m.saveSnapshotLocked(); err != nil {
 		return err
 	}
-	m.stopSnapshotterLocked()
-	m.server.Close()
-	m.server = nil
-	address := net.JoinHostPort(bindHost, strconv.Itoa(m.config.Port))
-	if err := m.startPrivateLocked(address); err == nil {
-		if restoreErr := restoreSnapshotToPrivateRedis(address, m.snapshotPath); restoreErr == nil {
+	m.phase, m.message = "migrating", "正在安全迁移到 ALemonX 私有 Redis。"
+	if err := m.startPrivateLocked(net.JoinHostPort(bindHost, "0")); err == nil {
+		if restoreErr := restoreSnapshotToPrivateRedis(m.backendAddress, m.snapshotPath, m.config.Password); restoreErr == nil {
+			m.proxy.setBackend(m.backendAddress)
+			m.stopSnapshotterLocked()
+			m.server.Close()
+			m.server = nil
 			m.config.PrivateInitialized = true
 			if err := m.saveLocked(); err != nil {
-				return fmt.Errorf("保存私有 Redis 初始化状态失败：%w", err)
+				m.retryable = true
+				return fmt.Errorf("私有 Redis 已切换，但保存初始化状态失败：%w", err)
 			}
-			m.message = "已从 miniredis 迁移到应用私有 Redis，数据持久化已启用。"
+			m.mode, m.phase, m.retryable = "private-running", "", false
+			m.message = "已迁移到 ALemonX 私有 Redis，数据持久化已启用。"
 			return nil
 		} else {
 			_ = m.stopPrivateLocked()
-			m.restoreEmbeddedLocked()
-			return fmt.Errorf("私有 Redis 数据迁移失败，已回退 miniredis：%w", restoreErr)
+			m.backendAddress = m.server.Addr()
+			m.phase, m.retryable = "preparing-runtime", true
+			m.message = "私有 Redis 数据迁移失败；仍在使用临时 Redis。"
+			return fmt.Errorf("私有 Redis 数据迁移失败：%w", restoreErr)
 		}
 	} else {
-		m.restoreEmbeddedLocked()
-		return fmt.Errorf("私有 Redis 启动失败，已回退 miniredis：%w", err)
+		m.backendAddress = m.server.Addr()
+		m.phase, m.retryable = "preparing-runtime", true
+		m.message = "私有 Redis 启动失败；仍在使用临时 Redis。"
+		return fmt.Errorf("私有 Redis 启动失败：%w", err)
 	}
 }
 
@@ -229,7 +269,7 @@ func (m *Manager) restoreEmbeddedLocked() {
 	m.startSnapshotterLocked()
 }
 
-func restoreSnapshotToPrivateRedis(address, path string) error {
+func restoreSnapshotToPrivateRedis(address, path string, passwords ...string) error {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -251,6 +291,11 @@ func restoreSnapshotToPrivateRedis(address, path string) error {
 	defer connection.Close()
 	_ = connection.SetDeadline(time.Now().Add(20 * time.Second))
 	reader := bufio.NewReader(connection)
+	if len(passwords) > 0 && passwords[0] != "" {
+		if err := redisRESPOn(connection, reader, []byte("AUTH"), []byte(passwords[0])); err != nil {
+			return err
+		}
+	}
 	for _, database := range data.Databases {
 		if err := redisRESPOn(connection, reader, []byte("SELECT"), []byte(strconv.Itoa(database.ID))); err != nil {
 			return err

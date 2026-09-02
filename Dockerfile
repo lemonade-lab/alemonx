@@ -75,4 +75,4 @@ ENV HOME=/root \
 
 EXPOSE 17390
 ENTRYPOINT ["/usr/bin/tini", "--", "/app/alx"]
-CMD ["--host", "0.0.0.0", "--port", "17390", "--redis-off"]
+CMD ["--host", "0.0.0.0", "--port", "17390"]

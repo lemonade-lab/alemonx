@@ -5,6 +5,8 @@
 package redis
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -46,10 +48,18 @@ type Config struct {
 	// imported into an application-private runtime. Later starts trust the
 	// runtime's own AOF/RDB rather than replaying an old fallback snapshot.
 	PrivateInitialized bool `json:"privateInitialized,omitempty"`
+	// Password is generated once per ALemonX instance. It protects the public
+	// loopback proxy as well as the private Redis backend. It is deliberately
+	// omitted from Status so a status refresh can never leak credentials.
+	Password   string `json:"password,omitempty"`
+	InstanceID string `json:"instanceId,omitempty"`
 }
 
 // Status is the manager state returned to the workbench.
 type Status struct {
+	Mode             string `json:"mode"`
+	Phase            string `json:"phase,omitempty"`
+	Ownership        string `json:"ownership"`
 	Running          bool   `json:"running"`
 	Managed          bool   `json:"managed"`
 	External         bool   `json:"external"`
@@ -69,6 +79,10 @@ type Status struct {
 	PrivateInstalled bool   `json:"privateInstalled"`
 	PrivateRunning   bool   `json:"privateRunning"`
 	RuntimePath      string `json:"runtimePath,omitempty"`
+	RuntimeVersion   string `json:"runtimeVersion,omitempty"`
+	Retryable        bool   `json:"retryable"`
+	TaskID           string `json:"taskId,omitempty"`
+	ConnectionURI    string `json:"connectionUri,omitempty"`
 }
 
 // Manager owns the built-in Redis lifecycle and its persisted settings.
@@ -79,11 +93,16 @@ type Manager struct {
 
 	config         Config
 	server         *miniredis.Miniredis
+	proxy          *redisProxy
+	backendAddress string
 	private        bool
 	privateProcess *exec.Cmd
 	external       bool
 	skipped        bool
 	message        string
+	mode           string
+	phase          string
+	retryable      bool
 	lastSaved      time.Time
 	snapshotStop   chan struct{}
 }
@@ -99,6 +118,24 @@ func NewManager(path string) *Manager {
 	}
 	if err := manager.loadLocked(); err != nil {
 		log.Printf("内置 Redis 配置不可用，已使用默认配置：%v", err)
+	}
+	if manager.config.Password == "" || manager.config.InstanceID == "" {
+		// A random per-instance secret keeps a loopback Redis from being a
+		// writable service for every process on the machine.
+		secret := make([]byte, 32)
+		if _, err := rand.Read(secret); err != nil {
+			log.Printf("生成 Redis 本地凭据失败：%v", err)
+		} else {
+			if manager.config.Password == "" {
+				manager.config.Password = base64.RawURLEncoding.EncodeToString(secret)
+			}
+			if manager.config.InstanceID == "" {
+				manager.config.InstanceID = base64.RawURLEncoding.EncodeToString(secret[:16])
+			}
+			if err := manager.saveLocked(); err != nil {
+				log.Printf("保存 Redis 本地凭据失败：%v", err)
+			}
+		}
 	}
 	return manager
 }
@@ -184,6 +221,10 @@ func (m *Manager) Stop() (string, error) {
 		m.message = "当前连接的是外部 Redis，无需停止。"
 		return m.message, nil
 	}
+	if m.proxy != nil {
+		m.proxy.close()
+		m.proxy = nil
+	}
 	if m.private {
 		if err := m.stopPrivateLocked(); err != nil {
 			return "", err
@@ -213,6 +254,14 @@ func (m *Manager) Stop() (string, error) {
 func (m *Manager) Restart() (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.external {
+		m.message = "当前使用的是外部 Redis，ALemonX 不会重启它。"
+		return m.message, nil
+	}
+	if m.proxy != nil {
+		m.proxy.close()
+		m.proxy = nil
+	}
 	if m.private {
 		if err := m.stopPrivateLocked(); err != nil {
 			return "", err
@@ -250,6 +299,10 @@ func (m *Manager) Configure(port int, autoStart, disabled bool) error {
 		return err
 	}
 	if disabled || portChanged {
+		if m.proxy != nil {
+			m.proxy.close()
+			m.proxy = nil
+		}
 		if m.private {
 			if err := m.stopPrivateLocked(); err != nil {
 				return err
@@ -282,6 +335,10 @@ func (m *Manager) Configure(port int, autoStart, disabled bool) error {
 func (m *Manager) Close() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.proxy != nil {
+		m.proxy.close()
+		m.proxy = nil
+	}
 	if m.server != nil {
 		if err := m.saveSnapshotLocked(); err != nil {
 			log.Printf("保存内置 Redis 数据失败：%v", err)
@@ -302,30 +359,14 @@ func (m *Manager) startLocked() error {
 	if m.config.Disabled {
 		return errors.New("内置 Redis 已被禁用，无法启动；请在设置中重新启用后再试。")
 	}
+	// Native was a legacy setting. Never start or install a system service; an
+	// existing process is simply treated as an external, read-only endpoint.
 	if m.config.Native {
-		native := inspectNative(m.config.Port)
-		if !native.Running {
-			if native.Installed {
-				if err := startNativeService(native.Service); err != nil {
-					return err
-				}
-				native = inspectNative(m.config.Port)
-			}
-			if !native.Running {
-				return fmt.Errorf("独立 Redis 未运行，请在设置中重新安装或启动系统服务")
-			}
-		}
-		m.external = true
-		m.skipped = true
-		m.message = "正在使用独立 Redis；服务由 systemd 管理，ALemonX 重启不会影响它。"
-		return nil
+		m.config.Native = false
+		_ = m.saveLocked()
 	}
-	if m.private {
-		m.message = fmt.Sprintf("应用私有 Redis 已在运行，地址 %s。", net.JoinHostPort(bindHost, strconv.Itoa(m.config.Port)))
-		return nil
-	}
-	if m.server != nil {
-		m.message = fmt.Sprintf("内置 Redis 已在运行，地址 %s。", m.server.Addr())
+	if m.private || m.server != nil {
+		m.message = fmt.Sprintf("ALemonX Redis 已在运行，地址 %s。", net.JoinHostPort(bindHost, strconv.Itoa(m.config.Port)))
 		return nil
 	}
 	port := m.config.Port
@@ -342,9 +383,10 @@ func (m *Manager) startLocked() error {
 		return fmt.Errorf("端口 %d 已被其他程序占用，且不是可用的 Redis 服务", port)
 	}
 	if m.privateInstalledLocked() {
-		if err := m.startPrivateLocked(address); err == nil {
+		backend := net.JoinHostPort(bindHost, "0")
+		if err := m.startPrivateLocked(backend); err == nil {
 			if !m.config.PrivateInitialized {
-				if err := restoreSnapshotToPrivateRedis(address, m.snapshotPath); err != nil {
+				if err := restoreSnapshotToPrivateRedis(m.backendAddress, m.snapshotPath, m.config.Password); err != nil {
 					_ = m.stopPrivateLocked()
 					log.Printf("私有 Redis 首次恢复失败，回退 miniredis：%v", err)
 				} else {
@@ -352,10 +394,19 @@ func (m *Manager) startLocked() error {
 					if err := m.saveLocked(); err != nil {
 						log.Printf("保存私有 Redis 初始化状态失败：%v", err)
 					}
-					m.message = "应用私有 Redis 已启动，已导入 miniredis 历史数据。"
+					if err := m.startProxyLocked(address); err != nil {
+						_ = m.stopPrivateLocked()
+						return err
+					}
+					m.mode, m.phase, m.message = "private-running", "", "ALemonX 私有 Redis 已准备好。"
 					return nil
 				}
 			} else {
+				if err := m.startProxyLocked(address); err != nil {
+					_ = m.stopPrivateLocked()
+					return err
+				}
+				m.mode, m.phase = "private-running", ""
 				return nil
 			}
 		} else {
@@ -363,12 +414,14 @@ func (m *Manager) startLocked() error {
 		}
 	}
 	server := miniredis.NewMiniRedis()
-	if err := server.StartAddr(address); err != nil {
+	if err := server.StartAddr(net.JoinHostPort(bindHost, "0")); err != nil {
 		m.external = false
 		m.skipped = false
 		return fmt.Errorf("启动内置 Redis 失败：%w", err)
 	}
+	server.RequireAuth(m.config.Password)
 	m.server = server
+	m.backendAddress = server.Addr()
 	if err := m.restoreSnapshotLocked(); err != nil {
 		log.Printf("恢复内置 Redis 数据失败：%v", err)
 		m.message = "内置 Redis 已启动；历史数据恢复失败。"
@@ -376,29 +429,37 @@ func (m *Manager) startLocked() error {
 		m.message = "内置 Redis 已启动，已启用本地持久化。"
 	}
 	m.startSnapshotterLocked()
+	if err := m.startProxyLocked(address); err != nil {
+		m.stopSnapshotterLocked()
+		m.server.Close()
+		m.server = nil
+		return fmt.Errorf("启动 Redis 本地代理失败：%w", err)
+	}
 	m.external = false
 	m.skipped = false
+	m.mode, m.phase, m.retryable = "fallback-running", "preparing-runtime", true
+	return nil
+}
+
+func (m *Manager) startProxyLocked(address string) error {
+	if m.proxy != nil {
+		return nil
+	}
+	proxy, err := newRedisProxy(address, m.backendAddress, m.config.Password)
+	if err != nil {
+		return err
+	}
+	m.proxy = proxy
 	return nil
 }
 
 func (m *Manager) statusLocked() Status {
 	port := m.config.Port
-	if m.server != nil {
-		if parsed, err := strconv.Atoi(m.server.Port()); err == nil {
-			port = parsed
-		}
-	}
-	native := inspectNative(port)
 	managed := m.server != nil || m.private
 	external := m.external
-	if m.config.Native {
-		external = native.Running
-	}
 	message := m.message
 	if m.config.Disabled {
 		message = "内置 Redis 已禁用；可在设置中重新启用。"
-	} else if m.config.Native && !native.Running {
-		message = "独立 Redis 已安装但当前未运行；可点击启用独立 Redis。"
 	} else if message == "" {
 		switch {
 		case m.private:
@@ -416,6 +477,9 @@ func (m *Manager) statusLocked() Status {
 		lastSaved = m.lastSaved.Format(time.RFC3339)
 	}
 	return Status{
+		Mode:             m.modeForStatusLocked(managed, external),
+		Phase:            m.phase,
+		Ownership:        ownershipFor(managed, external),
 		Running:          managed || external,
 		Managed:          managed,
 		External:         external,
@@ -425,17 +489,60 @@ func (m *Manager) statusLocked() Status {
 		Message:          message,
 		AutoStart:        m.config.AutoStart,
 		Disabled:         m.config.Disabled,
-		Persistent:       managed || (m.config.Native && native.Running),
+		Persistent:       managed,
 		LastSaved:        lastSaved,
-		NativeSupported:  native.Supported,
-		NativeInstalled:  native.Installed,
-		NativeRunning:    native.Running,
-		NativeEnabled:    native.Enabled,
-		NativeService:    native.Service,
+		NativeSupported:  false,
+		NativeInstalled:  false,
+		NativeRunning:    false,
+		NativeEnabled:    false,
+		NativeService:    "",
 		PrivateInstalled: m.privateInstalledLocked(),
 		PrivateRunning:   m.private,
 		RuntimePath:      m.privateRuntime(),
+		Retryable:        m.retryable,
+		ConnectionURI:    "redis://:" + m.config.Password + "@" + net.JoinHostPort(bindHost, strconv.Itoa(port)),
 	}
+}
+
+// RetryRuntime records a user-requested retry. The downloader is deliberately
+// asynchronous: fallback Redis remains available even when the release source
+// is offline.
+func (m *Manager) RetryRuntime() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.server != nil && !m.private {
+		m.phase, m.retryable = "preparing-runtime", true
+		m.message = "正在后台准备 ALemonX 私有 Redis。"
+	}
+}
+
+func ownershipFor(managed, external bool) string {
+	if external {
+		return "external"
+	}
+	if managed {
+		return "alemonx"
+	}
+	return "none"
+}
+
+func (m *Manager) modeForStatusLocked(managed, external bool) string {
+	if m.config.Disabled {
+		return "disabled"
+	}
+	if external {
+		return "external-reused"
+	}
+	if m.mode != "" {
+		return m.mode
+	}
+	if m.private {
+		return "private-running"
+	}
+	if managed {
+		return "fallback-running"
+	}
+	return "stopped"
 }
 
 func (m *Manager) loadLocked() error {

@@ -51,7 +51,7 @@ func TestManagerStartsAndStopsTemporaryRedis(t *testing.T) {
 	if status.Port != manager.config.Port {
 		t.Fatalf("port mismatch: config %d, status %d", manager.config.Port, status.Port)
 	}
-	if !ping(t, status.Address) {
+	if !ping(t, status.Address, manager.config.Password) {
 		t.Fatalf("embedded Redis did not answer PING at %s", status.Address)
 	}
 	message, err := manager.Stop()
@@ -64,6 +64,33 @@ func TestManagerStartsAndStopsTemporaryRedis(t *testing.T) {
 	status = manager.Status()
 	if status.Running || status.Managed {
 		t.Fatalf("stopped status = %+v", status)
+	}
+}
+
+func TestPublicProxyRequiresInstancePassword(t *testing.T) {
+	manager := newTestManager(t)
+	if err := manager.Configure(freePort(t), false, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	connection, err := net.DialTimeout("tcp", manager.Status().Address, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+	if _, err := connection.Write([]byte("*1\r\n$4\r\nPING\r\n")); err != nil {
+		t.Fatal(err)
+	}
+	reply := make([]byte, 128)
+	count, err := connection.Read(reply)
+	if err != nil || !strings.HasPrefix(string(reply[:count]), "-NOAUTH") {
+		t.Fatalf("unauthenticated proxy reply = %q, %v", reply[:count], err)
+	}
+	if !ping(t, manager.Status().Address, manager.config.Password) {
+		t.Fatal("authenticated proxy did not forward PING")
 	}
 }
 
@@ -312,7 +339,7 @@ func TestManagerConfigureRestartsRunningRedisOnPortChange(t *testing.T) {
 	if status.Port == oldPort {
 		t.Fatal("port did not change")
 	}
-	if !ping(t, status.Address) {
+	if !ping(t, status.Address, manager.config.Password) {
 		t.Fatalf("restarted Redis did not answer PING at %s", status.Address)
 	}
 	manager.Close()
@@ -355,7 +382,7 @@ func TestManagerDisabledForbidsStartAndClosesRunningServer(t *testing.T) {
 	}
 }
 
-func ping(t *testing.T, address string) bool {
+func ping(t *testing.T, address string, password ...string) bool {
 	t.Helper()
 	connection, err := net.DialTimeout("tcp", address, time.Second)
 	if err != nil {
@@ -363,6 +390,15 @@ func ping(t *testing.T, address string) bool {
 	}
 	defer connection.Close()
 	_ = connection.SetDeadline(time.Now().Add(time.Second))
+	if len(password) > 0 {
+		if err := sendRESPCommand(connection, [][]byte{[]byte("AUTH"), []byte(password[0])}); err != nil {
+			return false
+		}
+		buffer := make([]byte, 64)
+		if count, err := connection.Read(buffer); err != nil || !strings.HasPrefix(string(buffer[:count]), "+OK") {
+			return false
+		}
+	}
 	if _, err := connection.Write([]byte("*1\r\n$4\r\nPING\r\n")); err != nil {
 		return false
 	}

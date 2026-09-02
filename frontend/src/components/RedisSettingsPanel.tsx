@@ -1,31 +1,13 @@
 import { useEffect, useState } from 'react'
-import {
-  Check,
-  Copy,
-  Database,
-  Play,
-  Power,
-  RefreshCw,
-  RotateCcw,
-  Save
-} from 'lucide-react'
-import {
-  useControlSystemRedisMutation,
-  useSaveSystemRedisConfigMutation,
-  useSystemRedisQuery
-} from '../store/workspaceApi'
+import { Check, Copy, Database, Power, RefreshCw, RotateCcw, Save, Settings2 } from 'lucide-react'
+import { useControlSystemRedisMutation, useSaveSystemRedisConfigMutation, useSystemRedisQuery } from '../store/workspaceApi'
 import { Button } from './Button'
-import {
-  SettingsCard,
-  SettingsMessage,
-  SettingsPage,
-  SettingsSwitch
-} from './SettingsCard'
+import { SettingsCard, SettingsMessage, SettingsPage, SettingsSwitch } from './SettingsCard'
 
-function messageFrom(error: unknown, fallback: string) {
+function errorMessage(error: unknown, fallback: string) {
   if (typeof error === 'object' && error && 'data' in error) {
-    const data = (error as { data?: { error?: string } }).data
-    if (data?.error) return data.error
+    const value = (error as { data?: { error?: string } }).data?.error
+    if (value) return value
   }
   return fallback
 }
@@ -33,10 +15,10 @@ function messageFrom(error: unknown, fallback: string) {
 export function RedisSettingsPanel() {
   const { data, isLoading, isError, refetch } = useSystemRedisQuery()
   const [control, { isLoading: controlling }] = useControlSystemRedisMutation()
-  const [saveConfig, { isLoading: saving }] =
-    useSaveSystemRedisConfigMutation()
+  const [saveConfig, { isLoading: saving }] = useSaveSystemRedisConfigMutation()
+  const [advanced, setAdvanced] = useState(false)
   const [port, setPort] = useState('6379')
-  const [autoStart, setAutoStart] = useState(false)
+  const [autoStart, setAutoStart] = useState(true)
   const [disabled, setDisabled] = useState(false)
   const [changed, setChanged] = useState(false)
   const [message, setMessage] = useState('')
@@ -44,231 +26,43 @@ export function RedisSettingsPanel() {
 
   useEffect(() => {
     if (!data || changed) return
-    setPort(String(data.port))
-    setAutoStart(data.autoStart)
-    setDisabled(data.disabled)
+    setPort(String(data.port)); setAutoStart(data.autoStart); setDisabled(data.disabled)
   }, [data, changed])
+  if (isLoading) return <div className="settings-panel-content">正在检查本地数据服务…</div>
+  if (isError || !data) return <div className="settings-panel-content">暂时无法读取 Redis 状态。<Button variant="ghost" onClick={() => void refetch()}>重试</Button></div>
 
-  if (isLoading) {
-    return <div className="settings-panel-content">正在读取 Redis 状态…</div>
+  const preparing = data.phase === 'preparing-runtime' || data.mode === 'migrating'
+  const ready = data.running && !data.external
+  const title = data.disabled ? 'Redis 已关闭' : data.external ? '正在使用已有 Redis' : preparing ? '正在准备更稳定的本地 Redis' : ready ? 'Redis 已准备好' : 'Redis 需要处理'
+  const description = data.disabled ? '机器人和插件当前不能使用 Redis。' : data.external ? '这是已有服务，ALemonX 只连接使用，不会停止或修改它。' : preparing ? '应用正在后台准备；机器人和插件可以继续使用。' : ready ? '数据保存在本机，ALemonX 启动时会自动运行。' : '启动服务后，机器人和插件即可使用本地数据存储。'
+  const run = async (action: 'start' | 'stop' | 'restart' | 'retry-runtime') => {
+    if ((action === 'stop' || action === 'restart') && !window.confirm(`${action === 'stop' ? '停止' : '重启'}后，机器人和插件将暂时不可使用。是否继续？`)) return
+    setMessage(''); setCopied(false)
+    try { await control(action).unwrap() } catch (error) { setMessage(errorMessage(error, 'Redis 操作未完成。')) }
   }
-  if (isError || !data) {
-    return <div className="settings-panel-content">无法读取 Redis 状态。</div>
-  }
-
-  const statusTone = data.disabled ? 'is-offline' : data.running ? 'is-ready' : 'is-idle'
-  const statusLabel = data.disabled
-    ? '已禁用'
-    : data.running
-      ? data.privateRunning
-        ? '运行中 · 应用私有 Redis'
-        : data.managed
-          ? '运行中 · 内置持久化 Redis'
-        : data.nativeRunning
-          ? '运行中 · 独立 Redis（systemd）'
-          : '使用中 · 外部 Redis'
-      : '未运行'
-
-  const runAction = async (
-    action: 'start' | 'stop' | 'restart' | 'install-native'
-  ) => {
-    setMessage('')
-    setCopied(false)
-    try {
-      await control(action).unwrap()
-    } catch (error) {
-      setMessage(messageFrom(error, 'Redis 操作未完成。'))
-    }
-  }
-
   const save = async () => {
-    const parsed = Number(port)
-    setMessage('')
-    setCopied(false)
-    if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65535) {
-      setMessage('端口需要在 1-65535 之间。')
-      return
-    }
-    try {
-      const next = await saveConfig({
-        port: parsed,
-        autoStart,
-        disabled
-      }).unwrap()
-      setPort(String(next.port))
-      setDisabled(next.disabled)
-      setChanged(false)
-      setMessage(next.disabled ? '' : '')
-    } catch (error) {
-      setMessage(messageFrom(error, 'Redis 配置未保存。'))
-    }
+    const nextPort = Number(port)
+    if (!Number.isInteger(nextPort) || nextPort < 1 || nextPort > 65535) { setMessage('端口需要在 1-65535 之间。'); return }
+    if ((disabled || nextPort !== data.port) && !window.confirm(disabled ? '关闭后机器人和插件将无法使用 Redis。是否继续？' : '修改端口会短暂重启本地 Redis。是否继续？')) return
+    try { await saveConfig({ port: nextPort, autoStart, disabled }).unwrap(); setChanged(false); setMessage('配置已保存。') } catch (error) { setMessage(errorMessage(error, 'Redis 配置未保存。')) }
   }
-
-  const copyAddress = async () => {
-    try {
-      await navigator.clipboard.writeText(`redis://${data.address}`)
-      setCopied(true)
-      window.setTimeout(() => setCopied(false), 1600)
-    } catch {
-      setMessage('无法复制，请手动复制地址。')
-    }
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(data.connectionUri || `redis://${data.address}`); setCopied(true); window.setTimeout(() => setCopied(false), 1600) } catch { setMessage('无法复制，请手动复制连接信息。') }
   }
-
-  return (
-    <SettingsPage
-      title="Redis"
-      description="工作台内置的持久化 Redis 服务，供机器人与插件使用。"
-    >
-      <SettingsCard
-        icon={<Database className="size-4" />}
-        title={data.privateRunning ? 'Redis 应用私有服务' : data.nativeRunning ? 'Redis 独立服务' : 'Redis 内置服务'}
-        description={
-          data.privateRunning
-            ? '由 ALemonX 受控启动与关闭，数据持久化在应用目录。'
-            : data.nativeRunning
-            ? '由 Linux systemd 独立管理，ALemonX 重启不会影响 Redis。'
-            : '工作台内置的持久化 Redis 服务，供机器人与插件使用。'
-        }
-        actions={
-          <Button
-            variant="ghost"
-            className="gap-1"
-            onClick={() => void refetch()}
-            disabled={controlling}
-          >
-            刷新状态
-          </Button>
-        }
-      >
-        <div className="settings-service-status" aria-live="polite">
-          <span className={statusTone} aria-hidden="true" />
-          <small>
-            {statusLabel}
-            {data.skipped ? ' · 端口被占用已跳过启动' : ''}
-            {data.message ? `\n${data.message}` : ''}
-          </small>
-        </div>
-        <div className="settings-redis-address">
-          <span>连接地址</span>
-          <code>redis://{data.address}</code>
-          <button
-            type="button"
-            className="text-button"
-            onClick={() => void copyAddress()}
-            disabled={!data.running}
-          >
-            {copied ? (
-              <Check className="size-3.5" />
-            ) : (
-              <Copy className="size-3.5" />
-            )}
-            {copied ? '已复制' : '复制'}
-          </button>
-        </div>
-        <div className="settings-card-actions settings-card-actions-end">
-          {data.nativeSupported && !data.nativeRunning && (
-            <Button
-              variant="secondary"
-              className="gap-1.5"
-              disabled={controlling || saving || data.port !== 6379}
-              onClick={() => void runAction('install-native')}
-              title={
-                data.port !== 6379
-                  ? '独立 Redis 当前使用系统默认端口 6379，请先修改端口'
-                  : undefined
-              }
-            >
-              <Database className="size-3.5" />
-              {data.nativeInstalled ? '启用独立 Redis' : '安装独立 Redis'}
-            </Button>
-          )}
-          <Button
-            variant="primary"
-            className="gap-1.5"
-            disabled={controlling || data.running || data.disabled}
-            onClick={() => void runAction('start')}
-          >
-            <Play className="size-3.5" /> 启动
-          </Button>
-          <Button
-            variant="secondary"
-            className="gap-1.5"
-            disabled={controlling || !data.managed || data.disabled}
-            onClick={() => void runAction('restart')}
-          >
-            <RotateCcw className="size-3.5" /> 重启
-          </Button>
-          <Button
-            variant="danger"
-            className="gap-1.5"
-            disabled={controlling || !data.managed || data.disabled}
-            onClick={() => void runAction('stop')}
-          >
-            <Power className="size-3.5" /> 停止
-          </Button>
-        </div>
-      </SettingsCard>
-
-      <SettingsCard
-        icon={<RefreshCw className="size-4" />}
-        title="服务配置"
-        description="端口与自启策略"
-      >
-        <div className="settings-redis-form">
-          <label className="settings-redis-field">
-            <span>端口</span>
-            <input
-              type="number"
-              min={1}
-              max={65535}
-              value={port}
-              onChange={event => {
-                setPort(event.target.value)
-                setChanged(true)
-                setMessage('')
-              }}
-            />
-          </label>
-          <Button
-            variant="secondary"
-            className="gap-1.5"
-            disabled={saving || (!changed && port === String(data.port))}
-            onClick={() => void save()}
-          >
-            <Save className="size-3.5" /> 保存配置
-          </Button>
-          <SettingsSwitch
-            checked={!disabled}
-            onChange={checked => {
-              setDisabled(!checked)
-              setChanged(true)
-              setMessage('')
-            }}
-            label={data.nativeRunning ? '使用独立 Redis 服务' : '启用内置 Redis 服务'}
-            hint={
-              data.nativeRunning
-                ? '独立 Redis 由 systemd 管理；关闭此开关不会停止系统服务'
-                : '关闭后不会启动；可用 alx --redis-off 快速禁用'
-            }
-          />
-          <SettingsSwitch
-            checked={autoStart}
-            onChange={checked => {
-              setAutoStart(checked)
-              setChanged(true)
-              setMessage('')
-            }}
-            label="工作台启动时自动开启"
-            hint="默认开启；端口已有 Redis 时自动复用该服务"
-          />
-        </div>
-      </SettingsCard>
-
-      {message && (
-        <SettingsMessage tone={message.includes('失败') || message.includes('无法') ? 'error' : 'info'}>
-          {message}
-        </SettingsMessage>
-      )}
-    </SettingsPage>
-  )
+  return <SettingsPage title="Redis" description="为机器人和插件自动管理的本地数据服务。">
+    <SettingsCard icon={<Database className="size-4" />} title={title} description={description} actions={<Button variant="ghost" className="gap-1" onClick={() => void refetch()} disabled={controlling}><RefreshCw className="size-3.5" />刷新</Button>}>
+      <div className="settings-service-status" aria-live="polite"><span className={ready ? 'is-ready' : preparing ? 'is-idle' : 'is-offline'} aria-hidden="true" /><small>{data.message}</small></div>
+      <div className="settings-redis-address"><span>连接信息</span><code>{data.address}</code><button type="button" className="text-button" onClick={() => void copy()} disabled={!data.running}>{copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}{copied ? '已复制' : '复制连接串'}</button></div>
+      {!data.external && <div className="settings-card-actions settings-card-actions-end">{!data.running && !data.disabled && <Button variant="primary" disabled={controlling} onClick={() => void run('start')}>启动服务</Button>}{data.mode === 'fallback-running' && <Button variant="secondary" disabled={controlling} onClick={() => void run('retry-runtime')}>重试准备</Button>}</div>}
+    </SettingsCard>
+    <Button variant="ghost" className="gap-1" onClick={() => setAdvanced(value => !value)}><Settings2 className="size-3.5" />{advanced ? '收起高级设置' : '高级设置'}</Button>
+    {advanced && !data.external && <SettingsCard icon={<Settings2 className="size-4" />} title="维护与配置" description="通常无需修改；改端口、关闭或重启会影响机器人和插件。"><div className="settings-redis-form">
+      <label className="settings-redis-field"><span>端口</span><input type="number" min={1} max={65535} value={port} onChange={event => { setPort(event.target.value); setChanged(true) }} /></label>
+      <SettingsSwitch checked={!disabled} onChange={checked => { setDisabled(!checked); setChanged(true) }} label="启用本地 Redis" hint="关闭后不会自动启动，也不会停止任何已有外部 Redis。" />
+      <SettingsSwitch checked={autoStart} onChange={checked => { setAutoStart(checked); setChanged(true) }} label="启动 ALemonX 时自动开启" hint="默认开启。" />
+      <Button variant="secondary" className="gap-1.5" disabled={saving || !changed} onClick={() => void save()}><Save className="size-3.5" />保存配置</Button>
+      {data.managed && <div className="settings-card-actions"><Button variant="secondary" disabled={controlling} onClick={() => void run('restart')}><RotateCcw className="size-3.5" />重启</Button><Button variant="danger" disabled={controlling} onClick={() => void run('stop')}><Power className="size-3.5" />停止</Button></div>}
+    </div></SettingsCard>}
+    {message && <SettingsMessage tone={message.includes('失败') || message.includes('无法') ? 'error' : 'info'}>{message}</SettingsMessage>}
+  </SettingsPage>
 }

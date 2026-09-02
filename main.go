@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"embed"
 	"encoding/json"
@@ -102,6 +103,7 @@ func main() {
 		log.Fatal(err)
 	}
 	yes, arguments := flagPresent(arguments, "--yes")
+	passwordStdin, arguments := flagPresent(arguments, "--password-stdin")
 	if len(arguments) > 0 && arguments[0] == "update-watch" {
 		if len(arguments) != 1 {
 			usage()
@@ -283,7 +285,7 @@ func main() {
 			pluginCommand(arguments[1:], yes, workspaceRoot)
 			return
 		case "auth":
-			authCommand(arguments[1:], yes, account, password, confirmation)
+			authCommand(arguments[1:], yes, account, password, confirmation, passwordStdin)
 			return
 		case "redis":
 			redisCommand(arguments[1:], port, account, password)
@@ -323,7 +325,7 @@ func main() {
 	serve(host, port, redisPort, redisOff, workspaceRoot)
 }
 
-func authCommand(arguments []string, confirmed bool, account, password, confirmation string) {
+func authCommand(arguments []string, confirmed bool, account, password, confirmation string, passwordStdin bool) {
 	manager, err := access.New()
 	if err != nil {
 		log.Fatal(err)
@@ -334,13 +336,14 @@ func authCommand(arguments []string, confirmed bool, account, password, confirma
 			log.Fatal(err)
 		}
 		if status.Enabled {
-			fmt.Printf("身份认证已开启，账户：%s\n", status.Account)
+			fmt.Printf("身份认证已开启，账户：%s\n配置：%s\n", status.Account, manager.Path())
 		} else {
-			fmt.Println("身份认证未开启。")
+			fmt.Printf("身份认证未开启。\n配置：%s\n", manager.Path())
 		}
 		return
 	}
 	if len(arguments) == 1 && arguments[0] == "enable" {
+		password, confirmation = authPasswordInput(password, confirmation, passwordStdin)
 		if _, err := manager.Enable(account, password, confirmation); err != nil {
 			log.Fatal(err)
 		}
@@ -363,6 +366,7 @@ func authCommand(arguments []string, confirmed bool, account, password, confirma
 			fmt.Println("此操作会使全部现有登录会话失效，并禁用其他超级管理员。请使用 --yes 确认。")
 			return
 		}
+		password, confirmation = authPasswordInput(password, confirmation, passwordStdin)
 		if _, err := manager.ResetSuperAdmin(account, password, confirmation); err != nil {
 			log.Fatal(err)
 		}
@@ -370,6 +374,26 @@ func authCommand(arguments []string, confirmed bool, account, password, confirma
 		return
 	}
 	usage()
+}
+
+// authPasswordInput accepts two newline-delimited secrets on stdin so an
+// emergency password never has to appear in shell history or process args.
+func authPasswordInput(password, confirmation string, passwordStdin bool) (string, string) {
+	if !passwordStdin {
+		return password, confirmation
+	}
+	if password != "" || confirmation != "" {
+		log.Fatal("--password-stdin 不能与 --password 或 --confirm-password 同时使用")
+	}
+	reader := bufio.NewReader(io.LimitReader(os.Stdin, 16<<10))
+	readSecret := func() string {
+		value, err := reader.ReadString('\n')
+		if err != nil && len(value) == 0 {
+			log.Fatal("无法从标准输入读取密码")
+		}
+		return strings.TrimSuffix(strings.TrimSuffix(value, "\n"), "\r")
+	}
+	return readSecret(), readSecret()
 }
 
 // redisCommand delegates lifecycle control to the running workbench. The
@@ -381,7 +405,7 @@ func redisCommand(arguments []string, workbenchPort, account, password string) {
 		return
 	}
 	action := arguments[0]
-	if action != "status" && action != "start" && action != "stop" && action != "restart" {
+	if action != "status" && action != "start" && action != "stop" && action != "restart" && action != "retry-runtime" {
 		usage()
 		return
 	}
@@ -770,9 +794,13 @@ func usage() {
   alx auth status                      查看身份认证状态
   alx auth enable --account <账户> --password <密码> --confirm-password <确认密码>
                                      开启本机身份认证（也支持 alx_AUTH_* 环境变量注入）
+  alx auth enable --account <账户> --password-stdin
+                                     从标准输入读取两次密码，避免出现在命令行
   alx auth disable --yes               关闭身份认证
   alx auth reset-super-admin --account <账户> --password <密码> --confirm-password <确认密码> --yes
                                      紧急重设超级管理员；使旧会话失效并禁用其他超级管理员
+  alx auth reset-super-admin --account <账户> --password-stdin --yes
+                                     从标准输入读取两次密码，避免出现在命令行
   alx [--cwd /项目目录] npm publish  发布到 npm 官方仓库
   alx [--cwd /项目目录] git publish --yes  创建 GitHub Release 标签`)
 }

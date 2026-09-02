@@ -244,9 +244,13 @@ The workspace directory stores templates, tools, new robots, and system plugins.
 
 The workspace paths also appear in the robot creation destination step (default `workspace/bots`). When templates or built-in tools have a newer version, they are never overwritten automatically; to refresh, delete the corresponding copy directory and use it again.
 
+Docker deployments also enable Redis by default. It listens only on container-local `127.0.0.1` and does not expose an additional host port. The `./data` volume preserves its configuration and fallback snapshot.
+
 **Q14: I forgot the workbench admin password?**
 
 When authentication is already enabled, use `alx auth reset-super-admin --account ... --password ... --confirm-password ... --yes` for emergency recovery. It immediately invalidates old sessions and disables other super administrators while preserving ordinary accounts, roles, and workbench data. `alx auth status` shows the current state. In production, also restrict access with a firewall.
+
+To keep a password out of shell history and process arguments, use `--password-stdin` and provide the password twice on standard input. For Docker deployments, run the command inside the container so it updates the store used by the running service: `docker compose exec -T alx /app/alx auth reset-super-admin --account <account> --password-stdin --yes`. Run `docker compose exec -T alx /app/alx auth status` first to confirm the configuration path.
 
 ### AI and MCP
 

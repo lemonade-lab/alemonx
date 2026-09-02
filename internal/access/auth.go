@@ -74,6 +74,11 @@ type Manager struct {
 	data config
 }
 
+// Path returns the exact file used by this manager. It is exposed for local
+// diagnostics so operators do not accidentally reset a different user's (or
+// the host's instead of a container's) authentication store.
+func (m *Manager) Path() string { return m.path }
+
 func DefaultPath() (string, error) {
 	directory, err := os.UserConfigDir()
 	if err != nil {

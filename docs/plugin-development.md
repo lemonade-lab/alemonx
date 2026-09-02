@@ -411,7 +411,7 @@ SDK 方法一览：
 
 ### webview.open：宿主管理的 WebView 窗口
 
-插件不需要再实现自己的 webview。`webview.open` 会校验参数后让工作台打开一个标准的悬浮窗口（可拖拽、缩放、最小化、最大化，行为与内置窗口一致），窗口内嵌 iframe；多个 WebView 自动级联错开位置，避免完全重叠：
+插件不需要再实现自己的 webview。`webview.open({ resource })` 会让工作台打开一个标准的悬浮窗口（可拖拽、缩放、最小化、最大化，窗口内嵌插件静态页）；`webview.open({ url })` 会在**内置浏览器创建新标签**，而不是把外部页面嵌入插件 iframe：
 
 ```js
 // 打开插件自身 web 根目录里的静态页面（同源，自动带 ALXHost）
@@ -422,7 +422,7 @@ const opened = await window.ALXHost.webview.open('my-status', {
   height: 640
 })
 
-// 打开外部 HTTP(S) 地址（第三方站点，不获得任何宿主能力）
+// 打开外部 HTTP(S) 地址（内置浏览器新标签，不获得任何宿主能力）
 await window.ALXHost.webview.open('my-status', {
   title: '官方文档',
   url: 'https://docs.example.com/'
@@ -434,7 +434,8 @@ await window.ALXHost.webview.close('my-status', opened.id)
 
 约束与细节：
 
-- 每个插件同时最多打开 **8 个 WebView**，超出时 Promise 立即以 `{ ok: false, error }` 拒绝。
+- 每个插件同时最多打开 **8 个页面句柄**（静态 WebView 与内置浏览器标签合计），超出时 Promise 立即以 `{ ok: false, error }` 拒绝。
+- `url` 返回的 `id` 绑定内置浏览器标签；`webview.close(id)` 只关闭该标签。用户已经关闭标签或浏览器窗口时，重复关闭是幂等的。
 - 静态页 WebView 自动携带当前主题参数（`?theme=light|dark`），与插件主页保持一致；窗口副标题显示实际地址。
 - 所有插件 WebView 都会由宿主注入 `--alemonjs-*` 主题变量（`docs/theme.json` 的完整契约，含 `[data-theme='dark']` 下的暗色覆盖），页面可直接使用 `var(--alemonjs-primary-bg)` 这类变量，无需自带主题色拷贝。
 - 同一插件打开同一资源（按去掉主题参数后的地址）时会恢复上次的窗口位置与尺寸，位置记忆存在浏览器本地。

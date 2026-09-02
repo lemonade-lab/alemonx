@@ -214,6 +214,9 @@ export type DependencySourceTask = {
   finishedAt?: string
 }
 export type SystemRedisStatus = {
+  mode: 'private-running' | 'fallback-running' | 'preparing-runtime' | 'migrating' | 'external-reused' | 'stopped' | 'disabled' | 'failed'
+  phase?: string
+  ownership: 'alemonx' | 'external' | 'none'
   running: boolean
   managed: boolean
   external: boolean
@@ -233,6 +236,10 @@ export type SystemRedisStatus = {
   privateInstalled: boolean
   privateRunning: boolean
   runtimePath?: string
+  runtimeVersion?: string
+  retryable: boolean
+  taskId?: string
+  connectionUri?: string
 }
 export type SystemCurrentRobot = {
   root: string
@@ -670,7 +677,7 @@ export const workspaceApi = createApi({
     }),
     controlSystemRedis: build.mutation<
       SystemRedisStatus,
-      'start' | 'stop' | 'restart' | 'install-native'
+      'start' | 'stop' | 'restart' | 'retry-runtime'
     >({
       query: action => ({
         url: 'system/redis',

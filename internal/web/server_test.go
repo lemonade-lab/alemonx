@@ -1865,10 +1865,42 @@ func TestBrowserHTTPResponseRewritesCrossOriginResourcesAndInstallsRuntime(t *te
 	body, _ := io.ReadAll(response.Body)
 	wantCross := browserHTTPProxyPrefix(&url.URL{Scheme: "http", Host: "10.0.6.3:8080"})
 	wantFrame := browserHTTPProxyPrefix(&url.URL{Scheme: "http", Host: "10.0.6.4:9090"})
-	for _, want := range []string{wantCross + "logo.svg", wantCross + "large.png", prefix + "small.png", wantFrame + "panel", "window.fetch=", "window.WebSocket=", "window.EventSource="} {
+	for _, want := range []string{wantCross + "logo.svg", wantCross + "large.png", prefix + "small.png", wantFrame + "panel", "window.fetch=", "window.WebSocket=", "window.EventSource=", "Node.prototype[name]", "Location.prototype[name]", "form-blocked"} {
 		if !strings.Contains(string(body), want) {
 			t.Errorf("rewritten browser document missing %q:\n%s", want, body)
 		}
+	}
+}
+
+func TestBrowserHTTPResponseOwnsChromeAndReferrerRecoveryPolicy(t *testing.T) {
+	target, err := url.Parse("http://10.0.6.2:50831")
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefix := browserHTTPProxyPrefix(target)
+	response := &http.Response{
+		StatusCode: http.StatusOK,
+		Header: http.Header{
+			"Content-Type":    []string{"text/html; charset=utf-8"},
+			"Referrer-Policy": []string{"no-referrer"},
+		},
+		Body: io.NopCloser(strings.NewReader(`<html><head><meta name="referrer" content="no-referrer"></head><body><script src="/app.js" referrerpolicy="no-referrer"></script></body></html>`)),
+	}
+	modifyBrowserHTTPResponse(response, target, prefix, prefix+"panel/index.html")
+	rewriteBrowserHTTPResponse(response, target, prefix, prefix+"panel/index.html")
+	injectBrowserStorageBootstrap(response, prefix, "token", target, "/panel/index.html")
+	body, _ := io.ReadAll(response.Body)
+	content := string(body)
+	if response.Header.Get("Referrer-Policy") != "strict-origin-when-cross-origin" {
+		t.Fatalf("browser referrer policy = %q", response.Header.Get("Referrer-Policy"))
+	}
+	for _, want := range []string{`src="` + prefix + `app.js"`, `referrerpolicy="strict-origin-when-cross-origin"`, `content="strict-origin-when-cross-origin"`, browserHTTPScrollbarStyle, browserBaseHrefFor(prefix + "panel/index.html")} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("browser document missing %q:\n%s", want, content)
+		}
+	}
+	if strings.Contains(content, `robotAppScrollbarStyle`) || strings.Contains(content, `bridge.js`) {
+		t.Fatalf("browser chrome leaked robot application behavior: %s", content)
 	}
 }
 
@@ -1967,6 +1999,100 @@ func TestBrowserHTTPProxyHandlerNormalizesNestedProxyPath(t *testing.T) {
 	(&server{}).browserHTTPProxyHandler(recorder, request)
 	if recorder.Code != http.StatusOK || requestedPath != "/guoba-plugin-mock-root/_app.config.js?v=1" {
 		t.Fatalf("nested request = status %d, upstream path %q", recorder.Code, requestedPath)
+	}
+}
+
+func TestBrowserHTTPRecoveryRoutesEscapedRootAndAPIBeforeWorkbench(t *testing.T) {
+	var paths []string
+	var bodies []string
+	upstream := newIPv4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		paths = append(paths, r.URL.RequestURI())
+		bodies = append(bodies, string(body))
+		_, _ = w.Write([]byte("upstream:" + r.URL.Path))
+	}))
+	target, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := base64.RawURLEncoding.EncodeToString([]byte(target.Scheme + "://" + target.Host))
+	proxyPage := "http://workbench.test/api/v1/browser/http/" + token + "/panel/index.html"
+	workbenchCalls := 0
+	handler := (&server{}).browserHTTPRecovery(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		workbenchCalls++
+		_, _ = w.Write([]byte("workbench"))
+	}))
+
+	asset := httptest.NewRequest(http.MethodGet, "http://workbench.test/assets/app.js?v=1", nil)
+	asset.Header.Set("Referer", proxyPage)
+	assetResult := httptest.NewRecorder()
+	handler.ServeHTTP(assetResult, asset)
+	if assetResult.Code != http.StatusOK || assetResult.Body.String() != "upstream:/assets/app.js" {
+		t.Fatalf("escaped asset = %d %q", assetResult.Code, assetResult.Body.String())
+	}
+
+	root := httptest.NewRequest(http.MethodPost, "http://workbench.test/", strings.NewReader("payload"))
+	root.Header.Set("Referer", proxyPage)
+	rootResult := httptest.NewRecorder()
+	handler.ServeHTTP(rootResult, root)
+	if rootResult.Code != http.StatusOK || rootResult.Body.String() != "upstream:/" {
+		t.Fatalf("escaped root = %d %q", rootResult.Code, rootResult.Body.String())
+	}
+
+	api := httptest.NewRequest(http.MethodGet, "http://workbench.test/api/v1/from-page", nil)
+	api.Header.Set("Referer", proxyPage)
+	apiResult := httptest.NewRecorder()
+	handler.ServeHTTP(apiResult, api)
+	if apiResult.Code != http.StatusOK || apiResult.Body.String() != "upstream:/api/v1/from-page" {
+		t.Fatalf("escaped api = %d %q", apiResult.Code, apiResult.Body.String())
+	}
+	if workbenchCalls != 0 || !reflect.DeepEqual(paths, []string{"/assets/app.js?v=1", "/", "/api/v1/from-page"}) || !reflect.DeepEqual(bodies, []string{"", "payload", ""}) {
+		t.Fatalf("recovery must preserve target paths and bodies: workbench=%d paths=%q bodies=%q", workbenchCalls, paths, bodies)
+	}
+}
+
+func TestBrowserHTTPRecoveryLeavesWorkbenchRequestsWithoutValidProxyReferer(t *testing.T) {
+	called := 0
+	handler := (&server{}).browserHTTPRecovery(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		called++
+		_, _ = w.Write([]byte("workbench"))
+	}))
+	request := httptest.NewRequest(http.MethodGet, "http://workbench.test/", nil)
+	result := httptest.NewRecorder()
+	handler.ServeHTTP(result, request)
+	if called != 1 || result.Body.String() != "workbench" {
+		t.Fatalf("ordinary workbench root must not be recovered: calls=%d body=%q", called, result.Body.String())
+	}
+}
+
+func TestBrowserHTTPProxyRewritesWorkbenchRefererForUpstream(t *testing.T) {
+	var referer string
+	upstream := newIPv4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		referer = r.Referer()
+		_, _ = w.Write([]byte("ok"))
+	}))
+	target, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := base64.RawURLEncoding.EncodeToString([]byte(target.Scheme + "://" + target.Host))
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/browser/http/"+token+"/next", nil)
+	request.Header.Set("Referer", "http://workbench.test/api/v1/browser/http/"+token+"/panel?x=1")
+	response := httptest.NewRecorder()
+	(&server{}).browserHTTPProxyHandler(response, request)
+	if referer != target.Scheme+"://"+target.Host+"/panel?x=1" {
+		t.Fatalf("upstream referer = %q", referer)
+	}
+}
+
+func TestBrowserHostScopeRecognizesPrivateAddressFamilies(t *testing.T) {
+	for _, host := range []string{"localhost", "printer.local", "127.0.0.1", "10.0.6.2", "192.168.1.10", "172.16.8.1", "::1", "fe80::1", "fc00::1"} {
+		if scope := browserHostScope(context.Background(), host); scope != "private" {
+			t.Errorf("host %q scope = %q, want private", host, scope)
+		}
+	}
+	if scope := browserHostScope(context.Background(), "8.8.8.8"); scope != "public" {
+		t.Fatalf("public IP scope = %q", scope)
 	}
 }
 
@@ -2104,6 +2230,9 @@ func TestLocalServiceAPIBootstrapInjectedWhenDeclared(t *testing.T) {
 	}
 	if !strings.Contains(body, "window.WebSocket=S") || !strings.Contains(body, "ws://") {
 		t.Fatalf("compat bootstrap must rebase WebSocket URLs: %s", body)
+	}
+	if !strings.Contains(body, parsed.Host) || response.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("compat bootstrap must bind the declared upstream and disable upstream HTML caching: host=%q cache=%q body=%s", parsed.Host, response.Header().Get("Cache-Control"), body)
 	}
 	if !strings.Contains(body, "<base href=") {
 		t.Fatalf("rewritten HTML lacks base href: %s", body)

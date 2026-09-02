@@ -1098,6 +1098,8 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	mux.HandleFunc("/api/v1/services/dynamic/", s.dynamicLocalServiceProxyHandler)
 	mux.HandleFunc("/api/v1/services/", s.localServiceProxyHandler)
 	mux.HandleFunc("/api/v1/browser/http/", s.browserHTTPProxyHandler)
+	mux.HandleFunc("/api/v1/browser/classify", s.browserClassifyHandler)
+	mux.HandleFunc("/api/v1/browser/external/open", s.browserExternalOpenHandler)
 	mux.HandleFunc("/api/v1/robot", s.robotHandler)
 	mux.HandleFunc("/api/v1/robot/master", s.robotMasterAuthorizationHandler)
 	mux.HandleFunc("/api/v1/robot/projects", s.robotProjectsHandler)
@@ -1177,7 +1179,12 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	router.Use(gin.Recovery(), s.ginHeaders(), s.ginAccess(), s.ginRequestLog())
 	// The Gin engine owns every request. Existing handlers remain standard
 	// net/http functions, preserving their API contracts during migration.
-	router.Any("/*path", gin.WrapH(mux))
+	// Browser HTTP escape recovery deliberately wraps the whole mux. A proxied
+	// document can still cause the browser parser, a preload scanner, a stale
+	// worker, or third-party code to request an origin-root URL such as /app.js.
+	// It must be recovered before a similarly named workbench API/static route
+	// (or the SPA root fallback) has an opportunity to consume it.
+	router.Any("/*path", gin.WrapH(s.browserHTTPRecovery(mux)))
 	runtime := &ServerRuntime{Handler: router, server: s, updateRequested: make(chan struct{})}
 	s.requestUpdateShutdown = runtime.RequestUpdateShutdown
 	return runtime
@@ -6521,13 +6528,8 @@ func (s *server) browserHTTPProxyHandler(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, "缺少 HTTP 浏览地址。")
 		return
 	}
-	rawTarget, err := base64.RawURLEncoding.DecodeString(parts[0])
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "HTTP 浏览地址无效。")
-		return
-	}
-	target, err := url.Parse(string(rawTarget))
-	if err != nil || target.Scheme != "http" || target.Host == "" || target.User != nil {
+	target, ok := browserHTTPTargetFromToken(parts[0])
+	if !ok {
 		writeError(w, http.StatusBadRequest, "仅支持无凭据的 HTTP 浏览地址。")
 		return
 	}
@@ -6579,6 +6581,9 @@ func (s *server) browserHTTPProxyHandler(w http.ResponseWriter, r *http.Request)
 			if request.Header.Get("Origin") != "" {
 				request.Header.Set("Origin", target.Scheme+"://"+target.Host)
 			}
+			if referer := browserHTTPLogicalReferer(request.Header.Get("Referer")); referer != "" {
+				request.Header.Set("Referer", referer)
+			}
 		},
 		ModifyResponse: func(response *http.Response) error {
 			modifyBrowserHTTPResponse(response, target, proxyPrefix, r.URL.Path)
@@ -6598,6 +6603,102 @@ func (s *server) browserHTTPProxyHandler(w http.ResponseWriter, r *http.Request)
 		},
 	}
 	proxy.ServeHTTP(w, r)
+}
+
+// browserHTTPLogicalReferer restores the upstream-facing referer from a
+// workbench proxy mount. It prevents application-side origin checks from
+// observing internal /api/v1/browser paths.
+func browserHTTPLogicalReferer(value string) string {
+	parsed, err := url.Parse(strings.TrimSpace(value))
+	if err != nil {
+		return ""
+	}
+	const mount = "/api/v1/browser/http/"
+	if !strings.HasPrefix(parsed.Path, mount) {
+		return ""
+	}
+	rest := strings.TrimPrefix(parsed.Path, mount)
+	parts := strings.SplitN(rest, "/", 2)
+	if len(parts) == 0 {
+		return ""
+	}
+	target, ok := browserHTTPTargetFromToken(parts[0])
+	if !ok {
+		return ""
+	}
+	path := "/"
+	if len(parts) == 2 && parts[1] != "" {
+		path += parts[1]
+	}
+	return target.Scheme + "://" + target.Host + path + func() string {
+		if parsed.RawQuery == "" {
+			return ""
+		}
+		return "?" + parsed.RawQuery
+	}()
+}
+
+// browserHTTPRecovery catches a request that escaped an HTTP browser mount
+// back to the workbench origin. It is intentionally browser-only: robot apps
+// and system-plugin WebViews never enter this handler or its proxy pipeline.
+func (s *server) browserHTTPRecovery(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		const mount = "/api/v1/browser/http/"
+		if strings.HasPrefix(r.URL.Path, mount) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		token, ok := browserHTTPRefererToken(r)
+		if !ok {
+			next.ServeHTTP(w, r)
+			return
+		}
+		recovered := r.Clone(r.Context())
+		urlCopy := *r.URL
+		recovered.URL = &urlCopy
+		recovered.URL.Path = mount + token + r.URL.Path
+		recovered.URL.RawPath = ""
+		recovered.RequestURI = recovered.URL.RequestURI()
+		s.browserHTTPProxyHandler(w, recovered)
+	})
+}
+
+// browserHTTPRefererToken accepts only a same-workbench proxy Referer and
+// validates the encoded HTTP origin before it becomes a recovery target.
+func browserHTTPRefererToken(r *http.Request) (string, bool) {
+	referer := strings.TrimSpace(r.Referer())
+	if referer == "" {
+		return "", false
+	}
+	parsed, err := url.Parse(referer)
+	if err != nil {
+		return "", false
+	}
+	if parsed.Host != "" && !strings.EqualFold(parsed.Host, r.Host) {
+		return "", false
+	}
+	const mount = "/api/v1/browser/http/"
+	if !strings.HasPrefix(parsed.Path, mount) {
+		return "", false
+	}
+	rest := strings.TrimPrefix(parsed.Path, mount)
+	token := strings.SplitN(rest, "/", 2)[0]
+	if _, ok := browserHTTPTargetFromToken(token); !ok {
+		return "", false
+	}
+	return token, true
+}
+
+func browserHTTPTargetFromToken(token string) (*url.URL, bool) {
+	rawTarget, err := base64.RawURLEncoding.DecodeString(token)
+	if err != nil {
+		return nil, false
+	}
+	target, err := url.Parse(string(rawTarget))
+	if err != nil || !strings.EqualFold(target.Scheme, "http") || target.Host == "" || target.User != nil {
+		return nil, false
+	}
+	return target, true
 }
 
 // browserHTTPNestedMount returns the token and resource path from a proxy path
@@ -6623,12 +6724,15 @@ func browserHTTPNestedMount(requestPath string) (token, resourcePath string, ok 
 	return parts[0], parts[1], true
 }
 
-// modifyBrowserHTTPResponse deliberately keeps the visual injections shared
-// with robot apps, but not their launchpad-specific 404 handling. A normal
-// website must be allowed to render its own 404 page and follow redirects to
-// any HTTP origin through the browser proxy.
+// modifyBrowserHTTPResponse belongs solely to the built-in browser pipeline.
+// It never invokes robot-app rewriting or fallback behavior: a normal website
+// must render its own 404 page and follow redirects through browser mounts.
 func modifyBrowserHTTPResponse(response *http.Response, target *url.URL, proxyPrefix, requestPath string) {
 	response.Header.Del("X-Frame-Options")
+	// Escape recovery needs same-workbench resource requests to retain their
+	// full Referer. Upstream policies such as no-referrer would otherwise make
+	// a missed root-relative resource indistinguishable from a workbench asset.
+	response.Header.Set("Referrer-Policy", "strict-origin-when-cross-origin")
 	if location := response.Header.Get("Location"); location != "" {
 		if strings.HasPrefix(location, "//") {
 			response.Header.Set("Location", browserProxyURL("http:"+location))
@@ -6646,14 +6750,118 @@ func modifyBrowserHTTPResponse(response *http.Response, target *url.URL, proxyPr
 		return
 	}
 	_ = response.Body.Close()
-	document := injectRobotAppDocumentChrome(string(body), requestPath)
+	document := injectBrowserDocumentChrome(string(body), requestPath)
 	response.Body = io.NopCloser(strings.NewReader(document))
 	response.ContentLength = int64(len(document))
 	response.Header.Set("Content-Length", strconv.Itoa(len(document)))
 }
 
+// injectBrowserDocumentChrome is intentionally separate from robot app chrome.
+// The browser owns only its visual contract and logical document base; it does
+// not acquire robot routes, bridges, launchpad behavior, or app fallback.
+func injectBrowserDocumentChrome(document, requestPath string) string {
+	injections := alemonjsThemeStyleTag + browserBaseHrefFor(requestPath) + browserHTTPScrollbarStyle
+	if head := regexp.MustCompile(`(?i)<head[^>]*>`).FindString(document); head != "" {
+		return strings.Replace(document, head, head+injections, 1)
+	}
+	if htmlTag := regexp.MustCompile(`(?i)<html[^>]*>`).FindString(document); htmlTag != "" {
+		return strings.Replace(document, htmlTag, htmlTag+"<head>"+injections+"</head>", 1)
+	}
+	return injections + document
+}
+
+func browserBaseHrefFor(requestPath string) string {
+	directory := requestPath
+	if index := strings.LastIndex(directory, "/"); index >= 0 {
+		directory = directory[:index+1]
+	}
+	return `<base href="` + html.EscapeString(directory) + `">`
+}
+
+const browserHTTPScrollbarStyle = `<style>html,body{scrollbar-width:none;-ms-overflow-style:none}html::-webkit-scrollbar,body::-webkit-scrollbar{width:0;height:0;display:none}</style>`
+
 func browserHTTPCookiePrefix(targetToken string) string {
 	return "alxbrowser_" + targetToken + "_"
+}
+
+type browserURLRequest struct {
+	URL string `json:"url"`
+}
+
+// browserClassifyHandler resolves a complete HTTP(S) target from the host
+// environment. Browser navigation uses this only to choose an outer surface:
+// private/LAN targets stay in the built-in browser; public targets leave it.
+func (s *server) browserClassifyHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "该浏览器请求方式暂不支持。")
+		return
+	}
+	target, ok := browserURLRequestTarget(w, r)
+	if !ok {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"scope": browserHostScope(r.Context(), target.Hostname())})
+}
+
+func (s *server) browserExternalOpenHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "该浏览器请求方式暂不支持。")
+		return
+	}
+	target, ok := browserURLRequestTarget(w, r)
+	if !ok {
+		return
+	}
+	if err := system.OpenDesktopTarget(target.String()); err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func browserURLRequestTarget(w http.ResponseWriter, r *http.Request) (*url.URL, bool) {
+	var input browserURLRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, 16<<10)).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, "浏览器地址无效。")
+		return nil, false
+	}
+	target, err := url.Parse(strings.TrimSpace(input.URL))
+	if err != nil || target.Host == "" || target.User != nil || (target.Scheme != "http" && target.Scheme != "https") {
+		writeError(w, http.StatusBadRequest, "仅支持有效的 HTTP 或 HTTPS 地址。")
+		return nil, false
+	}
+	return target, true
+}
+
+func browserHostScope(ctx context.Context, host string) string {
+	host = strings.Trim(strings.ToLower(strings.TrimSpace(host)), "[]")
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") || strings.HasSuffix(host, ".local") {
+		return "private"
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		if browserPrivateIP(ip) {
+			return "private"
+		}
+		return "public"
+	}
+	lookupContext, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	addresses, err := net.DefaultResolver.LookupIPAddr(lookupContext, host)
+	if err != nil {
+		// Let the user's system browser apply its own DNS, VPN and split-DNS
+		// rules when this workbench host cannot resolve a public name.
+		return "public"
+	}
+	for _, address := range addresses {
+		if browserPrivateIP(address.IP) {
+			return "private"
+		}
+	}
+	return "public"
+}
+
+func browserPrivateIP(ip net.IP) bool {
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified()
 }
 
 // isolateBrowserHTTPCookies keeps every HTTP target's session separate from
@@ -6816,6 +7024,10 @@ func browserRewriteHTMLAttributes(token *webhtml.Token, mapper browserURLMapper)
 			attribute.Val = rewriteBrowserSrcSet(attribute.Val, mapper)
 		case "style":
 			attribute.Val = rewriteBrowserCSS(attribute.Val, mapper.proxyPrefix)
+		case "referrerpolicy":
+			// Browser escape recovery depends on same-origin proxy subrequests
+			// retaining their source mount. Do not let an upstream page disable it.
+			attribute.Val = "strict-origin-when-cross-origin"
 		case "integrity":
 			// Rewritten modules no longer match the upstream digest.
 			attribute.Key = ""
@@ -6830,6 +7042,24 @@ func browserRewriteHTMLAttributes(token *webhtml.Token, mapper browserURLMapper)
 	token.Attr = filtered
 	if strings.EqualFold(token.Data, "meta") {
 		browserRewriteMetaRefresh(token, mapper)
+		browserRewriteMetaReferrerPolicy(token)
+	}
+}
+
+func browserRewriteMetaReferrerPolicy(token *webhtml.Token) {
+	name := ""
+	for index := range token.Attr {
+		if strings.EqualFold(token.Attr[index].Key, "name") || strings.EqualFold(token.Attr[index].Key, "http-equiv") {
+			name = strings.ToLower(strings.TrimSpace(token.Attr[index].Val))
+		}
+	}
+	if name != "referrer" && name != "referrer-policy" {
+		return
+	}
+	for index := range token.Attr {
+		if strings.EqualFold(token.Attr[index].Key, "content") {
+			token.Attr[index].Val = "strict-origin-when-cross-origin"
+		}
 	}
 }
 
@@ -6926,7 +7156,7 @@ func injectBrowserStorageBootstrap(response *http.Response, proxyPrefix, targetT
 		return
 	}
 	_ = response.Body.Close()
-	script := `<script src="` + html.EscapeString(proxyPrefix+"__alx_browser_storage.js") + `"></script><script>` + browserHTTPRuntime(targetToken, target, requestPath) + `</script>`
+	script := `<script src="` + html.EscapeString(proxyPrefix+"__alx_browser_storage.js") + `"></script><script>` + browserHTTPNavigationRuntime(target, requestPath) + `</script><script>` + browserHTTPReferrerRuntime() + `</script><script>` + browserHTTPRuntime(targetToken, target, requestPath) + `</script>`
 	document := string(body)
 	if head := regexp.MustCompile(`(?i)<head[^>]*>`).FindString(document); head != "" {
 		document = strings.Replace(document, head, head+script, 1)
@@ -6940,13 +7170,29 @@ func injectBrowserStorageBootstrap(response *http.Response, proxyPrefix, targetT
 	response.Header.Set("Content-Length", strconv.Itoa(len(document)))
 }
 
+// browserHTTPReferrerRuntime normalizes dynamically-created elements before
+// they enter the document. Static markup is handled by the HTML transformer;
+// this closes the equivalent referrerpolicy=no-referrer escape hatch for DOM
+// APIs without sharing any robot or plugin runtime.
+func browserHTTPReferrerRuntime() string {
+	return `(function(){var policy='strict-origin-when-cross-origin';function fix(node){try{if(!node||node.nodeType!==1)return;if(node.hasAttribute&&node.hasAttribute('referrerpolicy'))node.setAttribute('referrerpolicy',policy);if(node.querySelectorAll)node.querySelectorAll('[referrerpolicy]').forEach(function(child){child.setAttribute('referrerpolicy',policy)})}catch(_){}}var set=Element.prototype.setAttribute;Element.prototype.setAttribute=function(name,value){if(String(name).toLowerCase()==='referrerpolicy')value=policy;return set.call(this,name,value)};['appendChild','insertBefore','replaceChild'].forEach(function(name){var native=Node.prototype[name];if(!native)return;Node.prototype[name]=function(node){fix(node);return native.apply(this,arguments)}})})();`
+}
+
+// browserHTTPNavigationRuntime covers document-navigation APIs that bypass
+// fetch/XHR interception. Cross-site targets are reported to the host, where
+// public-vs-private routing is decided; same-site roots remain in this mount.
+func browserHTTPNavigationRuntime(target *url.URL, requestPath string) string {
+	logicalBase := "http://" + target.Host + requestPath
+	return `(function(){var base=` + strconv.Quote(logicalBase) + `,origin=` + strconv.Quote("http://"+target.Host) + `,mount='/api/v1/browser/http/';function token(v){try{return btoa(v).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')}catch(_){return''}}function logical(value){try{var u=new URL(value,base);if(u.origin===location.origin&&u.pathname.indexOf(mount)!==0)return new URL(u.pathname+u.search+u.hash,origin);return u}catch(_){return null}}function reportExternal(url){parent.postMessage({source:'alx-browser',type:'open',url:url},location.origin)}function mapped(value){var u=logical(value);if(!u)return value;if(u.origin!==origin){reportExternal(u.href);return null}if(u.protocol!=='http:')return u.href;return mount+token(u.origin)+u.pathname+u.search+u.hash}function wrap(name){try{var native=Location.prototype[name];if(typeof native!=='function')return;Location.prototype[name]=function(value){var next=mapped(value);if(next===null)return;return native.call(this,next)}}catch(_){}}wrap('assign');wrap('replace');try{var descriptor=Object.getOwnPropertyDescriptor(Location.prototype,'href');if(descriptor&&descriptor.set&&descriptor.configurable)Object.defineProperty(Location.prototype,'href',{configurable:true,enumerable:descriptor.enumerable,get:descriptor.get,set:function(value){var next=mapped(value);if(next!==null)descriptor.set.call(this,next)}})}catch(_){}document.addEventListener('click',function(event){var anchor=event.target&&event.target.closest&&event.target.closest('a[href]');if(!anchor||event.defaultPrevented||event.button&&event.button!==0)return;var next=logical(anchor.href);if(!next||next.origin===origin&&anchor.target!=='_blank')return;event.preventDefault();reportExternal(next.href)},true);document.addEventListener('submit',function(event){var form=event.target;if(!form||!form.action)return;var next=logical(form.action);if(!next||next.origin===origin)return;event.preventDefault();event.stopImmediatePropagation();var method=String(form.method||'get').toLowerCase();if(method==='get'){try{var targetURL=new URL(next.href),data=new FormData(form);data.forEach(function(value,key){targetURL.searchParams.append(key,String(value))});reportExternal(targetURL.href)}catch(_){reportExternal(next.href)}return}parent.postMessage({source:'alx-browser',type:'form-blocked',url:next.href,method:method},location.origin)},true)})();`
+}
+
 // browserHTTPRuntime virtualizes the HTTP origin for dynamic browser APIs. It
 // is intentionally installed before application scripts so absolute URLs built
 // at runtime follow the same backend proxy as markup resources.
 func browserHTTPRuntime(targetToken string, target *url.URL, requestPath string) string {
 	logicalBase := "http://" + target.Host + requestPath
 	proxyPrefix := "/api/v1/browser/http/"
-	return `(function(){var logicalBase=` + strconv.Quote(logicalBase) + `,logicalOrigin=` + strconv.Quote("http://"+target.Host) + `,mount=` + strconv.Quote(proxyPrefix) + `;function token(origin){try{return btoa(origin).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')}catch(_){return''}}function toLogical(value){try{var u=new URL(value,logicalBase);if(u.origin===location.origin&&u.pathname.indexOf(mount)!==0)return new URL(u.pathname+u.search+u.hash,logicalOrigin);return u}catch(_){return null}}function proxied(value,websocket){try{if(typeof value==='string'&&value.indexOf(mount)===0)return websocket?(location.protocol==='https:'?'wss://':'ws://')+location.host+value:value;var u=toLogical(value);if(!u)return value;if(websocket&&(u.protocol==='ws:'||u.protocol==='wss:')){if(u.protocol==='wss:')return u.href;u.protocol='http:'}if(u.protocol!=='http:')return u.href;var p=mount+token(u.origin)+u.pathname+u.search+u.hash;return websocket?(location.protocol==='https:'?'wss://':'ws://')+location.host+p:p}catch(_){return value}}function map(input,websocket){if(input instanceof Request)return proxied(input.url,websocket);if(input instanceof URL)return proxied(input.href,websocket);return proxied(String(input),websocket)}function report(){try{var path=location.pathname.indexOf(mount)===0?location.pathname.slice(location.pathname.indexOf('/',mount.length)+1):location.pathname;parent.postMessage({source:'alx-browser',type:'navigate',url:new URL(path+location.search+location.hash,logicalOrigin).href},location.origin)}catch(_){}}var nativeFetch=window.fetch;window.fetch=function(input,init){try{if(input instanceof Request)return nativeFetch.call(this,new Request(map(input),input),init);return nativeFetch.call(this,map(input),init)}catch(_){return nativeFetch.apply(this,arguments)}};var NativeXHR=window.XMLHttpRequest;function ProxyXHR(){var xhr=new NativeXHR(),open=xhr.open;xhr.open=function(method,url){arguments[1]=map(url);return open.apply(xhr,arguments)};return xhr}ProxyXHR.prototype=NativeXHR.prototype;window.XMLHttpRequest=ProxyXHR;var NativeEventSource=window.EventSource;if(NativeEventSource)window.EventSource=function(url,init){return new NativeEventSource(map(url),init)};var NativeSocket=window.WebSocket;if(NativeSocket){function ProxySocket(url,protocols){return protocols===undefined?new NativeSocket(map(url,true)):new NativeSocket(map(url,true),protocols)}ProxySocket.prototype=NativeSocket.prototype;['CONNECTING','OPEN','CLOSING','CLOSED'].forEach(function(key){ProxySocket[key]=NativeSocket[key]});window.WebSocket=ProxySocket}function proxyWorker(Native){if(!Native)return null;function Wrapped(url,options){return options===undefined?new Native(map(url)):new Native(map(url),options)}Wrapped.prototype=Native.prototype;return Wrapped}window.Worker=proxyWorker(window.Worker)||window.Worker;window.SharedWorker=proxyWorker(window.SharedWorker)||window.SharedWorker;if(navigator.serviceWorker&&navigator.serviceWorker.register){var register=navigator.serviceWorker.register.bind(navigator.serviceWorker);navigator.serviceWorker.register=function(url,options){return register(map(url),options)}}var nativeBeacon=navigator.sendBeacon&&navigator.sendBeacon.bind(navigator);if(nativeBeacon)navigator.sendBeacon=function(url,data){return nativeBeacon(map(url),data)};['pushState','replaceState'].forEach(function(name){var nativeHistory=history[name];history[name]=function(state,title,next){if(next!==undefined&&next!==null)arguments[2]=map(next);var result=nativeHistory.apply(this,arguments);report();return result}});addEventListener('popstate',report);addEventListener('hashchange',report);var nativeOpen=window.open;window.open=function(url,target,features){if(typeof url==='string'&&url){parent.postMessage({source:'alx-browser',type:'open',url:toLogical(url).href},location.origin);return null}return nativeOpen.apply(this,arguments)};document.addEventListener('click',function(event){var anchor=event.target&&event.target.closest&&event.target.closest('a[target="_blank"]');if(!anchor||!anchor.href)return;event.preventDefault();parent.postMessage({source:'alx-browser',type:'open',url:toLogical(anchor.href).href},location.origin)},true);report()})();`
+	return `(function(){var logicalBase=` + strconv.Quote(logicalBase) + `,logicalOrigin=` + strconv.Quote("http://"+target.Host) + `,mount=` + strconv.Quote(proxyPrefix) + `;function token(origin){try{return btoa(origin).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')}catch(_){return''}}function toLogical(value){try{var u=new URL(value,logicalBase);if(u.origin===location.origin&&u.pathname.indexOf(mount)!==0)return new URL(u.pathname+u.search+u.hash,logicalOrigin);return u}catch(_){return null}}function proxied(value,websocket){try{if(typeof value==='string'&&value.indexOf(mount)===0)return websocket?(location.protocol==='https:'?'wss://':'ws://')+location.host+value:value;var u=toLogical(value);if(!u)return value;if(websocket&&(u.protocol==='ws:'||u.protocol==='wss:')){if(u.protocol==='wss:')return u.href;u.protocol='http:'}if(u.protocol!=='http:')return u.href;var p=mount+token(u.origin)+u.pathname+u.search+u.hash;return websocket?(location.protocol==='https:'?'wss://':'ws://')+location.host+p:p}catch(_){return value}}function map(input,websocket){if(input instanceof Request)return proxied(input.url,websocket);if(input instanceof URL)return proxied(input.href,websocket);return proxied(String(input),websocket)}function report(){try{var path=location.pathname.indexOf(mount)===0?location.pathname.slice(location.pathname.indexOf('/',mount.length)+1):location.pathname;parent.postMessage({source:'alx-browser',type:'navigate',url:new URL(path+location.search+location.hash,logicalOrigin).href},location.origin)}catch(_){}}var nativeFetch=window.fetch;window.fetch=function(input,init){try{if(input instanceof Request)return nativeFetch.call(this,new Request(map(input),input),init);return nativeFetch.call(this,map(input),init)}catch(_){return nativeFetch.apply(this,arguments)}};var NativeXHR=window.XMLHttpRequest;function ProxyXHR(){var xhr=new NativeXHR(),open=xhr.open;xhr.open=function(method,url){arguments[1]=map(url);return open.apply(xhr,arguments)};return xhr}ProxyXHR.prototype=NativeXHR.prototype;window.XMLHttpRequest=ProxyXHR;var NativeEventSource=window.EventSource;if(NativeEventSource)window.EventSource=function(url,init){return new NativeEventSource(map(url),init)};var NativeSocket=window.WebSocket;if(NativeSocket){function ProxySocket(url,protocols){return protocols===undefined?new NativeSocket(map(url,true)):new NativeSocket(map(url,true),protocols)}ProxySocket.prototype=NativeSocket.prototype;['CONNECTING','OPEN','CLOSING','CLOSED'].forEach(function(key){ProxySocket[key]=NativeSocket[key]});window.WebSocket=ProxySocket}function proxyWorker(Native){if(!Native)return null;function Wrapped(url,options){return options===undefined?new Native(map(url)):new Native(map(url),options)}Wrapped.prototype=Native.prototype;return Wrapped}window.Worker=proxyWorker(window.Worker)||window.Worker;window.SharedWorker=proxyWorker(window.SharedWorker)||window.SharedWorker;if(navigator.serviceWorker&&navigator.serviceWorker.register){var register=navigator.serviceWorker.register.bind(navigator.serviceWorker);navigator.serviceWorker.register=function(url,options){return register(map(url),options)}}var nativeBeacon=navigator.sendBeacon&&navigator.sendBeacon.bind(navigator);if(nativeBeacon)navigator.sendBeacon=function(url,data){return nativeBeacon(map(url),data)};function mapForm(form){try{if(form&&form.action)form.action=map(form.action)}catch(_){}}document.addEventListener('submit',function(event){mapForm(event.target)},true);if(window.HTMLFormElement){['submit','requestSubmit'].forEach(function(name){var native=HTMLFormElement.prototype[name];if(native)HTMLFormElement.prototype[name]=function(){mapForm(this);return native.apply(this,arguments)}})}['pushState','replaceState'].forEach(function(name){var nativeHistory=history[name];history[name]=function(state,title,next){if(next!==undefined&&next!==null)arguments[2]=map(next);var result=nativeHistory.apply(this,arguments);report();return result}});addEventListener('popstate',report);addEventListener('hashchange',report);var nativeOpen=window.open;window.open=function(url,target,features){if(typeof url==='string'&&url){parent.postMessage({source:'alx-browser',type:'open',url:toLogical(url).href},location.origin);return null}return nativeOpen.apply(this,arguments)};document.addEventListener('click',function(event){var anchor=event.target&&event.target.closest&&event.target.closest('a[target="_blank"]');if(!anchor||!anchor.href)return;event.preventDefault();parent.postMessage({source:'alx-browser',type:'open',url:toLogical(anchor.href).href},location.origin)},true);report()})();`
 }
 
 // robotTestHandler reverse-proxies the robot's CBP/sandbox WebSocket service

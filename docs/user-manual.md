@@ -71,8 +71,10 @@ workspace/
 | 名称 | 谁在用 | 能做什么 |
 | --- | --- | --- |
 | 系统面板页 | 系统插件 | 插件自己的管理界面，可调用宿主能力与特权操作 |
-| 宿主 WebView | 系统插件打开的窗口 | 普通 iframe，展示插件页面或外部 URL，无宿主特权 |
+| 宿主 WebView | 系统插件打开的 `resource` 窗口 | 普通 iframe，展示插件自身静态页面并提供受控宿主能力 |
 | 机器人应用页 | 机器人插件 | 只能访问当前机器人的 `./api/*`，是机器人自己的前端 |
+
+三者的代理、权限、页面注入与生命周期互不复用。系统插件请求打开 HTTP/HTTPS 地址时，会交给左下角的**浏览器**创建新标签；只有系统插件自身的静态 `resource` 页面才会在插件窗口内打开。详细边界见：[WebView 架构](webview-architecture.md)。
 
 #### 系统插件 vs 机器人插件
 
@@ -246,9 +248,13 @@ workspace/
 
 工作区路径也会显示在创建机器人的"保存位置"里（默认 `workspace/bots`）。模板或内置工具若检测到更新版本，不会自动覆盖；如需刷新，删除对应副本目录后重新使用即可。
 
+Docker 部署也默认启用 Redis；它仅监听容器内 `127.0.0.1`，不会新增对外端口。`./data` 卷会保留其配置与回退快照。
+
 **Q14：忘记工作台管理员密码？**
 
 认证已开启时，使用紧急恢复命令重设超级管理员：`alx auth reset-super-admin --account ... --password ... --confirm-password ... --yes`。它会立即使旧会话失效，并禁用其他超级管理员账号；普通账号、角色和工作台数据会保留。`alx auth status` 可查看当前状态。生产部署建议配合防火墙限制访问来源。
+
+为避免密码出现在 shell 历史和进程参数中，请使用 `--password-stdin` 并通过标准输入连续传入两次密码。Docker 部署必须在容器内执行，保证写入实际运行服务的认证文件：`docker compose exec -T alx /app/alx auth reset-super-admin --account <账户> --password-stdin --yes`。先执行 `docker compose exec -T alx /app/alx auth status` 可确认配置路径。
 
 ### AI 与 MCP
 

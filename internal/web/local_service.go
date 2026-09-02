@@ -79,12 +79,12 @@ var (
 // WebUI port to its frontend; that port is rewritten to the workbench port, so
 // its WebSocket must also be mapped back under the service mount rather than
 // attempting an upgrade at the workbench root.
-const embeddedAPICompatScript = `<script>(function(){var m=%q;if(!m||window.__alxApiCompat)return;window.__alxApiCompat=true;function p(u){if(typeof u==="string"&&u.charAt(0)==="/"&&u.charAt(1)!=="/")return m+u.slice(1);return u}function w(u){try{var x=new URL(String(u),window.location.href),same=x.host===window.location.host,root=x.pathname.charAt(0)==="/"?x.pathname.slice(1):x.pathname;if((same||typeof u==="string"&&u.charAt(0)==="/")&&(x.protocol==="ws:"||x.protocol==="wss:"||x.protocol==="http:"||x.protocol==="https:")){return (window.location.protocol==="https:"?"wss://":"ws://")+window.location.host+m+root+x.search+x.hash}}catch(e){}return u}var f=window.fetch?window.fetch.bind(window):null;if(f){window.fetch=function(i,n){var u=null,x=i;if(typeof i==="string"){u=i;x=p(i)}else if(i&&typeof i.url==="string"){u=i.url;x=new Request(p(i.url),i)}var q=f(x,n);if(!u||u.indexOf("/api/login-info")===-1)return q;return q.then(function(r){return r.clone().text().then(function(t){try{var d=JSON.parse(t),port=Number(window.location.port)||(window.location.protocol==="https:"?443:80);if(d&&d.data&&d.data.webui&&d.data.webui.port){d.data.webui.port=port;var h=new Headers(r.headers);h.set("Content-Length",String(JSON.stringify(d).length));return new Response(JSON.stringify(d),{status:r.status,statusText:r.statusText,headers:h})}}catch(e){}return r})})}}var o=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(a,u){arguments[1]=p(u);return o.apply(this,arguments)};var E=window.EventSource;if(E){function P(u,c){return new E(p(u),c)}P.prototype=E.prototype;P.CONNECTING=E.CONNECTING;P.OPEN=E.OPEN;P.CLOSED=E.CLOSED;window.EventSource=P}var W=window.WebSocket;if(W){function S(u,c){return c===undefined?new W(w(u)):new W(w(u),c)}S.prototype=W.prototype;S.CONNECTING=W.CONNECTING;S.OPEN=W.OPEN;S.CLOSING=W.CLOSING;S.CLOSED=W.CLOSED;window.WebSocket=S}})();</script>`
+const embeddedAPICompatScript = `<script>(function(){var m=%q,h=%q;if(!m||window.__alxApiCompat)return;window.__alxApiCompat=true;function p(u){if(typeof u==="string"&&u.charAt(0)==="/"&&u.charAt(1)!=="/")return m+u.slice(1);return u}function w(u){try{var x=new URL(String(u),window.location.href),same=x.host===window.location.host||x.host===h||x.hostname==="::",root=x.pathname.charAt(0)==="/"?x.pathname.slice(1):x.pathname;if((same||typeof u==="string"&&u.charAt(0)==="/")&&(x.protocol==="ws:"||x.protocol==="wss:"||x.protocol==="http:"||x.protocol==="https:")){return (window.location.protocol==="https:"?"wss://":"ws://")+window.location.host+m+root+x.search+x.hash}}catch(e){}return u}var f=window.fetch?window.fetch.bind(window):null;if(f){window.fetch=function(i,n){var u=null,x=i;if(typeof i==="string"){u=i;x=p(i)}else if(i&&typeof i.url==="string"){u=i.url;x=new Request(p(i.url),i)}var q=f(x,n);if(!u||u.indexOf("/api/login-info")===-1)return q;return q.then(function(r){return r.clone().text().then(function(t){try{var d=JSON.parse(t),port=Number(window.location.port)||(window.location.protocol==="https:"?443:80);if(d&&d.data&&d.data.webui&&d.data.webui.port){d.data.webui.port=port;var h=new Headers(r.headers);h.set("Content-Length",String(JSON.stringify(d).length));return new Response(JSON.stringify(d),{status:r.status,statusText:r.statusText,headers:h})}}catch(e){}return r})})}}var o=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(a,u){arguments[1]=p(u);return o.apply(this,arguments)};var E=window.EventSource;if(E){function P(u,c){return new E(p(u),c)}P.prototype=E.prototype;P.CONNECTING=E.CONNECTING;P.OPEN=E.OPEN;P.CLOSED=E.CLOSED;window.EventSource=P}var W=window.WebSocket;if(W){function S(u,c){return c===undefined?new W(w(u)):new W(w(u),c)}S.prototype=W.prototype;S.CONNECTING=W.CONNECTING;S.OPEN=W.OPEN;S.CLOSING=W.CLOSING;S.CLOSED=W.CLOSED;window.WebSocket=S}if(navigator.serviceWorker){navigator.serviceWorker.register=function(){return Promise.reject(new Error("embedded service worker disabled"))}}})();</script>`
 
 // injectEmbeddedAPIBootstrap adds the compatibility script to a rewritten
 // HTML document. Compressed bodies are left untouched, mirroring the HTML
 // rewrite path.
-func injectEmbeddedAPIBootstrap(response *http.Response, mount string) {
+func injectEmbeddedAPIBootstrap(response *http.Response, mount, upstreamHost string) {
 	if response.StatusCode != http.StatusOK || !strings.HasPrefix(response.Header.Get("Content-Type"), "text/html") {
 		return
 	}
@@ -96,7 +96,7 @@ func injectEmbeddedAPIBootstrap(response *http.Response, mount string) {
 		return
 	}
 	_ = response.Body.Close()
-	script := fmt.Sprintf(embeddedAPICompatScript, mount)
+	script := fmt.Sprintf(embeddedAPICompatScript, mount, upstreamHost)
 	document := string(body)
 	if head := htmlHeadPattern.FindString(document); head != "" {
 		document = strings.Replace(document, head, head+script, 1)
@@ -107,6 +107,12 @@ func injectEmbeddedAPIBootstrap(response *http.Response, mount string) {
 	response.Body = io.NopCloser(bytes.NewReader(rewritten))
 	response.ContentLength = int64(len(rewritten))
 	response.Header.Set("Content-Length", strconv.Itoa(len(rewritten)))
+	// This body is no longer the upstream's HTML: it contains a service-specific
+	// base URL and WebSocket shim. Never let the browser reuse the upstream's
+	// public cache entry, otherwise a later WebUI open can silently load the
+	// original page and bypass the proxy (which surfaces as “not websocket
+	// protocol” or a blank WebUI).
+	response.Header.Set("Cache-Control", "no-store")
 	if policy := response.Header.Get("Content-Security-Policy"); policy != "" && scriptSrcPolicy.MatchString(policy) {
 		response.Header.Set("Content-Security-Policy", scriptSrcPolicy.ReplaceAllString(policy, "$1 'unsafe-inline'"))
 	}
@@ -242,6 +248,14 @@ func (s *server) localServiceProxyWith(w http.ResponseWriter, r *http.Request, p
 			request.Host = target.Host
 			request.Header.Del("Authorization")
 			request.Header.Del("Cookie")
+			// HTML rewritten below contains a service-specific base URL and API/
+			// WebSocket shim. A browser normally requests gzip; rewriting only an
+			// uncompressed body would otherwise make this work with curl but fail
+			// in the embedded WebUI. Ask the loopback service for identity here so
+			// every response that needs rewriting follows the same path.
+			if service.RewriteHTML {
+				request.Header.Set("Accept-Encoding", "identity")
+			}
 			for _, cookie := range r.Cookies() {
 				if strings.HasPrefix(cookie.Name, cookiePrefix) {
 					request.AddCookie(&http.Cookie{Name: strings.TrimPrefix(cookie.Name, cookiePrefix), Value: cookie.Value})
@@ -258,7 +272,7 @@ func (s *server) localServiceProxyWith(w http.ResponseWriter, r *http.Request, p
 				modifyRobotAppResponse(response, target, mount, r.URL.Path, r)
 			}
 			if service.RewriteHTML && service.RewriteAPIBase {
-				injectEmbeddedAPIBootstrap(response, mount)
+				injectEmbeddedAPIBootstrap(response, mount, target.Host)
 			}
 			isolateLocalServiceCookies(response, cookiePrefix, mount)
 			if service.Embed {
@@ -385,7 +399,21 @@ func localServiceTarget(service setupplugin.ServiceSpec, requestPath string) (*u
 	if base == "" {
 		base = "/"
 	}
-	targetPath := path.Join(base, clean)
+	// Web apps such as NapCat can emit absolute assets under their own base
+	// path (for example /webui/assets/app.js). The service mount already maps
+	// to that base path, so appending it again would request
+	// /webui/webui/assets/app.js and usually return the HTML fallback.
+	targetPath := ""
+	if service.RewriteAPIBase && (strings.HasPrefix(clean, "/api/") || strings.HasPrefix(clean, "/files/")) {
+		// NapCat serves its UI under /webui but exposes its control API and
+		// theme files at the server root. The injected browser shim deliberately
+		// preserves those root-relative calls under the service mount.
+		targetPath = clean
+	} else if base != "/" && (clean == base || strings.HasPrefix(clean, base+"/")) {
+		targetPath = clean
+	} else {
+		targetPath = path.Join(base, clean)
+	}
 	if strings.HasSuffix(requestPath, "/") && !strings.HasSuffix(targetPath, "/") {
 		targetPath += "/"
 	}

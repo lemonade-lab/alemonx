@@ -2718,9 +2718,37 @@ button {
 
 .floating-window-header-custom > div:first-child {
   align-self: stretch;
-  flex: 1 1 auto;
+  /* The tab/title region receives only the space left after the window
+   * controls. Using a zero flex basis prevents its intrinsic tab width from
+   * competing with — and eventually pushing out — minimize/close controls. */
+  flex: 1 1 0%;
   min-width: 0;
   overflow: hidden;
+}
+
+.floating-window-header-custom > div:last-child {
+  /* Window controls are chrome, not page content: never let a custom header
+   * (browser tabs, terminal tabs, etc.) shrink or displace them. */
+  flex: 0 0 auto;
+}
+
+/* Browser tabs own their overflow region. Keep the new-tab control outside
+ * this scroller so it remains reachable even when many tabs are open. */
+.mini-browser-tab-list {
+  flex: 0 1 auto;
+  max-width: calc(100% - 2.25rem);
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
+}
+
+.mini-browser-tab {
+  flex: 1 1 11rem;
+  min-width: 5rem;
+}
+
+.mini-browser-tab-list::-webkit-scrollbar {
+  display: block;
+  height: 5px;
 }
 
 .floating-window-header-custom .readonly-console-tabs {
@@ -6613,6 +6641,91 @@ textarea:hover {
 .workbench-window-hidden > .guide-shell {
   pointer-events: none;
   visibility: hidden;
+}
+
+.launchpad {
+  align-items: center;
+  backdrop-filter: blur(18px) saturate(0.82);
+  background: rgb(32 29 26 / 0.46);
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  padding: 32px;
+  position: fixed;
+  z-index: 10001;
+}
+
+.launchpad-panel {
+  animation: launchpad-enter 0.24s ease-out;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  max-height: min(760px, calc(100vh - 64px));
+  overflow: auto;
+  padding: 12px;
+  width: min(960px, 100%);
+}
+
+.launchpad-apps {
+  display: grid;
+  gap: 18px;
+  grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+}
+
+.launchpad-app {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 18px;
+  color: var(--theme-text-strong);
+  cursor: pointer;
+  display: grid;
+  gap: 6px;
+  justify-items: center;
+  min-height: 142px;
+  padding: 12px 8px;
+  transition: background 0.16s ease, transform 0.16s ease;
+}
+
+.launchpad-app:hover,
+.launchpad-app:focus-visible {
+  background: rgb(255 255 255 / 0.32);
+  outline: none;
+  transform: translateY(-4px) scale(1.025);
+}
+
+[data-theme='dark'] .launchpad-app:hover,
+[data-theme='dark'] .launchpad-app:focus-visible {
+  background: rgb(255 255 255 / 0.1);
+}
+
+.launchpad-app-icon {
+  align-items: center;
+  background: linear-gradient(145deg, var(--theme-accent-soft), var(--theme-surface-raised));
+  border: 1px solid rgb(255 255 255 / 0.52);
+  border-radius: 22px;
+  box-shadow: 0 12px 22px rgb(28 26 23 / 0.16), inset 0 1px rgb(255 255 255 / 0.72);
+  color: var(--theme-accent-text);
+  display: flex;
+  height: 68px;
+  justify-content: center;
+  width: 68px;
+}
+
+.launchpad-app strong {
+  color: white;
+  font-size: 0.86rem;
+  font-weight: 600;
+  text-shadow: 0 1px 3px rgb(0 0 0 / 0.38);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@keyframes launchpad-enter {
+  from { opacity: 0; transform: scale(0.96); }
+  to { opacity: 1; transform: scale(1); }
 }
 
 @media (min-width: 1440px) {

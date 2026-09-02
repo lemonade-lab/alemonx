@@ -40,6 +40,7 @@ import {
   FlaskConical,
   GitBranch,
   Home,
+  LayoutGrid,
   MessageSquare,
   Monitor,
   Settings,
@@ -182,6 +183,7 @@ export default function App() {
   const [settingsLayer, setSettingsLayer] = useState(108)
   const [dockWindows, setDockWindows] = useState<DockWindows>(emptyDockWindows)
   const [mainWindowHidden, setMainWindowHidden] = useState(false)
+  const [launchpadOpen, setLaunchpadOpen] = useState(false)
   const nextWindowLayer = useRef(106)
   const dragState = useRef<{
     pointerId: number
@@ -611,6 +613,15 @@ export default function App() {
     ...Object.values(dockWindows.system)
   ].some(item => item.open)
 
+  useEffect(() => {
+    if (!launchpadOpen) return
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setLaunchpadOpen(false)
+    }
+    window.addEventListener('keydown', closeOnEscape)
+    return () => window.removeEventListener('keydown', closeOnEscape)
+  }, [launchpadOpen])
+
   return (
     <div className="app-shell">
       <div
@@ -625,6 +636,8 @@ export default function App() {
           windowLabel={guideOpen ? '引导' : '工作台'}
           windowHidden={mainWindowHidden}
           hasOpenDesktopWindow={hasOpenDesktopWindow}
+          launchpadOpen={launchpadOpen}
+          onToggleLaunchpad={() => setLaunchpadOpen(value => !value)}
           onToggleWindow={() => {
             // Application windows stay in front of the workbench. Restoring
             // the workbench must not raise it above them and cover the stack.
@@ -757,6 +770,35 @@ export default function App() {
           )}
         </div>
       </div>
+      {launchpadOpen && (
+        <Launchpad
+          mainWindowLabel={guideOpen ? '引导' : '工作台'}
+          windows={dockWindows}
+          onClose={() => setLaunchpadOpen(false)}
+          onOpenMainWindow={() => {
+            setMainWindowHidden(false)
+            activateWorkbench()
+          }}
+          onOpenSettings={() => {
+            openSettings()
+          }}
+          onOpenWindow={(name, open, minimized) => {
+            if (!open || minimized)
+              window.dispatchEvent(new CustomEvent(`alx:desktop-${name}-toggle`))
+          }}
+          onOpenSystemWindow={(feature, minimized) => {
+            const state = dockWindows.system[feature]
+            if (!state?.open)
+              window.dispatchEvent(
+                new CustomEvent('alx:desktop-system-open', { detail: feature })
+              )
+            else if (minimized)
+            window.dispatchEvent(
+              new CustomEvent('alx:desktop-system-toggle', { detail: feature })
+            )
+          }}
+        />
+      )}
       <AppSettingsPanel
         id="app-settings"
         open={settingsOpen}
@@ -792,6 +834,8 @@ function WorkbenchDock({
   windowLabel,
   windowHidden,
   hasOpenDesktopWindow,
+  launchpadOpen,
+  onToggleLaunchpad,
   onToggleWindow,
   windows,
   onTerminal,
@@ -808,6 +852,8 @@ function WorkbenchDock({
   windowLabel: string
   windowHidden: boolean
   hasOpenDesktopWindow: boolean
+  launchpadOpen: boolean
+  onToggleLaunchpad: () => void
   onToggleWindow: () => void
   windows: DockWindows
   onTerminal: () => void
@@ -834,7 +880,7 @@ function WorkbenchDock({
   ].filter(item => item.open).length
   return (
     <aside
-      className={`workbench-dock${visibleApps > 0 ? ' workbench-dock-visible' : ''}`}
+      className={`workbench-dock${visibleApps >= 0 ? ' workbench-dock-visible' : ''}`}
       aria-label="工作台 Dock"
     >
       <div className="workbench-dock-items">
@@ -851,6 +897,15 @@ function WorkbenchDock({
         >
           <Home className="size-5" />
           <span>{windowLabel}</span>
+        </button>
+        <button
+          className={launchpadOpen ? 'active' : ''}
+          onClick={onToggleLaunchpad}
+          aria-pressed={launchpadOpen}
+          title="打开 Launchpad"
+        >
+          <LayoutGrid className="size-5" />
+          <span>Launchpad</span>
         </button>
         {windows.terminal.open && (
           <div className="workbench-dock-apps">
@@ -974,7 +1029,7 @@ function WorkbenchDock({
             </button>
           </div>
         )}
-        {Object.entries(windows.system).map(([feature, item]) => (
+        {Object.entries(windows.system).filter(([, item]) => item.open).map(([feature, item]) => (
           <div className="workbench-dock-apps" key={feature}>
             <button
               className={item.minimized ? '' : 'active'}
@@ -990,6 +1045,101 @@ function WorkbenchDock({
         ))}
       </div>
     </aside>
+  )
+}
+
+function Launchpad({
+  mainWindowLabel,
+  windows,
+  onClose,
+  onOpenMainWindow,
+  onOpenSettings,
+  onOpenWindow,
+  onOpenSystemWindow
+}: {
+  mainWindowLabel: string
+  windows: DockWindows
+  onClose: () => void
+  onOpenMainWindow: () => void
+  onOpenSettings: () => void
+  onOpenWindow: (name: string, open: boolean, minimized: boolean) => void
+  onOpenSystemWindow: (feature: string, minimized: boolean) => void
+}) {
+  const apps = [
+    {
+      id: 'main',
+      label: mainWindowLabel,
+      icon: <Home className="size-8" />,
+      onOpen: onOpenMainWindow
+    },
+    {
+      id: 'settings',
+      label: '设置',
+      icon: <Settings className="size-8" />,
+      onOpen: onOpenSettings
+    },
+    ...([
+      ['terminal', '终端', Terminal],
+      ['foregroundLogs', '前台日志', ClipboardList],
+      ['git', 'Git 仓库管理', GitBranch],
+      ['app', '应用', Monitor],
+      ['test', '测试', FlaskConical],
+      ['live', '在线聊天', MessageSquare],
+      ['pm2Logs', 'PM2 日志', Terminal],
+      ['pm2Status', 'PM2 状态', Activity],
+      ['ops', '运维', ShieldCheck]
+    ] as const)
+      .map(([id, label, Icon]) => ({
+        id,
+        label,
+        icon: <Icon className="size-8" />,
+        onOpen: () =>
+          onOpenWindow(
+            id === 'foregroundLogs'
+              ? 'foreground-logs'
+              : id === 'pm2Logs'
+                ? 'pm2-logs'
+                : id === 'pm2Status'
+                  ? 'pm2-status'
+                  : id,
+            windows[id].open,
+            windows[id].minimized
+          )
+      })),
+    ...Object.entries(windows.system).map(([feature, item]) => ({
+      id: `system-${feature}`,
+      label: item.label,
+      icon: <Settings className="size-8" />,
+      onOpen: () => onOpenSystemWindow(feature, item.minimized)
+    }))
+  ]
+
+  return (
+    <div
+      className="launchpad"
+      role="presentation"
+      onPointerDown={event => {
+        if (!(event.target as HTMLElement).closest('button')) onClose()
+      }}
+    >
+      <section className="launchpad-panel" aria-label="应用启动台">
+        <div className="launchpad-apps">
+          {apps.map(app => (
+            <button
+              className="launchpad-app"
+              key={app.id}
+              onClick={() => {
+                app.onOpen()
+                onClose()
+              }}
+            >
+              <span className="launchpad-app-icon">{app.icon}</span>
+              <strong>{app.label}</strong>
+            </button>
+          ))}
+        </div>
+      </section>
+    </div>
   )
 }
 

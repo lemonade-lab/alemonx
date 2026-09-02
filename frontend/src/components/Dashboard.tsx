@@ -1065,6 +1065,9 @@ export function Dashboard({
   )
   const [systemWindowFeature, setSystemWindowFeature] =
     useStoreState<SystemFeature | null>(null)
+  const selectSystemFeatureRef = useRef<
+    (feature: SystemFeature, resetBrowserHome?: boolean) => void
+  >(() => {})
   const [systemWindows, setSystemWindows] = useStoreState<
     Record<SystemFeature, SystemWindowState>
   >({})
@@ -1087,7 +1090,7 @@ export function Dashboard({
   } | null>(null)
   const [serviceWebviewMinimized, setServiceWebviewMinimized] =
     useStoreState(false)
-  const [browserRequestedURL, setBrowserRequestedURL] = useStoreState('')
+  const [browserRequestedURL, setBrowserRequestedURL] = useStoreState<BrowserCommand | null>(null)
   const [browserHomeVersion, setBrowserHomeVersion] = useStoreState(0)
   const [busy, setBusy] = useStoreState(false)
   const [catalogTitle, setCatalogTitle] = useStoreState('')
@@ -1211,6 +1214,18 @@ export function Dashboard({
   // an array so render-time .find/.filter never reads a null value.
   const setupPlugins = useMemo(() => setupPluginsData ?? [], [setupPluginsData])
   useEffect(() => {
+    const registeredSystemWindows: Record<
+      string,
+      { open: boolean; minimized: boolean; label: string }
+    > = Object.fromEntries(
+      [
+        ...coreFeatureCatalog.map(item => [item.id, item.label] as const),
+        ...setupPlugins.map(item => [`setup:${item.id}`, item.name] as const)
+      ].map(([feature, label]) => [
+        feature,
+        { open: false, minimized: false, label }
+      ])
+    )
     onWindowStateChange?.({
       terminal: { open: consoleOpen, minimized: consoleMinimized },
       foregroundLogs: {
@@ -1227,16 +1242,19 @@ export function Dashboard({
       pm2Logs: { open: pm2LogsOpen, minimized: pm2LogsMinimized },
       pm2Status: { open: pm2ProcessesOpen, minimized: pm2ProcessesMinimized },
       ops: { open: opsOpen, minimized: opsMinimized },
-      system: Object.fromEntries(
-        Object.entries(systemWindows).map(([feature, state]) => [
+      system: {
+        ...registeredSystemWindows,
+        ...Object.fromEntries(
+          Object.entries(systemWindows).map(([feature, state]) => [
           feature,
           {
             open: true,
             minimized: state.minimized,
             label: systemFeatureLabel(feature, setupPlugins)
           }
-        ])
-      )
+          ])
+        )
+      }
     })
   }, [
     consoleMinimized,
@@ -1886,7 +1904,7 @@ export function Dashboard({
         const selectedPage = botAppPages.find(
           item => item.id === pendingAppPageID
         )
-        openMiniBrowser(
+        openWorkbenchBrowserPage(
           selectedPage
             ? `/api/v1/robot/webview/${robotAppToken(root)}/${selectedPage.id}/`
             : `/api/v1/robot/app/${robotAppToken(root)}/`
@@ -1906,7 +1924,7 @@ export function Dashboard({
       // If the app is already serving, render it in-page instead of starting
       // another dev/app process (which would conflict with the running one).
       if (await checkAppReachable()) {
-        openMiniBrowser(`/api/v1/robot/app/${robotAppToken(root)}/`)
+        openWorkbenchBrowserPage(`/api/v1/robot/app/${robotAppToken(root)}/`)
         return
       }
       const task = await startRobotTask({
@@ -1918,7 +1936,7 @@ export function Dashboard({
         appReady: true,
         readyProbe: checkAppReachable
       })
-      openMiniBrowser(`/api/v1/robot/app/${robotAppToken(root)}/`)
+      openWorkbenchBrowserPage(`/api/v1/robot/app/${robotAppToken(root)}/`)
     } catch (reason) {
       showOutput(operationErrorMessage(reason, '应用启动失败。'), true)
     }
@@ -2142,6 +2160,10 @@ export function Dashboard({
         [feature]: { minimized: !current[feature].minimized }
       }))
     }
+    const openSystem = (event: Event) => {
+      const feature = (event as CustomEvent<string>).detail as SystemFeature
+      if (feature) selectSystemFeatureRef.current(feature)
+    }
     window.addEventListener('alx:desktop-git-toggle', toggleGit)
     window.addEventListener('alx:desktop-app-toggle', toggleApp)
     window.addEventListener('alx:desktop-test-toggle', toggleTest)
@@ -2154,6 +2176,7 @@ export function Dashboard({
     window.addEventListener('alx:desktop-pm2-status-toggle', togglePM2Status)
     window.addEventListener('alx:desktop-ops-toggle', toggleOps)
     window.addEventListener('alx:desktop-system-toggle', toggleSystem)
+    window.addEventListener('alx:desktop-system-open', openSystem)
     return () => {
       window.removeEventListener('alx:desktop-git-toggle', toggleGit)
       window.removeEventListener('alx:desktop-app-toggle', toggleApp)
@@ -2170,6 +2193,7 @@ export function Dashboard({
       )
       window.removeEventListener('alx:desktop-ops-toggle', toggleOps)
       window.removeEventListener('alx:desktop-system-toggle', toggleSystem)
+      window.removeEventListener('alx:desktop-system-open', openSystem)
     }
   }, [
     activeProject,
@@ -3067,7 +3091,7 @@ export function Dashboard({
     closeTemporaryContentPage()
     setSystemFeature(null)
     if (nextFeature === 'browser' && resetBrowserHome) {
-      setBrowserRequestedURL('')
+      setBrowserRequestedURL(null)
       setBrowserHomeVersion(version => version + 1)
     }
     setSystemWindowFeature(nextFeature)
@@ -3078,9 +3102,53 @@ export function Dashboard({
     activateFloatingWindow(`system:${nextFeature}`)
     setOutput('')
   }
-  function openMiniBrowser(url: string) {
-    setBrowserRequestedURL(url)
+  selectSystemFeatureRef.current = selectSystemFeature
+  function openMiniBrowser(
+    url: string,
+    tabID?: string,
+    newTab = false,
+    preserveCurrentFeature = false
+  ) {
+    setBrowserRequestedURL({
+      id: `browser-command-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      kind: 'open',
+      source: 'address',
+      url,
+      tabID,
+      newTab
+    })
+    if (preserveCurrentFeature) {
+      // A system-plugin URL is delegated to the browser, but its panel must
+      // remain mounted so ALXHost keeps its lifecycle and close(id) handle.
+      setSystemWindowFeature('browser')
+      setSystemWindows(current => ({
+        ...current,
+        browser: { minimized: false }
+      }))
+      activateFloatingWindow('system:browser')
+      return
+    }
     selectSystemFeature('browser', false)
+  }
+  // Workbench routes are application documents, not user-entered URLs. They
+  // must bypass URL completion, LAN/public classification and HTTP proxying.
+  function openWorkbenchBrowserPage(path: string, tabID?: string) {
+    setBrowserRequestedURL({
+      id: `browser-command-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      kind: 'open',
+      source: 'workbench',
+      url: path,
+      tabID,
+      newTab: true
+    })
+    selectSystemFeature('browser', false)
+  }
+  function closeMiniBrowserTab(tabID: string) {
+    setBrowserRequestedURL({
+      id: `browser-command-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      kind: 'close',
+      tabID
+    })
   }
 
   const currentCatalog =
@@ -3393,7 +3461,13 @@ export function Dashboard({
         onFix={onFix}
       />
     ) : setupPlugin ? (
-      <SetupPluginCenter plugin={setupPlugin} />
+      <SetupPluginCenter
+        plugin={setupPlugin}
+        onOpenBrowserTab={(url, tabID) =>
+          openMiniBrowser(url, tabID, true, true)
+        }
+        onCloseBrowserTab={closeMiniBrowserTab}
+      />
     ) : null
   }
   const invalidProject = Boolean(
@@ -3427,7 +3501,13 @@ export function Dashboard({
         onFix={onFix}
       />
     ) : workspaceSetupPlugin ? (
-      <SetupPluginCenter plugin={workspaceSetupPlugin} />
+      <SetupPluginCenter
+        plugin={workspaceSetupPlugin}
+        onOpenBrowserTab={(url, tabID) =>
+          openMiniBrowser(url, tabID, true, true)
+        }
+        onCloseBrowserTab={closeMiniBrowserTab}
+      />
     ) : invalidProject ? (
       <InvalidWorkspace
         project={activeProject!}
@@ -4065,6 +4145,7 @@ export function Dashboard({
           onOpenService={url => {
             void (async () => {
               let src = url
+              let isWorkbenchPage = false
               try {
                 const service = new URL(url)
                 const configured = await loadAppPort(root, true).unwrap()
@@ -4074,11 +4155,16 @@ export function Dashboard({
                 if (configured.configured && servicePort === configured.port) {
                   const path = `${service.pathname}${service.search}${service.hash}`
                   src = `/api/v1/robot/app/${robotAppToken(root)}${path}`
+                  isWorkbenchPage = true
                 }
               } catch {
                 // 非当前机器人应用端口继续直接嵌入；跨源服务仍可刷新。
               }
-              openMiniBrowser(src)
+              // A service link from the smart log is an explicit external
+              // preview. Preserve the user's current browser page and open it
+              // in its own tab, just like a browser's "open service" action.
+              if (isWorkbenchPage) openWorkbenchBrowserPage(src)
+              else openMiniBrowser(src, undefined, true)
             })()
           }}
           onActivate={() => activateFloatingWindow('foregroundLogs')}
@@ -4174,7 +4260,7 @@ export function Dashboard({
             <MiniBrowserWindow
               key={`${feature}-${browserHomeVersion}`}
               minimized={state.minimized}
-              requestedURL={browserRequestedURL}
+              browserCommand={browserRequestedURL}
               zIndex={zIndex}
               onClose={() => closeSystemWindow(feature)}
               onMinimize={() =>
@@ -7515,7 +7601,15 @@ function stableHash(value: string) {
   return (hash >>> 0).toString(36)
 }
 
-function SetupPluginCenter({ plugin }: { plugin: SetupPlugin }) {
+function SetupPluginCenter({
+  plugin,
+  onOpenBrowserTab,
+  onCloseBrowserTab
+}: {
+  plugin: SetupPlugin
+  onOpenBrowserTab: (url: string, tabID: string) => void
+  onCloseBrowserTab: (tabID: string) => void
+}) {
   // A setup plugin's interface is its panel page, served same-origin by alx.
   // The declarative action-list model was removed; the panel calls the plugin's
   // action forward API itself.
@@ -7555,6 +7649,7 @@ function SetupPluginCenter({ plugin }: { plugin: SetupPlugin }) {
   )
   const [hostWebviews, setHostWebviews] = useState<HostWebview[]>([])
   const hostWebviewsRef = useRef<HostWebview[]>([])
+  const browserWebviewIDs = useRef(new Set<string>())
   const webviewFrames = useRef(new Map<string, Window>())
   const hostWebviewLayer = useRef(1080)
   const [uiDialogQueue, setUiDialogQueue] = useState<HostUiRequest[]>([])
@@ -7567,6 +7662,15 @@ function SetupPluginCenter({ plugin }: { plugin: SetupPlugin }) {
   useEffect(() => {
     uiDialogQueueRef.current = uiDialogQueue
   }, [uiDialogQueue])
+  useEffect(() => {
+    const forgetClosedBrowserTab = (event: Event) => {
+      const id = (event as CustomEvent<{ id?: string }>).detail?.id
+      if (typeof id === 'string') browserWebviewIDs.current.delete(id)
+    }
+    window.addEventListener('alx-browser-tab-closed', forgetClosedBrowserTab)
+    return () =>
+      window.removeEventListener('alx-browser-tab-closed', forgetClosedBrowserTab)
+  }, [])
   useEffect(() => {
     setActiveModalBusy(false)
   }, [uiDialogQueue[0]?.requestId])
@@ -7700,7 +7804,10 @@ function SetupPluginCenter({ plugin }: { plugin: SetupPlugin }) {
           )
           return
         }
-        if (hostWebviewsRef.current.length >= 8) {
+        const isStatic = webview.kind === 'static'
+        if (
+          hostWebviewsRef.current.length + browserWebviewIDs.current.size >= 8
+        ) {
           postHostResult(
             'webview-result',
             requestId,
@@ -7709,8 +7816,20 @@ function SetupPluginCenter({ plugin }: { plugin: SetupPlugin }) {
           )
           return
         }
+        if (!isStatic) {
+          browserWebviewIDs.current.add(requestId)
+          onOpenBrowserTab(webview.src, requestId)
+          window.requestAnimationFrame(() =>
+            postHostResult(
+              'webview-result',
+              requestId,
+              { ok: true, id: requestId },
+              sourceWindow
+            )
+          )
+          return
+        }
         const offset = (hostWebviewsRef.current.length % 6) * 32
-        const isStatic = webview.kind === 'static'
         const keySrc = webview.src.replace(/[?&]theme=[^&#]*/g, '')
         const item: HostWebview = {
           id: requestId,
@@ -7720,7 +7839,7 @@ function SetupPluginCenter({ plugin }: { plugin: SetupPlugin }) {
               (webview.src.includes('?') ? '&' : '?') +
               `theme=${encodeURIComponent(theme)}`
             : webview.src,
-          kind: isStatic ? 'static' : 'url',
+          kind: 'static',
           width: Math.max(480, Math.min(1600, Number(webview.width) || 960)),
           height: Math.max(420, Math.min(1200, Number(webview.height) || 680)),
           left: 120 + offset,
@@ -7758,11 +7877,23 @@ function SetupPluginCenter({ plugin }: { plugin: SetupPlugin }) {
         const next = webviewId
           ? current.filter(item => item.id !== webviewId)
           : []
+        let browserClosed = 0
+        if (webviewId) {
+          if (browserWebviewIDs.current.delete(webviewId)) {
+            onCloseBrowserTab(webviewId)
+            browserClosed = 1
+          }
+        } else {
+          const ids = [...browserWebviewIDs.current]
+          browserWebviewIDs.current.clear()
+          ids.forEach(onCloseBrowserTab)
+          browserClosed = ids.length
+        }
         setHostWebviews(next)
         postHostResult(
           'webview-close-result',
           requestId,
-          { ok: true, closed: current.length - next.length },
+          { ok: true, closed: current.length - next.length + browserClosed },
           sourceWindow
         )
         return
@@ -11247,27 +11378,122 @@ type BrowserTab = {
   historyIndex: number
 }
 
+type BrowserAddress = {
+  url: URL
+  displayURL: string
+}
+
+// Keep navigation sources explicit. A workbench document is never interpreted
+// as text from the address bar, and an address-bar URL can never acquire a
+// robot application route by accident.
+type BrowserCommand = {
+  id: string
+  kind: 'open' | 'close'
+  source?: 'address' | 'workbench'
+  url?: string
+  tabID?: string
+  newTab?: boolean
+}
+
+function createBrowserHomeTab(): BrowserTab {
+  return {
+    id: `browser-home-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    query: '',
+    pageURL: '',
+    frameKey: 0,
+    history: [],
+    historyIndex: -1
+  }
+}
+
+function isBrowserIPAddress(host: string) {
+  const value = host.replace(/^\[|\]$/g, '')
+  return /^\d{1,3}(?:\.\d{1,3}){3}$/.test(value) || value.includes(':') || value === 'localhost'
+}
+
+// URL.href removes default ports. The browser keeps a separate display URL so
+// address completion remains visible and deterministic to users.
+function completeBrowserAddress(input: string): BrowserAddress | null {
+  const raw = input.trim()
+  if (!raw) return null
+  const portOnly = /^(\d{1,5})([/?#].*)?$/.exec(raw)
+  let scheme = ''
+  let authority = ''
+  let suffix = ''
+  if (portOnly) {
+    scheme = 'http:'
+    authority = '127.0.0.1:' + portOnly[1]
+    suffix = portOnly[2] || ''
+  } else {
+    const prefixed = /^(https?):\/\/?(.*)$/i.exec(raw)
+    if (prefixed) {
+      scheme = prefixed[1].toLowerCase() + ':'
+      authority = prefixed[2]
+      if (/^\d{1,5}$/.test(authority)) authority = '127.0.0.1:' + authority
+    } else {
+      authority = raw
+    }
+    const boundary = authority.search(/[/?#]/)
+    if (boundary >= 0) {
+      suffix = authority.slice(boundary)
+      authority = authority.slice(0, boundary)
+    }
+    if (!authority) return null
+    let provisional: URL
+    try {
+      provisional = new URL('http://' + authority)
+    } catch {
+      return null
+    }
+    const explicitPort = /(?:^\[[^\]]+\]|^[^:]+):(\d{1,5})$/.exec(authority)?.[1] || ''
+    const hasPort = explicitPort !== ''
+    const hostIsIP = isBrowserIPAddress(provisional.hostname)
+    if (!scheme) {
+      if (hasPort && explicitPort === '80') scheme = 'http:'
+      else if (hasPort && explicitPort === '443') scheme = 'https:'
+      else scheme = hostIsIP ? 'http:' : 'https:'
+    }
+    if (!hasPort) authority += ':' + (scheme === 'https:' ? '443' : '80')
+  }
+  try {
+    const url = new URL(scheme + '//' + authority + suffix)
+    const port = url.port || (scheme === 'https:' ? '443' : '80')
+    const host = url.hostname.includes(':') && !url.hostname.startsWith('[')
+      ? `[${url.hostname}]`
+      : url.hostname
+    return {
+      url,
+      displayURL: `${scheme}//${host}:${port}${url.pathname}${url.search}${url.hash}`
+    }
+  } catch {
+    return null
+  }
+}
+
 function MiniBrowserWindow({
   minimized,
-  requestedURL,
+  browserCommand,
   zIndex,
   onClose,
   onMinimize,
   onActivate
 }: {
   minimized: boolean
-  requestedURL: string
+  browserCommand: BrowserCommand | null
   zIndex: number
   onClose: () => void
   onMinimize: () => void
   onActivate: () => void
 }) {
   const [homeQuery, setHomeQuery] = useState('')
-  const [tabs, setTabs] = useState<BrowserTab[]>([])
-  const [activeTabID, setActiveTabID] = useState('')
+  // Like a desktop browser, opening the browser itself opens a real home tab.
+  // It is not a placeholder that appears only after the first navigation.
+  const [tabs, setTabs] = useState<BrowserTab[]>(() => [createBrowserHomeTab()])
+  const [activeTabID, setActiveTabID] = useState(() => tabs[0].id)
   const [error, setError] = useState('')
-  const lastRequestedURL = useRef('')
+  const lastBrowserCommandID = useRef('')
   const frameRef = useRef<HTMLIFrameElement>(null)
+  const tabListRef = useRef<HTMLDivElement>(null)
   const activeTab = tabs.find(tab => tab.id === activeTabID)
   const query = activeTab?.query ?? homeQuery
   const pageURL = activeTab?.pageURL ?? ''
@@ -11296,37 +11522,96 @@ function MiniBrowserWindow({
       .replace(/=+$/g, '')
     return `/api/v1/browser/http/${token}${target.pathname}${target.search}${target.hash}`
   }
-  const navigate = (value = query, openInNewTab = false) => {
+  const openInSystemBrowser = async (target: BrowserAddress) => {
+    const response = await fetch('/api/v1/browser/external/open', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: target.displayURL })
+    })
+    if (!response.ok) throw new Error('无法交给系统浏览器打开。')
+  }
+  const openWorkbenchPage = (
+    path: string,
+    openInNewTab: boolean,
+    tabID?: string
+  ) => {
+    let target: URL
+    try {
+      target = new URL(path, window.location.origin)
+    } catch {
+      setError('工作台页面地址无效。')
+      return
+    }
+    if (
+      target.origin !== window.location.origin ||
+      !target.pathname.startsWith('/api/v1/robot/')
+    ) {
+      setError('不允许将该地址作为工作台内部页面打开。')
+      return
+    }
+    const pageURL = `${target.pathname}${target.search}${target.hash}`
+    const nextTab: BrowserTab = {
+      id: tabID ?? `browser-workbench-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      query: pageURL,
+      pageURL,
+      frameKey: 1,
+      history: [target.href],
+      historyIndex: 0
+    }
+    setError('')
+    if (openInNewTab || !activeTab) {
+      setTabs(current => [...current, nextTab])
+      setActiveTabID(nextTab.id)
+      return
+    }
+    setTabs(current =>
+      current.map(tab => (tab.id === activeTab.id ? { ...nextTab, id: tab.id } : tab))
+    )
+  }
+  const navigate = async (value = query, openInNewTab = false, tabID?: string) => {
     const input = value.trim()
     if (!input) return
     try {
-      const isPortOnly = /^\d{1,5}$/.test(input)
-      const port = isPortOnly ? Number(input) : 0
-      if (isPortOnly && (port < 1 || port > 65535)) {
+      const portOnly = /^(\d{1,5})(?:[/?#].*)?$/.exec(input)
+      const port = portOnly ? Number(portOnly[1]) : 0
+      if (portOnly && (port < 1 || port > 65535)) {
         setError('端口号必须在 1 到 65535 之间。')
         return
       }
-      const hasScheme = /^[a-z][a-z\d+.-]*:/i.test(input)
       const isLocalPath = input.startsWith('/')
       const looksLikeAddress =
         input.includes('.') || input.startsWith('localhost') || input.includes(':')
-      const isLoopbackAddress = /^(?:localhost|127(?:\.\d{1,3}){3}|0(?:\.\d{1,3}){3})(?::\d{1,5})?(?:[/?#].*)?$/i.test(
-        input
+      const searchURL = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(input)}`
+      const currentEntry = activeTab?.history[activeTab.historyIndex]
+      const complete = isLocalPath
+        ? completeBrowserAddress(
+            new URL(input, currentEntry ?? window.location.origin).href
+          )
+        : completeBrowserAddress(looksLikeAddress || portOnly ? input : searchURL)
+      if (!complete) throw new Error('地址无效')
+      const next = complete.url
+      // A newly-created home tab is active but deliberately has no history
+      // entry yet. Its first navigation must not try to parse `undefined`.
+      const current = currentEntry ? new URL(currentEntry) : null
+      const sameSite = Boolean(
+        current &&
+          current.protocol === next.protocol &&
+          current.hostname === next.hostname &&
+          (current.port || (current.protocol === 'https:' ? '443' : '80')) ===
+            (next.port || (next.protocol === 'https:' ? '443' : '80'))
       )
-      const next = port
-        ? new URL(`http://127.0.0.1:${port}`)
-        : isLocalPath
-          ? new URL(input, window.location.origin)
-        : hasScheme
-          ? new URL(input)
-          : looksLikeAddress
-            ? new URL(`${isLoopbackAddress ? 'http' : 'https'}://${input}`)
-            : new URL(
-                `https://html.duckduckgo.com/html/?q=${encodeURIComponent(input)}`
-              )
-      if (!['http:', 'https:'].includes(next.protocol)) {
-        setError('仅支持打开 HTTP 或 HTTPS 地址。')
-        return
+      if (!sameSite) {
+        const classified = await fetch('/api/v1/browser/classify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url: complete.displayURL })
+        })
+        const result = (await classified.json().catch(() => ({}))) as { scope?: string }
+        if (!classified.ok) throw new Error('地址分类失败')
+        if (next.protocol === 'https:' || result.scope !== 'private') {
+          await openInSystemBrowser(complete)
+          return
+        }
       }
       setError('')
       const nextHistory = openInNewTab || !activeTab
@@ -11334,8 +11619,8 @@ function MiniBrowserWindow({
         : activeTab.history.slice(0, activeTab.historyIndex + 1)
       if (nextHistory.at(-1) !== next.href) nextHistory.push(next.href)
       const nextTab: BrowserTab = {
-        id: `browser-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        query: addressTextFor(next),
+        id: tabID ?? `browser-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        query: sameSite ? addressTextFor(next) : complete.displayURL,
         pageURL: frameURLFor(next),
         frameKey: 1,
         history: nextHistory,
@@ -11390,15 +11675,34 @@ function MiniBrowserWindow({
     }
   }
   useEffect(() => {
-    if (!requestedURL || requestedURL === lastRequestedURL.current) return
-    lastRequestedURL.current = requestedURL
-    navigate(requestedURL)
-  }, [requestedURL])
+    if (!browserCommand || browserCommand.id === lastBrowserCommandID.current)
+      return
+    lastBrowserCommandID.current = browserCommand.id
+    if (browserCommand.kind === 'close' && browserCommand.tabID) {
+      closeTab(browserCommand.tabID)
+      return
+    }
+    if (browserCommand.kind === 'open' && browserCommand.url) {
+      if (browserCommand.source === 'workbench') {
+        openWorkbenchPage(
+          browserCommand.url,
+          browserCommand.newTab === true,
+          browserCommand.tabID
+        )
+        return
+      }
+      navigate(browserCommand.url, browserCommand.newTab === true, browserCommand.tabID)
+    }
+  }, [browserCommand])
   useEffect(() => {
     const receive = (event: MessageEvent) => {
       if (event.origin !== window.location.origin) return
       const data = event.data as { source?: string; type?: string; url?: string } | null
       if (data?.source !== 'alx-browser' || !data.url) return
+      if (data.type === 'form-blocked') {
+        setError('已阻止跨站 POST 提交：系统浏览器无法安全复用当前页面的表单数据与会话。')
+        return
+      }
       if (data.type === 'open') {
         navigate(data.url, true)
         return
@@ -11426,8 +11730,26 @@ function MiniBrowserWindow({
   const closeTab = (id: string) => {
     const index = tabs.findIndex(tab => tab.id === id)
     const remaining = tabs.filter(tab => tab.id !== id)
+    if (index >= 0)
+      window.dispatchEvent(
+        new CustomEvent('alx-browser-tab-closed', { detail: { id } })
+      )
+    if (remaining.length === 0) {
+      onClose()
+      return
+    }
     setTabs(remaining)
     if (id === activeTabID) setActiveTabID(remaining[Math.max(0, index - 1)]?.id ?? '')
+  }
+  const openHomeTab = () => {
+    const homeTab = createBrowserHomeTab()
+    setTabs(current => [
+      ...current,
+      homeTab
+    ])
+    setActiveTabID(homeTab.id)
+    setHomeQuery('')
+    setError('')
   }
   return (
     <DesktopWindow
@@ -11438,77 +11760,54 @@ function MiniBrowserWindow({
       subtitle={pageURL || '搜索与访问网页'}
       icon={<Globe2 className="size-4 shrink-0 text-brand-600 dark:text-brand-200" />}
       headerLeft={
-        pageURL ? (
-          <form
-            className="flex w-full items-center gap-2"
-            onSubmit={event => {
-              event.preventDefault()
-              navigate()
-            }}
-          >
-            <button
-              className="icon-button size-9 shrink-0 p-0"
-              type="button"
-              onClick={() => {
-                setError('')
-                setActiveTabID('')
-                setHomeQuery('')
+        tabs.length > 0 ? (
+          <div className="flex min-w-0 flex-1 items-center gap-1 py-1" data-window-interactive>
+            <div
+              ref={tabListRef}
+              className="mini-browser-tab-list flex min-w-0 items-center gap-1 overflow-x-auto overflow-y-hidden"
+              data-window-interactive
+              onWheel={event => {
+                if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return
+                const list = tabListRef.current
+                if (!list) return
+                list.scrollLeft += event.deltaY
+                event.preventDefault()
               }}
-              aria-label="浏览器首页"
-              title="首页"
             >
-              <Globe2 className="size-4" />
-            </button>
+              {tabs.map(tab => (
+                <div
+                  key={tab.id}
+                  className={`mini-browser-tab flex max-w-52 items-center gap-1 rounded-t-md border border-b-0 px-2 py-1 text-xs ${tab.id === activeTabID ? 'bg-white text-slate-800 dark:bg-slate-700 dark:text-slate-100' : 'border-transparent text-slate-500 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700/70'}`}
+                >
+                  <button className="min-w-0 flex-1 truncate text-left" type="button" onClick={event => { setActiveTabID(tab.id); event.currentTarget.scrollIntoView({ block: 'nearest', inline: 'nearest' }) }} title={tab.query}>
+                    {tab.query || '首页'}
+                  </button>
+                  <button className="shrink-0 rounded p-0.5 hover:bg-slate-200 dark:hover:bg-slate-600" type="button" onClick={() => closeTab(tab.id)} aria-label="关闭标签页">
+                    <X className="size-3" />
+                  </button>
+                </div>
+              ))}
+            </div>
             <button
               className="icon-button size-8 shrink-0 p-0"
               type="button"
-              disabled={historyIndex <= 0}
-              onClick={() => navigateHistory(-1)}
-              aria-label="后退"
-              title="后退"
+              onClick={openHomeTab}
+              aria-label="新建标签页"
+              title="新建标签页"
             >
-              <ArrowLeft className="size-4" />
+              <Plus className="size-4" />
             </button>
-            <button
-              className="icon-button size-8 shrink-0 p-0"
-              type="button"
-              disabled={historyIndex >= history.length - 1}
-              onClick={() => navigateHistory(1)}
-              aria-label="前进"
-              title="前进"
-            >
-              <ArrowRight className="size-4" />
-            </button>
-            <button
-              className="icon-button size-8 shrink-0 p-0"
-              type="button"
-              onClick={() => updateActiveTab(tab => ({ ...tab, frameKey: tab.frameKey + 1 }))}
-              aria-label="刷新"
-              title="刷新"
-            >
-              <RefreshCw className="size-4" />
-            </button>
-            <input
-              className="min-w-0 flex-1 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-800 outline-none placeholder:text-slate-400 focus:border-brand-600 focus:ring-2 focus:ring-brand-100 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100"
-              value={query}
-              onChange={event => setQuery(event.target.value)}
-              placeholder="输入网址或搜索内容"
-              aria-label="网址或搜索内容"
-              autoComplete="off"
-              spellCheck={false}
-            />
-            <button
-              className="icon-button size-9 shrink-0 p-0"
-              type="submit"
-              aria-label="前往"
-              title="前往"
-            >
-              <Search className="size-4" />
-            </button>
-          </form>
+          </div>
         ) : undefined
       }
-      onClose={onClose}
+      onClose={() => {
+        tabs.forEach(tab =>
+          window.dispatchEvent(
+            new CustomEvent('alx-browser-tab-closed', { detail: { id: tab.id } })
+          )
+        )
+        onClose()
+      }}
       onMinimize={onMinimize}
       zIndex={zIndex}
       onActivate={onActivate}
@@ -11519,31 +11818,13 @@ function MiniBrowserWindow({
       <section className="mini-browser flex min-h-0 flex-1 flex-col bg-slate-50 dark:bg-slate-900">
         {pageURL ? (
           <>
-            <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-slate-200 bg-slate-100 px-2 py-1 dark:border-slate-700 dark:bg-slate-800">
-              {tabs.map(tab => (
-                <div
-                  key={tab.id}
-                  className={`flex min-w-0 max-w-48 items-center gap-1 rounded px-2 py-1 text-xs ${tab.id === activeTabID ? 'bg-white text-slate-800 shadow-sm dark:bg-slate-700 dark:text-slate-100' : 'text-slate-500 hover:bg-white/70 dark:text-slate-300 dark:hover:bg-slate-700/70'}`}
-                >
-                  <button
-                    className="min-w-0 flex-1 truncate text-left"
-                    type="button"
-                    onClick={() => setActiveTabID(tab.id)}
-                    title={tab.query}
-                  >
-                    {tab.query || '新标签页'}
-                  </button>
-                  <button
-                    className="shrink-0 rounded p-0.5 hover:bg-slate-200 dark:hover:bg-slate-600"
-                    type="button"
-                    onClick={() => closeTab(tab.id)}
-                    aria-label="关闭标签页"
-                  >
-                    <X className="size-3" />
-                  </button>
-                </div>
-              ))}
-            </div>
+            <form className="flex shrink-0 items-center gap-2 border-b border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-800" onSubmit={event => { event.preventDefault(); void navigate() }}>
+              <button className="icon-button size-8 shrink-0 p-0" type="button" onClick={() => navigateHistory(-1)} disabled={historyIndex <= 0} aria-label="后退" title="后退"><ArrowLeft className="size-4" /></button>
+              <button className="icon-button size-8 shrink-0 p-0" type="button" onClick={() => navigateHistory(1)} disabled={historyIndex >= history.length - 1} aria-label="前进" title="前进"><ArrowRight className="size-4" /></button>
+              <button className="icon-button size-8 shrink-0 p-0" type="button" onClick={() => updateActiveTab(tab => ({ ...tab, frameKey: tab.frameKey + 1 }))} aria-label="刷新" title="刷新"><RefreshCw className="size-4" /></button>
+              <input className="min-w-0 flex-1 rounded-full border border-slate-300 bg-white px-4 py-1.5 text-sm text-slate-800 outline-none placeholder:text-slate-400 focus:border-brand-600 focus:ring-2 focus:ring-brand-100 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100" value={query} onChange={event => setQuery(event.target.value)} placeholder="输入网址或搜索内容" aria-label="网址或搜索内容" autoComplete="off" spellCheck={false} />
+              <button className="icon-button size-8 shrink-0 p-0" type="submit" aria-label="前往" title="前往"><Search className="size-4" /></button>
+            </form>
             {error && (
               <p className="m-0 border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-700 dark:border-amber-900/70 dark:bg-amber-950/30 dark:text-amber-300">
                 {error}
@@ -11555,7 +11836,11 @@ function MiniBrowserWindow({
             key={frameKey}
             src={pageURL}
             title="迷你浏览器页面"
-            referrerPolicy="no-referrer"
+            referrerPolicy={
+              pageURL.startsWith('/api/v1/browser/http/')
+                ? 'strict-origin-when-cross-origin'
+                : 'no-referrer'
+            }
             onLoad={syncFrameNavigation}
           />
         </>

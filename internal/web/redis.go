@@ -27,8 +27,8 @@ func (s *server) systemRedisHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		var err error
 		switch input.Action {
-		case "install-native":
-			err = s.redisManager.InstallNative()
+		case "retry-runtime":
+			s.redisManager.RetryRuntime()
 		case "start":
 			err = s.redisManager.Start()
 		case "stop":

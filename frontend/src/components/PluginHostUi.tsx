@@ -10,7 +10,7 @@ export type HostWebview = {
   id: string
   title: string
   src: string
-  kind: 'url' | 'static'
+  kind: 'static'
   width: number
   height: number
   left: number
@@ -59,7 +59,8 @@ const toastIconClass: Record<HostToast['type'], string> = {
 /**
  * A host-managed WebView window opened by a system plugin. The plugin never
  * re-implements window chrome: the host provides the floating-window shell
- * and simply embeds the validated src (static plugin resource or http(s) URL).
+ * and simply embeds a validated static plugin resource. External URLs are
+ * delegated by the workbench to the separate built-in browser mechanism.
  */
 export function PluginWebviewWindow({
   webview,
