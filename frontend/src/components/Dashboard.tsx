@@ -11238,6 +11238,15 @@ function ServiceWebviewWindow({
   )
 }
 
+type BrowserTab = {
+  id: string
+  query: string
+  pageURL: string
+  frameKey: number
+  history: string[]
+  historyIndex: number
+}
+
 function MiniBrowserWindow({
   minimized,
   requestedURL,
@@ -11253,13 +11262,25 @@ function MiniBrowserWindow({
   onMinimize: () => void
   onActivate: () => void
 }) {
-  const [query, setQuery] = useState('')
-  const [pageURL, setPageURL] = useState('')
-  const [frameKey, setFrameKey] = useState(0)
+  const [homeQuery, setHomeQuery] = useState('')
+  const [tabs, setTabs] = useState<BrowserTab[]>([])
+  const [activeTabID, setActiveTabID] = useState('')
   const [error, setError] = useState('')
-  const [history, setHistory] = useState<string[]>([])
-  const [historyIndex, setHistoryIndex] = useState(-1)
   const lastRequestedURL = useRef('')
+  const frameRef = useRef<HTMLIFrameElement>(null)
+  const activeTab = tabs.find(tab => tab.id === activeTabID)
+  const query = activeTab?.query ?? homeQuery
+  const pageURL = activeTab?.pageURL ?? ''
+  const frameKey = activeTab?.frameKey ?? 0
+  const history = activeTab?.history ?? []
+  const historyIndex = activeTab?.historyIndex ?? -1
+  const updateActiveTab = (update: (tab: BrowserTab) => BrowserTab) => {
+    setTabs(current => current.map(tab => (tab.id === activeTabID ? update(tab) : tab)))
+  }
+  const setQuery = (value: string) => {
+    if (activeTab) updateActiveTab(tab => ({ ...tab, query: value }))
+    else setHomeQuery(value)
+  }
   const addressTextFor = (target: URL) =>
     target.origin === window.location.origin
       ? `${target.pathname}${target.search}${target.hash}` || '/'
@@ -11275,7 +11296,7 @@ function MiniBrowserWindow({
       .replace(/=+$/g, '')
     return `/api/v1/browser/http/${token}${target.pathname}${target.search}${target.hash}`
   }
-  const navigate = (value = query) => {
+  const navigate = (value = query, openInNewTab = false) => {
     const input = value.trim()
     if (!input) return
     try {
@@ -11308,15 +11329,24 @@ function MiniBrowserWindow({
         return
       }
       setError('')
-      setQuery(addressTextFor(next))
-      setPageURL(frameURLFor(next))
-      setHistory(current => {
-        const nextHistory = current.slice(0, historyIndex + 1)
-        if (nextHistory.at(-1) !== next.href) nextHistory.push(next.href)
-        setHistoryIndex(nextHistory.length - 1)
-        return nextHistory
-      })
-      setFrameKey(value => value + 1)
+      const nextHistory = openInNewTab || !activeTab
+        ? [next.href]
+        : activeTab.history.slice(0, activeTab.historyIndex + 1)
+      if (nextHistory.at(-1) !== next.href) nextHistory.push(next.href)
+      const nextTab: BrowserTab = {
+        id: `browser-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        query: addressTextFor(next),
+        pageURL: frameURLFor(next),
+        frameKey: 1,
+        history: nextHistory,
+        historyIndex: nextHistory.length - 1
+      }
+      if (openInNewTab || !activeTab) {
+        setTabs(current => [...current, nextTab])
+        setActiveTabID(nextTab.id)
+      } else {
+        setTabs(current => current.map(tab => (tab.id === activeTab.id ? { ...nextTab, id: tab.id } : tab)))
+      }
     } catch {
       setError('请输入有效的网址或搜索内容。')
     }
@@ -11325,18 +11355,61 @@ function MiniBrowserWindow({
     const nextIndex = historyIndex + delta
     const nextURL = history[nextIndex]
     if (!nextURL) return
-    setHistoryIndex(nextIndex)
     const target = new URL(nextURL)
-    setQuery(addressTextFor(target))
-    setPageURL(frameURLFor(target))
+    updateActiveTab(tab => ({
+      ...tab,
+      historyIndex: nextIndex,
+      query: addressTextFor(target),
+      pageURL: frameURLFor(target),
+      frameKey: tab.frameKey + 1
+    }))
     setError('')
-    setFrameKey(value => value + 1)
+  }
+  const syncFrameNavigation = () => {
+    if (!activeTab || !frameRef.current) return
+    try {
+      const frameURL = new URL(frameRef.current.contentWindow?.location.href ?? '')
+      const match = frameURL.pathname.match(/^\/api\/v1\/browser\/http\/([^/]+)\/(.*)$/)
+      if (!match) return
+      const targetOrigin = window
+        .atob(match[1].replace(/-/g, '+').replace(/_/g, '/'))
+      const logical = new URL(`/${match[2]}${frameURL.search}${frameURL.hash}`, targetOrigin)
+      if (activeTab.history[activeTab.historyIndex] === logical.href) return
+      const nextHistory = activeTab.history.slice(0, activeTab.historyIndex + 1)
+      nextHistory.push(logical.href)
+      updateActiveTab(tab => ({
+        ...tab,
+        query: addressTextFor(logical),
+        pageURL: `${frameURL.pathname}${frameURL.search}${frameURL.hash}`,
+        history: nextHistory,
+        historyIndex: nextHistory.length - 1
+      }))
+    } catch {
+      // HTTPS pages are direct and intentionally remain inaccessible to the
+      // workbench document; their address stays as the user entered it.
+    }
   }
   useEffect(() => {
     if (!requestedURL || requestedURL === lastRequestedURL.current) return
     lastRequestedURL.current = requestedURL
     navigate(requestedURL)
   }, [requestedURL])
+  useEffect(() => {
+    const receive = (event: MessageEvent) => {
+      if (event.origin !== window.location.origin) return
+      const data = event.data as { source?: string; type?: string; url?: string } | null
+      if (data?.source !== 'alx-browser' || data.type !== 'open' || !data.url) return
+      navigate(data.url, true)
+    }
+    window.addEventListener('message', receive)
+    return () => window.removeEventListener('message', receive)
+  })
+  const closeTab = (id: string) => {
+    const index = tabs.findIndex(tab => tab.id === id)
+    const remaining = tabs.filter(tab => tab.id !== id)
+    setTabs(remaining)
+    if (id === activeTabID) setActiveTabID(remaining[Math.max(0, index - 1)]?.id ?? '')
+  }
   return (
     <DesktopWindow
       id="mini-browser"
@@ -11359,8 +11432,8 @@ function MiniBrowserWindow({
               type="button"
               onClick={() => {
                 setError('')
-                setPageURL('')
-                setQuery('')
+                setActiveTabID('')
+                setHomeQuery('')
               }}
               aria-label="浏览器首页"
               title="首页"
@@ -11390,7 +11463,7 @@ function MiniBrowserWindow({
             <button
               className="icon-button size-8 shrink-0 p-0"
               type="button"
-              onClick={() => setFrameKey(value => value + 1)}
+              onClick={() => updateActiveTab(tab => ({ ...tab, frameKey: tab.frameKey + 1 }))}
               aria-label="刷新"
               title="刷新"
             >
@@ -11427,17 +11500,44 @@ function MiniBrowserWindow({
       <section className="mini-browser flex min-h-0 flex-1 flex-col bg-slate-50 dark:bg-slate-900">
         {pageURL ? (
           <>
+            <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-slate-200 bg-slate-100 px-2 py-1 dark:border-slate-700 dark:bg-slate-800">
+              {tabs.map(tab => (
+                <div
+                  key={tab.id}
+                  className={`flex min-w-0 max-w-48 items-center gap-1 rounded px-2 py-1 text-xs ${tab.id === activeTabID ? 'bg-white text-slate-800 shadow-sm dark:bg-slate-700 dark:text-slate-100' : 'text-slate-500 hover:bg-white/70 dark:text-slate-300 dark:hover:bg-slate-700/70'}`}
+                >
+                  <button
+                    className="min-w-0 flex-1 truncate text-left"
+                    type="button"
+                    onClick={() => setActiveTabID(tab.id)}
+                    title={tab.query}
+                  >
+                    {tab.query || '新标签页'}
+                  </button>
+                  <button
+                    className="shrink-0 rounded p-0.5 hover:bg-slate-200 dark:hover:bg-slate-600"
+                    type="button"
+                    onClick={() => closeTab(tab.id)}
+                    aria-label="关闭标签页"
+                  >
+                    <X className="size-3" />
+                  </button>
+                </div>
+              ))}
+            </div>
             {error && (
               <p className="m-0 border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-700 dark:border-amber-900/70 dark:bg-amber-950/30 dark:text-amber-300">
                 {error}
               </p>
             )}
           <iframe
+            ref={frameRef}
             className="min-h-0 flex-1 border-0 bg-white"
             key={frameKey}
             src={pageURL}
             title="迷你浏览器页面"
             referrerPolicy="no-referrer"
+            onLoad={syncFrameNavigation}
           />
         </>
       ) : (

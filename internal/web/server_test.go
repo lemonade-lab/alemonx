@@ -1420,7 +1420,7 @@ func TestWebviewThemeInjection(t *testing.T) {
 			t.Fatalf("alemonjs theme style misses %q:\n%s", want, alemonjsThemeStyleTag)
 		}
 	}
-	rewritten := rewriteRobotAppHTML([]byte("<html><head></head><body>app</body></html>"), "/api/v1/robot/app/token/", "x")
+	rewritten := rewriteRobotAppHTML([]byte("<html><head></head><body>app</body></html>"), nil, "/api/v1/robot/app/token/", "x")
 	if !strings.Contains(string(rewritten), `--alemonjs-primary-bg`) {
 		t.Fatalf("robot app proxy must inject alemonjs theme variables: %s", string(rewritten))
 	}
@@ -1820,6 +1820,69 @@ func TestBrowserHTTPProxyStorageBootstrapUsesTargetNamespace(t *testing.T) {
 	body := recorder.Body.String()
 	if !strings.Contains(body, "__alx_browser_storage_"+token+":") || !strings.Contains(body, "install('localStorage')") || !strings.Contains(body, "install('sessionStorage')") || !strings.Contains(body, "installCookieScope") || !strings.Contains(body, browserHTTPCookiePrefix(token)) {
 		t.Fatalf("storage bootstrap missing namespace or storage shims: %q", body)
+	}
+}
+
+func TestBrowserHTTPResponseRewritesCrossOriginResourcesAndInstallsRuntime(t *testing.T) {
+	target, err := url.Parse("http://10.0.6.2:50831")
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefix := browserHTTPProxyPrefix(target)
+	response := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/html; charset=utf-8"}},
+		Body: io.NopCloser(strings.NewReader(`<img src="http://10.0.6.3:8080/logo.svg" srcset="/small.png 1x, http://10.0.6.3:8080/large.png 2x">` +
+			`<iframe src="//10.0.6.4:9090/panel"></iframe>`)),
+	}
+	rewriteBrowserHTTPResponse(response, target, prefix, prefix)
+	injectBrowserStorageBootstrap(response, prefix, "token", target, "/")
+	body, _ := io.ReadAll(response.Body)
+	wantCross := browserHTTPProxyPrefix(&url.URL{Scheme: "http", Host: "10.0.6.3:8080"})
+	wantFrame := browserHTTPProxyPrefix(&url.URL{Scheme: "http", Host: "10.0.6.4:9090"})
+	for _, want := range []string{wantCross + "logo.svg", wantCross + "large.png", prefix + "small.png", wantFrame + "panel", "window.fetch=", "window.WebSocket=", "window.EventSource="} {
+		if !strings.Contains(string(body), want) {
+			t.Errorf("rewritten browser document missing %q:\n%s", want, body)
+		}
+	}
+}
+
+func TestModifyBrowserHTTPResponseKeeps404AndProxiesCrossOriginRedirect(t *testing.T) {
+	target, err := url.Parse("http://10.0.6.2:50831")
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefix := browserHTTPProxyPrefix(target)
+	missing := &http.Response{
+		StatusCode: http.StatusNotFound,
+		Header:     http.Header{"Content-Type": []string{"text/html"}},
+		Body:       io.NopCloser(strings.NewReader("not found")),
+	}
+	modifyBrowserHTTPResponse(missing, target, prefix, prefix+"missing")
+	if missing.StatusCode != http.StatusNotFound || missing.Header.Get("Location") != "" {
+		t.Fatalf("browser 404 must pass through, got status=%d location=%q", missing.StatusCode, missing.Header.Get("Location"))
+	}
+	redirect := &http.Response{
+		StatusCode: http.StatusFound,
+		Header:     http.Header{"Location": []string{"http://10.0.6.3:8080/login?next=1"}},
+		Body:       io.NopCloser(strings.NewReader("")),
+	}
+	modifyBrowserHTTPResponse(redirect, target, prefix, prefix)
+	want := browserHTTPProxyPrefix(&url.URL{Scheme: "http", Host: "10.0.6.3:8080"}) + "login?next=1"
+	if redirect.Header.Get("Location") != want {
+		t.Fatalf("cross-origin redirect = %q, want %q", redirect.Header.Get("Location"), want)
+	}
+}
+
+func TestRewriteBrowserCSSAndJavaScript(t *testing.T) {
+	prefix := "/api/v1/browser/http/current/"
+	css := rewriteBrowserCSS(`a{background:url('/image.png')}@import url(http://10.0.6.5:8081/site.css);`, prefix)
+	if !strings.Contains(css, prefix+"image.png") || !strings.Contains(css, browserHTTPProxyPrefix(&url.URL{Scheme: "http", Host: "10.0.6.5:8081"})+"site.css") {
+		t.Fatalf("css URLs not rewritten: %s", css)
+	}
+	js := rewriteBrowserJavaScript(`import "http://10.0.6.6:3000/module.js";new Worker("http://10.0.6.6:3000/worker.js")`)
+	if !strings.Contains(js, browserHTTPProxyPrefix(&url.URL{Scheme: "http", Host: "10.0.6.6:3000"})+"module.js") || !strings.Contains(js, "worker.js") {
+		t.Fatalf("javascript URLs not rewritten: %s", js)
 	}
 }
 
@@ -2334,6 +2397,26 @@ func TestModifyRobotAppResponse(t *testing.T) {
 		for _, want := range []string{`href="https://example.com/x"`, `href="//cdn.example.com/x"`} {
 			if !strings.Contains(string(body), want) {
 				t.Errorf("external URL changed: missing %q\nbody:\n%s", want, body)
+			}
+		}
+	})
+
+	t.Run("same target absolute document URLs stay inside proxy", func(t *testing.T) {
+		response := htmlResponse(`<html><head>` +
+			`<script src="http://127.0.0.1:18110/assets/app.js?v=1"></script>` +
+			`<link href="//127.0.0.1:18110/assets/app.css#theme" rel="stylesheet">` +
+			`</head><body><a href="http://127.0.0.1:18110/app/?q=1#detail">App</a>` +
+			`<img src="http://example.com/logo.svg"></body></html>`)
+		modifyRobotAppResponse(response, target, appPrefix, appPrefix, navigation(appPrefix))
+		body, _ := io.ReadAll(response.Body)
+		for _, want := range []string{
+			`src="` + appPrefix + `assets/app.js?v=1"`,
+			`href="` + appPrefix + `assets/app.css#theme"`,
+			`href="` + appPrefix + `app/?q=1#detail"`,
+			`src="http://example.com/logo.svg"`,
+		} {
+			if !strings.Contains(string(body), want) {
+				t.Errorf("absolute URL rewrite missing %q\nbody:\n%s", want, body)
 			}
 		}
 	})

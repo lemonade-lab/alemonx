@@ -6549,6 +6549,9 @@ func (s *server) browserHTTPProxyHandler(w http.ResponseWriter, r *http.Request)
 			request.URL.RawQuery = r.URL.RawQuery
 			request.Host = target.Host
 			request.Header.Del("Authorization")
+			// Let net/http negotiate and transparently decode gzip so HTML/CSS/JS
+			// responses can be rewritten before they reach the embedded browser.
+			request.Header.Del("Accept-Encoding")
 			request.Header.Del("Cookie")
 			for _, cookie := range r.Cookies() {
 				if strings.HasPrefix(cookie.Name, cookiePrefix) {
@@ -6562,10 +6565,16 @@ func (s *server) browserHTTPProxyHandler(w http.ResponseWriter, r *http.Request)
 			}
 		},
 		ModifyResponse: func(response *http.Response) error {
-			modifyRobotAppResponse(response, target, proxyPrefix, r.URL.Path, r)
+			modifyBrowserHTTPResponse(response, target, proxyPrefix, r.URL.Path)
 			isolateBrowserHTTPCookies(response, cookiePrefix, proxyPrefix)
-			injectBrowserStorageBootstrap(response, proxyPrefix)
+			rewriteBrowserHTTPResponse(response, target, proxyPrefix, r.URL.Path)
+			injectBrowserStorageBootstrap(response, proxyPrefix, parts[0], target, requestPath)
 			response.Header.Del("X-Frame-Options")
+			// The proxy injects a compatibility runtime and may rewrite module
+			// specifiers. Keep upstream CSP/SRI from rejecting those safe, local
+			// transformations inside the isolated browser mount.
+			response.Header.Del("Content-Security-Policy")
+			response.Header.Del("Content-Security-Policy-Report-Only")
 			return nil
 		},
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, _ error) {
@@ -6573,6 +6582,35 @@ func (s *server) browserHTTPProxyHandler(w http.ResponseWriter, r *http.Request)
 		},
 	}
 	proxy.ServeHTTP(w, r)
+}
+
+// modifyBrowserHTTPResponse deliberately keeps the visual injections shared
+// with robot apps, but not their launchpad-specific 404 handling. A normal
+// website must be allowed to render its own 404 page and follow redirects to
+// any HTTP origin through the browser proxy.
+func modifyBrowserHTTPResponse(response *http.Response, target *url.URL, proxyPrefix, requestPath string) {
+	response.Header.Del("X-Frame-Options")
+	if location := response.Header.Get("Location"); location != "" {
+		if strings.HasPrefix(location, "//") {
+			response.Header.Set("Location", browserProxyURL("http:"+location))
+		} else if strings.HasPrefix(location, "/") {
+			response.Header.Set("Location", proxyPrefix+strings.TrimPrefix(location, "/"))
+		} else if rewritten := browserProxyURL(location); rewritten != location {
+			response.Header.Set("Location", rewritten)
+		}
+	}
+	if response.StatusCode != http.StatusOK || !strings.HasPrefix(strings.ToLower(response.Header.Get("Content-Type")), "text/html") || response.Header.Get("Content-Encoding") != "" {
+		return
+	}
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		return
+	}
+	_ = response.Body.Close()
+	rewritten := rewriteRobotAppHTML(body, target, proxyPrefix, requestPath)
+	response.Body = io.NopCloser(bytes.NewReader(rewritten))
+	response.ContentLength = int64(len(rewritten))
+	response.Header.Set("Content-Length", strconv.Itoa(len(rewritten)))
 }
 
 func browserHTTPCookiePrefix(targetToken string) string {
@@ -6614,10 +6652,157 @@ func browserStorageBootstrapHandler(w http.ResponseWriter, r *http.Request, targ
 func browserStorageBootstrap(targetToken string) string {
 	prefix := "__alx_browser_storage_" + targetToken + ":"
 	cookiePrefix := browserHTTPCookiePrefix(targetToken)
-	return `(function(){var prefix=` + strconv.Quote(prefix) + `,cookiePrefix=` + strconv.Quote(cookiePrefix) + `;function scoped(storage){return Object.freeze({get length(){var count=0;for(var i=0;i<storage.length;i++){var key=storage.key(i);if(key&&key.indexOf(prefix)===0)count++}return count},key:function(index){var count=0;for(var i=0;i<storage.length;i++){var key=storage.key(i);if(key&&key.indexOf(prefix)===0){if(count++===Number(index))return key.slice(prefix.length)}}return null},getItem:function(key){return storage.getItem(prefix+String(key))},setItem:function(key,value){storage.setItem(prefix+String(key),String(value))},removeItem:function(key){storage.removeItem(prefix+String(key))},clear:function(){for(var keys=[],i=0;i<storage.length;i++){var key=storage.key(i);if(key&&key.indexOf(prefix)===0)keys.push(key)}keys.forEach(function(key){storage.removeItem(key)})}})}function install(name){try{var value=scoped(window[name]);Object.defineProperty(window,name,{value:value,configurable:false,enumerable:true})}catch(_){}}function installCookieScope(){try{var descriptor=Object.getOwnPropertyDescriptor(Document.prototype,'cookie');if(!descriptor||!descriptor.get||!descriptor.set)return;Object.defineProperty(document,'cookie',{configurable:false,get:function(){return descriptor.get.call(document).split(/;s*/).filter(function(item){return item.indexOf(cookiePrefix)===0}).map(function(item){return item.slice(cookiePrefix.length)}).join('; ')},set:function(value){var first=String(value).indexOf('=');if(first<1)return;return descriptor.set.call(document,cookiePrefix+String(value))}})}catch(_){}}install('localStorage');install('sessionStorage');installCookieScope()})();`
+	return `(function(){var prefix=` + strconv.Quote(prefix) + `,cookiePrefix=` + strconv.Quote(cookiePrefix) + `;function scoped(storage){return Object.freeze({get length(){var count=0;for(var i=0;i<storage.length;i++){var key=storage.key(i);if(key&&key.indexOf(prefix)===0)count++}return count},key:function(index){var count=0;for(var i=0;i<storage.length;i++){var key=storage.key(i);if(key&&key.indexOf(prefix)===0){if(count++===Number(index))return key.slice(prefix.length)}}return null},getItem:function(key){return storage.getItem(prefix+String(key))},setItem:function(key,value){storage.setItem(prefix+String(key),String(value))},removeItem:function(key){storage.removeItem(prefix+String(key))},clear:function(){for(var keys=[],i=0;i<storage.length;i++){var key=storage.key(i);if(key&&key.indexOf(prefix)===0)keys.push(key)}keys.forEach(function(key){storage.removeItem(key)})}})}function install(name){try{var value=scoped(window[name]);Object.defineProperty(window,name,{value:value,configurable:false,enumerable:true})}catch(_){}}function installCookieScope(){try{var descriptor=Object.getOwnPropertyDescriptor(Document.prototype,'cookie');if(!descriptor||!descriptor.get||!descriptor.set)return;Object.defineProperty(document,'cookie',{configurable:false,get:function(){return descriptor.get.call(document).split(/;\s*/).filter(function(item){return item.indexOf(cookiePrefix)===0}).map(function(item){return item.slice(cookiePrefix.length)}).join('; ')},set:function(value){var first=String(value).indexOf('=');if(first<1)return;return descriptor.set.call(document,cookiePrefix+String(value))}})}catch(_){}}install('localStorage');install('sessionStorage');installCookieScope()})();`
 }
 
-func injectBrowserStorageBootstrap(response *http.Response, proxyPrefix string) {
+// rewriteBrowserHTTPResponse extends the generic app rewriting for the mini
+// browser: every HTTP origin is mapped back into a proxy mount, not only the
+// origin that produced the current document.
+func rewriteBrowserHTTPResponse(response *http.Response, target *url.URL, proxyPrefix, requestPath string) {
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices || response.Header.Get("Content-Encoding") != "" {
+		return
+	}
+	contentType := strings.ToLower(response.Header.Get("Content-Type"))
+	if !strings.HasPrefix(contentType, "text/html") && !strings.HasPrefix(contentType, "text/css") &&
+		!strings.Contains(contentType, "javascript") && !strings.Contains(contentType, "ecmascript") {
+		return
+	}
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		return
+	}
+	_ = response.Body.Close()
+	document := string(body)
+	switch {
+	case strings.HasPrefix(contentType, "text/html"):
+		document = rewriteBrowserHTML(document, target, proxyPrefix)
+	case strings.HasPrefix(contentType, "text/css"):
+		document = rewriteBrowserCSS(document, proxyPrefix)
+	default:
+		document = rewriteBrowserJavaScript(document)
+	}
+	response.Body = io.NopCloser(strings.NewReader(document))
+	response.ContentLength = int64(len(document))
+	response.Header.Set("Content-Length", strconv.Itoa(len(document)))
+}
+
+func browserHTTPProxyPrefix(target *url.URL) string {
+	if target == nil || !strings.EqualFold(target.Scheme, "http") || target.Host == "" {
+		return ""
+	}
+	token := base64.RawURLEncoding.EncodeToString([]byte("http://" + target.Host))
+	return "/api/v1/browser/http/" + token + "/"
+}
+
+func browserProxyURL(value string) string {
+	parsed, err := url.Parse(value)
+	if err != nil || !strings.EqualFold(parsed.Scheme, "http") || parsed.Host == "" {
+		return value
+	}
+	prefix := browserHTTPProxyPrefix(parsed)
+	if prefix == "" {
+		return value
+	}
+	path := parsed.EscapedPath()
+	if path == "" {
+		path = "/"
+	}
+	rewritten := prefix + strings.TrimPrefix(path, "/")
+	if parsed.ForceQuery || parsed.RawQuery != "" {
+		rewritten += "?" + parsed.RawQuery
+	}
+	if parsed.Fragment != "" {
+		rewritten += "#" + parsed.EscapedFragment()
+	}
+	return rewritten
+}
+
+func rewriteBrowserHTML(document string, target *url.URL, proxyPrefix string) string {
+	// Attributes which may initiate a network request or navigation. Generic
+	// matching deliberately leaves data:, javascript:, and HTTPS untouched.
+	for _, attr := range []string{"href", "src", "action", "poster", "data", "formaction"} {
+		for _, quote := range []string{`"`, `'`} {
+			pattern := regexp.MustCompile(`(?i)(\b` + attr + `=` + quote + `)([^` + quote + `]*)` + quote)
+			document = pattern.ReplaceAllStringFunc(document, func(match string) string {
+				parts := pattern.FindStringSubmatch(match)
+				value := parts[2]
+				return parts[1] + rewriteBrowserResourceURL(value, proxyPrefix) + quote
+			})
+		}
+	}
+	// srcset has a comma-separated list of resource URLs. Only its URL portion
+	// is changed; density/width descriptors remain untouched.
+	for _, quote := range []string{`"`, `'`} {
+		pattern := regexp.MustCompile(`(?i)(\bsrcset=` + quote + `)([^` + quote + `]*)` + quote)
+		document = pattern.ReplaceAllStringFunc(document, func(match string) string {
+			parts := pattern.FindStringSubmatch(match)
+			entries := strings.Split(parts[2], ",")
+			for index, entry := range entries {
+				fields := strings.Fields(strings.TrimSpace(entry))
+				if len(fields) == 0 {
+					continue
+				}
+				fields[0] = rewriteBrowserResourceURL(fields[0], proxyPrefix)
+				entries[index] = strings.Join(fields, " ")
+			}
+			return parts[1] + strings.Join(entries, ", ") + quote
+		})
+	}
+	// A transformed module no longer matches the upstream hash. The proxy mount
+	// is already isolated by target token, so remove SRI only for this response.
+	document = regexp.MustCompile(`(?i)\s+integrity\s*=\s*(?:"[^"]*"|'[^']*')`).ReplaceAllString(document, "")
+	styleTag := regexp.MustCompile(`(?is)(<style[^>]*>)(.*?)(</style>)`)
+	document = styleTag.ReplaceAllStringFunc(document, func(match string) string {
+		parts := styleTag.FindStringSubmatch(match)
+		return parts[1] + rewriteBrowserCSS(parts[2], proxyPrefix) + parts[3]
+	})
+	styleAttr := regexp.MustCompile(`(?i)(\bstyle\s*=\s*["'])(.*?)(["'])`)
+	document = styleAttr.ReplaceAllStringFunc(document, func(match string) string {
+		parts := styleAttr.FindStringSubmatch(match)
+		return parts[1] + rewriteBrowserCSS(parts[2], proxyPrefix) + parts[3]
+	})
+	return document
+}
+
+func rewriteBrowserResourceURL(value, proxyPrefix string) string {
+	if strings.HasPrefix(value, "//") {
+		return browserProxyURL("http:" + value)
+	}
+	if strings.HasPrefix(value, "/") {
+		return proxyPrefix + strings.TrimPrefix(value, "/")
+	}
+	return browserProxyURL(value)
+}
+
+func rewriteBrowserCSS(document, proxyPrefix string) string {
+	root := regexp.MustCompile(`(?i)(url\(\s*['"]?)(/[^/'"\s)][^'"\s)]*)(['"]?\s*\))`)
+	document = root.ReplaceAllStringFunc(document, func(match string) string {
+		parts := root.FindStringSubmatch(match)
+		return parts[1] + proxyPrefix + strings.TrimPrefix(parts[2], "/") + parts[3]
+	})
+	pattern := regexp.MustCompile(`(?i)(url\(\s*['"]?)(http:)?(//[^'"\s)]+)(['"]?\s*\))`)
+	document = pattern.ReplaceAllStringFunc(document, func(match string) string {
+		parts := pattern.FindStringSubmatch(match)
+		return parts[1] + browserProxyURL("http:"+parts[3]) + parts[4]
+	})
+	imports := regexp.MustCompile(`(?i)(@import\s+(?:url\(\s*)?['"])(http://[^'"\s)]+)(['"]\s*\)?)`)
+	return imports.ReplaceAllStringFunc(document, func(match string) string {
+		parts := imports.FindStringSubmatch(match)
+		return parts[1] + browserProxyURL(parts[2]) + parts[3]
+	})
+}
+
+func rewriteBrowserJavaScript(document string) string {
+	// Keep this deliberately narrow: these syntactic URL positions are resolved
+	// by the module/worker loader before fetch can be monkey-patched.
+	pattern := regexp.MustCompile(`(?i)((?:\bfrom\s*|\bimport\s*(?:\(|)|\bnew\s+(?:shared)?worker\s*\()['"])(http://[^'"\s]+)(['"])`)
+	return pattern.ReplaceAllStringFunc(document, func(match string) string {
+		parts := pattern.FindStringSubmatch(match)
+		return parts[1] + browserProxyURL(parts[2]) + parts[3]
+	})
+}
+
+func injectBrowserStorageBootstrap(response *http.Response, proxyPrefix, targetToken string, target *url.URL, requestPath string) {
 	if response.StatusCode != http.StatusOK || !strings.HasPrefix(response.Header.Get("Content-Type"), "text/html") || response.Header.Get("Content-Encoding") != "" {
 		return
 	}
@@ -6626,7 +6811,7 @@ func injectBrowserStorageBootstrap(response *http.Response, proxyPrefix string) 
 		return
 	}
 	_ = response.Body.Close()
-	script := `<script src="` + html.EscapeString(proxyPrefix+"__alx_browser_storage.js") + `"></script>`
+	script := `<script src="` + html.EscapeString(proxyPrefix+"__alx_browser_storage.js") + `"></script><script>` + browserHTTPRuntime(targetToken, target, requestPath) + `</script>`
 	document := string(body)
 	if head := regexp.MustCompile(`(?i)<head[^>]*>`).FindString(document); head != "" {
 		document = strings.Replace(document, head, head+script, 1)
@@ -6638,6 +6823,15 @@ func injectBrowserStorageBootstrap(response *http.Response, proxyPrefix string) 
 	response.Body = io.NopCloser(strings.NewReader(document))
 	response.ContentLength = int64(len(document))
 	response.Header.Set("Content-Length", strconv.Itoa(len(document)))
+}
+
+// browserHTTPRuntime virtualizes the HTTP origin for dynamic browser APIs. It
+// is intentionally installed before application scripts so absolute URLs built
+// at runtime follow the same backend proxy as markup resources.
+func browserHTTPRuntime(targetToken string, target *url.URL, requestPath string) string {
+	logicalBase := "http://" + target.Host + requestPath
+	proxyPrefix := "/api/v1/browser/http/"
+	return `(function(){var logicalBase=` + strconv.Quote(logicalBase) + `,mount=` + strconv.Quote(proxyPrefix) + `;function token(origin){try{return btoa(origin).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')}catch(_){return''}}function proxied(value,websocket){try{var u=new URL(value,logicalBase);if(websocket&&(u.protocol==='ws:'||u.protocol==='wss:')){if(u.protocol==='wss:')return u.href;u.protocol='http:'}if(u.protocol!=='http:')return u.href;var p=mount+token(u.origin)+u.pathname+u.search+u.hash;return websocket?(location.protocol==='https:'?'wss://':'ws://')+location.host+p:p}catch(_){return value}}function map(input,websocket){if(input instanceof Request)return proxied(input.url,websocket);if(input instanceof URL)return proxied(input.href,websocket);return proxied(String(input),websocket)}var nativeFetch=window.fetch;window.fetch=function(input,init){try{if(input instanceof Request)return nativeFetch.call(this,new Request(map(input),input),init);return nativeFetch.call(this,map(input),init)}catch(_){return nativeFetch.apply(this,arguments)}};var NativeXHR=window.XMLHttpRequest;function ProxyXHR(){var xhr=new NativeXHR(),open=xhr.open;xhr.open=function(method,url){arguments[1]=map(url);return open.apply(xhr,arguments)};return xhr}ProxyXHR.prototype=NativeXHR.prototype;window.XMLHttpRequest=ProxyXHR;var NativeEventSource=window.EventSource;if(NativeEventSource)window.EventSource=function(url,init){return new NativeEventSource(map(url),init)};var NativeSocket=window.WebSocket;if(NativeSocket){function ProxySocket(url,protocols){return protocols===undefined?new NativeSocket(map(url,true)):new NativeSocket(map(url,true),protocols)}ProxySocket.prototype=NativeSocket.prototype;['CONNECTING','OPEN','CLOSING','CLOSED'].forEach(function(key){ProxySocket[key]=NativeSocket[key]});window.WebSocket=ProxySocket}function proxyWorker(Native){if(!Native)return null;function Wrapped(url,options){return options===undefined?new Native(map(url)):new Native(map(url),options)}Wrapped.prototype=Native.prototype;return Wrapped}window.Worker=proxyWorker(window.Worker)||window.Worker;window.SharedWorker=proxyWorker(window.SharedWorker)||window.SharedWorker;if(navigator.serviceWorker&&navigator.serviceWorker.register){var register=navigator.serviceWorker.register.bind(navigator.serviceWorker);navigator.serviceWorker.register=function(url,options){return register(map(url),options)}}var nativeBeacon=navigator.sendBeacon&&navigator.sendBeacon.bind(navigator);if(nativeBeacon)navigator.sendBeacon=function(url,data){return nativeBeacon(map(url),data)};var nativeOpen=window.open;window.open=function(url,target,features){if(typeof url==='string'&&url){parent.postMessage({source:'alx-browser',type:'open',url:new URL(url,logicalBase).href},location.origin);return null}return nativeOpen.apply(this,arguments)};document.addEventListener('click',function(event){var anchor=event.target&&event.target.closest&&event.target.closest('a[target="_blank"]');if(!anchor||!anchor.href)return;event.preventDefault();parent.postMessage({source:'alx-browser',type:'open',url:new URL(anchor.href,logicalBase).href},location.origin)},true)})();`
 }
 
 // robotTestHandler reverse-proxies the robot's CBP/sandbox WebSocket service
@@ -7005,7 +7199,7 @@ func modifyRobotAppResponse(response *http.Response, target *url.URL, appPrefix,
 		return
 	}
 	_ = response.Body.Close()
-	rewritten := rewriteRobotAppHTML(body, appPrefix, requestPath)
+	rewritten := rewriteRobotAppHTML(body, target, appPrefix, requestPath)
 	response.Body = io.NopCloser(bytes.NewReader(rewritten))
 	response.ContentLength = int64(len(rewritten))
 	response.Header.Set("Content-Length", strconv.Itoa(len(rewritten)))
@@ -7036,15 +7230,16 @@ func rewriteRobotAppLocation(location string, target *url.URL, prefix string) st
 
 // rewriteRobotAppHTML injects a <base href> for the current document directory
 // (so relative assets like ./assets/... and ./api/... resolve within the mount)
-// and re-prefixes root-relative href/src/action references (like the launchpad's
-// /app/ links) which ignore <base>.
-func rewriteRobotAppHTML(body []byte, prefix, requestPath string) []byte {
+// and re-prefixes root-relative plus target-origin absolute href/src/action
+// references (like /app/ or http://127.0.0.1:port/app/) which ignore <base> or
+// would otherwise escape the proxy.
+func rewriteRobotAppHTML(body []byte, target *url.URL, prefix, requestPath string) []byte {
 	document := string(body)
-	// Root-relative absolute paths (/app/, /apps/x/, /favicon.ico) bypass <base>.
-	// Protocol-relative (//host) and scheme URLs must stay untouched. This runs
-	// first so the injected <base href> (itself a root-relative path) is not
-	// re-prefixed.
+	// Root-relative paths (/app/, /apps/x/, /favicon.ico) and absolute URLs for
+	// the proxied HTTP origin bypass <base>. This runs before the injected <base
+	// href> (itself a root-relative path) is added.
 	document = rewriteRootRelativeAttr(document, prefix)
+	document = rewriteTargetAbsoluteAttr(document, target, prefix)
 	injections := alemonjsThemeStyleTag + baseHrefFor(requestPath) + robotAppScrollbarStyle
 	if head := regexp.MustCompile(`(?i)<head[^>]*>`).FindString(document); head != "" {
 		document = strings.Replace(document, head, head+injections, 1)
@@ -7085,6 +7280,51 @@ func rewriteRootRelativeAttr(document, prefix string) string {
 					return match
 				}
 				return parts[1] + prefix + strings.TrimPrefix(parts[2], "/") + quote
+			})
+		}
+	}
+	return document
+}
+
+// rewriteTargetAbsoluteAttr keeps document resources on the HTTP proxy when an
+// app writes its own origin into href/src/action. Different origins are left
+// intact. A same-origin absolute URL must not silently bypass the proxy because
+// it would lose the proxy's cookies, storage isolation, and private-network
+// access behavior.
+func rewriteTargetAbsoluteAttr(document string, target *url.URL, prefix string) string {
+	if target == nil || target.Host == "" {
+		return document
+	}
+	for _, attr := range []string{"href", "src", "action"} {
+		for _, quote := range []string{`"`, `'`} {
+			pattern := regexp.MustCompile(`(?i)(\b` + attr + `=` + quote + `)([^` + quote + `]*)` + quote)
+			document = pattern.ReplaceAllStringFunc(document, func(match string) string {
+				parts := pattern.FindStringSubmatch(match)
+				value := parts[2]
+				parsed, err := url.Parse(value)
+				if err != nil || parsed.Host != target.Host {
+					return match
+				}
+				// url.Parse("//host/path") has no scheme. It is still safe to
+				// rewrite when it names this exact target host.
+				if parsed.Scheme != "" && !strings.EqualFold(parsed.Scheme, target.Scheme) {
+					return match
+				}
+				if parsed.Scheme == "" && !strings.HasPrefix(value, "//") {
+					return match
+				}
+				path := parsed.EscapedPath()
+				if path == "" {
+					path = "/"
+				}
+				rewritten := prefix + strings.TrimPrefix(path, "/")
+				if parsed.ForceQuery || parsed.RawQuery != "" {
+					rewritten += "?" + parsed.RawQuery
+				}
+				if parsed.Fragment != "" {
+					rewritten += "#" + parsed.EscapedFragment()
+				}
+				return parts[1] + rewritten + quote
 			})
 		}
 	}

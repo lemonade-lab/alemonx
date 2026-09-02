@@ -19,6 +19,14 @@ RUN (cd yarn && npm ci --no-bin-links --ignore-scripts --no-audit --no-fund)
 FROM golang:1.24 AS builder
 WORKDIR /src
 
+# BuildKit automatic platform arguments are global before the first FROM, but
+# must be re-declared inside this stage before GOARCH/GOOS can consume them.
+# Without these declarations an ARM Docker build silently produced an amd64
+# workbench binary, causing platform-aware plugins to download x64 runtimes.
+ARG TARGETOS
+ARG TARGETARCH
+ARG TARGETVARIANT
+
 # 配置 Go 模块代理为国内镜像源
 ENV GOPROXY=https://goproxy.cn,https://goproxy.io,direct
 
@@ -32,9 +40,6 @@ COPY --from=frontend /src/dist ./dist
 COPY --from=resources /out ./resources/packages
 
 # 打包 go 支持多架构
-ARG TARGETOS=linux
-ARG TARGETARCH=amd64
-ARG TARGETVARIANT
 ARG VERSION=dev
 
 RUN set -eu; \
