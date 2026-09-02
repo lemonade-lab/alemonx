@@ -1874,6 +1874,29 @@ func TestModifyBrowserHTTPResponseKeeps404AndProxiesCrossOriginRedirect(t *testi
 	}
 }
 
+func TestBrowserRewriteDoesNotNestExistingProxyMount(t *testing.T) {
+	target, err := url.Parse("http://10.0.6.2:50831")
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefix := browserHTTPProxyPrefix(target)
+	response := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/html"}},
+		Body:       io.NopCloser(strings.NewReader(`<script src="/guoba-plugin-mock-root/_app.config.js?v=1"></script>`)),
+	}
+	modifyBrowserHTTPResponse(response, target, prefix, prefix)
+	rewriteBrowserHTTPResponse(response, target, prefix, prefix)
+	body, _ := io.ReadAll(response.Body)
+	want := `src="` + prefix + `guoba-plugin-mock-root/_app.config.js?v=1"`
+	if !strings.Contains(string(body), want) {
+		t.Fatalf("proxy resource URL = %s, want %s", body, want)
+	}
+	if strings.Contains(string(body), prefix+"api/v1/browser/http/") {
+		t.Fatalf("proxy mount was nested: %s", body)
+	}
+}
+
 func TestRewriteBrowserCSSAndJavaScript(t *testing.T) {
 	prefix := "/api/v1/browser/http/current/"
 	css := rewriteBrowserCSS(`a{background:url('/image.png')}@import url(http://10.0.6.5:8081/site.css);`, prefix)
