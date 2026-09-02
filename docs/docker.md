@@ -74,21 +74,21 @@ MCP 的 stdio 连接可通过 `docker compose exec -T alx /app/alx mcp` 启动�
 
 ## 从源码构建
 
-首次构建或需要刷新 Debian 安全更新、Chromium、QQ/NapCat 系统依赖时，先由本机 Builder 手动发布 `alemonbase`：
+首次构建或需要刷新 Debian 安全更新、Chromium、QQ/NapCat 系统依赖时，先由本机 Builder 手动发布 `alemonbase`。`Dockerfile.base` 当前以 `node:22` 为基础；必须执行带 `push` 的命令，普通的 `make docker-base-buildx` 只验证，不会更新腾讯云镜像：
 
 ```sh
 docker login ccr.ccs.tencentyun.com
 ALX_BASE_VERSION=20260822 make docker-base-buildx-push
 ```
 
-日常 ALemonX 构建直接复用腾讯云的 `alemonbase`，不会再次执行 `apt-get update` 或 `apt-get upgrade`：
+发布完成后，应用镜像继续复用腾讯云的 `alemonbase:latest`，不会再次执行 `apt-get update` 或 `apt-get upgrade`：
 
 ```sh
 make docker-build
 ALX_IMAGE=alemonx:local docker compose up -d
 ```
 
-构建使用多阶段镜像：Node 阶段生成嵌入式前端，Go 阶段交叉编译静态 `alx`，最终镜像继承腾讯云 `ccr.ccs.tencentyun.com/ningmengchongshui/alemonbase`。基础镜像负责 Node、Git、SSH、Chromium 和系统库；应用镜像只复制工作台二进制，因此代码构建不会重复安装系统包。需要复现某个已验证的基础层时，传入固定标签，例如 `ALX_RUNTIME_BASE=ccr.ccs.tencentyun.com/ningmengchongshui/alemonbase:20260822 make docker-build`。
+构建使用多阶段镜像：Node 阶段生成嵌入式前端，Go 阶段交叉编译静态 `alx`，最终镜像继承腾讯云 `ccr.ccs.tencentyun.com/ningmengchongshui/alemonbase:latest`。基础镜像负责 Node、Git、SSH、Chromium 和系统库；应用镜像只复制工作台二进制，因此代码构建不会重复安装系统包。`latest` 内的 Node 版本由 `Dockerfile.base` 的 `FROM node:22` 决定。
 
 镜像内置 Noto CJK 与 Emoji 字体以及 **Chromium 浏览器**：机器人图片消息（jsxp 渲染）中文与表情显示正常，Puppeteer/Playwright 等浏览器自动化开箱可用（无需自行下载）。容器以 root 运行，浏览器或 QQ/NapCat 的 Electron 运行时必须使用 `--no-sandbox`；QQ 插件会自动添加该参数。镜像体积会因此明显增大（Chromium 约 500MB）。
 
@@ -104,7 +104,7 @@ docker compose -f docker-compose.yml -f docker-compose.snowluma.yml up -d
 
 ## 发布与构建边界
 
-应用镜像可通过 GitHub Actions 的 **发布腾讯云 Docker 镜像** 工作流手动发布。进入仓库的 **Actions** 页面，选择该工作流并点击 **Run workflow**，然后填写腾讯云 TCR/CCR 仓库域名、命名空间、镜像仓库、登录账号及密码或访问令牌。表单默认使用当前的腾讯云镜像地址，也允许填写自定义的腾讯云仓库域名。工作流会在日志中遮罩密码；但 GitHub Actions 的手动表单不提供密码字段类型，密码可能保留在工作流运行元数据中，请只在受信任的仓库中使用。每次构建会自动读取当前提交可追溯到的最新 Git 标签，并同时推送该版本和 `latest`，同时构建 `linux/amd64` 与 `linux/arm64` 两个架构。
+应用镜像可通过 GitHub Actions 的 **发布腾讯云 Docker 镜像** 工作流手动发布。进入仓库的 **Actions** 页面，选择该工作流并点击 **Run workflow**，然后填写腾讯云 TCR/CCR 仓库域名、命名空间、镜像仓库、登录账号及密码或访问令牌。运行时基础镜像默认使用 `alemonbase:latest`。表单默认使用当前的腾讯云镜像地址，也允许填写自定义的腾讯云仓库域名。工作流会在日志中遮罩密码；但 GitHub Actions 的手动表单不提供密码字段类型，密码可能保留在工作流运行元数据中，请只在受信任的仓库中使用。每次构建会自动读取当前提交可追溯到的最新 Git 标签，并同时推送该版本和 `latest`，同时构建 `linux/amd64` 与 `linux/arm64` 两个架构。
 
 基础镜像可通过 **发布腾讯云 alemonbase 镜像** 工作流手动发布。填写版本标签（例如 `20260901`）后，工作流会同时发布该版本和 `latest` 标签；应用镜像工作流的运行时基础镜像应使用已发布的版本标签或 `latest`。
 

@@ -36,14 +36,17 @@ if [ "$push" = '1' ]; then
     -t "$image:$version" \
     --push \
     .
+  echo '✅ 基础镜像已构建并推送。'
+  echo "📦 已更新: $image:latest, $image:$version"
 else
-  echo '🔨 仅验证构建（结果保留在 Buildx 缓存中）...'
-  echo "💡 提示: 如需推送，执行: ALX_BASE_PUSH=1 $0"
+  echo '🔨 从零开始进行多架构验证（忽略缓存并重新拉取基础层；不会生成或更新任何镜像）...'
+  echo "💡 如需推送并更新远端镜像，执行: ALX_BASE_PUSH=1 $0"
   docker buildx build \
+    --pull \
+    --no-cache \
     --platform "$platforms" \
     -f Dockerfile.base \
     --output type=cacheonly \
     .
+  echo '✅ 基础镜像多架构验证通过；远端和本地镜像均未更新。'
 fi
-
-echo '✅ 基础镜像构建完成。'

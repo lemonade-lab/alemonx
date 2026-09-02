@@ -1,6 +1,6 @@
 # ALemonX runtime base. Rebuild and publish this image manually when Debian
 # security updates or runtime system dependencies need to change.
-FROM node:22-bookworm
+FROM node:22
 
 # 先更新源
 RUN apt-get update --fix-missing || (sleep 5 && apt-get update --fix-missing)

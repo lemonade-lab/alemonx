@@ -44,8 +44,8 @@ if [ "$push" = '1' ]; then
     --push \
     .
 else
-  echo "🔨 仅验证构建（结果在缓存中）..."
-  echo "💡 提示: 如需推送，执行: ALX_PUSH=1 $0"
+  echo "🔨 仅验证构建（结果仅在缓存中，不会生成或更新应用镜像）..."
+  echo "💡 如需推送，执行: ALX_PUSH=1 $0"
   docker buildx build \
     --platform "$platforms" \
     --build-arg "ALX_RUNTIME_BASE=$runtime_base" \
@@ -63,6 +63,6 @@ echo "🏷️  标签: latest, $version"
 if [ "$push" = '1' ]; then
   echo "📤 已推送到远程仓库"
 else
-  echo "💡 镜像仅在本地缓存中"
+  echo "💡 仅完成验证；远端和本地镜像均未更新"
 fi
 echo "=========================================="
