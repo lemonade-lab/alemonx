@@ -1555,13 +1555,51 @@ func (m Manager) Write(root, name, content string) (Result, error) {
 	if filepath.Base(path) == ".npmrc" && looksLikeYAMLConfig(content) {
 		return Result{}, errors.New(".npmrc 内容看起来是 YAML 配置（例如 alemon.config.yaml 被误存到了 .npmrc）。npm 无法识别这类内容并会把其中的值打印到日志；请改存到 alemon.config.yaml")
 	}
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+	mode := os.FileMode(0o644)
+	if filepath.Base(path) == "alemon.config.yaml" {
+		// Runtime configuration can include bot and master keys. Keep it private
+		// even when it was first created through the workbench.
+		mode = 0o600
+	}
+	if err := writeFileAtomically(path, []byte(content), mode); err != nil {
 		if !permissionError(err) {
 			return Result{}, fmt.Errorf("保存 %s 失败：%w", filepath.Base(path), err)
 		}
 		return Result{}, permissionAdvice("保存 " + filepath.Base(path))
 	}
 	return Result{Path: path, Output: "已保存。"}, nil
+}
+
+// writeFileAtomically never exposes a partially-written configuration after a
+// process interruption. The final chmod also repairs permissive modes left by
+// earlier releases.
+func writeFileAtomically(path string, content []byte, mode os.FileMode) error {
+	directory := filepath.Dir(path)
+	file, err := os.CreateTemp(directory, ".alx-write-*")
+	if err != nil {
+		return err
+	}
+	temporary := file.Name()
+	defer os.Remove(temporary)
+	if err := file.Chmod(mode); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if _, err := file.Write(content); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(temporary, path); err != nil {
+		return err
+	}
+	return os.Chmod(path, mode)
 }
 
 var yamlKeyValuePattern = regexp.MustCompile(`^[A-Za-z0-9_.-]+\s*:\s`)

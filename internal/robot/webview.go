@@ -268,7 +268,7 @@ func (Manager) AppPort(root string) (AppPortInfo, error) {
 
 // SaveAppPort writes serverPort into alemon.config.yaml, replacing an existing
 // value or appending a new one.
-func (Manager) SaveAppPort(root string, port int) (Result, error) {
+func (m Manager) SaveAppPort(root string, port int) (Result, error) {
 	if port < 1 || port > 65535 {
 		return Result{}, errors.New("应用端口应在 1-65535 之间")
 	}
@@ -282,24 +282,13 @@ func (Manager) SaveAppPort(root string, port int) (Result, error) {
 		return Result{}, fmt.Errorf("无法读取运行配置：%w", err)
 	}
 	text := string(content)
-	value := "serverPort: " + strconv.Itoa(port)
-	pattern := regexp.MustCompile(`(?m)^serverPort\s*:\s*['\"]?\d+['\"]?\s*$`)
-	if pattern.MatchString(text) {
-		text = pattern.ReplaceAllString(text, value)
-	} else {
-		text = strings.TrimRight(text, "\n")
-		if text != "" {
-			text += "\n"
-		}
-		text += value + "\n"
+	result, err := m.Write(root, "alemon.config.yaml", setTopLevelScalar(text, "serverPort", strconv.Itoa(port)))
+	if err != nil {
+		return Result{}, err
 	}
-	if err := os.WriteFile(configFile, []byte(text), 0644); err != nil {
-		if permissionError(err) {
-			return Result{}, permissionAdvice("保存应用端口")
-		}
-		return Result{}, fmt.Errorf("无法保存应用端口：%w", err)
-	}
-	return Result{Path: configFile, Output: "应用端口已设置为 " + strconv.Itoa(port) + "。"}, nil
+	result.Path = configFile
+	result.Output = "应用端口已设置为 " + strconv.Itoa(port) + "。"
+	return result, nil
 }
 
 // EnabledApps reads the alemon.config.yaml apps array. AlemonJS loads each name
@@ -328,6 +317,15 @@ func (Manager) EnabledApps(root string) ([]string, error) {
 		return result, nil
 	case []string:
 		return apps, nil
+	case map[string]any:
+		result := make([]string, 0, len(apps))
+		for name, enabled := range apps {
+			if active, ok := enabled.(bool); ok && active && name != "" {
+				result = append(result, name)
+			}
+		}
+		sort.Strings(result)
+		return result, nil
 	case nil:
 		return []string{}, nil
 	default:
@@ -337,7 +335,7 @@ func (Manager) EnabledApps(root string) ([]string, error) {
 
 // SetAppEnabled adds or removes a local package's npm name from the
 // alemon.config.yaml apps array, controlling whether the robot loads it.
-func (Manager) SetAppEnabled(root, packageName string, enabled bool) (Result, error) {
+func (m Manager) SetAppEnabled(root, packageName string, enabled bool) (Result, error) {
 	if strings.TrimSpace(packageName) == "" {
 		return Result{}, errors.New("请选择要启动的本地包")
 	}
@@ -369,6 +367,12 @@ func (Manager) SetAppEnabled(root, packageName string, enabled bool) (Result, er
 		}
 	case []string:
 		apps = append(apps, existing...)
+	case map[string]any:
+		for name, active := range existing {
+			if value, ok := active.(bool); ok && value && name != "" {
+				apps = append(apps, name)
+			}
+		}
 	}
 	found := false
 	filtered := apps[:0]
@@ -382,22 +386,56 @@ func (Manager) SetAppEnabled(root, packageName string, enabled bool) (Result, er
 	if enabled && !found {
 		filtered = append(filtered, packageName)
 	}
-	config["apps"] = filtered
-	encoded, err := yaml.Marshal(config)
+	text := setTopLevelStringList(string(content), "apps", filtered)
+	result, err := m.Write(root, "alemon.config.yaml", text)
 	if err != nil {
 		return Result{}, err
-	}
-	if err := os.WriteFile(configFile, encoded, 0644); err != nil {
-		if permissionError(err) {
-			return Result{}, permissionAdvice("保存运行配置")
-		}
-		return Result{}, fmt.Errorf("无法保存运行配置：%w", err)
 	}
 	state := "已停用"
 	if enabled {
 		state = "已启用"
 	}
-	return Result{Path: configFile, Output: packageName + " " + state + "。"}, nil
+	result.Path = configFile
+	result.Output = packageName + " " + state + "。"
+	return result, nil
+}
+
+// setTopLevelStringList replaces exactly one top-level YAML list while leaving
+// every unrelated section, comment, and ordering decision untouched.
+func setTopLevelStringList(content, key string, values []string) string {
+	lines := strings.Split(strings.TrimRight(content, "\n"), "\n")
+	start, end := -1, len(lines)
+	pattern := regexp.MustCompile(`^` + regexp.QuoteMeta(key) + `\s*:`)
+	for index, line := range lines {
+		if start < 0 {
+			if pattern.MatchString(line) {
+				start = index
+			}
+			continue
+		}
+		if line != "" && line[0] != ' ' && line[0] != '\t' && !strings.HasPrefix(strings.TrimSpace(line), "#") {
+			end = index
+			break
+		}
+	}
+	section := []string{key + ":"}
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			section = append(section, "  - "+strconv.Quote(value))
+		}
+	}
+	if start < 0 {
+		if len(lines) == 1 && lines[0] == "" {
+			lines = nil
+		}
+		if len(lines) > 0 {
+			lines = append(lines, "")
+		}
+		return strings.Join(append(lines, section...), "\n") + "\n"
+	}
+	updated := append(append([]string{}, lines[:start]...), section...)
+	updated = append(updated, lines[end:]...)
+	return strings.Join(updated, "\n") + "\n"
 }
 
 // AppPortReachable probes whether the robot's application is actually serving

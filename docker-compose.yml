@@ -16,6 +16,8 @@ services:
       ALX_WORKSPACE: /app/workspace
       ALEMONJS_SETUP_ROOTS: /app/workspace
       ALX_PRIVILEGED_MODE: ${ALX_PRIVILEGED_MODE:-enabled}
+      # SnowLuma 默认关闭；只有显式叠加高权限覆盖文件才会启用。
+      ALX_SNOWLUMA_ENABLED: ${ALX_SNOWLUMA_ENABLED:-0}
     volumes:
       - ./data:/root
       - ./workspace:/app/workspace

@@ -1,21 +1,21 @@
 # ALemonX runtime base. Rebuild and publish this image manually when Debian
 # security updates or runtime system dependencies need to change.
-FROM node:22
+FROM node:22-bookworm
 
 # 先更新源
 RUN apt-get update --fix-missing || (sleep 5 && apt-get update --fix-missing)
 
-# 第一组：基础工具（几乎不会失败）
+# 第一组：保留原有基础工具
 RUN apt-get install -y --no-install-recommends \
     ca-certificates curl git lsof openssh-client tini unzip \
-    && echo "✅ Base tools installed"
+    && echo "基础工具安装完成"
 
-# 第二组：字体（通常没问题）
+# 第二组：保留原有字体
 RUN apt-get install -y --no-install-recommends \
     fonts-noto-cjk fonts-noto-color-emoji \
-    && echo "✅ Fonts installed"
+    && echo "字体安装完成"
 
-# Python 环境安装
+# Python 环境安装（保留原有依赖）
 RUN apt-get install -y --no-install-recommends \
     python3 python3-pip python3-venv python3-dev \
     && echo "✅ Python installed" || echo "❌ Python failed"
@@ -27,7 +27,7 @@ RUN ln -sf /usr/bin/python3 /usr/bin/python \
 # 创建虚拟环境并升级 pip（关键修改）
 RUN python3 -m venv /opt/venv \
     && /opt/venv/bin/pip install --no-cache-dir --upgrade pip setuptools wheel \
-    && echo "✅ Virtual environment created and pip upgraded"
+    && echo "Python 虚拟环境已就绪"
 
 # 使用虚拟环境的 pip 安装 Python 包（关键修改）
 RUN /opt/venv/bin/pip install --no-cache-dir \
@@ -42,18 +42,16 @@ RUN /opt/venv/bin/pip install --no-cache-dir \
     websockets \
     pydantic pydantic-settings \
     loguru \
-    pytest pytest-asyncio \
-    && echo "✅ Chatbot Python packages installed" || echo "❌ Python packages failed"
+    pytest pytest-asyncio
 
-# 第三组：Chromium（Debian 12 中可用）
-RUN apt-get install -y --no-install-recommends --fix-missing chromium \
-    && echo "✅ Chromium installed" || echo "❌ Chromium failed"
+# 第三组：保留 Chromium，并使其安装失败时直接中断构建。
+RUN apt-get install -y --no-install-recommends --fix-missing chromium
 
-# 第四组：X11（Debian 12 适配）
-RUN apt-get install -y --no-install-recommends xvfb x11-utils xkb-data \
-    && echo "✅ X11 tools installed" || echo "❌ X11 tools failed"
+# 第四组：保留原有 X11 依赖，并补齐 xkbcomp 与受控桌面入口。
+RUN apt-get install -y --no-install-recommends --fix-missing \
+    xvfb x11-utils x11-xkb-utils xkb-data xauth procps x11vnc novnc websockify
 
-# 第五组：GUI 依赖库（Debian 12 包名确认）
+# 第五组：保留原有 GUI 依赖库。
 RUN apt-get install -y --no-install-recommends \
     libnss3 \
     libgbm1 \
@@ -68,8 +66,7 @@ RUN apt-get install -y --no-install-recommends \
     libxdamage1 \
     libxfixes3 \
     libxrandr2 \
-    libxkbcommon0 \
-    && echo "✅ GUI libraries installed" || echo "❌ Some GUI libraries failed"
+    libxkbcommon0
 
 # 清理
 RUN rm -rf /var/lib/apt/lists/* \
@@ -84,9 +81,17 @@ ENV PYTHONUNBUFFERED=1 \
     PATH="/opt/venv/bin:$PATH" \
     VIRTUAL_ENV="/opt/venv"
 
-# 验证安装
-RUN python --version && pip --version \
-    && echo "✅ Python environment ready"
+# QQ 图形运行契约不完整时必须让镜像构建失败。
+RUN set -eux; \
+    command -v Xvfb; command -v xkbcomp; command -v x11vnc; command -v websockify; \
+    test -d /usr/share/X11/xkb; \
+    if ldd "$(command -v Xvfb)" | grep -q 'not found'; then echo "Xvfb 动态库不完整" >&2; exit 1; fi; \
+    Xvfb :99 -screen 0 1280x720x24 -nolisten tcp -ac & xvfb_pid=$!; \
+    trap 'kill "$xvfb_pid" 2>/dev/null || true' EXIT; \
+    for i in $(seq 1 20); do test -S /tmp/.X11-unix/X99 && break; sleep 0.1; done; \
+    test -S /tmp/.X11-unix/X99; \
+    kill "$xvfb_pid"; wait "$xvfb_pid" || true; trap - EXIT; \
+    python --version; pip --version
 
 # 设置工作目录
 WORKDIR /app

@@ -202,6 +202,31 @@ func TestSetAppEnabledTogglesLocalPackageInApps(t *testing.T) {
 	}
 }
 
+func TestSetAppEnabledMigratesMappedAppsWithoutRewritingOtherConfig(t *testing.T) {
+	root := t.TempDir()
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"bot"}`)
+	writeAppPageFixture(t, filepath.Join(root, "alemon.config.yaml"), "# keep this comment\napps:\n  first: true\n  disabled: false\nserverPort: 18110 # app port\n")
+
+	apps, err := (Manager{}).EnabledApps(root)
+	if err != nil || len(apps) != 1 || apps[0] != "first" {
+		t.Fatalf("mapped apps = %v, %v", apps, err)
+	}
+	if _, err := (Manager{}).SetAppEnabled(root, "second", true); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(filepath.Join(root, "alemon.config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(content), "# keep this comment") || !strings.Contains(string(content), "serverPort: 18110 # app port") {
+		t.Fatalf("unrelated config was rewritten:\n%s", content)
+	}
+	apps, err = (Manager{}).EnabledApps(root)
+	if err != nil || strings.Join(apps, ",") != "first,second" {
+		t.Fatalf("migrated apps = %v, %v", apps, err)
+	}
+}
+
 // TestAppPortReachableReportsUnreachableWhenPortClosed verifies the probe
 // returns unreachable for a port with no listener (safe in sandboxed CI where
 // binding sockets is not permitted).

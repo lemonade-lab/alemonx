@@ -2,6 +2,7 @@ import { useStoreState } from '../store/guideStore'
 import { useEffect, useState, type ReactNode } from 'react'
 import { Settings, SlidersHorizontal } from 'lucide-react'
 import cn from 'classnames'
+import { load } from 'js-yaml'
 import { RobotPanel } from './RobotPanel'
 
 type Props = {
@@ -10,7 +11,34 @@ type Props = {
   extensionConfig?: ReactNode
   onChange: (content: string) => void
 }
-type Values = Record<string, string>
+type AccessKey = 'masterID' | 'masterKey' | 'botID' | 'botKey'
+type AccessItem = { value: string; enabled: boolean }
+type TextKey =
+  | 'port'
+  | 'serverPort'
+  | 'input'
+  | 'login'
+  | 'url'
+  | 'fullReceive'
+  | 'disabledRegular'
+  | 'disabledSelects'
+  | 'disabledUserID'
+  | 'disabledUserKey'
+  | 'redirectRegular'
+  | 'redirectTarget'
+  | 'mappingRegular'
+  | 'mappingTarget'
+  | 'repeatedEventTime'
+  | 'repeatedUserTime'
+  | 'apps'
+  | 'cbpTimeout'
+  | 'cbpReconnect'
+  | 'cbpHeartbeat'
+  | 'cbpHealthCheck'
+  | 'cbpUserAgent'
+  | 'cbpDeviceID'
+  | 'cbpFullReceive'
+type Values = Record<TextKey, string> & Record<AccessKey, AccessItem[]>
 const empty: Values = {
   port: '',
   serverPort: '',
@@ -18,10 +46,10 @@ const empty: Values = {
   login: '',
   url: '',
   fullReceive: '',
-  masterID: '',
-  masterKey: '',
-  botID: '',
-  botKey: '',
+  masterID: [],
+  masterKey: [],
+  botID: [],
+  botKey: [],
   disabledRegular: '',
   disabledSelects: '',
   disabledUserID: '',
@@ -43,7 +71,9 @@ const empty: Values = {
 }
 
 function sameValues(left: Values, right: Values) {
-  return Object.keys(empty).every(key => left[key] === right[key])
+  return Object.keys(empty).every(
+    key => JSON.stringify(left[key as keyof Values]) === JSON.stringify(right[key as keyof Values])
+  )
 }
 const managed = new Set([
   'port',
@@ -68,44 +98,70 @@ const managed = new Set([
   'cbp'
 ])
 const quote = (value: string) => `'${value.replace(/'/g, "''")}'`
-const clean = (value: string) =>
-  value
-    .trim()
-    .replace(/^['"]|['"]$/g, '')
-    .replace(/''/g, "'")
-const mapLines = (key: string, values: string) =>
-  values.trim()
+const mapLines = (key: string, values: AccessItem[]) => {
+  const entries = values.filter(item => item.value.trim())
+  return entries.length
     ? [
         `${key}:`,
-        ...values.split(',').map(value => `  ${quote(value.trim())}: true`)
+        ...entries.map(item => `  ${quote(item.value.trim())}: ${item.enabled}`)
       ]
     : []
-const scalar = (source: string, key: string) =>
-  clean(source.match(new RegExp(`^${key}:\\s*(.+)$`, 'm'))?.[1] ?? '')
-const nested = (source: string, parent: string, key: string) => {
-  const block =
-    source.match(
-      new RegExp(`^\\s*${parent}:\\s*\\n([\\s\\S]*?)(?=^[^ \\t]|$)`, 'm')
-    )?.[1] ?? ''
-  return clean(block.match(new RegExp(`^\\s+${key}:\\s*(.+)$`, 'm'))?.[1] ?? '')
 }
-const mapped = (source: string, key: string) => {
-  const block =
-    source.match(
-      new RegExp(`^${key}:\\s*\\n([\\s\\S]*?)(?=^[^ \\t]|$)`, 'm')
-    )?.[1] ?? ''
-  const values: string[] = []
-  for (const line of block.split('\n')) {
-    const match = line.match(
-      /^\s+(?:-\s+)?['"]?([^:'"]+)['"]?\s*(?::\s*true)?\s*$/
-    )
-    if (match) values.push(clean(match[1]))
-  }
-  return values.join(', ')
+const stringMapLines = (key: string, values: string) => {
+  const entries = values
+    .split(',')
+    .map(value => value.trim())
+    .filter(Boolean)
+  return entries.length
+    ? [`${key}:`, ...entries.map(value => `  ${quote(value)}: true`)]
+    : []
 }
-function readValues(source: string): Values {
+const listLines = (key: string, values: string) => {
+  const entries = values
+    .split(',')
+    .map(value => value.trim())
+    .filter(Boolean)
+  return entries.length ? [`${key}:`, ...entries.map(value => `  - ${quote(value)}`)] : []
+}
+const record = (value: unknown): Record<string, unknown> | null =>
+  value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null
+const text = (value: unknown) =>
+  typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean'
+    ? String(value)
+    : ''
+const list = (value: unknown) => {
+  if (Array.isArray(value)) return value.map(text).filter(Boolean).join(', ')
+  const values = record(value)
+  return values
+    ? Object.entries(values)
+        .filter(([, enabled]) => enabled === true)
+        .map(([key]) => key)
+        .join(', ')
+    : ''
+}
+const accessItems = (value: unknown): AccessItem[] => {
+  if (Array.isArray(value))
+    return value.map(text).filter(Boolean).map(value => ({ value, enabled: true }))
+  const values = record(value)
+  return values
+    ? Object.entries(values).map(([value, enabled]) => ({
+        value,
+        enabled: enabled === true
+      }))
+    : []
+}
+function readValues(source: string): Values | null {
   const values = { ...empty }
-  const map: Record<string, string> = {
+  if (!source.trim()) return values
+  let root: Record<string, unknown>
+  try {
+    root = record(load(source)) ?? {}
+  } catch {
+    return null
+  }
+  const map: Record<string, TextKey> = {
     port: 'port',
     serverPort: 'serverPort',
     input: 'input',
@@ -115,32 +171,35 @@ function readValues(source: string): Values {
     redirect_text_regular: 'redirectRegular',
     redirect_text_target: 'redirectTarget'
   }
-  Object.entries(map).forEach(([yaml, field]) => {
-    values[field] = scalar(source, yaml)
-  })
-  values.fullReceive = scalar(source, 'is_full_receive')
-  values.masterID = mapped(source, 'master_id')
-  values.masterKey = mapped(source, 'master_key')
-  values.botID = mapped(source, 'bot_id')
-  values.botKey = mapped(source, 'bot_key')
-  values.disabledSelects = mapped(source, 'disabled_selects')
-  values.disabledUserID = mapped(source, 'disabled_user_id')
-  values.disabledUserKey = mapped(source, 'disabled_user_key')
-  values.apps = mapped(source, 'apps')
-  values.mappingRegular = nested(source, 'mapping_text', 'regular')
-  values.mappingTarget = nested(source, 'mapping_text', 'target')
-  values.repeatedEventTime = nested(source, 'processor', 'repeated_event_time')
-  values.repeatedUserTime = nested(source, 'processor', 'repeated_user_time')
-  values.cbpTimeout = nested(source, 'cbp', 'timeout')
-  values.cbpReconnect = nested(source, 'cbp', 'reconnectInterval')
-  values.cbpHeartbeat = nested(source, 'cbp', 'heartbeatInterval')
-  values.cbpHealthCheck = nested(source, 'cbp', 'healthCheckInterval')
-  values.cbpUserAgent = nested(source, 'headers', 'user-agent')
-  values.cbpDeviceID = nested(source, 'headers', 'x-device-id')
-  values.cbpFullReceive = nested(source, 'headers', 'x-full-receive')
+  Object.entries(map).forEach(([yaml, field]) => (values[field] = text(root[yaml])))
+  values.fullReceive = text(root.is_full_receive)
+  values.masterID = accessItems(root.master_id)
+  values.masterKey = accessItems(root.master_key)
+  values.botID = accessItems(root.bot_id)
+  values.botKey = accessItems(root.bot_key)
+  values.disabledSelects = list(root.disabled_selects)
+  values.disabledUserID = list(root.disabled_user_id)
+  values.disabledUserKey = list(root.disabled_user_key)
+  values.apps = list(root.apps)
+  const mappings = Array.isArray(root.mapping_text) ? root.mapping_text : []
+  const mapping = record(mappings[0])
+  values.mappingRegular = text(mapping?.regular)
+  values.mappingTarget = text(mapping?.target)
+  const processor = record(root.processor)
+  values.repeatedEventTime = text(processor?.repeated_event_time)
+  values.repeatedUserTime = text(processor?.repeated_user_time)
+  const cbp = record(root.cbp)
+  values.cbpTimeout = text(cbp?.timeout)
+  values.cbpReconnect = text(cbp?.reconnectInterval)
+  values.cbpHeartbeat = text(cbp?.heartbeatInterval)
+  values.cbpHealthCheck = text(cbp?.healthCheckInterval)
+  const headers = record(cbp?.headers)
+  values.cbpUserAgent = text(headers?.['user-agent'])
+  values.cbpDeviceID = text(headers?.['x-device-id'])
+  values.cbpFullReceive = text(headers?.['x-full-receive'])
   return values
 }
-function toYaml(values: Values) {
+function toYaml(values: Values, includeMapping = true) {
   const lines: string[] = []
   const add = (key: string, value: string) => {
     if (value.trim()) lines.push(`${key}: ${quote(value.trim())}`)
@@ -159,13 +218,13 @@ function toYaml(values: Values) {
   )
   add('disabled_text_regular', values.disabledRegular)
   lines.push(
-    ...mapLines('disabled_selects', values.disabledSelects),
-    ...mapLines('disabled_user_id', values.disabledUserID),
-    ...mapLines('disabled_user_key', values.disabledUserKey)
+    ...stringMapLines('disabled_selects', values.disabledSelects),
+    ...stringMapLines('disabled_user_id', values.disabledUserID),
+    ...stringMapLines('disabled_user_key', values.disabledUserKey)
   )
   add('redirect_text_regular', values.redirectRegular)
   add('redirect_text_target', values.redirectTarget)
-  if (values.mappingRegular.trim() && values.mappingTarget.trim())
+  if (includeMapping && values.mappingRegular.trim() && values.mappingTarget.trim())
     lines.push(
       'mapping_text:',
       `  - regular: ${quote(values.mappingRegular.trim())}`,
@@ -178,7 +237,7 @@ function toYaml(values: Values) {
     if (values.repeatedUserTime.trim())
       lines.push(`  repeated_user_time: ${values.repeatedUserTime.trim()}`)
   }
-  if (values.apps.trim()) lines.push(...mapLines('apps', values.apps))
+  if (values.apps.trim()) lines.push(...listLines('apps', values.apps))
   const cbp = [
     ['timeout', values.cbpTimeout],
     ['reconnectInterval', values.cbpReconnect],
@@ -211,13 +270,13 @@ function toYaml(values: Values) {
   }
   return lines.length ? `${lines.join('\n')}\n` : ''
 }
-function mergeConfig(existing: string, generated: string) {
+function mergeConfig(existing: string, generated: string, preserved = new Set<string>()) {
   const normalized = /^\{\s*\}$/.test(existing.trim()) ? '' : existing
   const lines = normalized.replace(/\r/g, '').split('\n')
   const kept: string[] = []
   for (let index = 0; index < lines.length;) {
     const match = lines[index].match(/^([^ \t#][^:]*):/)
-    if (!match || !managed.has(match[1])) {
+    if (!match || !managed.has(match[1]) || preserved.has(match[1])) {
       kept.push(lines[index++])
       continue
     }
@@ -235,30 +294,116 @@ function mergeConfig(existing: string, generated: string) {
 export function RobotConfigForm({ content, toolbar, onChange, extensionConfig }: Props) {
   const [values, setValues] = useStoreState<Values>(empty)
   const [advanced, setAdvanced] = useState(false)
+  const [invalidConfig, setInvalidConfig] = useState(false)
   useEffect(() => {
     const next = readValues(content)
+    setInvalidConfig(next === null)
+    if (!next) return
     setValues(current => (sameValues(current, next) ? current : next))
   }, [content, setValues])
   // Redux's YAML draft is the shared editing source for both modes.
-  const set = (key: string, value: string) => {
-    const next = { ...values, [key]: value }
+  const saveValues = (next: Values, changedKey?: keyof Values) => {
+    if (invalidConfig) return
+    const mappingChange =
+      changedKey === 'mappingRegular' || changedKey === 'mappingTarget'
+    const writeMapping = Boolean(
+      mappingChange &&
+        ((next.mappingRegular.trim() && next.mappingTarget.trim()) ||
+          (!next.mappingRegular.trim() && !next.mappingTarget.trim()))
+    )
     setValues(next)
-    onChange(mergeConfig(content, toYaml(next)))
+    onChange(
+      mergeConfig(
+        content,
+        toYaml(next, writeMapping),
+        writeMapping ? undefined : new Set(['mapping_text'])
+      )
+    )
   }
+  const set = (key: TextKey, value: string) =>
+    saveValues({ ...values, [key]: value }, key)
+  const setAccessItems = (key: AccessKey, items: AccessItem[]) =>
+    saveValues({ ...values, [key]: items }, key)
   const inputClass =
     'min-h-9 w-full rounded-md border border-slate-300 bg-white px-2.5 text-sm font-normal text-slate-800 outline-none transition focus:border-brand-600 focus:ring-2 focus:ring-brand-100'
   const labelClass = 'grid gap-1 text-xs font-semibold text-slate-600'
-  const field = (key: string, label: string, hint = '', title = '') => (
+  const field = (key: TextKey, label: string, hint = '', title = '') => (
     <label className={labelClass} key={key} title={title || undefined}>
       {label}
       <input
         className={inputClass}
+        disabled={invalidConfig}
         value={values[key]}
         onChange={event => set(key, event.target.value)}
         placeholder={hint}
       />
     </label>
   )
+  const accessItemsField = (key: AccessKey, label: string, hint: string) => {
+    const items = values[key]
+    const updateItem = (index: number, patch: Partial<AccessItem>) =>
+      setAccessItems(
+        key,
+        items.map((item, current) =>
+          current === index ? { ...item, ...patch } : item
+        )
+      )
+    return (
+      <section className="col-span-2 grid gap-2 rounded-lg border border-slate-200 bg-slate-50/50 p-2.5">
+        <div className="flex items-center justify-between gap-2">
+          <label className="text-xs font-semibold text-slate-600">{label}</label>
+          <button
+            type="button"
+            className="secondary-button min-h-7 px-2 text-xs"
+            disabled={invalidConfig}
+            onClick={() => setAccessItems(key, [...items, { value: '', enabled: true }])}
+          >
+            + 新增项
+          </button>
+        </div>
+        {items.length === 0 ? (
+          <p className="m-0 text-xs text-slate-400">{hint}</p>
+        ) : (
+          <div className="grid gap-2">
+            {items.map((item, index) => (
+              <div className="flex items-center gap-2" key={`${key}-${index}`}>
+                <input
+                  className={inputClass}
+                  disabled={invalidConfig}
+                  value={item.value}
+                  placeholder={hint}
+                  onChange={event => updateItem(index, { value: event.target.value })}
+                />
+                <label className="flex shrink-0 items-center gap-1.5 text-xs font-medium text-slate-600">
+                  <input
+                    type="checkbox"
+                    className="size-4 accent-brand-600"
+                    disabled={invalidConfig}
+                    checked={item.enabled}
+                    onChange={event => updateItem(index, { enabled: event.target.checked })}
+                  />
+                  开启
+                </label>
+                <button
+                  type="button"
+                  className="secondary-button min-h-8 shrink-0 px-2 text-xs"
+                  disabled={invalidConfig}
+                  onClick={() =>
+                    setAccessItems(
+                      key,
+                      items.filter((_, current) => current !== index)
+                    )
+                  }
+                >
+                  删除
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+    )
+  }
   const group = (
     name: string,
     note: string,
@@ -328,6 +473,11 @@ export function RobotConfigForm({ content, toolbar, onChange, extensionConfig }:
         </>
       }
     >
+      {invalidConfig && (
+        <p className="m-0 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          配置包含无法解析的 YAML；为避免覆盖原内容，已暂停可视化编辑。请切换到文本模式修复后再继续。
+        </p>
+      )}
       {extensionConfig}
       {group(
         '常规运行',
@@ -377,6 +527,7 @@ export function RobotConfigForm({ content, toolbar, onChange, extensionConfig }:
             全量接收
             <select
               className={inputClass}
+              disabled={invalidConfig}
               value={values.fullReceive}
               onChange={event => set('fullReceive', event.target.value)}
             >
@@ -391,10 +542,10 @@ export function RobotConfigForm({ content, toolbar, onChange, extensionConfig }:
         '身份与权限',
         '按需',
         <>
-          {field('masterID', '主人 ID', '多个用逗号分隔')}
-          {field('masterKey', '主人 Key', '多个用逗号分隔')}
-          {field('botID', '机器人 ID', '多个用逗号分隔')}
-          {field('botKey', '机器人 Key', '多个用逗号分隔')}
+          {accessItemsField('masterID', '主人 ID', '例如 123456')}
+          {accessItemsField('masterKey', '主人 Key', '例如 master-key')}
+          {accessItemsField('botID', '机器人 ID', '例如 987654')}
+          {accessItemsField('botKey', '机器人 Key', '例如 bot-key')}
         </>
       )}
       {advanced &&
@@ -441,6 +592,7 @@ export function RobotConfigForm({ content, toolbar, onChange, extensionConfig }:
             CBP 全量接收
             <select
               className={inputClass}
+              disabled={invalidConfig}
               value={values.cbpFullReceive}
               onChange={event => set('cbpFullReceive', event.target.value)}
             >

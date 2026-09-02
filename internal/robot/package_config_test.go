@@ -51,6 +51,31 @@ func TestScopedConnectionPackageUsesShortNamespace(t *testing.T) {
 	}
 }
 
+func TestPackageConfigRejectsMalformedRuntimeYAML(t *testing.T) {
+	root := t.TempDir()
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
+	writeAppPageFixture(t, filepath.Join(root, "node_modules", "example", "package.json"), `{
+  "name":"example",
+  "alemonjs":{"config":[{"name":"token","type":"string","description":"token"}]}
+}`)
+	malformed := "example:\n  token: value\n  broken: [\n"
+	writeAppPageFixture(t, filepath.Join(root, "alemon.config.yaml"), malformed)
+
+	if _, err := (Manager{}).PackageConfig(root, "example"); err == nil {
+		t.Fatal("malformed runtime YAML must be reported instead of treated as empty config")
+	}
+	if _, err := (Manager{}).SavePackageConfig(root, "example", map[string]any{"token": "new"}); err == nil {
+		t.Fatal("malformed runtime YAML must block package config writes")
+	}
+	data, err := os.ReadFile(filepath.Join(root, "alemon.config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != malformed {
+		t.Fatalf("malformed config was modified:\n%s", data)
+	}
+}
+
 // TestScopedConnectionPackageReadsLegacyKey keeps values written by older
 // versions that keyed the section by the scoped package name.
 func TestScopedConnectionPackageReadsLegacyKey(t *testing.T) {

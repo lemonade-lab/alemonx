@@ -51,14 +51,13 @@ RUN set -eu; \
 # 最终运行阶段
 FROM ${ALX_RUNTIME_BASE} AS runtime
 
-RUN mkdir -p /app /app/plugins /app/workspace /data
+RUN mkdir -p /app /app/plugins /app/workspace /data /root/.ssh
 
 WORKDIR /app
 COPY --from=builder /out/alx /app/alx
 
 # 授权
-RUN mkdir -p /root/.ssh \
-    && chmod 700 /root/.ssh \
+RUN chmod 700 /root/.ssh \
     && ssh-keyscan github.com >> /root/.ssh/known_hosts
 
 # 设置环境变量

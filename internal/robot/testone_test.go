@@ -4,7 +4,9 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -45,6 +47,17 @@ func TestTestPortReadsAndSavesTopLevelPort(t *testing.T) {
 	info, _ = (Manager{}).TestPort(root)
 	if info.Port != 20002 || !info.Configured {
 		t.Fatalf("port with serverPort present = %+v, want 20002 configured", info)
+	}
+	writeAppPageFixture(t, filepath.Join(root, "alemon.config.yaml"), "port: 20002 # test port\n")
+	if _, err := (Manager{}).SaveTestPort(root, 20003); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(filepath.Join(root, "alemon.config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(string(content), "port:") != 1 || !strings.Contains(string(content), "port: 20003") {
+		t.Fatalf("port save left duplicate key:\n%s", content)
 	}
 }
 
@@ -116,6 +129,12 @@ func TestTestSandboxAvailableRequiresNoLogin(t *testing.T) {
 	available, _ = (Manager{}).TestSandboxAvailable(root)
 	if available {
 		t.Fatal("platform config must not be sandbox")
+	}
+	// Nested plugin settings must not be mistaken for the robot's own mode.
+	writeAppPageFixture(t, filepath.Join(root, "alemon.config.yaml"), "plugin:\n  login: nested\n  platform: nested\n")
+	available, _ = (Manager{}).TestSandboxAvailable(root)
+	if !available {
+		t.Fatal("nested login/platform should not disable sandbox mode")
 	}
 	// A commented-out login must not count.
 	writeAppPageFixture(t, filepath.Join(root, "alemon.config.yaml"), "# login: discord\nport: 17117\n")

@@ -1596,7 +1596,9 @@ export function Dashboard({
   const [writeRobotFile] = useWriteRobotFileMutation()
   const [writePackageConfig] = useWritePackageConfigMutation()
   const [saveRobotLogin] = useSaveRobotLoginMutation()
+  const [setAppEnabled] = useSetAppEnabledMutation()
   const fileSaveTimers = useRef(new Map<string, number>())
+  const fileSaveChains = useRef(new Map<string, Promise<void>>())
   useEffect(
     () => () => {
       fileSaveTimers.current.forEach(timer => window.clearTimeout(timer))
@@ -1609,6 +1611,25 @@ export function Dashboard({
     setOutputFailed(failed)
     setOperationLogMinimized(false)
   }
+  const queueFileSave = <T,>(key: string, operation: () => Promise<T>) => {
+    const previous = fileSaveChains.current.get(key) ?? Promise.resolve()
+    const next = previous.catch(() => {}).then(operation)
+    const completed = next.then(
+      () => undefined,
+      () => undefined
+    )
+    fileSaveChains.current.set(key, completed)
+    void completed.finally(() => {
+      if (fileSaveChains.current.get(key) === completed)
+        fileSaveChains.current.delete(key)
+    })
+    return next
+  }
+  // All alemon.config.yaml mutations share one queue per robot. Several panels
+  // edit different parts of this same file, so letting their requests race can
+  // make a later response overwrite a value saved by another panel.
+  const queueConfigSave = <T,>(targetRoot: string, operation: () => Promise<T>) =>
+    queueFileSave(`${targetRoot}:alemon.config.yaml`, operation)
   const waitForRobotTask = (
     taskID: string,
     options: {
@@ -1777,7 +1798,11 @@ export function Dashboard({
       key,
       window.setTimeout(() => {
         fileSaveTimers.current.delete(key)
-        void persistFile(root, targetFile, nextContent)
+        if (targetFile === 'alemon.config.yaml')
+          void queueConfigSave(root, () =>
+            persistFile(root, targetFile, nextContent)
+          )
+        else void queueFileSave(key, () => persistFile(root, targetFile, nextContent))
       }, 500)
     )
   }
@@ -1810,7 +1835,7 @@ export function Dashboard({
     }
     setAppPortBusy(true)
     try {
-      await saveAppPort({ root, port }).unwrap()
+      await queueConfigSave(root, () => saveAppPort({ root, port }).unwrap())
       await refreshConfigDraft()
       setAppPortDialog(false)
       // Launch happens after the dialog closes; reflect it on the toolbar icon.
@@ -1898,7 +1923,7 @@ export function Dashboard({
     }
     setTestPortBusy(true)
     try {
-      await saveTestPort({ root, port }).unwrap()
+      await queueConfigSave(root, () => saveTestPort({ root, port }).unwrap())
       await refreshConfigDraft()
       setTestPortDialog(false)
       setTestLaunching(true)
@@ -1982,7 +2007,7 @@ export function Dashboard({
     }
     setLivePortBusy(true)
     try {
-      await saveTestPort({ root, port }).unwrap()
+      await queueConfigSave(root, () => saveTestPort({ root, port }).unwrap())
       await refreshConfigDraft()
       setLivePortDialog(false)
       requestLiveLogin()
@@ -2535,11 +2560,16 @@ export function Dashboard({
         return true
       }
       if (method === 'PUT') {
-        const result = await writeRobotFile({
-          root: data.root,
-          file: data.file,
-          content: data.content
-        }).unwrap()
+        const write = () =>
+          writeRobotFile({
+            root: data.root,
+            file: data.file,
+            content: data.content
+          }).unwrap()
+        const result =
+          data.file === 'alemon.config.yaml'
+            ? await queueConfigSave(data.root, write)
+            : await write()
         if (data.file === 'alemon.config.yaml')
           dispatch(setRobotConfig({ root: data.root, content: data.content }))
         showOutput(result.output ?? '操作完成。')
@@ -2624,11 +2654,13 @@ export function Dashboard({
   ): Promise<boolean> {
     if (!root) return false
     try {
-      await writePackageConfig({
-        root,
-        package: packageName,
-        values
-      }).unwrap()
+      await queueConfigSave(root, () =>
+        writePackageConfig({
+          root,
+          package: packageName,
+          values
+        }).unwrap()
+      )
       await refreshConfigDraft()
       return true
     } catch (reason) {
@@ -2646,11 +2678,13 @@ export function Dashboard({
   ): Promise<boolean> {
     if (!root) return false
     try {
-      await saveRobotLogin({
-        root,
-        login: login.trim(),
-        package: packageName
-      }).unwrap()
+      await queueConfigSave(root, () =>
+        saveRobotLogin({
+          root,
+          login: login.trim(),
+          package: packageName
+        }).unwrap()
+      )
       await refreshConfigDraft()
       return true
     } catch (reason) {
@@ -2960,6 +2994,11 @@ export function Dashboard({
           }
           onSaveConfig={savePackageConfig}
           onConfigChanged={refreshConfigDraft}
+          onSetAppEnabled={(packageName, enabled) =>
+            queueConfigSave(root, () =>
+              setAppEnabled({ root, package: packageName, enabled }).unwrap()
+            )
+          }
           onRemove={async packageName => setPendingBackpackRemoval(packageName)}
           onReplace={async (packageName, version, force = false) =>
             api('POST', {
@@ -7772,6 +7811,7 @@ function BackpackPanel({
   onSetPrivate,
   onSaveConfig,
   onConfigChanged,
+  onSetAppEnabled,
   onRemove,
   onReplace
 }: {
@@ -7795,6 +7835,7 @@ function BackpackPanel({
     values: Record<string, unknown>
   ) => Promise<boolean>
   onConfigChanged: () => Promise<void>
+  onSetAppEnabled: (packageName: string, enabled: boolean) => Promise<unknown>
   onRemove: (packageName: string) => Promise<void>
   onReplace: (
     packageName: string,
@@ -7817,7 +7858,6 @@ function BackpackPanel({
     isFetching: manifestLoading,
     refetch: refetchManifest
   } = usePackageManifestQuery(root, { skip: !root })
-  const [setAppEnabled] = useSetAppEnabledMutation()
   const enabledApps = new Set(appsData?.items ?? [])
   const isPrivateBackpack = Boolean(
     manifest?.private &&
@@ -7833,7 +7873,7 @@ function BackpackPanel({
     if (!root) return
     setAppToggleBusy(packageName)
     try {
-      await setAppEnabled({ root, package: packageName, enabled }).unwrap()
+      await onSetAppEnabled(packageName, enabled)
       await Promise.all([refetchApps(), onConfigChanged()])
     } finally {
       setAppToggleBusy('')
@@ -8634,7 +8674,14 @@ function PackageConfigPanel({
   if (error || !data)
     return (
       <section className="package-config-panel rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-500">
-        <p>该条目没有可读取的 alemonjs.config 声明。</p>
+        <p>
+          {error
+            ? operationErrorMessage(
+                error,
+                '无法读取机器人运行配置；请先在文本模式修复 YAML。'
+              )
+            : '该条目没有可读取的 alemonjs.config 声明。'}
+        </p>
       </section>
     )
   if (!data.fields?.length)

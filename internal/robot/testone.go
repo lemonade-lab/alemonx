@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
-	"strings"
 	"time"
 )
 
@@ -47,7 +46,7 @@ func (Manager) TestPort(root string) (TestPortInfo, error) {
 
 // SaveTestPort writes the top-level port into alemon.config.yaml, replacing an
 // existing value or appending a new one.
-func (Manager) SaveTestPort(root string, port int) (Result, error) {
+func (m Manager) SaveTestPort(root string, port int) (Result, error) {
 	if port < 1 || port > 65535 {
 		return Result{}, errors.New("服务端口应在 1-65535 之间")
 	}
@@ -61,24 +60,13 @@ func (Manager) SaveTestPort(root string, port int) (Result, error) {
 		return Result{}, fmt.Errorf("无法读取运行配置：%w", err)
 	}
 	text := string(content)
-	value := "port: " + strconv.Itoa(port)
-	pattern := regexp.MustCompile(`(?m)^port\s*:\s*['\"]?\d+['\"]?\s*$`)
-	if pattern.MatchString(text) {
-		text = pattern.ReplaceAllString(text, value)
-	} else {
-		text = strings.TrimRight(text, "\n")
-		if text != "" {
-			text += "\n"
-		}
-		text += value + "\n"
+	result, err := m.Write(root, "alemon.config.yaml", setTopLevelScalar(text, "port", strconv.Itoa(port)))
+	if err != nil {
+		return Result{}, err
 	}
-	if err := os.WriteFile(configFile, []byte(text), 0644); err != nil {
-		if permissionError(err) {
-			return Result{}, permissionAdvice("保存服务端口")
-		}
-		return Result{}, fmt.Errorf("无法保存服务端口：%w", err)
-	}
-	return Result{Path: configFile, Output: "服务端口已设置为 " + strconv.Itoa(port) + "。"}, nil
+	result.Path = configFile
+	result.Output = "服务端口已设置为 " + strconv.Itoa(port) + "。"
+	return result, nil
 }
 
 // TestSandboxAvailable reports whether the robot is configured to start in
@@ -95,7 +83,7 @@ func (Manager) TestSandboxAvailable(root string) (bool, error) {
 		// 没有配置时框架默认进入沙盒模式。
 		return true, nil
 	}
-	if match := regexp.MustCompile(`(?m)^\s*(login|platform)\s*:\s*['\"]?[^\s'\"]+`).FindStringSubmatch(string(data)); len(match) == 2 {
+	if match := regexp.MustCompile(`(?m)^(login|platform)\s*:\s*['\"]?[^\s'\"]+`).FindStringSubmatch(string(data)); len(match) == 2 {
 		return false, nil
 	}
 	return true, nil

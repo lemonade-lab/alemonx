@@ -47,10 +47,10 @@ docker compose up -d
 
 | 宿主目录 | 容器路径 | 内容 |
 | --- | --- | --- |
-| `./data` | `/data` | 工作台状态：账户、配置、SQLite、下载缓存 |
-| `./workspace` | `/app/workspace` | 统一工作区：模板、机器人、内置工具、系统插件 |
+| `./data` | `/root` | 工作台状态：账户、配置、SQLite、下载缓存 |
+| `./workspace` | `/app/workspace` | 统一工作区：模板、机器人、内置工具、系统插件及 QQ 动态运行文件 |
 
-容器内统一工作区为 `/app/workspace`：首次启动会把内嵌模板物化到其中的 `templates/`（可编辑，持久保存在宿主机 `./workspace`），新建机器人默认落在 `bots/`。内置 Yarn 物化到 `packages/yarn`；PM2 不随镜像嵌入，首次需要时用内置 Yarn 安装到 `packages/pm2`（位置固定，持久保存在宿主机目录）。通过工作台或 `alx plugin install` 安装的系统插件只写入 `plugins/`；程序随镜像提供的 `/app/plugins` 只用于兼容读取，且优先级低于工作区插件。每个系统插件的默认持久数据目录为 `store/<插件 ID>/`，容器重建后仍保留；例如 QQ 插件应把下载的组件、登录态和配置写入 `store/alemonx-qq/`。
+容器内统一工作区为 `/app/workspace`：首次启动会把内嵌模板物化到其中的 `templates/`（可编辑，持久保存在宿主机 `./workspace`），新建机器人默认落在 `bots/`。内置 Yarn 物化到 `packages/yarn`；PM2 不随镜像嵌入，首次需要时用内置 Yarn 安装到 `packages/pm2`（位置固定，持久保存在宿主机目录）。通过工作台或 `alx plugin install` 安装的系统插件只写入 `plugins/`；程序随镜像提供的 `/app/plugins` 只用于兼容读取，且优先级低于工作区插件。每个系统插件的默认持久数据目录为 `store/<插件 ID>/`，容器重建后仍保留。QQ 插件会将动态下载的 QQ、NapCat、LLBot、SnowLuma 和登录运行态保存到 `store/alemonx-qq/runtimes/<系统-架构>/`；旧共享目录只迁移可读日志，不会复用其他系统的可执行文件。
 
 容器进程以 root 运行，挂载目录开箱即用，无需在宿主机执行 `chown`/`chmod`。
 
@@ -93,6 +93,14 @@ ALX_IMAGE=alemonx:local docker compose up -d
 镜像内置 Noto CJK 与 Emoji 字体以及 **Chromium 浏览器**：机器人图片消息（jsxp 渲染）中文与表情显示正常，Puppeteer/Playwright 等浏览器自动化开箱可用（无需自行下载）。容器以 root 运行，浏览器或 QQ/NapCat 的 Electron 运行时必须使用 `--no-sandbox`；QQ 插件会自动添加该参数。镜像体积会因此明显增大（Chromium 约 500MB）。
 
 镜像也预装 QQ/NapCat Linux 所需的 Xvfb、XKB、GTK/NSS/GBM、音频、CUPS 和 X11 动态库，并把 `/dev/shm` 设为 1 GiB。安装 QQ 插件时无需再执行“准备 QQ 登录运行环境”的系统授权；插件仍会负责下载 QQ/NapCat、启动独立 Xvfb 显示与登录流程。
+
+NapCat 启动后会在容器回环地址创建 QQ 桌面入口。该入口不映射宿主机端口，只能从已登录的 ALemonX 工作台内打开。SnowLuma 默认关闭，因为它需要注入 QQ 进程；需要时使用显式高权限覆盖文件启动：
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.snowluma.yml up -d
+```
+
+该模式会添加 `SYS_PTRACE` 与受控的 seccomp 放宽项，仅应在确认需要 SnowLuma 的主机上启用。
 
 ## 发布与构建边界
 

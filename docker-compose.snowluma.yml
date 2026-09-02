@@ -1,0 +1,11 @@
+# SnowLuma injects into the Linux QQ process and therefore needs stronger
+# container permissions.  This file is deliberately opt-in:
+# docker compose -f docker-compose.yml -f docker-compose.snowluma.yml up -d
+services:
+  alx:
+    environment:
+      ALX_SNOWLUMA_ENABLED: "1"
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - seccomp=unconfined

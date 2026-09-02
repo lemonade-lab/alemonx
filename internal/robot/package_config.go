@@ -177,7 +177,10 @@ func packageConfigFromManifest(path string, data []byte, subject string) (Packag
 	if namespace != declaration.Name {
 		candidates = append(candidates, declaration.Name)
 	}
-	config.Values = readConfigValues(string(content), candidates, declaration.Config)
+	config.Values, err = readConfigValues(string(content), candidates, declaration.Config)
+	if err != nil {
+		return PackageConfig{}, fmt.Errorf("无法解析机器人运行配置：%w", err)
+	}
 	return config, nil
 }
 
@@ -337,13 +340,13 @@ func removeTopLevelScalar(content, key string) string {
 	return strings.TrimLeft(pattern.ReplaceAllString(content, ""), "\r\n")
 }
 
-func readConfigValues(content string, namespaces []string, fields []packageschema.Field) map[string]any {
+func readConfigValues(content string, namespaces []string, fields []packageschema.Field) (map[string]any, error) {
 	content = stripYAMLBOM(content)
 	content = dedupeYAMLSections(content)
 	root := map[string]any{}
 	if strings.TrimSpace(content) != "" {
 		if err := yaml.Unmarshal([]byte(content), &root); err != nil {
-			return map[string]any{}
+			return nil, err
 		}
 	}
 	raw := map[string]any{}
@@ -371,7 +374,7 @@ func readConfigValues(content string, namespaces []string, fields []packageschem
 			values[field.Name] = packageschema.NormalizeValue(coerced)
 		}
 	}
-	return values
+	return values, nil
 }
 
 // mergeConfigValuesWithLegacy writes the short connection key and, when a file

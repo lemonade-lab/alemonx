@@ -10,7 +10,7 @@ import (
 // a testone sandbox config: login/platform switch alemonjs out of sandbox
 // mode, and serverPort would make the sandbox bind the robot's application
 // server port and collide with the original process.
-var sandboxConfigPattern = regexp.MustCompile(`(?m)^\s*(login|platform|serverPort)\s*:.*$`)
+var sandboxConfigPattern = regexp.MustCompile(`(?m)^(login|platform|serverPort)\s*:.*$`)
 
 // SandboxConfig prepares a temporary alemonjs configuration for the testone
 // sandbox. The copy keeps the robot's port (or overrides it with port when
