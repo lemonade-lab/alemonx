@@ -76,6 +76,9 @@ type LocalPackageVersions = {
   current: string
   latest?: string
   versions: string[]
+  branch?: string
+  ahead?: number
+  dirty?: boolean
 }
 export type RobotChatRecordSummary = {
   root: string

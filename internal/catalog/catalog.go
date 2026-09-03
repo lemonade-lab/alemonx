@@ -104,13 +104,15 @@ func Fetch(kind string) ([]Group, error) {
 
 // catalogInstall keeps JS modules as project dependencies even when their
 // documentation happens to link to a source repository. Apps are deliberately
-// different: they are installed into the robot backpack and may use Git URLs.
+// different: they are installed into the robot backpack from their release
+// branch. The catalog documentation commonly links to main or a version tag,
+// neither of which is the distributable branch for a robot plugin.
 func catalogInstall(kind string, item Item) string {
-	if kind == "modules" || strings.HasPrefix(item.Name, "@alemonjs/") || item.Name == "alemonjs" {
+	if kind == "modules" {
 		return item.Name
 	}
-	if repository := repositoryInstallURL(item.URL); repository != "" {
-		return "git+" + repository
+	if repository := repositoryURL(item.URL); repository != "" {
+		return "git+" + repository + ".git#release"
 	}
 	return ""
 }

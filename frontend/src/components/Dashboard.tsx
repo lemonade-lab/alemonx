@@ -200,7 +200,6 @@ import {
   useRemoveSetupPluginDevelopmentMutation,
   useLazySetupPluginDevelopmentLogsQuery,
   useUploadSetupPluginArchiveMutation,
-  useUploadRobotPackageMutation,
   useSetSystemCurrentRobotMutation,
   useSystemMcpQuery,
   useLazySetupPluginMarketQuery,
@@ -2697,8 +2696,8 @@ export function Dashboard({
           'uninstall-module',
           'remove-local-package',
           'replace-local-package',
-          'switch-local-package-version',
-          'force-switch-local-package-version',
+          'sync-local-package-release',
+          'force-sync-local-package-release',
           'enable-backpack-workspace',
           'disable-backpack-workspace'
         ].includes(data.action)
@@ -3193,8 +3192,8 @@ export function Dashboard({
             api('POST', {
               root,
               action: force
-                ? 'force-switch-local-package-version'
-                : 'switch-local-package-version',
+                ? 'force-sync-local-package-release'
+                : 'sync-local-package-release',
               package: packageName,
               version,
               ...(force ? { confirm: 'true' } : {})
@@ -5224,29 +5223,31 @@ function GitCloneDialog({
               )}
             </label>
             <div className="grid gap-3 sm:grid-cols-2">
-              <label className="grid gap-1 text-xs font-semibold text-slate-600">
-                {mode === 'package' ? '插件分支' : '分支'}
-                {branchesLoading ? '（正在读取…）' : '（可选）'}
-                <select
-                  className="h-9 rounded-md border border-slate-300 bg-white px-2.5 text-sm font-normal text-slate-800 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100 disabled:bg-slate-100"
-                  value={branch}
-                  onChange={event => setBranch(event.target.value)}
-                  disabled={!branches.length || branchesLoading}
-                >
-                  {mode === 'package' ? (
-                    <option value="release">发布分支（release）</option>
-                  ) : (
+              {mode === 'package' ? (
+                <span className="grid gap-1 text-xs font-semibold text-slate-600">
+                  插件分支
+                  <span className="inline-flex h-9 items-center rounded-md border border-slate-300 bg-slate-50 px-2.5 text-sm font-normal text-slate-600">
+                    发布分支（release）
+                  </span>
+                </span>
+              ) : (
+                <label className="grid gap-1 text-xs font-semibold text-slate-600">
+                  分支{branchesLoading ? '（正在读取…）' : '（可选）'}
+                  <select
+                    className="h-9 rounded-md border border-slate-300 bg-white px-2.5 text-sm font-normal text-slate-800 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100 disabled:bg-slate-100"
+                    value={branch}
+                    onChange={event => setBranch(event.target.value)}
+                    disabled={!branches.length || branchesLoading}
+                  >
                     <option value="">默认分支</option>
-                  )}
-                  {branches
-                    .filter(item => mode !== 'package' || item !== 'release')
-                    .map(item => (
+                    {branches.map(item => (
                       <option key={item} value={item}>
                         {formatBranchLabel(item)}
                       </option>
                     ))}
-                </select>
-              </label>
+                  </select>
+                </label>
+              )}
               <label className="grid gap-1 text-xs font-semibold text-slate-600">
                 克隆深度
                 <select
@@ -8247,10 +8248,6 @@ function BackpackPanel({
   const [selectedName, setSelectedName] = useStoreState('')
   const [appToggleBusy, setAppToggleBusy] = useStoreState('')
   const [privacyToggleBusy, setPrivacyToggleBusy] = useStoreState(false)
-  const [uploadRobotPackage, { isLoading: uploadingPackage }] =
-    useUploadRobotPackageMutation()
-  const [uploadPackageError, setUploadPackageError] = useState('')
-  const [uploadPackageDone, setUploadPackageDone] = useState('')
   const { data: appsData, refetch: refetchApps } = useRobotAppsQuery(root, {
     skip: !root
   })
@@ -8287,17 +8284,6 @@ function BackpackPanel({
       if (await onSetPrivate(!isPrivateBackpack)) await refetchManifest()
     } finally {
       setPrivacyToggleBusy(false)
-    }
-  }
-  const uploadPackageArchive = async (file: File) => {
-    setUploadPackageError('')
-    setUploadPackageDone('')
-    try {
-      const installed = await uploadRobotPackage({ root, file }).unwrap()
-      setUploadPackageDone(`已上传“${installed.name}”。`)
-      await onRefresh()
-    } catch (reason) {
-      setUploadPackageError(operationErrorMessage(reason, '插件包上传未完成。'))
     }
   }
   if (selected)
@@ -8390,24 +8376,6 @@ function BackpackPanel({
         </>
       }
     >
-      <section className="grid gap-1.5">
-        <PluginUploadDropzone
-          label="拖入或点击上传"
-          hint="支持 .zip / .tar.gz / .tgz，上传内含 package.json 的 AlemonJS 插件包。"
-          busy={uploadingPackage}
-          onFile={file => void uploadPackageArchive(file)}
-        />
-        {uploadPackageError && (
-          <small className="rounded-md border border-amber-200 bg-amber-50 p-2 text-[11px] leading-4 text-amber-800">
-            {uploadPackageError}
-          </small>
-        )}
-        {uploadPackageDone && (
-          <small className="rounded-md border border-emerald-200 bg-emerald-50 p-2 text-[11px] leading-4 text-emerald-700">
-            {uploadPackageDone}
-          </small>
-        )}
-      </section>
       <div className="grid gap-2">
         {loading ? (
           <p className="grid min-h-32 place-items-center text-sm text-slate-500">
@@ -8721,12 +8689,12 @@ function BackpackPackageManager({
           <section className="grid gap-4 rounded-xl border border-slate-200 bg-white p-4">
             <div className="grid gap-1">
               <strong className="text-sm font-semibold text-slate-800">
-                {versions.source === 'git' ? 'Git 版本' : 'npm 版本'}
+                {versions.source === 'git' ? 'release 分支' : 'npm 版本'}
               </strong>
               <span className="text-xs leading-5 text-slate-500">
                 当前使用 {versions.current || item.version || '未知'}；
                 {versions.source === 'git'
-                  ? '此插件是 Git 工作区，版本以标签为准；强制切换会丢弃该插件的本地 Git 修改。'
+                  ? `当前分支为 ${versions.branch || 'detached'}；${versions.dirty ? '存在未提交修改；' : ''}${versions.ahead ? `本地领先远程 ${versions.ahead} 个提交；` : ''}同步会通过 Git 拉取并重置到 origin/release，以上风险需强制确认。`
                   : '未检测到 Git，使用 npm 已发布版本。'}
               </span>
             </div>
@@ -8753,7 +8721,7 @@ function BackpackPackageManager({
                 onClick={() => void onReplace(item.name, version)}
               >
                 <GitBranch className="size-4" />
-                切换版本
+                同步 release
               </button>
               {versions.source === 'git' && (
                 <button
@@ -8767,7 +8735,7 @@ function BackpackPackageManager({
                   onClick={() => setForceSwitchOpen(true)}
                 >
                   <AlertTriangle className="size-4" />
-                  强制切换
+                  强制同步
                 </button>
               )}
             </div>
@@ -8776,10 +8744,10 @@ function BackpackPackageManager({
       </div>
       <ConfirmDialog
         open={forceSwitchOpen}
-        title="强制切换插件版本"
+        title="强制同步 release 分支"
         subtitle="此操作只影响当前背包插件的 Git 工作区"
-        message={`将切换“${item.name}”到 ${version}，并永久丢弃该插件目录中所有未提交及未跟踪的 Git 文件。\n\n机器人主项目和其他插件不会受到影响。`}
-        confirmLabel="丢弃修改并切换"
+        message={`将把“${item.name}”同步到 origin/release，并永久丢弃该插件目录中所有未提交及未跟踪的 Git 文件。\n\n机器人主项目和其他插件不会受到影响。`}
+        confirmLabel="丢弃修改并同步"
         destructive
         busy={busy}
         onCancel={() => setForceSwitchOpen(false)}
@@ -8819,12 +8787,15 @@ function CatalogDetail({
       ? item.name
       : '')
   const repositoryInstall = packageName.startsWith('git+')
+  const releaseBranchInstall = kind === 'plugin' && repositoryInstall
   const npmPackage = Boolean(packageName && !repositoryInstall)
   const {
     data: packageVersions,
     isFetching: versionsLoading,
     error: versionsError
-  } = useCatalogVersionsQuery(packageName, { skip: !packageName })
+  } = useCatalogVersionsQuery(packageName, {
+    skip: !packageName || releaseBranchInstall
+  })
   useEffect(() => {
     setVersion('')
   }, [packageName, setVersion])
@@ -8836,7 +8807,9 @@ function CatalogDetail({
     !versionsLoading &&
     !versionsError &&
     packageVersions?.versions.length === 0
-  const installTarget = version.trim()
+  const installTarget = releaseBranchInstall
+    ? packageName
+    : version.trim()
     ? npmPackage
       ? `${packageName}@${version.trim()}`
       : `${packageName.split('#')[0]}#${version.trim()}`
@@ -8888,7 +8861,11 @@ function CatalogDetail({
             )}
         </div>
         <div className="flex flex-wrap items-end justify-end gap-2">
-          {packageName ? (
+          {releaseBranchInstall ? (
+            <span className="rounded-md bg-slate-100 px-2.5 py-2 text-xs font-semibold text-slate-600">
+              release 分支
+            </span>
+          ) : packageName ? (
             <label className="grid gap-1 text-[11px] font-semibold text-slate-500">
               <select
                 className="h-9 min-w-32 rounded-md border border-slate-300 bg-white px-2 text-xs font-medium text-slate-700 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100"

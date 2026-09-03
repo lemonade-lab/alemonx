@@ -141,27 +141,39 @@ func TestSwitchLocalPackageVersionRequiresConfirmationBeforeDiscardingGitChanges
 	plugin := filepath.Join(root, "packages", "local-plugin")
 	writeAppPageFixture(t, filepath.Join(plugin, "package.json"), `{"name":"local-plugin","version":"1.0.0"}`)
 	for _, command := range [][]string{
-		{"init", "-b", "main"},
+		{"init", "-b", "release"},
 		{"config", "user.name", "Test User"},
 		{"config", "user.email", "test@example.com"},
 		{"add", "."},
 		{"commit", "-m", "initial"},
-		{"tag", "v1.0.0"},
 	} {
 		if _, err := gitRun(plugin, command...); err != nil {
 			t.Skipf("git is unavailable for local package switch test: %v", err)
 		}
 	}
+	remote := filepath.Join(t.TempDir(), "plugin.git")
+	for _, command := range [][]string{
+		{"init", "--bare", remote},
+		{"remote", "add", "origin", remote},
+		{"push", "-u", "origin", "release"},
+	} {
+		if _, err := gitRun(plugin, command...); err != nil {
+			t.Skipf("git remote setup is unavailable for local package switch test: %v", err)
+		}
+	}
 	writeAppPageFixture(t, filepath.Join(plugin, "package.json"), `{"name":"local-plugin","version":"1.0.0","local":true}`)
 	writeAppPageFixture(t, filepath.Join(plugin, "scratch.txt"), "local change")
 
-	if _, err := switchLocalPackageVersion(root, "local-plugin", "v1.0.0", false); err == nil || !strings.Contains(err.Error(), "强制切换") {
+	if _, err := switchLocalPackageVersion(root, "local-plugin", "v1.0.0", false); err == nil || !strings.Contains(err.Error(), "仅允许同步 release") {
+		t.Fatalf("tag switch must be rejected, err=%v", err)
+	}
+	if _, err := switchLocalPackageVersion(root, "local-plugin", "release", false); err == nil || !strings.Contains(err.Error(), "存在未提交修改") {
 		t.Fatalf("ordinary switch should preserve local changes, err=%v", err)
 	}
-	if _, err := (Manager{}).Run(root, "force-switch-local-package-version", "", "local-plugin", "v1.0.0", "", "", false); err == nil || !strings.Contains(err.Error(), "确认") {
+	if _, err := (Manager{}).Run(root, "force-sync-local-package-release", "", "local-plugin", "release", "", "", false); err == nil || !strings.Contains(err.Error(), "确认") {
 		t.Fatalf("force switch without confirmation should be rejected, err=%v", err)
 	}
-	result, err := (Manager{}).Run(root, "force-switch-local-package-version", "", "local-plugin", "v1.0.0", "", "", true)
+	result, err := (Manager{}).Run(root, "force-sync-local-package-release", "", "local-plugin", "release", "", "", true)
 	if err != nil {
 		t.Fatalf("force switch: %v\n%s", err, result.Output)
 	}
@@ -174,5 +186,22 @@ func TestSwitchLocalPackageVersionRequiresConfirmationBeforeDiscardingGitChanges
 	}
 	if status, err := gitRun(plugin, "status", "--porcelain"); err != nil || strings.TrimSpace(status) != "" {
 		t.Fatalf("plugin should be clean after force switch: %q, %v", status, err)
+	}
+	writeAppPageFixture(t, filepath.Join(plugin, "package.json"), `{"name":"local-plugin","version":"1.0.1"}`)
+	if _, err := gitRun(plugin, "add", "."); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gitRun(plugin, "commit", "-m", "local release commit"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := switchLocalPackageVersion(root, "local-plugin", "release", false); err == nil || !strings.Contains(err.Error(), "领先远程") {
+		t.Fatalf("ordinary sync must preserve a clean local commit, err=%v", err)
+	}
+	if _, err := (Manager{}).SetAppEnabled(root, "local-plugin", true); err == nil || !strings.Contains(err.Error(), "领先远程") {
+		t.Fatalf("a release branch ahead of origin must not be enabled, err=%v", err)
+	}
+	writeAppPageFixture(t, filepath.Join(root, "alemon.config.yaml"), "apps:\n  local-plugin: true\n")
+	if err := (Manager{}).ValidateEnabledBackpackRelease(root); err == nil || !strings.Contains(err.Error(), "领先远程") {
+		t.Fatalf("runtime release preflight must reject a branch ahead of origin, err=%v", err)
 	}
 }

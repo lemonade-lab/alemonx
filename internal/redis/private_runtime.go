@@ -75,7 +75,7 @@ func (m *Manager) startPrivateLocked(address string) error {
 		address = net.JoinHostPort(bindHost, portText)
 	}
 	config := filepath.Join(m.privateDataDir(), "redis.conf")
-	contents := fmt.Sprintf("bind 127.0.0.1\nport %s\ndir %s\ndbfilename dump.rdb\nappendonly yes\nappendfsync everysec\nrequirepass %s\ndaemonize no\nprotected-mode yes\nlogfile %s\n", portText, redisConfigPath(m.privateDataDir()), m.config.Password, redisConfigPath(filepath.Join(m.privateDataDir(), "redis.log")))
+	contents := fmt.Sprintf("bind 127.0.0.1\nport %s\ndir %s\ndbfilename dump.rdb\nappendonly yes\nappendfsync everysec\ndaemonize no\nprotected-mode yes\nlogfile %s\n", portText, redisConfigPath(m.privateDataDir()), redisConfigPath(filepath.Join(m.privateDataDir(), "redis.log")))
 	if err := os.WriteFile(config, []byte(contents), 0o600); err != nil {
 		return fmt.Errorf("写入私有 Redis 配置失败：%w", err)
 	}
@@ -131,7 +131,6 @@ func (m *Manager) stopPrivateLocked() error {
 	if m.backendAddress != "" {
 		address = m.backendAddress
 	}
-	_ = redisRESP(address, 3*time.Second, []byte("AUTH"), []byte(m.config.Password))
 	_ = redisRESP(address, 3*time.Second, []byte("SHUTDOWN"), []byte("SAVE"))
 	if m.privateProcess != nil && m.privateProcess.Process != nil {
 		done := make(chan error, 1)
@@ -225,7 +224,7 @@ func (m *Manager) ActivatePrivateRuntime() error {
 	}
 	m.phase, m.message = "migrating", "正在安全迁移到 ALemonX 私有 Redis。"
 	if err := m.startPrivateLocked(net.JoinHostPort(bindHost, "0")); err == nil {
-		if restoreErr := restoreSnapshotToPrivateRedis(m.backendAddress, m.snapshotPath, m.config.Password); restoreErr == nil {
+		if restoreErr := restoreSnapshotToPrivateRedis(m.backendAddress, m.snapshotPath); restoreErr == nil {
 			m.proxy.setBackend(m.backendAddress)
 			m.stopSnapshotterLocked()
 			m.server.Close()
@@ -269,7 +268,7 @@ func (m *Manager) restoreEmbeddedLocked() {
 	m.startSnapshotterLocked()
 }
 
-func restoreSnapshotToPrivateRedis(address, path string, passwords ...string) error {
+func restoreSnapshotToPrivateRedis(address, path string) error {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -291,11 +290,6 @@ func restoreSnapshotToPrivateRedis(address, path string, passwords ...string) er
 	defer connection.Close()
 	_ = connection.SetDeadline(time.Now().Add(20 * time.Second))
 	reader := bufio.NewReader(connection)
-	if len(passwords) > 0 && passwords[0] != "" {
-		if err := redisRESPOn(connection, reader, []byte("AUTH"), []byte(passwords[0])); err != nil {
-			return err
-		}
-	}
 	for _, database := range data.Databases {
 		if err := redisRESPOn(connection, reader, []byte("SELECT"), []byte(strconv.Itoa(database.ID))); err != nil {
 			return err

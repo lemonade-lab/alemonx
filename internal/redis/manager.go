@@ -6,7 +6,6 @@ package redis
 
 import (
 	"crypto/rand"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -47,12 +46,8 @@ type Config struct {
 	// PrivateInitialized is written only after the miniredis snapshot has been
 	// imported into an application-private runtime. Later starts trust the
 	// runtime's own AOF/RDB rather than replaying an old fallback snapshot.
-	PrivateInitialized bool `json:"privateInitialized,omitempty"`
-	// Password is generated once per ALemonX instance. It protects the public
-	// loopback proxy as well as the private Redis backend. It is deliberately
-	// omitted from Status so a status refresh can never leak credentials.
-	Password   string `json:"password,omitempty"`
-	InstanceID string `json:"instanceId,omitempty"`
+	PrivateInitialized bool   `json:"privateInitialized,omitempty"`
+	InstanceID         string `json:"instanceId,omitempty"`
 }
 
 // Status is the manager state returned to the workbench.
@@ -91,20 +86,22 @@ type Manager struct {
 	snapshotPath string
 	mu           sync.Mutex
 
-	config         Config
-	server         *miniredis.Miniredis
-	proxy          *redisProxy
-	backendAddress string
-	private        bool
-	privateProcess *exec.Cmd
-	external       bool
-	skipped        bool
-	message        string
-	mode           string
-	phase          string
-	retryable      bool
-	lastSaved      time.Time
-	snapshotStop   chan struct{}
+	config             Config
+	server             *miniredis.Miniredis
+	proxy              *redisProxy
+	backendAddress     string
+	private            bool
+	privateProcess     *exec.Cmd
+	external           bool
+	skipped            bool
+	message            string
+	mode               string
+	phase              string
+	retryable          bool
+	runtimeDownloading bool
+	runtimeVersion     string
+	lastSaved          time.Time
+	snapshotStop       chan struct{}
 }
 
 // NewManager returns a manager backed by the given configuration file. A
@@ -119,19 +116,14 @@ func NewManager(path string) *Manager {
 	if err := manager.loadLocked(); err != nil {
 		log.Printf("内置 Redis 配置不可用，已使用默认配置：%v", err)
 	}
-	if manager.config.Password == "" || manager.config.InstanceID == "" {
+	if manager.config.InstanceID == "" {
 		// A random per-instance secret keeps a loopback Redis from being a
 		// writable service for every process on the machine.
 		secret := make([]byte, 32)
 		if _, err := rand.Read(secret); err != nil {
 			log.Printf("生成 Redis 本地凭据失败：%v", err)
 		} else {
-			if manager.config.Password == "" {
-				manager.config.Password = base64.RawURLEncoding.EncodeToString(secret)
-			}
-			if manager.config.InstanceID == "" {
-				manager.config.InstanceID = base64.RawURLEncoding.EncodeToString(secret[:16])
-			}
+			manager.config.InstanceID = fmt.Sprintf("%x", secret[:16])
 			if err := manager.saveLocked(); err != nil {
 				log.Printf("保存 Redis 本地凭据失败：%v", err)
 			}
@@ -153,8 +145,13 @@ func (m *Manager) Status() Status {
 // an error is returned and nothing is started.
 func (m *Manager) Start() error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.startLocked()
+	err := m.startLocked()
+	shouldPrepare := err == nil && m.server != nil && !m.private && !m.runtimeDownloading
+	m.mu.Unlock()
+	if shouldPrepare {
+		go m.RetryRuntime()
+	}
+	return err
 }
 
 // InstallNative installs Redis through the Linux package manager, enables its
@@ -386,7 +383,7 @@ func (m *Manager) startLocked() error {
 		backend := net.JoinHostPort(bindHost, "0")
 		if err := m.startPrivateLocked(backend); err == nil {
 			if !m.config.PrivateInitialized {
-				if err := restoreSnapshotToPrivateRedis(m.backendAddress, m.snapshotPath, m.config.Password); err != nil {
+				if err := restoreSnapshotToPrivateRedis(m.backendAddress, m.snapshotPath); err != nil {
 					_ = m.stopPrivateLocked()
 					log.Printf("私有 Redis 首次恢复失败，回退 miniredis：%v", err)
 				} else {
@@ -419,7 +416,6 @@ func (m *Manager) startLocked() error {
 		m.skipped = false
 		return fmt.Errorf("启动内置 Redis 失败：%w", err)
 	}
-	server.RequireAuth(m.config.Password)
 	m.server = server
 	m.backendAddress = server.Addr()
 	if err := m.restoreSnapshotLocked(); err != nil {
@@ -445,7 +441,7 @@ func (m *Manager) startProxyLocked(address string) error {
 	if m.proxy != nil {
 		return nil
 	}
-	proxy, err := newRedisProxy(address, m.backendAddress, m.config.Password)
+	proxy, err := newRedisProxy(address, m.backendAddress)
 	if err != nil {
 		return err
 	}
@@ -499,21 +495,30 @@ func (m *Manager) statusLocked() Status {
 		PrivateInstalled: m.privateInstalledLocked(),
 		PrivateRunning:   m.private,
 		RuntimePath:      m.privateRuntime(),
+		RuntimeVersion:   m.runtimeVersion,
 		Retryable:        m.retryable,
-		ConnectionURI:    "redis://:" + m.config.Password + "@" + net.JoinHostPort(bindHost, strconv.Itoa(port)),
+		ConnectionURI:    "redis://" + net.JoinHostPort(bindHost, strconv.Itoa(port)),
 	}
 }
 
-// RetryRuntime records a user-requested retry. The downloader is deliberately
-// asynchronous: fallback Redis remains available even when the release source
-// is offline.
+// RetryRuntime starts an asynchronous runtime preparation or safely retries a
+// previously prepared runtime. Fallback Redis remains available on failure.
 func (m *Manager) RetryRuntime() {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.server != nil && !m.private {
-		m.phase, m.retryable = "preparing-runtime", true
-		m.message = "正在后台准备 ALemonX 私有 Redis。"
+	if m.server == nil || m.private || m.runtimeDownloading {
+		m.mu.Unlock()
+		return
 	}
+	m.phase, m.retryable = "preparing-runtime", true
+	m.message = "正在后台准备 ALemonX 私有 Redis。"
+	m.runtimeDownloading = true
+	installed := m.privateInstalledLocked()
+	m.mu.Unlock()
+	if installed {
+		go m.activatePreparedRuntime()
+		return
+	}
+	go m.prepareRuntime()
 }
 
 func ownershipFor(managed, external bool) string {

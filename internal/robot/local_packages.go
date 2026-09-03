@@ -28,10 +28,14 @@ func installLocalPackage(root, source string) (Result, error) {
 		return Result{}, fmt.Errorf("本地插件包 %s 已存在，工具不会覆盖它", name)
 	}
 	if strings.HasPrefix(source, "git+") {
-		repository, ref, err := splitGitPackageSource(source)
+		repository, _, err := splitGitPackageSource(source)
 		if err != nil {
 			return Result{}, err
 		}
+		// Backpack plugins are always checked out from the distributable branch.
+		// Do not let a catalog URL, API caller, or stale UI select a tag or a
+		// development branch here.
+		ref := "release"
 		cloneRepository, mirrored := githubPackageMirror(repository)
 		args := []string{"clone", "--depth", "1"}
 		if ref != "" {
@@ -475,6 +479,9 @@ func replaceLocalPackage(root, packageName, version string) (Result, error) {
 }
 
 func switchLocalPackageVersion(root, packageName, version string, force bool) (Result, error) {
+	if version != "release" {
+		return Result{}, errors.New("背包插件仅允许同步 release 分支")
+	}
 	items, err := (Manager{}).LocalPackages(root)
 	if err != nil {
 		return Result{}, err
@@ -484,25 +491,15 @@ func switchLocalPackageVersion(root, packageName, version string, force bool) (R
 			continue
 		}
 		if output, gitErr := gitRun(item.Path, "rev-parse", "--is-inside-work-tree"); gitErr == nil && strings.TrimSpace(output) == "true" {
-			if !gitVersionPattern.MatchString(version) {
-				return Result{}, errors.New("请选择有效的 Git 版本标签")
+			if output, fetchErr := gitRun(item.Path, "fetch", "origin", "release"); fetchErr != nil {
+				return Result{Path: item.Path, Output: output}, errors.New("无法从 Git 仓库获取 release 分支")
 			}
-			status, statusErr := gitRun(item.Path, "status", "--porcelain")
+			status, statusErr := releaseGitStatus(item.Path)
 			if statusErr != nil {
-				return Result{}, errors.New("无法确认 Git 工作区状态")
+				return Result{}, statusErr
 			}
-			if strings.TrimSpace(status) != "" {
-				if !force {
-					return Result{}, errors.New("插件 Git 工作区有未提交修改，请先提交或还原后再切换版本；确认不需要这些修改时可选择“强制切换”")
-				}
-			}
-			if _, tagErr := gitRun(item.Path, "rev-parse", "-q", "--verify", "refs/tags/"+version); tagErr != nil {
-				if _, fetchErr := gitRun(item.Path, "fetch", "origin", "tag", version); fetchErr != nil {
-					return Result{}, errors.New("无法从 Git 仓库获取该版本标签")
-				}
-				if _, tagErr = gitRun(item.Path, "rev-parse", "-q", "--verify", "refs/tags/"+version); tagErr != nil {
-					return Result{}, errors.New("Git 仓库中没有该版本标签")
-				}
+			if !force && (status.Dirty || status.Branch != "release" || status.Ahead > 0) {
+				return Result{}, releaseSyncConfirmationError(status)
 			}
 			var logs []string
 			if force {
@@ -516,14 +513,66 @@ func switchLocalPackageVersion(root, packageName, version string, force bool) (R
 				}
 				logs = append(logs, "已丢弃该插件工作区的本地 Git 修改。", resetOutput, cleanOutput)
 			}
-			output, checkoutErr := gitRun(item.Path, "checkout", "--force", "--detach", "tags/"+version)
+			output, checkoutErr := gitRun(item.Path, "checkout", "-B", "release", "origin/release")
 			logs = append(logs, output)
+			if checkoutErr == nil {
+				output, checkoutErr = gitRun(item.Path, "reset", "--hard", "origin/release")
+				logs = append(logs, output)
+			}
 			output = strings.TrimSpace(strings.Join(logs, "\n"))
-			return Result{Path: item.Path, Output: output}, checkoutErr
+			if checkoutErr != nil {
+				return Result{Path: item.Path, Output: output}, checkoutErr
+			}
+			return Result{Path: item.Path, Output: "已同步 release 分支。\n" + output}, nil
 		}
 		return replaceLocalPackage(root, packageName, version)
 	}
 	return Result{}, errors.New("背包中没有可切换版本的本地插件包")
+}
+
+type releaseStatus struct {
+	Branch string
+	Head   string
+	Ahead  int
+	Dirty  bool
+}
+
+func releaseGitStatus(path string) (releaseStatus, error) {
+	branch, _ := gitRun(path, "symbolic-ref", "--quiet", "--short", "HEAD")
+	head, headErr := gitRun(path, "rev-parse", "--short", "HEAD")
+	if headErr != nil {
+		return releaseStatus{}, errors.New("无法读取插件 Git 提交")
+	}
+	dirty, dirtyErr := gitRun(path, "status", "--porcelain")
+	if dirtyErr != nil {
+		return releaseStatus{}, errors.New("无法确认 Git 工作区状态")
+	}
+	status := releaseStatus{Branch: strings.TrimSpace(branch), Head: strings.TrimSpace(head), Dirty: strings.TrimSpace(dirty) != ""}
+	if status.Branch == "release" {
+		counts, err := gitRun(path, "rev-list", "--left-right", "--count", "origin/release...release")
+		if err != nil {
+			return releaseStatus{}, errors.New("无法比较本地与远程 release 分支")
+		}
+		var behind int
+		if _, err := fmt.Sscanf(strings.TrimSpace(counts), "%d %d", &behind, &status.Ahead); err != nil {
+			return releaseStatus{}, errors.New("无法识别 release 分支状态")
+		}
+	}
+	return status, nil
+}
+
+func releaseSyncConfirmationError(status releaseStatus) error {
+	reasons := make([]string, 0, 3)
+	if status.Branch != "release" {
+		reasons = append(reasons, "当前不在 release 分支")
+	}
+	if status.Dirty {
+		reasons = append(reasons, "存在未提交修改")
+	}
+	if status.Ahead > 0 {
+		reasons = append(reasons, fmt.Sprintf("本地 release 分支领先远程 %d 个提交", status.Ahead))
+	}
+	return errors.New(strings.Join(reasons, "；") + "，请确认后强制同步")
 }
 
 func localPackageName(source string) string {

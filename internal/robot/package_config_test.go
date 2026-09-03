@@ -460,26 +460,26 @@ func TestPackageConfigsOnlyEnabledBackpackPackages(t *testing.T) {
 	}
 }
 
-func TestDefaultEnableLocalPackageAddsToApps(t *testing.T) {
+func TestDefaultEnableLocalPackageSkipsUnmanagedPackage(t *testing.T) {
 	root := t.TempDir()
 	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
 	target := filepath.Join(root, "packages", "demo")
 	writeAppPageFixture(t, filepath.Join(target, "package.json"), `{"name":"demo-pkg"}`)
 
 	note := defaultEnableLocalPackage(root, target)
-	if !strings.Contains(note, "已默认启用") {
-		t.Fatalf("note = %q, want default-enable note", note)
+	if note != "" {
+		t.Fatalf("note = %q, want no auto-enable for unmanaged package", note)
 	}
 	enabled, err := (Manager{}).EnabledApps(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(enabled) != 1 || enabled[0] != "demo-pkg" {
-		t.Fatalf("enabled = %#v, want demo-pkg", enabled)
+	if len(enabled) != 0 {
+		t.Fatalf("enabled = %#v, want none", enabled)
 	}
 }
 
-func TestInstallLocalPackageDefaultsEnabledEndToEnd(t *testing.T) {
+func TestInstallLocalPackageDoesNotEnableUnmanagedNPMPackage(t *testing.T) {
 	root := t.TempDir()
 	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
 	source := filepath.Join(t.TempDir(), "market-plugin")
@@ -497,8 +497,8 @@ func TestInstallLocalPackageDefaultsEnabledEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(result.Output, "已默认启用") {
-		t.Fatalf("install output = %q, want default-enable note", result.Output)
+	if strings.Contains(result.Output, "已默认启用") {
+		t.Fatalf("install output = %q, unmanaged package must not auto-enable", result.Output)
 	}
 	if _, err := os.Stat(filepath.Join(root, "packages", "market-plugin", "package.json")); err != nil {
 		t.Fatalf("package did not enter backpack: %v", err)
@@ -507,7 +507,7 @@ func TestInstallLocalPackageDefaultsEnabledEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(enabled) != 1 || enabled[0] != "market-plugin" {
-		t.Fatalf("enabled = %#v, want market-plugin", enabled)
+	if len(enabled) != 0 {
+		t.Fatalf("enabled = %#v, want none", enabled)
 	}
 }

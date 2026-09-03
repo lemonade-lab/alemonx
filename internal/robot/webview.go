@@ -344,6 +344,28 @@ func (m Manager) SetAppEnabled(root, packageName string, enabled bool) (Result, 
 	if err != nil {
 		return Result{}, err
 	}
+	if enabled {
+		items, listErr := m.LocalPackages(root)
+		if listErr != nil {
+			return Result{}, listErr
+		}
+		for _, item := range items {
+			if item.Name != packageName {
+				continue
+			}
+			if output, gitErr := gitRun(item.Path, "rev-parse", "--is-inside-work-tree"); gitErr != nil || strings.TrimSpace(output) != "true" {
+				return Result{}, errors.New("背包插件必须从 Git release 分支安装后才能启用")
+			}
+			status, statusErr := releaseGitStatus(item.Path)
+			if statusErr != nil {
+				return Result{}, statusErr
+			}
+			if status.Branch != "release" || status.Dirty || status.Ahead > 0 {
+				return Result{}, releaseSyncConfirmationError(status)
+			}
+			break
+		}
+	}
 	configFile := filepath.Join(project, "alemon.config.yaml")
 	content, err := os.ReadFile(configFile)
 	if err != nil && !os.IsNotExist(err) {
@@ -392,6 +414,44 @@ func (m Manager) SetAppEnabled(root, packageName string, enabled bool) (Result, 
 	result.Path = configFile
 	result.Output = packageName + " " + state + "。"
 	return result, nil
+}
+
+// ValidateEnabledBackpackRelease prevents an already-enabled legacy package
+// from bypassing the release-branch rule when a robot is started.
+func (m Manager) ValidateEnabledBackpackRelease(root string) error {
+	enabled, err := m.EnabledApps(root)
+	if err != nil {
+		return err
+	}
+	items, err := m.LocalPackages(root)
+	if err != nil {
+		return err
+	}
+	for _, item := range items {
+		if !item.Valid || !containsString(enabled, item.Name) {
+			continue
+		}
+		if output, gitErr := gitRun(item.Path, "rev-parse", "--is-inside-work-tree"); gitErr != nil || strings.TrimSpace(output) != "true" {
+			return fmt.Errorf("背包插件 %s 必须从 Git release 分支安装后才能运行", item.Name)
+		}
+		status, statusErr := releaseGitStatus(item.Path)
+		if statusErr != nil {
+			return statusErr
+		}
+		if status.Branch != "release" || status.Dirty || status.Ahead > 0 {
+			return fmt.Errorf("背包插件 %s：%w", item.Name, releaseSyncConfirmationError(status))
+		}
+	}
+	return nil
+}
+
+func containsString(items []string, target string) bool {
+	for _, item := range items {
+		if item == target {
+			return true
+		}
+	}
+	return false
 }
 
 // setTopLevelBooleanMap replaces exactly one top-level YAML map while leaving

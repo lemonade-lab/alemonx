@@ -196,6 +196,9 @@ func CloneLocalPackageWithProgress(root, repository, branch, name, mirror string
 // CloneLocalPackageWithAuthorization clones a package with ephemeral HTTPS
 // credentials when the repository is private.
 func CloneLocalPackageWithAuthorization(root, repository, branch, name, mirror string, depth int, authorization HTTPSAuthorization, onProgress func(CloneProgress)) (Result, error) {
+	// Backpack plugins are release artifacts. Enforce this at the package
+	// boundary so non-HTTP callers cannot clone development branches here.
+	branch = "release"
 	project, err := projectPath(root)
 	if err != nil {
 		return Result{}, err

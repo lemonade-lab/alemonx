@@ -1,9 +1,14 @@
 package redis
 
 import (
+	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -51,7 +56,7 @@ func TestManagerStartsAndStopsTemporaryRedis(t *testing.T) {
 	if status.Port != manager.config.Port {
 		t.Fatalf("port mismatch: config %d, status %d", manager.config.Port, status.Port)
 	}
-	if !ping(t, status.Address, manager.config.Password) {
+	if !ping(t, status.Address) {
 		t.Fatalf("embedded Redis did not answer PING at %s", status.Address)
 	}
 	message, err := manager.Stop()
@@ -67,7 +72,7 @@ func TestManagerStartsAndStopsTemporaryRedis(t *testing.T) {
 	}
 }
 
-func TestPublicProxyRequiresInstancePassword(t *testing.T) {
+func TestPublicProxyKeepsDefaultUnauthenticatedRobotCompatibility(t *testing.T) {
 	manager := newTestManager(t)
 	if err := manager.Configure(freePort(t), false, false); err != nil {
 		t.Fatal(err)
@@ -86,11 +91,26 @@ func TestPublicProxyRequiresInstancePassword(t *testing.T) {
 	}
 	reply := make([]byte, 128)
 	count, err := connection.Read(reply)
-	if err != nil || !strings.HasPrefix(string(reply[:count]), "-NOAUTH") {
-		t.Fatalf("unauthenticated proxy reply = %q, %v", reply[:count], err)
+	if err != nil || !strings.HasPrefix(string(reply[:count]), "+PONG") {
+		t.Fatalf("default proxy reply = %q, %v", reply[:count], err)
 	}
-	if !ping(t, manager.Status().Address, manager.config.Password) {
-		t.Fatal("authenticated proxy did not forward PING")
+	if !ping(t, manager.Status().Address) {
+		t.Fatal("proxy did not forward PING")
+	}
+}
+
+func TestRuntimeDownloadVerifiesDeclaredSHA256(t *testing.T) {
+	body := []byte("redis-runtime-fixture")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write(body) }))
+	defer server.Close()
+	destination := filepath.Join(t.TempDir(), "runtime.archive")
+	asset := runtimeAsset{URL: server.URL, Size: int64(len(body)), SHA256: fmt.Sprintf("%x", sha256.Sum256(body))}
+	if err := downloadRuntimeAsset(context.Background(), asset, destination); err != nil {
+		t.Fatal(err)
+	}
+	asset.SHA256 = strings.Repeat("0", 64)
+	if err := downloadRuntimeAsset(context.Background(), asset, filepath.Join(t.TempDir(), "invalid.archive")); err == nil {
+		t.Fatal("checksum mismatch must be rejected")
 	}
 }
 
@@ -339,7 +359,7 @@ func TestManagerConfigureRestartsRunningRedisOnPortChange(t *testing.T) {
 	if status.Port == oldPort {
 		t.Fatal("port did not change")
 	}
-	if !ping(t, status.Address, manager.config.Password) {
+	if !ping(t, status.Address) {
 		t.Fatalf("restarted Redis did not answer PING at %s", status.Address)
 	}
 	manager.Close()
@@ -382,7 +402,7 @@ func TestManagerDisabledForbidsStartAndClosesRunningServer(t *testing.T) {
 	}
 }
 
-func ping(t *testing.T, address string, password ...string) bool {
+func ping(t *testing.T, address string) bool {
 	t.Helper()
 	connection, err := net.DialTimeout("tcp", address, time.Second)
 	if err != nil {
@@ -390,15 +410,6 @@ func ping(t *testing.T, address string, password ...string) bool {
 	}
 	defer connection.Close()
 	_ = connection.SetDeadline(time.Now().Add(time.Second))
-	if len(password) > 0 {
-		if err := sendRESPCommand(connection, [][]byte{[]byte("AUTH"), []byte(password[0])}); err != nil {
-			return false
-		}
-		buffer := make([]byte, 64)
-		if count, err := connection.Read(buffer); err != nil || !strings.HasPrefix(string(buffer[:count]), "+OK") {
-			return false
-		}
-	}
 	if _, err := connection.Write([]byte("*1\r\n$4\r\nPING\r\n")); err != nil {
 		return false
 	}

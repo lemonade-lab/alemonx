@@ -142,8 +142,8 @@ func TestModuleCatalogAlwaysUsesNPMPackageName(t *testing.T) {
 	if got := catalogInstall("modules", item); got != "jsxp" {
 		t.Fatalf("module install target = %q, want npm package name", got)
 	}
-	if got := catalogInstall("apps", item); !strings.HasPrefix(got, "git+") {
-		t.Fatalf("app install target = %q, want git package", got)
+	if got := catalogInstall("apps", item); got != "git+https://github.com/lemonade-lab/lvyjs.git#release" {
+		t.Fatalf("app install target = %q, want release branch", got)
 	}
 }
 

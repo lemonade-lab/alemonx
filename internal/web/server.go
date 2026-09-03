@@ -6193,62 +6193,14 @@ func (s *server) robotPackagesHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
-// robotPackageUploadHandler unpacks a browser-uploaded plugin archive into the
-// selected robot's packages directory. The destination name comes from the
-// package manifest and an existing package with the same name is refused.
+// robotPackageUploadHandler rejects archives because backpack plugins must be
+// Git worktrees tracking release; archives cannot provide that provenance.
 func (s *server) robotPackageUploadHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, 2<<30+1<<20)
-	if err := r.ParseMultipartForm(16 << 20); err != nil {
-		writeError(w, http.StatusBadRequest, "上传格式无效。")
-		return
-	}
-	defer r.MultipartForm.RemoveAll()
-	root := strings.TrimSpace(r.FormValue("root"))
-	if _, err := s.robots.Validate(root); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	files := r.MultipartForm.File["files"]
-	if len(files) == 0 {
-		files = r.MultipartForm.File["file"]
-	}
-	if len(files) != 1 {
-		writeError(w, http.StatusBadRequest, "请上传一个插件包。")
-		return
-	}
-	header := files[0]
-	if !isUploadArchiveName(header.Filename) {
-		writeError(w, http.StatusBadRequest, "仅支持 .zip、.tar.gz 或 .tgz 插件包。")
-		return
-	}
-	temporary, err := os.CreateTemp("", "alx-package-upload-*.archive")
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "无法创建上传临时文件。")
-		return
-	}
-	defer func() { _ = os.Remove(temporary.Name()) }()
-	input, err := header.Open()
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "无法读取上传文件。")
-		return
-	}
-	_, copyErr := io.Copy(temporary, io.LimitReader(input, 2<<30+1))
-	closeErr := temporary.Close()
-	_ = input.Close()
-	if copyErr != nil || closeErr != nil {
-		writeError(w, http.StatusRequestEntityTooLarge, "插件包过大。")
-		return
-	}
-	item, err := s.robots.InstallLocalPackageUpload(root, temporary.Name())
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusCreated, item)
+	writeError(w, http.StatusGone, "背包插件仅支持通过 Git 克隆 release 分支，不支持上传压缩包。")
 }
 
 func (s *server) robotPackageVersionsHandler(w http.ResponseWriter, r *http.Request) {
@@ -8263,6 +8215,13 @@ func (s *server) robotOneBotSyncHandler(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "请填写 OneBot WebSocket URL。")
 		return
 	}
+	// Synchronization must never write into an arbitrary directory. Validate
+	// the explicit target as a real Node robot before touching its config; the
+	// UI list is only a convenience and can be stale or bypassed by callers.
+	if _, err := s.robots.Validate(input.Root); err != nil {
+		writeError(w, http.StatusBadRequest, "目标目录不是有效的 AlemonJS 机器人："+err.Error())
+		return
+	}
 	previous, err := s.robots.Read(input.Root, "alemon.config.yaml")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -8546,9 +8505,8 @@ func (s *server) robotPackageGitCloneHandler(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusBadRequest, "Git 信息无法识别。")
 		return
 	}
-	if strings.TrimSpace(input.Branch) == "" {
-		input.Branch = "release"
-	}
+	// Backpack plugins are managed exclusively from the release branch.
+	input.Branch = "release"
 	if _, err := s.robots.Validate(input.Root); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return

@@ -115,6 +115,9 @@ type LocalPackageVersions struct {
 	Current  string   `json:"current"`
 	Latest   string   `json:"latest,omitempty"`
 	Versions []string `json:"versions"`
+	Branch   string   `json:"branch,omitempty"`
+	Ahead    int      `json:"ahead,omitempty"`
+	Dirty    bool     `json:"dirty,omitempty"`
 }
 
 func (m Manager) LocalPackageVersions(root, packageName string) (LocalPackageVersions, error) {
@@ -127,13 +130,11 @@ func (m Manager) LocalPackageVersions(root, packageName string) (LocalPackageVer
 			continue
 		}
 		if output, gitErr := gitRun(item.Path, "rev-parse", "--is-inside-work-tree"); gitErr == nil && strings.TrimSpace(output) == "true" {
-			current, _ := gitRun(item.Path, "describe", "--tags", "--always", "--dirty")
-			versions := packageGitVersions(item.Path)
-			latest := ""
-			if len(versions) > 0 {
-				latest = versions[0]
+			status, statusErr := releaseGitStatus(item.Path)
+			if statusErr != nil {
+				return LocalPackageVersions{}, statusErr
 			}
-			return LocalPackageVersions{Source: "git", Current: strings.TrimSpace(current), Latest: latest, Versions: versions}, nil
+			return LocalPackageVersions{Source: "git", Current: status.Head, Latest: "release", Versions: []string{"release"}, Branch: status.Branch, Ahead: status.Ahead, Dirty: status.Dirty}, nil
 		}
 		versions, loadErr := catalog.LoadPackageVersions(item.Name)
 		if loadErr != nil {
@@ -142,36 +143,6 @@ func (m Manager) LocalPackageVersions(root, packageName string) (LocalPackageVer
 		return LocalPackageVersions{Source: "npm", Current: item.Version, Latest: versions.Latest, Versions: versions.Versions}, nil
 	}
 	return LocalPackageVersions{}, errors.New("背包中没有这个本地插件包")
-}
-
-// packageGitVersions enumerates published tags from origin without changing
-// the checkout. A shallow clone often has no local tags, so only reading
-// `git tag` would incorrectly make the version selector look empty.
-func packageGitVersions(root string) []string {
-	all := map[string]bool{}
-	for _, tag := range gitLines(root, "tag", "--list", "v*", "--sort=-v:refname") {
-		if gitVersionPattern.MatchString(tag) {
-			all[tag] = true
-		}
-	}
-	if remote, err := gitRun(root, "ls-remote", "--tags", "--refs", "origin"); err == nil {
-		for _, line := range strings.Split(remote, "\n") {
-			parts := strings.Fields(line)
-			if len(parts) != 2 {
-				continue
-			}
-			tag := strings.TrimPrefix(parts[1], "refs/tags/")
-			if gitVersionPattern.MatchString(tag) {
-				all[tag] = true
-			}
-		}
-	}
-	versions := make([]string, 0, len(all))
-	for tag := range all {
-		versions = append(versions, tag)
-	}
-	sort.Slice(versions, func(i, j int) bool { return newerGitTag(versions[i], versions[j]) })
-	return versions
 }
 
 func newerGitTag(left, right string) bool {
@@ -1730,11 +1701,17 @@ func (m Manager) Run(root, action, message, packageName, version, tag, token str
 		}
 		name, args = manager, packageVersionArgs(manager, version)
 	case "dev":
+		if err := m.ValidateEnabledBackpackRelease(root); err != nil {
+			return Result{}, err
+		}
 		if err := fixLegacyLvyScript(root); err != nil {
 			return Result{}, err
 		}
 		name, args = manager, []string{"run", "dev"}
 	case "app":
+		if err := m.ValidateEnabledBackpackRelease(root); err != nil {
+			return Result{}, err
+		}
 		name, args = manager, []string{"run", "app"}
 	case "repair-dev":
 		return (Manager{}).RepairRuntime(root, "dev")
@@ -1758,6 +1735,9 @@ func (m Manager) Run(root, action, message, packageName, version, tag, token str
 		}
 		name, args = "git", []string{"commit", "-m", message}
 	case "pm2":
+		if err := m.ValidateEnabledBackpackRelease(root); err != nil {
+			return Result{}, err
+		}
 		name, args = manager, []string{"run", "start"}
 	case "pm2-stop":
 		name, args = manager, []string{"run", "stop"}
@@ -1785,9 +1765,15 @@ func (m Manager) Run(root, action, message, packageName, version, tag, token str
 		}
 		return Result{Path: root, Output: strings.Join(outputs, "\n")}, nil
 	case "pm2-restart":
+		if err := m.ValidateEnabledBackpackRelease(root); err != nil {
+			return Result{}, err
+		}
 		name, args = pm2Launcher(root)
 		args = append(args, "restart", "pm2.config.cjs", "--update-env")
 	case "pm2-reload":
+		if err := m.ValidateEnabledBackpackRelease(root); err != nil {
+			return Result{}, err
+		}
 		name, args = pm2Launcher(root)
 		args = append(args, "reload", "pm2.config.cjs", "--update-env")
 	case "pm2-delete":
@@ -1832,13 +1818,13 @@ func (m Manager) Run(root, action, message, packageName, version, tag, token str
 		return m.syncLocalPackageOperation(root, func() (Result, error) {
 			return replaceLocalPackage(root, packageName, version)
 		})
-	case "switch-local-package-version":
+	case "sync-local-package-release":
 		return m.syncLocalPackageOperation(root, func() (Result, error) {
 			return switchLocalPackageVersion(root, packageName, version, false)
 		})
-	case "force-switch-local-package-version":
+	case "force-sync-local-package-release":
 		if !confirmed {
-			return Result{}, errors.New("强制切换会丢弃该插件工作区的本地修改，请确认后继续")
+			return Result{}, errors.New("强制同步会丢弃该插件工作区的本地修改或领先提交，请确认后继续")
 		}
 		return m.syncLocalPackageOperation(root, func() (Result, error) {
 			return switchLocalPackageVersion(root, packageName, version, true)
