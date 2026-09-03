@@ -329,6 +329,39 @@ func (f *Field) ValidateValue(value any) []string {
 	return validateRules(f, fmt.Sprintf("%v", value))
 }
 
+// ValidateRules checks only constraints on values that have actually been
+// supplied. Package configuration is saved incrementally, so required fields
+// are a launch-time readiness concern rather than a reason to reject every
+// partial edit.
+func (f *Field) ValidateRules(value any) []string {
+	if value == nil {
+		return nil
+	}
+	if f.Type == "object" {
+		object, ok := value.(map[string]any)
+		if !ok {
+			return nil
+		}
+		var messages []string
+		for _, child := range f.Config {
+			messages = append(messages, child.ValidateRules(object[child.Name])...)
+		}
+		return messages
+	}
+	if f.Type == "array<string>" || f.Type == "array<number>" {
+		array, ok := value.([]any)
+		if !ok {
+			return nil
+		}
+		var messages []string
+		for _, item := range array {
+			messages = append(messages, validateRules(f, fmt.Sprintf("%v", item))...)
+		}
+		return messages
+	}
+	return validateRules(f, fmt.Sprintf("%v", value))
+}
+
 func (f *Field) label() string {
 	if f.Description != "" {
 		return f.Description

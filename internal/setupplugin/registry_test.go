@@ -500,6 +500,8 @@ func TestRegistrySeparatesOnlineMarketFromLocalPlugins(t *testing.T) {
 			_, _ = w.Write([]byte("[network]: https://github.com/lemonade-lab/alemonx-network\n"))
 		case "/alx.json":
 			_, _ = w.Write([]byte(`{"id":"alemonx-network","name":"网络","version":"1.0.0","web":{"root":"web"}}`))
+		case "/releases":
+			_, _ = w.Write([]byte(`[{"tag_name":"v1.2.3"}]`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -520,12 +522,13 @@ func TestRegistrySeparatesOnlineMarketFromLocalPlugins(t *testing.T) {
 		onlineManifestURL: func(string) string {
 			return server.URL + "/alx.json"
 		},
+		releaseURL: func(string) string { return server.URL + "/releases" },
 	}
 	if local := registry.List(); len(local) != 1 || local[0].Name != "本地网络" {
 		t.Fatalf("local plugins = %#v", local)
 	}
 	plugins := registry.Market()
-	if len(plugins) != 1 || !plugins[0].Online || plugins[0].Runnable || plugins[0].Name != "网络" {
+	if len(plugins) != 1 || !plugins[0].Online || plugins[0].Runnable || plugins[0].Name != "网络" || plugins[0].Version != "v1.2.3" {
 		t.Fatalf("online plugin = %#v", plugins)
 	}
 	if _, err := registry.Run("alemonx-network", "check", nil, false); err == nil {

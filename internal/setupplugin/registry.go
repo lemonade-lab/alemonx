@@ -523,6 +523,9 @@ func (r *Registry) Market() []Plugin {
 	items := make([]Plugin, 0, len(candidates))
 	for _, plugin := range candidates {
 		if supportsCurrentPlatform(plugin.Platforms) {
+			// Marketplace version must describe the latest installable Release,
+			// not the source manifest version from the default branch.
+			plugin.Version, _ = r.latestReleaseTag(plugin)
 			items = append(items, plugin)
 		}
 	}
@@ -533,6 +536,42 @@ func (r *Registry) Market() []Plugin {
 		return items[i].Navigation.Label < items[j].Navigation.Label
 	})
 	return items
+}
+
+func (r *Registry) latestReleaseTag(plugin Plugin) (string, error) {
+	if plugin.Source == "" || r.httpClient == nil {
+		return "", errors.New("插件 Release 来源不可用")
+	}
+	url := r.releaseURL
+	if url == nil {
+		url = defaultReleaseURL
+	}
+	request, err := http.NewRequest(http.MethodGet, url(plugin.Source), nil)
+	if err != nil {
+		return "", err
+	}
+	response, err := r.httpClient.Do(request)
+	if err != nil {
+		return "", err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return "", errors.New("插件版本暂时无法获取")
+	}
+	var releases []struct {
+		TagName    string `json:"tag_name"`
+		Draft      bool   `json:"draft"`
+		Prerelease bool   `json:"prerelease"`
+	}
+	if err := json.NewDecoder(io.LimitReader(response.Body, 4<<20)).Decode(&releases); err != nil {
+		return "", err
+	}
+	for _, release := range releases {
+		if release.TagName != "" && !release.Draft && !release.Prerelease {
+			return release.TagName, nil
+		}
+	}
+	return "", errors.New("暂未找到可用的插件正式版本")
 }
 
 // Find returns one currently discoverable plugin from the cache.

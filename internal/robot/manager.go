@@ -4,6 +4,7 @@ package robot
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/mod/semver"
@@ -25,8 +27,56 @@ import (
 
 type Manager struct{}
 type Result struct {
-	Output string `json:"output"`
-	Path   string `json:"path"`
+	Output   string `json:"output"`
+	Path     string `json:"path"`
+	Revision string `json:"revision,omitempty"`
+}
+
+// ConfigRevisionConflict is returned when a full-document edit was based on a
+// stale read. Structured updates do not need a caller revision: they merge
+// against the newest document while holding the per-project transaction lock.
+type ConfigRevisionConflict struct{}
+
+func (ConfigRevisionConflict) Error() string {
+	return "运行配置已被其他操作更新，请刷新后重试"
+}
+
+var runtimeConfigLocks sync.Map // map[string]*sync.Mutex, keyed by project path
+
+func runtimeConfigRevision(content string) string {
+	sum := sha256.Sum256([]byte(content))
+	return fmt.Sprintf("%x", sum[:])
+}
+
+// UpdateRuntimeConfig serializes every read-modify-write of
+// alеmon.config.yaml for one robot. It also provides optimistic concurrency
+// control for full-document writes originating from the text editor.
+func (m Manager) UpdateRuntimeConfig(root, expectedRevision string, update func(string) (string, error)) (Result, error) {
+	project, err := projectPath(root)
+	if err != nil {
+		return Result{}, err
+	}
+	lockValue, _ := runtimeConfigLocks.LoadOrStore(project, &sync.Mutex{})
+	lock := lockValue.(*sync.Mutex)
+	lock.Lock()
+	defer lock.Unlock()
+	path := filepath.Join(project, "alemon.config.yaml")
+	data, err := os.ReadFile(path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return Result{}, fmt.Errorf("无法读取运行配置：%w", err)
+	}
+	current := string(data)
+	if expectedRevision != "" && expectedRevision != runtimeConfigRevision(current) {
+		return Result{}, ConfigRevisionConflict{}
+	}
+	next, err := update(current)
+	if err != nil {
+		return Result{}, err
+	}
+	if err := writeFileAtomically(path, []byte(next), 0o600); err != nil {
+		return Result{}, fmt.Errorf("保存 alemon.config.yaml 失败：%w", err)
+	}
+	return Result{Path: path, Output: "已保存。", Revision: runtimeConfigRevision(next)}, nil
 }
 
 // PM2LogPage is a read-only slice of PM2 output. Page 1 is always the newest
@@ -1538,14 +1588,18 @@ func (m Manager) Read(root, name string) (Result, error) {
 		// project legitimately may not have created either one yet; present an
 		// empty document so the editor can create it on save.
 		if errors.Is(err, os.ErrNotExist) && (name == "alemon.config.yaml" || name == ".npmrc" || name == ".env") {
-			return Result{Path: path, Output: ""}, nil
+			return Result{Path: path, Output: "", Revision: runtimeConfigRevision("")}, nil
 		}
 		if permissionError(err) {
 			return Result{}, permissionAdvice("读取 " + filepath.Base(path))
 		}
 		return Result{}, fmt.Errorf("读取失败：%w", err)
 	}
-	return Result{Path: path, Output: string(data)}, nil
+	result := Result{Path: path, Output: string(data)}
+	if name == "alemon.config.yaml" {
+		result.Revision = runtimeConfigRevision(result.Output)
+	}
+	return result, nil
 }
 func (m Manager) Write(root, name, content string) (Result, error) {
 	path, err := file(root, name)
@@ -1829,8 +1883,8 @@ func (m Manager) Run(root, action, message, packageName, version, tag, token str
 			args = append(args, "--update-env")
 		}
 	case "install-package":
-		if !allowedInstallPackage(packageName) {
-			return Result{}, errors.New("不支持的 AlemonJS 包")
+		if !strings.HasPrefix(packageName, "git+") || !allowedPackage(packageName) {
+			return Result{}, errors.New("机器人插件只能从 Git release 分支安装；连接和模块请使用各自的 npm 安装入口")
 		}
 		return m.syncLocalPackageOperation(root, func() (Result, error) {
 			return installLocalPackage(root, packageName)

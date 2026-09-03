@@ -1175,8 +1175,9 @@ func TestRobotConsoleSeparatesSnapshotAndOutput(t *testing.T) {
 	writeFixture(t, root, "package.json", `{"name":"bot","version":"1.0.0","scripts":{"dev":"node index.js"}}`)
 	writeFixture(t, root, "index.js", "console.log('hi')\n")
 	s := newStatefulTestServer()
+	startedAt := time.Now().UTC().Truncate(time.Second)
 	s.operations = []operationTask{
-		{ID: "dev-1", Root: root, Action: "dev", Status: "running", Output: "ready line"},
+		{ID: "dev-1", Root: root, Action: "dev", Status: "running", Output: "ready line", CreatedAt: startedAt},
 	}
 
 	recorder := httptest.NewRecorder()
@@ -1198,6 +1199,12 @@ func TestRobotConsoleSeparatesSnapshotAndOutput(t *testing.T) {
 	}
 	if payload.Mode != "开发模式" {
 		t.Fatalf("mode = %q, want 开发模式", payload.Mode)
+	}
+	if payload.SessionID != "dev-1" {
+		t.Fatalf("sessionId = %q, want dev-1", payload.SessionID)
+	}
+	if payload.StartedAt == nil || !payload.StartedAt.Equal(startedAt) {
+		t.Fatalf("startedAt = %#v, want %s", payload.StartedAt, startedAt)
 	}
 }
 

@@ -20,24 +20,22 @@ func (m Manager) SetMasterAuthorization(root, userID string, enabled bool) (Resu
 	if !masterAuthorizationIDPattern.MatchString(userID) {
 		return Result{}, errors.New("主人用户 ID 无效")
 	}
-	current, err := m.Read(root, "alemon.config.yaml")
-	if err != nil {
-		return Result{}, err
-	}
-	content := stripYAMLBOM(current.Output)
-	parsed := map[string]any{}
-	if strings.TrimSpace(content) != "" {
-		if err := yaml.Unmarshal([]byte(content), &parsed); err != nil {
-			return Result{}, errors.New("alemon.config.yaml 无法解析，不能安全更新主人权限")
+	return m.UpdateRuntimeConfig(root, "", func(content string) (string, error) {
+		content = stripYAMLBOM(content)
+		parsed := map[string]any{}
+		if strings.TrimSpace(content) != "" {
+			if err := yaml.Unmarshal([]byte(content), &parsed); err != nil {
+				return "", errors.New("alemon.config.yaml 无法解析，不能安全更新主人权限")
+			}
 		}
-	}
-	ids := masterAuthorizationIDs(parsed["master_id"])
-	if enabled {
-		ids[userID] = true
-	} else {
-		delete(ids, userID)
-	}
-	return m.Write(root, "alemon.config.yaml", replaceMasterAuthorizationSection(content, ids))
+		ids := masterAuthorizationIDs(parsed["master_id"])
+		if enabled {
+			ids[userID] = true
+		} else {
+			delete(ids, userID)
+		}
+		return replaceMasterAuthorizationSection(content, ids), nil
+	})
 }
 
 func masterAuthorizationIDs(value any) map[string]bool {

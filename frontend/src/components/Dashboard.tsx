@@ -25,10 +25,16 @@ import {
 } from '../lib/dashboardNavigation'
 import { createRandomID } from '../lib/randomId'
 import {
+  collapseForegroundLog,
+  filterForegroundLog,
+  foregroundLogDomains,
   foregroundLogDisplayText,
   foregroundLogSummary as summarizeForegroundLog,
-  interpretForegroundLog,
+  normalizeForegroundLog,
+  redactForegroundLog,
   type ForegroundLogAction,
+  type ForegroundLogDomain,
+  type ForegroundLogLevel,
   type ForegroundLogItem,
   type ForegroundLogMode
 } from '../lib/foregroundLogInterpreter'
@@ -1089,7 +1095,8 @@ export function Dashboard({
   } | null>(null)
   const [serviceWebviewMinimized, setServiceWebviewMinimized] =
     useStoreState(false)
-  const [browserRequestedURL, setBrowserRequestedURL] = useStoreState<BrowserCommand | null>(null)
+  const [browserRequestedURL, setBrowserRequestedURL] =
+    useStoreState<BrowserCommand | null>(null)
   const [browserHomeVersion, setBrowserHomeVersion] = useStoreState(0)
   const [busy, setBusy] = useStoreState(false)
   const [catalogTitle, setCatalogTitle] = useStoreState('')
@@ -1245,12 +1252,12 @@ export function Dashboard({
         ...registeredSystemWindows,
         ...Object.fromEntries(
           Object.entries(systemWindows).map(([feature, state]) => [
-          feature,
-          {
-            open: true,
-            minimized: state.minimized,
-            label: systemFeatureLabel(feature, setupPlugins)
-          }
+            feature,
+            {
+              open: true,
+              minimized: state.minimized,
+              label: systemFeatureLabel(feature, setupPlugins)
+            }
           ])
         )
       }
@@ -1599,7 +1606,18 @@ export function Dashboard({
     isFetching: packagesLoading,
     error: packagesError,
     refetch: refetchPackages
-  } = useLocalPackagesQuery(root, { skip: !root || section !== 'backpack' })
+  } = useLocalPackagesQuery(root, {
+    skip: !root || (section !== 'backpack' && page !== 'plugins')
+  })
+  const installedPluginKeys = useMemo(() => {
+    const keys = new Set<string>()
+    for (const item of localPackages?.items ?? []) {
+      keys.add(item.name.toLowerCase())
+      const directory = item.path.split('/').filter(Boolean).pop()
+      if (directory) keys.add(directory.toLowerCase())
+    }
+    return keys
+  }, [localPackages])
   const {
     data: runtime,
     isFetching: runtimeLoading,
@@ -1646,6 +1664,7 @@ export function Dashboard({
   const [setAppEnabled] = useSetAppEnabledMutation()
   const fileSaveTimers = useRef(new Map<string, number>())
   const fileSaveChains = useRef(new Map<string, Promise<void>>())
+  const configRevisions = useRef(new Map<string, string>())
   useEffect(
     () => () => {
       fileSaveTimers.current.forEach(timer => window.clearTimeout(timer))
@@ -1819,11 +1838,17 @@ export function Dashboard({
     nextContent: string
   ) => {
     try {
-      await writeRobotFile({
+      const result = await writeRobotFile({
         root: targetRoot,
         file: targetFile,
-        content: nextContent
+        content: nextContent,
+        ...(targetFile === 'alemon.config.yaml' &&
+        configRevisions.current.get(targetRoot)
+          ? { expectedRevision: configRevisions.current.get(targetRoot) }
+          : {})
       }).unwrap()
+      if (targetFile === 'alemon.config.yaml' && result.revision)
+        configRevisions.current.set(targetRoot, result.revision)
       if (targetFile === 'alemon.config.yaml')
         dispatch(setRobotConfig({ root: targetRoot, content: nextContent }))
       else
@@ -1834,6 +1859,23 @@ export function Dashboard({
           })
         )
     } catch (reason) {
+      // Keep the user's in-memory draft intact, but refresh the server-side
+      // revision so a deliberate next save can be based on current content.
+      if (
+        targetFile === 'alemon.config.yaml' &&
+        (reason as { status?: number })?.status === 409
+      ) {
+        try {
+          const latest = await readRobotFile(
+            { root: targetRoot, file: targetFile },
+            true
+          ).unwrap()
+          if (latest.revision)
+            configRevisions.current.set(targetRoot, latest.revision)
+        } catch {
+          // The original conflict notification below remains useful offline.
+        }
+      }
       showOutput(
         operationErrorMessage(reason, `${targetFile} 自动保存失败。`),
         true
@@ -1935,6 +1977,11 @@ export function Dashboard({
         appReady: true,
         readyProbe: checkAppReachable
       })
+      const portInfo = await loadAppPort(root, true).unwrap()
+      if (portInfo.drifted)
+        showOutput(
+          `应用端口已从 ${portInfo.configuredPort} 自动漂移至 ${portInfo.actualPort}。`
+        )
       openWorkbenchBrowserPage(`/api/v1/robot/app/${robotAppToken(root)}/`)
     } catch (reason) {
       showOutput(operationErrorMessage(reason, '应用启动失败。'), true)
@@ -2010,6 +2057,11 @@ export function Dashboard({
         ready: 'test'
       }).unwrap()
       await waitForRobotTask(task.id, { testReady: true })
+      const portInfo = await loadTestPort(root, true).unwrap()
+      if (portInfo.drifted)
+        showOutput(
+          `服务端口已从 ${portInfo.configuredPort} 自动漂移至 ${portInfo.actualPort}。`
+        )
       setTestContentOpen(true)
       setTestMinimized(false)
       activateFloatingWindow('test')
@@ -2226,6 +2278,7 @@ export function Dashboard({
       { root, file: 'alemon.config.yaml' },
       true
     ).unwrap()
+    if (result.revision) configRevisions.current.set(root, result.revision)
     dispatch(
       setRobotConfig({
         root,
@@ -2577,7 +2630,11 @@ export function Dashboard({
     if (root) void validateRobot(root)
   }, [root, validateRobot])
   useEffect(() => {
-    if (!root || (section !== 'config' && !foregroundLogsOpen) || hasRobotConfig)
+    if (
+      !root ||
+      (section !== 'config' && !foregroundLogsOpen) ||
+      hasRobotConfig
+    )
       return
     void readRobotFile({ root, file: 'alemon.config.yaml' }, true)
       .unwrap()
@@ -2778,7 +2835,10 @@ export function Dashboard({
     }
   }
 
-  async function setMasterAuthorization(userID: string, currentlyAuthorized: boolean) {
+  async function setMasterAuthorization(
+    userID: string,
+    currentlyAuthorized: boolean
+  ) {
     if (!root) return
     try {
       const result = await queueConfigSave(root, async () => {
@@ -2796,8 +2856,7 @@ export function Dashboard({
           error?: string
           output?: string
         }
-        if (!response.ok)
-          throw new Error(result.error || '主人权限更新失败。')
+        if (!response.ok) throw new Error(result.error || '主人权限更新失败。')
         return result
       })
       dispatch(setRobotConfig({ root, content: result.content ?? '' }))
@@ -3405,23 +3464,46 @@ export function Dashboard({
         )}
         {!catalogLoading && !catalogError && currentCatalog && (
           <section className="grid gap-2">
-            {currentCatalog.items.map(item => (
-              <button
-                className="flex items-center gap-3 rounded-lg border border-slate-200 bg-white p-3 text-left transition hover:border-slate-300 hover:bg-slate-50"
-                key={`${currentCatalog.title}-${item.name}`}
-                onClick={() => setCatalogItem(item)}
-              >
-                <span className="grid min-w-0 flex-1 gap-1">
-                  <strong className="truncate text-sm font-semibold text-slate-800">
-                    {item.name}
-                  </strong>
-                  <small className="truncate text-xs text-slate-500">
-                    {item.description || '查看包说明、安装与配置'}
-                  </small>
-                </span>
-                <ChevronRight className="size-4 shrink-0 text-slate-400" />
-              </button>
-            ))}
+            {currentCatalog.items.map(item => {
+              const repositoryName = item.install
+                .replace(/^git\+/, '')
+                .split('#')[0]
+                .replace(/\.git$/, '')
+                .split('/')
+                .filter(Boolean)
+                .pop()
+                ?.toLowerCase()
+              const installed =
+                page === 'plugins' &&
+                (installedPluginKeys.has(item.name.toLowerCase()) ||
+                  Boolean(
+                    repositoryName && installedPluginKeys.has(repositoryName)
+                  ))
+              return (
+                <button
+                  className="flex items-center gap-3 rounded-lg border border-slate-200 bg-white p-3 text-left transition hover:border-slate-300 hover:bg-slate-50"
+                  key={`${currentCatalog.title}-${item.name}`}
+                  onClick={() => setCatalogItem(item)}
+                >
+                  <div className="grid min-w-0 flex-1 gap-1">
+                    <div className="flex items-center gap-2">
+                      <strong className="truncate text-sm font-semibold text-slate-800">
+                        {item.name}
+                      </strong>
+                      {installed && (
+                        <small className="w-fit rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700">
+                          已安装
+                        </small>
+                      )}
+                    </div>
+                    <small className="truncate text-xs text-slate-500">
+                      {item.description || '查看包说明、安装与配置'}
+                    </small>
+                  </div>
+                  <ChevronRight className="size-4 shrink-0 text-slate-400" />
+                </button>
+              )
+            })}
           </section>
         )}
       </RobotPanel>
@@ -5111,7 +5193,8 @@ function GitCloneDialog({
                 placeholder="PAT / Access Token"
               />
               <small className="font-normal leading-5 text-slate-500">
-                GitHub 请使用有仓库读取权限的 token；Gitee 请使用私人令牌。密码登录通常已不被支持。
+                GitHub 请使用有仓库读取权限的 token；Gitee
+                请使用私人令牌。密码登录通常已不被支持。
               </small>
             </label>
             <footer className="flex justify-end gap-2 border-t border-slate-200 pt-3">
@@ -5128,251 +5211,257 @@ function GitCloneDialog({
               </button>
               <button
                 className="primary-button"
-              disabled={busy || !authorizationUsername.trim() || !authorizationToken}
+                disabled={
+                  busy || !authorizationUsername.trim() || !authorizationToken
+                }
               >
                 {busy ? '正在授权并克隆…' : '授权并重试'}
               </button>
             </footer>
           </form>
         ) : (
-        <div className="grid gap-3 overflow-auto p-4">
-          <section aria-label="仓库连接方式">
-            <header className="flex items-center justify-between gap-2">
-              <small
-                className="truncate text-[11px] text-slate-500"
-                title={
-                  connection === 'ssh' && !sshLoading && !sshKeys.length
-                    ? '未配置 SSH 密钥；请在顶部 SSH 管理中生成并添加公钥，或改用 HTTPS。'
-                    : connection === 'https'
-                      ? 'HTTPS 可直接使用；访问私有仓库时，需要在代码平台完成在线授权。'
-                      : undefined
-                }
-              >
-                {sshLoading
-                  ? '正在检查 SSH…'
-                  : connection === 'ssh' && !sshKeys.length
-                    ? 'SSH 未配置'
-                    : connection === 'https'
-                      ? 'HTTPS 已选择'
-                      : ''}
-              </small>
-            </header>
-            <Tabs
-              ariaLabel="仓库连接方式"
-              items={[
-                {
-                  id: 'ssh',
-                  icon: <KeyRound className="size-3.5" />,
-                  label: 'SSH',
-                  meta: sshKeys.length ? '推荐' : undefined
-                },
-                {
-                  id: 'https',
-                  icon: <Globe2 className="size-3.5" />,
-                  label: 'HTTPS'
-                }
-              ]}
-              onChange={setConnection}
-              value={connection}
-              variant="segmented"
-            />
-          </section>
-          <section className="grid gap-3">
-            <label className="grid gap-1 text-xs font-semibold text-slate-600">
-              <span className="flex min-w-0 items-center justify-between gap-2">
-                <span>仓库地址</span>
-                {usesSSH && !sshLoading && !sshKeys.length && (
-                  <small
-                    className="truncate font-normal text-red-700"
-                    title="请先配置 SSH 密钥，或改用 HTTPS 地址。"
-                  >
-                    未配置 SSH 密钥
+          <div className="grid gap-3 overflow-auto p-4">
+            <section aria-label="仓库连接方式">
+              <header className="flex items-center justify-between gap-2">
+                <small
+                  className="truncate text-[11px] text-slate-500"
+                  title={
+                    connection === 'ssh' && !sshLoading && !sshKeys.length
+                      ? '未配置 SSH 密钥；请在顶部 SSH 管理中生成并添加公钥，或改用 HTTPS。'
+                      : connection === 'https'
+                        ? 'HTTPS 可直接使用；访问私有仓库时，需要在代码平台完成在线授权。'
+                        : undefined
+                  }
+                >
+                  {sshLoading
+                    ? '正在检查 SSH…'
+                    : connection === 'ssh' && !sshKeys.length
+                      ? 'SSH 未配置'
+                      : connection === 'https'
+                        ? 'HTTPS 已选择'
+                        : ''}
+                </small>
+              </header>
+              <Tabs
+                ariaLabel="仓库连接方式"
+                items={[
+                  {
+                    id: 'ssh',
+                    icon: <KeyRound className="size-3.5" />,
+                    label: 'SSH',
+                    meta: sshKeys.length ? '推荐' : undefined
+                  },
+                  {
+                    id: 'https',
+                    icon: <Globe2 className="size-3.5" />,
+                    label: 'HTTPS'
+                  }
+                ]}
+                onChange={setConnection}
+                value={connection}
+                variant="segmented"
+              />
+            </section>
+            <section className="grid gap-3">
+              <label className="grid gap-1 text-xs font-semibold text-slate-600">
+                <span className="flex min-w-0 items-center justify-between gap-2">
+                  <span>仓库地址</span>
+                  {usesSSH && !sshLoading && !sshKeys.length && (
+                    <small
+                      className="truncate font-normal text-red-700"
+                      title="请先配置 SSH 密钥，或改用 HTTPS 地址。"
+                    >
+                      未配置 SSH 密钥
+                    </small>
+                  )}
+                </span>
+                <input
+                  className="h-9 rounded-md border border-slate-300 bg-white px-2.5 text-sm font-normal text-slate-800 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
+                  autoFocus
+                  value={repository}
+                  onChange={event => {
+                    const value = event.target.value
+                    setRepository(value)
+                    setAuthorizationError('')
+                    setBranch(mode === 'package' ? 'release' : '')
+                    if (/^(git@|ssh:\/\/)/.test(value.trim()))
+                      setConnection('ssh')
+                    const derived =
+                      value
+                        .trim()
+                        .replace(/\/$/, '')
+                        .split('/')
+                        .pop()
+                        ?.replace(/\.git$/, '') ?? ''
+                    setName(derived)
+                  }}
+                  placeholder={
+                    connection === 'ssh'
+                      ? 'git@github.com:组织/机器人仓库.git'
+                      : 'https://github.com/组织/机器人仓库.git'
+                  }
+                />
+                {authorizationError && (
+                  <small className="font-normal text-red-700">
+                    {authorizationError}
                   </small>
                 )}
-              </span>
-              <input
-                className="h-9 rounded-md border border-slate-300 bg-white px-2.5 text-sm font-normal text-slate-800 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
-                autoFocus
-                value={repository}
-                onChange={event => {
-                  const value = event.target.value
-                  setRepository(value)
-                  setAuthorizationError('')
-                  setBranch(mode === 'package' ? 'release' : '')
-                  if (/^(git@|ssh:\/\/)/.test(value.trim()))
-                    setConnection('ssh')
-                  const derived =
-                    value
-                      .trim()
-                      .replace(/\/$/, '')
-                      .split('/')
-                      .pop()
-                      ?.replace(/\.git$/, '') ?? ''
-                  setName(derived)
-                }}
-                placeholder={
-                  connection === 'ssh'
-                    ? 'git@github.com:组织/机器人仓库.git'
-                    : 'https://github.com/组织/机器人仓库.git'
-                }
-              />
-              {authorizationError && (
-                <small className="font-normal text-red-700">
-                  {authorizationError}
-                </small>
-              )}
-            </label>
-            <div className="grid gap-3 sm:grid-cols-2">
-              {mode === 'package' ? (
-                <span className="grid gap-1 text-xs font-semibold text-slate-600">
-                  插件分支
-                  <span className="inline-flex h-9 items-center rounded-md border border-slate-300 bg-slate-50 px-2.5 text-sm font-normal text-slate-600">
-                    发布分支（release）
+              </label>
+              <div className="grid gap-3 sm:grid-cols-2">
+                {mode === 'package' ? (
+                  <span className="grid gap-1 text-xs font-semibold text-slate-600">
+                    插件分支
+                    <span className="inline-flex h-9 items-center rounded-md border border-slate-300 bg-slate-50 px-2.5 text-sm font-normal text-slate-600">
+                      发布分支（release）
+                    </span>
                   </span>
-                </span>
-              ) : (
+                ) : (
+                  <label className="grid gap-1 text-xs font-semibold text-slate-600">
+                    分支{branchesLoading ? '（正在读取…）' : '（可选）'}
+                    <select
+                      className="h-9 rounded-md border border-slate-300 bg-white px-2.5 text-sm font-normal text-slate-800 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100 disabled:bg-slate-100"
+                      value={branch}
+                      onChange={event => setBranch(event.target.value)}
+                      disabled={!branches.length || branchesLoading}
+                    >
+                      <option value="">默认分支</option>
+                      {branches.map(item => (
+                        <option key={item} value={item}>
+                          {formatBranchLabel(item)}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
                 <label className="grid gap-1 text-xs font-semibold text-slate-600">
-                  分支{branchesLoading ? '（正在读取…）' : '（可选）'}
+                  克隆深度
                   <select
-                    className="h-9 rounded-md border border-slate-300 bg-white px-2.5 text-sm font-normal text-slate-800 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100 disabled:bg-slate-100"
-                    value={branch}
-                    onChange={event => setBranch(event.target.value)}
-                    disabled={!branches.length || branchesLoading}
+                    className="h-9 rounded-md border border-slate-300 bg-white px-2.5 text-sm font-normal text-slate-800 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
+                    value={depth}
+                    onChange={event => setDepth(Number(event.target.value))}
                   >
-                    <option value="">默认分支</option>
-                    {branches.map(item => (
-                      <option key={item} value={item}>
-                        {formatBranchLabel(item)}
-                      </option>
-                    ))}
+                    <option value={1}>仅最新提交（推荐）</option>
+                    <option value={50}>最近 50 条提交</option>
+                    <option value={200}>最近 200 条提交</option>
+                    <option value={0}>完整历史</option>
                   </select>
                 </label>
-              )}
-              <label className="grid gap-1 text-xs font-semibold text-slate-600">
-                克隆深度
-                <select
-                  className="h-9 rounded-md border border-slate-300 bg-white px-2.5 text-sm font-normal text-slate-800 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
-                  value={depth}
-                  onChange={event => setDepth(Number(event.target.value))}
-                >
-                  <option value={1}>仅最新提交（推荐）</option>
-                  <option value={50}>最近 50 条提交</option>
-                  <option value={200}>最近 200 条提交</option>
-                  <option value={0}>完整历史</option>
-                </select>
-              </label>
-              <label className="grid gap-1 text-xs font-semibold text-slate-600">
-                下载来源
-                <select
-                  className="h-9 rounded-md border border-slate-300 bg-white px-2.5 text-sm font-normal text-slate-800 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
-                  value={mirror}
-                  onChange={event => setMirror(event.target.value)}
-                >
-                  <option value="official">Git 官方（推荐）</option>
-                  <option value="gh-proxy">GitHub 加速 · gh-proxy</option>
-                  <option value="ghproxy-net">GitHub 加速 · ghproxy.net</option>
-                </select>
-              </label>
-            </div>
-          </section>
-          <section className="grid gap-3 sm:grid-cols-2">
-            <label className="grid gap-1 text-xs font-semibold text-slate-600">
-              {mode === 'package' ? '存放位置' : '所在文件夹'}
-              {mode === 'package' ? (
-                <span
-                  className="h-9 truncate rounded-md border border-slate-200 bg-slate-50 px-2.5 leading-9 text-sm font-normal text-slate-600"
-                  title={destination}
-                >
-                  当前机器人背包（packages）
-                </span>
-              ) : (
-                <button
-                  type="button"
-                  className="h-9 truncate rounded-md border border-slate-300 bg-white px-2.5 text-left text-sm font-normal text-slate-700"
-                  onClick={onChooseDestination}
-                >
-                  {gitDestinationLabel(destination)}
-                </button>
-              )}
-            </label>
-            <label className="grid gap-1 text-xs font-semibold text-slate-600">
-              <span className="flex min-w-0 items-center justify-between gap-2">
-                <span>新目录名称</span>
-                {target?.exists ? (
-                  <small
-                    className="truncate font-normal text-red-700"
-                    title={`目标已存在：${target.path}`}
+                <label className="grid gap-1 text-xs font-semibold text-slate-600">
+                  下载来源
+                  <select
+                    className="h-9 rounded-md border border-slate-300 bg-white px-2.5 text-sm font-normal text-slate-800 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
+                    value={mirror}
+                    onChange={event => setMirror(event.target.value)}
                   >
-                    目标已存在
-                  </small>
-                ) : target?.path ? null : targetError ? (
-                  <small
-                    className="truncate font-normal text-red-700"
-                    title={targetError}
+                    <option value="official">Git 官方（推荐）</option>
+                    <option value="gh-proxy">GitHub 加速 · gh-proxy</option>
+                    <option value="ghproxy-net">
+                      GitHub 加速 · ghproxy.net
+                    </option>
+                  </select>
+                </label>
+              </div>
+            </section>
+            <section className="grid gap-3 sm:grid-cols-2">
+              <label className="grid gap-1 text-xs font-semibold text-slate-600">
+                {mode === 'package' ? '存放位置' : '所在文件夹'}
+                {mode === 'package' ? (
+                  <span
+                    className="h-9 truncate rounded-md border border-slate-200 bg-slate-50 px-2.5 leading-9 text-sm font-normal text-slate-600"
+                    title={destination}
                   >
-                    无法检查目标
-                  </small>
-                ) : null}
-              </span>
-              <input
-                className={cn(
-                  'h-9 rounded-md border bg-white px-2.5 text-sm font-normal text-slate-800 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100',
-                  target?.exists || targetError
-                    ? 'border-red-400 focus:ring-red-100'
-                    : 'border-slate-300'
+                    当前机器人背包（packages）
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    className="h-9 truncate rounded-md border border-slate-300 bg-white px-2.5 text-left text-sm font-normal text-slate-700"
+                    onClick={onChooseDestination}
+                  >
+                    {gitDestinationLabel(destination)}
+                  </button>
                 )}
-                value={name}
-                onChange={event => setName(event.target.value)}
-                placeholder="默认使用仓库名"
-              />
-            </label>
-          </section>
-        </div>
-        )}
-        {!authorizationOpen && <footer className="flex justify-end gap-2 border-t border-slate-200 px-4 py-3">
-          {busy && (
-            <div className="mr-auto grid min-w-44 gap-1 self-center">
-              <div className="flex justify-between text-[11px] text-slate-500">
-                <span>{status}</span>
-                <span>{progress}%</span>
-              </div>
-              <div className="h-1.5 overflow-hidden rounded-full bg-slate-200">
-                <div
-                  className="h-full rounded-full bg-brand-600 transition-[width] duration-500"
-                  style={{ width: `${Math.max(8, progress)}%` }}
+              </label>
+              <label className="grid gap-1 text-xs font-semibold text-slate-600">
+                <span className="flex min-w-0 items-center justify-between gap-2">
+                  <span>新目录名称</span>
+                  {target?.exists ? (
+                    <small
+                      className="truncate font-normal text-red-700"
+                      title={`目标已存在：${target.path}`}
+                    >
+                      目标已存在
+                    </small>
+                  ) : target?.path ? null : targetError ? (
+                    <small
+                      className="truncate font-normal text-red-700"
+                      title={targetError}
+                    >
+                      无法检查目标
+                    </small>
+                  ) : null}
+                </span>
+                <input
+                  className={cn(
+                    'h-9 rounded-md border bg-white px-2.5 text-sm font-normal text-slate-800 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100',
+                    target?.exists || targetError
+                      ? 'border-red-400 focus:ring-red-100'
+                      : 'border-slate-300'
+                  )}
+                  value={name}
+                  onChange={event => setName(event.target.value)}
+                  placeholder="默认使用仓库名"
                 />
+              </label>
+            </section>
+          </div>
+        )}
+        {!authorizationOpen && (
+          <footer className="flex justify-end gap-2 border-t border-slate-200 px-4 py-3">
+            {busy && (
+              <div className="mr-auto grid min-w-44 gap-1 self-center">
+                <div className="flex justify-between text-[11px] text-slate-500">
+                  <span>{status}</span>
+                  <span>{progress}%</span>
+                </div>
+                <div className="h-1.5 overflow-hidden rounded-full bg-slate-200">
+                  <div
+                    className="h-full rounded-full bg-brand-600 transition-[width] duration-500"
+                    style={{ width: `${Math.max(8, progress)}%` }}
+                  />
+                </div>
               </div>
-            </div>
-          )}
-          <button className="secondary-button" onClick={onClose}>
-            取消
-          </button>
-          <button
-            className="primary-button gap-1.5"
-            disabled={
-              busy ||
-              authorizationChecking ||
-              ((connection === 'ssh' || usesSSH) &&
-                !sshLoading &&
-                !sshKeys.length) ||
-              !repository.trim() ||
-              !destination ||
-              !name.trim() ||
-              !target ||
-              target.exists ||
-              Boolean(targetError)
-            }
-            onClick={() => void submitClone()}
-          >
-            {busy
-              ? '正在下载…'
-              : authorizationChecking
-                ? '正在检查认证…'
-              : mode === 'package'
-                ? '克隆到背包'
-                : '克隆并添加'}
-          </button>
-        </footer>}
+            )}
+            <button className="secondary-button" onClick={onClose}>
+              取消
+            </button>
+            <button
+              className="primary-button gap-1.5"
+              disabled={
+                busy ||
+                authorizationChecking ||
+                ((connection === 'ssh' || usesSSH) &&
+                  !sshLoading &&
+                  !sshKeys.length) ||
+                !repository.trim() ||
+                !destination ||
+                !name.trim() ||
+                !target ||
+                target.exists ||
+                Boolean(targetError)
+              }
+              onClick={() => void submitClone()}
+            >
+              {busy
+                ? '正在下载…'
+                : authorizationChecking
+                  ? '正在检查认证…'
+                  : mode === 'package'
+                    ? '克隆到背包'
+                    : '克隆并添加'}
+            </button>
+          </footer>
+        )}
       </section>
     </Modal>
   )
@@ -6520,6 +6609,15 @@ function SystemPluginCenter({
     if (!developerMode && pluginView === 'development') setPluginView('mine')
   }, [developerMode, pluginView, setPluginView])
   const developmentItems = developmentData?.items ?? []
+  const installedSystemPluginIDs = useMemo(
+    () =>
+      new Set(
+        plugins
+          .filter(plugin => Boolean(plugin.source))
+          .map(plugin => plugin.id)
+      ),
+    [plugins]
+  )
   const isDevelopmentView = sidebarLayout && pluginView === 'development'
   const visiblePlugins = !sidebarLayout
     ? plugins
@@ -7045,6 +7143,8 @@ function SystemPluginCenter({
           <div className="grid gap-2">
             {visiblePlugins.map(plugin => {
               const isOnline = Boolean(plugin.online)
+              const isMarketInstalled =
+                isOnline && installedSystemPluginIDs.has(plugin.id)
               const isEnabled = Boolean(plugin.enabled)
               const isManagedRelease =
                 plugin.installMode === 'managed-release' ||
@@ -7095,6 +7195,11 @@ function SystemPluginCenter({
                       <strong className="truncate text-sm font-medium text-slate-800 dark:text-slate-100">
                         {plugin.name}
                       </strong>
+                      {isMarketInstalled && (
+                        <span className="shrink-0 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">
+                          已安装
+                        </span>
+                      )}
                       {plugin.description && (
                         <span className="setup-plugin-description hidden truncate text-xs text-slate-400 sm:inline dark:text-slate-500">
                           · {plugin.description}
@@ -7103,7 +7208,9 @@ function SystemPluginCenter({
                     </div>
                     <div className="mt-0.5 flex items-center gap-2 text-xs text-slate-400 dark:text-slate-500">
                       <span className="font-mono">
-                        {plugin.installedTag ?? `v${plugin.version}`}
+                        {isOnline
+                          ? plugin.version || '版本暂不可用'
+                          : (plugin.installedTag ?? `v${plugin.version}`)}
                       </span>
                       <span className="size-0.5 rounded-full bg-slate-300 dark:bg-slate-600" />
                       {isOnline ? (
@@ -7681,7 +7788,10 @@ function SetupPluginCenter({
     }
     window.addEventListener('alx-browser-tab-closed', forgetClosedBrowserTab)
     return () =>
-      window.removeEventListener('alx-browser-tab-closed', forgetClosedBrowserTab)
+      window.removeEventListener(
+        'alx-browser-tab-closed',
+        forgetClosedBrowserTab
+      )
   }, [])
   useEffect(() => {
     setActiveModalBusy(false)
@@ -7818,7 +7928,8 @@ function SetupPluginCenter({
         }
         const isStatic = webview.kind === 'static'
         if (
-          hostWebviewsRef.current.length + browserWebviewIDs.current.size >= 8
+          hostWebviewsRef.current.length + browserWebviewIDs.current.size >=
+          8
         ) {
           postHostResult(
             'webview-result',
@@ -8425,7 +8536,7 @@ function BackpackPanel({
                   <span className="text-[11px] text-slate-400">
                     {enabledApps.has(item.name)
                       ? '已启用,机器人启动时会加载'
-                      : '未启用,机器人启动将不会加载'}
+                      : '未启用,下次启动不会加载'}
                   </span>
                   {item.valid && (
                     <button
@@ -8435,6 +8546,11 @@ function BackpackPanel({
                           : 'primary-button gap-1.5'
                       }
                       disabled={appToggleBusy === item.name}
+                      title={
+                        enabledApps.has(item.name)
+                          ? '停用后，下次启动将不再加载此模块。'
+                          : '启用后，机器人会在下次启动时加载此模块。'
+                      }
                       onClick={() =>
                         void toggleApp(item.name, !enabledApps.has(item.name))
                       }
@@ -8450,7 +8566,7 @@ function BackpackPanel({
                         ? '切换中…'
                         : enabledApps.has(item.name)
                           ? '停用'
-                          : '启动'}
+                          : '启用'}
                     </button>
                   )}
                   {!item.valid && (
@@ -8789,7 +8905,8 @@ function CatalogDetail({
   const [version, setVersion] = useStoreState('')
   const packageName =
     item.install ||
-    (item.name === 'alemonjs' || item.name.startsWith('@alemonjs/')
+    (kind !== 'plugin' &&
+    (item.name === 'alemonjs' || item.name.startsWith('@alemonjs/'))
       ? item.name
       : '')
   const repositoryInstall = packageName.startsWith('git+')
@@ -8816,10 +8933,10 @@ function CatalogDetail({
   const installTarget = releaseBranchInstall
     ? packageName
     : version.trim()
-    ? npmPackage
-      ? `${packageName}@${version.trim()}`
-      : `${packageName.split('#')[0]}#${version.trim()}`
-    : packageName
+      ? npmPackage
+        ? `${packageName}@${version.trim()}`
+        : `${packageName.split('#')[0]}#${version.trim()}`
+      : packageName
   const installAction =
     kind === 'connection'
       ? 'install-connection'
@@ -11416,7 +11533,11 @@ function createBrowserHomeTab(): BrowserTab {
 
 function isBrowserIPAddress(host: string) {
   const value = host.replace(/^\[|\]$/g, '')
-  return /^\d{1,3}(?:\.\d{1,3}){3}$/.test(value) || value.includes(':') || value === 'localhost'
+  return (
+    /^\d{1,3}(?:\.\d{1,3}){3}$/.test(value) ||
+    value.includes(':') ||
+    value === 'localhost'
+  )
 }
 
 // URL.href removes default ports. The browser keeps a separate display URL so
@@ -11453,7 +11574,8 @@ function completeBrowserAddress(input: string): BrowserAddress | null {
     } catch {
       return null
     }
-    const explicitPort = /(?:^\[[^\]]+\]|^[^:]+):(\d{1,5})$/.exec(authority)?.[1] || ''
+    const explicitPort =
+      /(?:^\[[^\]]+\]|^[^:]+):(\d{1,5})$/.exec(authority)?.[1] || ''
     const hasPort = explicitPort !== ''
     const hostIsIP = isBrowserIPAddress(provisional.hostname)
     if (!scheme) {
@@ -11480,9 +11602,10 @@ function completeBrowserAddress(input: string): BrowserAddress | null {
       url.pathname += '/'
     }
     const port = url.port || (scheme === 'https:' ? '443' : '80')
-    const host = url.hostname.includes(':') && !url.hostname.startsWith('[')
-      ? `[${url.hostname}]`
-      : url.hostname
+    const host =
+      url.hostname.includes(':') && !url.hostname.startsWith('[')
+        ? `[${url.hostname}]`
+        : url.hostname
     return {
       url,
       displayURL: `${scheme}//${host}:${port}${url.pathname}${url.search}${url.hash}`
@@ -11529,7 +11652,9 @@ function MiniBrowserWindow({
   const history = activeTab?.history ?? []
   const historyIndex = activeTab?.historyIndex ?? -1
   const updateActiveTab = (update: (tab: BrowserTab) => BrowserTab) => {
-    setTabs(current => current.map(tab => (tab.id === activeTabID ? update(tab) : tab)))
+    setTabs(current =>
+      current.map(tab => (tab.id === activeTabID ? update(tab) : tab))
+    )
   }
   const setQuery = (value: string) => {
     if (activeTab) updateActiveTab(tab => ({ ...tab, query: value }))
@@ -11592,7 +11717,9 @@ function MiniBrowserWindow({
     }
     const pageURL = `${target.pathname}${target.search}${target.hash}`
     const nextTab: BrowserTab = {
-      id: tabID ?? `browser-workbench-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      id:
+        tabID ??
+        `browser-workbench-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       query: pageURL,
       pageURL,
       frameKey: 1,
@@ -11606,10 +11733,16 @@ function MiniBrowserWindow({
       return
     }
     setTabs(current =>
-      current.map(tab => (tab.id === activeTab.id ? { ...nextTab, id: tab.id } : tab))
+      current.map(tab =>
+        tab.id === activeTab.id ? { ...nextTab, id: tab.id } : tab
+      )
     )
   }
-  const navigate = async (value = query, openInNewTab = false, tabID?: string) => {
+  const navigate = async (
+    value = query,
+    openInNewTab = false,
+    tabID?: string
+  ) => {
     const input = value.trim()
     if (!input) return
     try {
@@ -11628,7 +11761,9 @@ function MiniBrowserWindow({
         input.startsWith('#') ||
         /^[^/?#\s]+\/[^/?#\s].*$/.test(input)
       const looksLikeAddress =
-        input.includes('.') || input.startsWith('localhost') || input.includes(':')
+        input.includes('.') ||
+        input.startsWith('localhost') ||
+        input.includes(':')
       const searchURL = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(input)}`
       if (isPathReference && !currentEntry) {
         setError('请先打开一个网站，再输入相对路径、查询或锚点。')
@@ -11636,7 +11771,9 @@ function MiniBrowserWindow({
       }
       const complete = isPathReference
         ? completeBrowserAddress(new URL(input, currentEntry).href)
-        : completeBrowserAddress(looksLikeAddress || portOnly ? input : searchURL)
+        : completeBrowserAddress(
+            looksLikeAddress || portOnly ? input : searchURL
+          )
       if (!complete) throw new Error('地址无效')
       const next = complete.url
       // A newly-created home tab is active but deliberately has no history
@@ -11644,10 +11781,10 @@ function MiniBrowserWindow({
       const current = currentEntry ? new URL(currentEntry) : null
       const sameSite = Boolean(
         current &&
-          current.protocol === next.protocol &&
-          current.hostname === next.hostname &&
-          (current.port || (current.protocol === 'https:' ? '443' : '80')) ===
-            (next.port || (next.protocol === 'https:' ? '443' : '80'))
+        current.protocol === next.protocol &&
+        current.hostname === next.hostname &&
+        (current.port || (current.protocol === 'https:' ? '443' : '80')) ===
+          (next.port || (next.protocol === 'https:' ? '443' : '80'))
       )
       const shouldOpenNewTab = openInNewTab || !activeTab
       // HTTPS is completely decided in the renderer: cross-site HTTPS always
@@ -11662,7 +11799,8 @@ function MiniBrowserWindow({
       // particular, this keeps a plugin Web UI open request reliable while its
       // host panel and the browser window are mounting concurrently.
       const pendingTabID = shouldOpenNewTab
-        ? tabID ?? `browser-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+        ? (tabID ??
+          `browser-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
         : ''
       if (shouldOpenNewTab && next.protocol === 'http:') {
         setTabs(current => [
@@ -11711,7 +11849,10 @@ function MiniBrowserWindow({
         : activeTab.history.slice(0, activeTab.historyIndex + 1)
       if (nextHistory.at(-1) !== next.href) nextHistory.push(next.href)
       const nextTab: BrowserTab = {
-        id: pendingTabID || tabID || `browser-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        id:
+          pendingTabID ||
+          tabID ||
+          `browser-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         query: sameSite ? addressTextFor(next) : complete.displayURL,
         pageURL: frameURLFor(next),
         frameKey: 1,
@@ -11726,7 +11867,11 @@ function MiniBrowserWindow({
         )
         setActiveTabID(nextTab.id)
       } else {
-        setTabs(current => current.map(tab => (tab.id === activeTab.id ? { ...nextTab, id: tab.id } : tab)))
+        setTabs(current =>
+          current.map(tab =>
+            tab.id === activeTab.id ? { ...nextTab, id: tab.id } : tab
+          )
+        )
       }
     } catch (reason) {
       setError(
@@ -11772,14 +11917,23 @@ function MiniBrowserWindow({
     syncTabTitle(tabID)
     try {
       const frameURL = new URL(frame.contentWindow?.location.href ?? '')
-      const match = frameURL.pathname.match(/^\/api\/v1\/browser\/http\/([^/]+)\/(.*)$/)
+      const match = frameURL.pathname.match(
+        /^\/api\/v1\/browser\/http\/([^/]+)\/(.*)$/
+      )
       if (!match) return
-      const targetOrigin = window
-        .atob(match[1].replace(/-/g, '+').replace(/_/g, '/'))
-      const logical = new URL(`/${match[2]}${frameURL.search}${frameURL.hash}`, targetOrigin)
+      const targetOrigin = window.atob(
+        match[1].replace(/-/g, '+').replace(/_/g, '/')
+      )
+      const logical = new URL(
+        `/${match[2]}${frameURL.search}${frameURL.hash}`,
+        targetOrigin
+      )
       setTabs(current =>
         current.map(tab => {
-          if (tab.id !== tabID || tab.history[tab.historyIndex] === logical.href)
+          if (
+            tab.id !== tabID ||
+            tab.history[tab.historyIndex] === logical.href
+          )
             return tab
           const nextHistory = tab.history.slice(0, tab.historyIndex + 1)
           nextHistory.push(logical.href)
@@ -11815,20 +11969,30 @@ function MiniBrowserWindow({
         )
         return
       }
-      navigate(browserCommand.url, browserCommand.newTab === true, browserCommand.tabID)
+      navigate(
+        browserCommand.url,
+        browserCommand.newTab === true,
+        browserCommand.tabID
+      )
     }
   }, [browserCommand])
   useEffect(() => {
     const receive = (event: MessageEvent) => {
       if (event.origin !== window.location.origin) return
-      const data = event.data as { source?: string; type?: string; url?: string } | null
+      const data = event.data as {
+        source?: string
+        type?: string
+        url?: string
+      } | null
       if (data?.source !== 'alx-browser' || !data.url) return
       const sourceTab = tabs.find(
         tab => frameRefs.current.get(tab.id)?.contentWindow === event.source
       )
       if (!sourceTab) return
       if (data.type === 'form-blocked') {
-        setError('已阻止跨站 POST 提交：系统浏览器无法安全复用当前页面的表单数据与会话。')
+        setError(
+          '已阻止跨站 POST 提交：系统浏览器无法安全复用当前页面的表单数据与会话。'
+        )
         return
       }
       if (data.type === 'open') {
@@ -11886,14 +12050,12 @@ function MiniBrowserWindow({
       return
     }
     setTabs(remaining)
-    if (id === activeTabID) setActiveTabID(remaining[Math.max(0, index - 1)]?.id ?? '')
+    if (id === activeTabID)
+      setActiveTabID(remaining[Math.max(0, index - 1)]?.id ?? '')
   }
   const openHomeTab = () => {
     const homeTab = createBrowserHomeTab()
-    setTabs(current => [
-      ...current,
-      homeTab
-    ])
+    setTabs(current => [...current, homeTab])
     setActiveTabID(homeTab.id)
     setHomeQuery('')
     setError('')
@@ -11905,7 +12067,9 @@ function MiniBrowserWindow({
       minimized={minimized}
       title="浏览器"
       subtitle={pageURL || '搜索与访问网页'}
-      icon={<Globe2 className="size-4 shrink-0 text-brand-600 dark:text-brand-200" />}
+      icon={
+        <Globe2 className="size-4 shrink-0 text-brand-600 dark:text-brand-200" />
+      }
       headerLeft={
         tabs.length > 0 ? (
           <div className="flex w-full items-center gap-1 overflow-x-auto py-1">
@@ -11914,10 +12078,20 @@ function MiniBrowserWindow({
                 key={tab.id}
                 className={`flex min-w-28 max-w-52 items-center gap-1 rounded-t-md border border-b-0 px-2 py-1 text-xs ${tab.id === activeTabID ? 'bg-white text-slate-800 dark:bg-slate-700 dark:text-slate-100' : 'border-transparent text-slate-500 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700/70'}`}
               >
-                <button className="min-w-0 flex-1 truncate text-left" type="button" onClick={() => setActiveTabID(tab.id)} title={tab.title || tab.query || '新标签页'}>
+                <button
+                  className="min-w-0 flex-1 truncate text-left"
+                  type="button"
+                  onClick={() => setActiveTabID(tab.id)}
+                  title={tab.title || tab.query || '新标签页'}
+                >
                   {tab.title || tab.query || '新标签页'}
                 </button>
-                <button className="shrink-0 rounded p-0.5 hover:bg-slate-200 dark:hover:bg-slate-600" type="button" onClick={() => closeTab(tab.id)} aria-label="关闭标签页">
+                <button
+                  className="shrink-0 rounded p-0.5 hover:bg-slate-200 dark:hover:bg-slate-600"
+                  type="button"
+                  onClick={() => closeTab(tab.id)}
+                  aria-label="关闭标签页"
+                >
                   <X className="size-3" />
                 </button>
               </div>
@@ -11937,7 +12111,9 @@ function MiniBrowserWindow({
       onClose={() => {
         tabs.forEach(tab =>
           window.dispatchEvent(
-            new CustomEvent('alx-browser-tab-closed', { detail: { id: tab.id } })
+            new CustomEvent('alx-browser-tab-closed', {
+              detail: { id: tab.id }
+            })
           )
         )
         onClose()
@@ -11952,12 +12128,64 @@ function MiniBrowserWindow({
       <section className="mini-browser flex min-h-0 flex-1 flex-col bg-slate-50 dark:bg-slate-900">
         {pageURL && (
           <>
-            <form className="flex shrink-0 items-center gap-2 border-b border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-800" onSubmit={event => { event.preventDefault(); void navigate() }}>
-              <button className="icon-button size-8 shrink-0 p-0" type="button" onClick={() => navigateHistory(-1)} disabled={historyIndex <= 0} aria-label="后退" title="后退"><ArrowLeft className="size-4" /></button>
-              <button className="icon-button size-8 shrink-0 p-0" type="button" onClick={() => navigateHistory(1)} disabled={historyIndex >= history.length - 1} aria-label="前进" title="前进"><ArrowRight className="size-4" /></button>
-              <button className="icon-button size-8 shrink-0 p-0" type="button" onClick={() => updateActiveTab(tab => ({ ...tab, frameKey: tab.frameKey + 1 }))} aria-label="刷新" title="刷新"><RefreshCw className="size-4" /></button>
-              <input className="min-w-0 flex-1 rounded-full border border-slate-300 bg-white px-4 py-1.5 text-sm text-slate-800 outline-none placeholder:text-slate-400 focus:border-brand-600 focus:ring-2 focus:ring-brand-100 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100" value={query} onChange={event => setQuery(event.target.value)} placeholder="输入网址或搜索内容" aria-label="网址或搜索内容" autoComplete="off" spellCheck={false} />
-              <button className="icon-button size-8 shrink-0 p-0" type="submit" aria-label="前往" title="前往"><Search className="size-4" /></button>
+            <form
+              className="flex shrink-0 items-center gap-2 border-b border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-800"
+              onSubmit={event => {
+                event.preventDefault()
+                void navigate()
+              }}
+            >
+              <button
+                className="icon-button size-8 shrink-0 p-0"
+                type="button"
+                onClick={() => navigateHistory(-1)}
+                disabled={historyIndex <= 0}
+                aria-label="后退"
+                title="后退"
+              >
+                <ArrowLeft className="size-4" />
+              </button>
+              <button
+                className="icon-button size-8 shrink-0 p-0"
+                type="button"
+                onClick={() => navigateHistory(1)}
+                disabled={historyIndex >= history.length - 1}
+                aria-label="前进"
+                title="前进"
+              >
+                <ArrowRight className="size-4" />
+              </button>
+              <button
+                className="icon-button size-8 shrink-0 p-0"
+                type="button"
+                onClick={() =>
+                  updateActiveTab(tab => ({
+                    ...tab,
+                    frameKey: tab.frameKey + 1
+                  }))
+                }
+                aria-label="刷新"
+                title="刷新"
+              >
+                <RefreshCw className="size-4" />
+              </button>
+              <input
+                className="min-w-0 flex-1 rounded-full border border-slate-300 bg-white px-4 py-1.5 text-sm text-slate-800 outline-none placeholder:text-slate-400 focus:border-brand-600 focus:ring-2 focus:ring-brand-100 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100"
+                value={query}
+                onChange={event => setQuery(event.target.value)}
+                placeholder="输入网址或搜索内容"
+                aria-label="网址或搜索内容"
+                autoComplete="off"
+                spellCheck={false}
+              />
+              <button
+                className="icon-button size-8 shrink-0 p-0"
+                type="submit"
+                aria-label="前往"
+                title="前往"
+              >
+                <Search className="size-4" />
+              </button>
             </form>
             {error && (
               <p className="m-0 border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-700 dark:border-amber-900/70 dark:bg-amber-950/30 dark:text-amber-300">
@@ -11967,66 +12195,68 @@ function MiniBrowserWindow({
           </>
         )}
         <div className="relative min-h-0 flex-1 overflow-hidden">
-          {tabs.filter(tab => tab.pageURL).map(tab => (
-            <iframe
-              key={`${tab.id}:${tab.frameKey}`}
-              ref={node => {
-                if (node) frameRefs.current.set(tab.id, node)
-                else frameRefs.current.delete(tab.id)
-              }}
-              className={`absolute inset-0 h-full w-full border-0 bg-white ${tab.id === activeTabID ? '' : 'invisible pointer-events-none'}`}
-              name={`alx-browser-tab:${tab.id}`}
-              src={tab.pageURL}
-              title={tab.query || '迷你浏览器页面'}
-              referrerPolicy={
-                tab.pageURL.startsWith('/api/v1/browser/http/')
-                  ? 'strict-origin-when-cross-origin'
-                  : 'no-referrer'
-              }
-              onLoad={() => syncFrameNavigation(tab.id)}
-            />
-          ))}
+          {tabs
+            .filter(tab => tab.pageURL)
+            .map(tab => (
+              <iframe
+                key={`${tab.id}:${tab.frameKey}`}
+                ref={node => {
+                  if (node) frameRefs.current.set(tab.id, node)
+                  else frameRefs.current.delete(tab.id)
+                }}
+                className={`absolute inset-0 h-full w-full border-0 bg-white ${tab.id === activeTabID ? '' : 'invisible pointer-events-none'}`}
+                name={`alx-browser-tab:${tab.id}`}
+                src={tab.pageURL}
+                title={tab.query || '迷你浏览器页面'}
+                referrerPolicy={
+                  tab.pageURL.startsWith('/api/v1/browser/http/')
+                    ? 'strict-origin-when-cross-origin'
+                    : 'no-referrer'
+                }
+                onLoad={() => syncFrameNavigation(tab.id)}
+              />
+            ))}
           {!pageURL && (
             <div className="grid h-full place-items-center bg-white p-8 dark:bg-slate-900">
-          <form
-            className="grid w-full max-w-2xl gap-7"
-            onSubmit={event => {
-              event.preventDefault()
-              navigate()
-            }}
-          >
-            <img
-              className="mx-auto h-auto w-52 max-w-[62%] dark:brightness-125"
-              src={meLogo}
-              alt="Alemon"
-            />
-            <div className="flex items-center rounded-full border border-slate-300 bg-white px-4 shadow-sm transition-shadow focus-within:border-brand-500 focus-within:ring-4 focus-within:ring-brand-100 dark:border-slate-600 dark:bg-slate-800 dark:focus-within:ring-brand-900/40">
-              <Plus className="mr-3 size-5 shrink-0 text-slate-700 dark:text-slate-300" />
-              <input
-                className="h-12 min-w-0 flex-1 bg-transparent text-base text-slate-800 outline-none placeholder:text-slate-400 dark:text-slate-100"
-                value={query}
-                onChange={event => setQuery(event.target.value)}
-                placeholder="搜索、输入网址或端口号"
-                aria-label="搜索或输入网址"
-                autoComplete="off"
-                autoFocus
-                spellCheck={false}
-              />
-              <button
-                className="inline-flex size-8 shrink-0 items-center justify-center rounded-full text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-800 dark:text-slate-400 dark:hover:bg-slate-700 dark:hover:text-slate-100"
-                type="submit"
-                aria-label="搜索或前往网址"
-                title="搜索或前往网址"
+              <form
+                className="grid w-full max-w-2xl gap-7"
+                onSubmit={event => {
+                  event.preventDefault()
+                  navigate()
+                }}
               >
-                <Search className="size-4" />
-              </button>
-            </div>
-            {error && (
-              <p className="m-0 text-center text-xs text-amber-700 dark:text-amber-300">
-                {error}
-              </p>
-            )}
-          </form>
+                <img
+                  className="mx-auto h-auto w-52 max-w-[62%] dark:brightness-125"
+                  src={meLogo}
+                  alt="Alemon"
+                />
+                <div className="flex items-center rounded-full border border-slate-300 bg-white px-4 shadow-sm transition-shadow focus-within:border-brand-500 focus-within:ring-4 focus-within:ring-brand-100 dark:border-slate-600 dark:bg-slate-800 dark:focus-within:ring-brand-900/40">
+                  <Plus className="mr-3 size-5 shrink-0 text-slate-700 dark:text-slate-300" />
+                  <input
+                    className="h-12 min-w-0 flex-1 bg-transparent text-base text-slate-800 outline-none placeholder:text-slate-400 dark:text-slate-100"
+                    value={query}
+                    onChange={event => setQuery(event.target.value)}
+                    placeholder="搜索、输入网址或端口号"
+                    aria-label="搜索或输入网址"
+                    autoComplete="off"
+                    autoFocus
+                    spellCheck={false}
+                  />
+                  <button
+                    className="inline-flex size-8 shrink-0 items-center justify-center rounded-full text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-800 dark:text-slate-400 dark:hover:bg-slate-700 dark:hover:text-slate-100"
+                    type="submit"
+                    aria-label="搜索或前往网址"
+                    title="搜索或前往网址"
+                  >
+                    <Search className="size-4" />
+                  </button>
+                </div>
+                {error && (
+                  <p className="m-0 text-center text-xs text-amber-700 dark:text-amber-300">
+                    {error}
+                  </p>
+                )}
+              </form>
             </div>
           )}
         </div>
@@ -12413,7 +12643,8 @@ function ControlCard({
     setRootNavigationVisible(false)
   }, [activePrimary])
   useEffect(() => {
-    if (!pendingCatalogPrimary || activePrimary !== pendingCatalogPrimary) return
+    if (!pendingCatalogPrimary || activePrimary !== pendingCatalogPrimary)
+      return
     if (catalogLoading) return
     setPendingCatalogPrimary(null)
     setRootNavigationVisible(false)
@@ -12562,8 +12793,10 @@ function ControlCard({
           >
             {directoryActions
               .filter(item => developerMode || item.id !== 'build')
-              .map(item => (
-                <button
+              .map(item => {
+                const hasSubitems = subitemsFor(item.id).length > 0
+                return (
+                  <button
                   className={cn(
                     'flex min-h-8 items-center gap-2 rounded-md px-2 text-left text-xs font-medium transition-colors',
                     activePrimary === item.id
@@ -12583,8 +12816,15 @@ function ControlCard({
                       aria-label="正在加载子菜单"
                     />
                   )}
+                  {hasSubitems && pendingCatalogPrimary !== item.id && (
+                    <ChevronRight
+                      className="size-3.5 shrink-0 text-slate-400 dark:text-slate-500"
+                      aria-label="包含子菜单"
+                    />
+                  )}
                 </button>
-              ))}
+                )
+              })}
             {project && (
               <button
                 className={cn(
@@ -12782,30 +13022,110 @@ function ReadonlyConsole({
   const [liveOutput, setLiveOutput] = useStoreState('')
   const [foregroundLogMode, setForegroundLogMode] =
     useStoreState<ForegroundLogMode>('simple')
-  const [foregroundLogFilter, setForegroundLogFilter] = useStoreState<
-    'all' | 'attention'
-  >('all')
+  const [foregroundLogQuery, setForegroundLogQuery] = useStoreState('')
+  const [foregroundLogLevels, setForegroundLogLevels] = useStoreState<
+    ForegroundLogLevel[]
+  >([])
+  const [foregroundLogDomainsSelected, setForegroundLogDomainsSelected] =
+    useStoreState<ForegroundLogDomain[]>([])
+  const [foregroundLogFiltersOpen, setForegroundLogFiltersOpen] =
+    useStoreState(false)
+  const [expandedForegroundRepeats, setExpandedForegroundRepeats] =
+    useStoreState<string[]>([])
+  const [foregroundLogContextIndex, setForegroundLogContextIndex] =
+    useStoreState<number | null>(null)
   const [pendingForegroundLogCount, setPendingForegroundLogCount] =
     useStoreState(0)
   const previousForegroundLogRef = useRef('')
+  // A task ID is allocated for every foreground/development launch. Keep it
+  // beside the live buffer so output from a new launch never joins the old
+  // run just because the logger did not print a timestamp.
+  const foregroundSessionRef = useRef('')
   const runError = error
     ? operationErrorMessage(error, '无法读取当前目录的运行终端信息。')
     : ''
   const running = Boolean(data?.running)
   const message = runError || liveOutput
-  const foregroundLogItems = useMemo(
-    () =>
-      interpretForegroundLog(
-        message,
-        foregroundLogMode,
-        foregroundLogFilter === 'attention'
-      ),
-    [foregroundLogFilter, foregroundLogMode, message]
+  const rawForegroundLogItems = useMemo(
+    () => normalizeForegroundLog(message),
+    [message]
   )
+  const foregroundLogItems = useMemo(() => {
+    const modeVisible = rawForegroundLogItems.filter(
+      item =>
+        foregroundLogMode !== 'simple' ||
+        item.level !== 'info' ||
+        item.domain === 'login' ||
+        item.domain === 'service' ||
+        item.action !== null ||
+        item.details.length > 0
+    )
+    const modeItems =
+      foregroundLogMode === 'advanced'
+        ? modeVisible
+        : collapseForegroundLog(modeVisible)
+    return filterForegroundLog(modeItems, {
+      query: foregroundLogQuery,
+      levels: foregroundLogLevels,
+      domains: foregroundLogDomainsSelected
+    })
+  }, [
+    foregroundLogDomainsSelected,
+    foregroundLogLevels,
+    foregroundLogMode,
+    foregroundLogQuery,
+    rawForegroundLogItems
+  ])
   const foregroundLogSummary = useMemo(
     () => summarizeForegroundLog(foregroundLogItems),
     [foregroundLogItems]
   )
+  const foregroundLogContext = useMemo(() => {
+    if (foregroundLogContextIndex === null) return []
+    const position = rawForegroundLogItems.findIndex(
+      item => item.index === foregroundLogContextIndex
+    )
+    return position < 0
+      ? []
+      : rawForegroundLogItems.slice(
+          Math.max(0, position - 20),
+          Math.min(rawForegroundLogItems.length, position + 21)
+        )
+  }, [foregroundLogContextIndex, rawForegroundLogItems])
+  const foregroundLogExport = useMemo(() => {
+    const filters = [
+      foregroundLogQuery.trim() ? `关键词：${foregroundLogQuery.trim()}` : '',
+      foregroundLogLevels.length
+        ? `级别：${foregroundLogLevels.join('、')}`
+        : '',
+      foregroundLogDomainsSelected.length
+        ? `领域：${foregroundLogDomainsSelected.join('、')}`
+        : ''
+    ].filter(Boolean)
+    return [
+      'AlemonX 智能日志（已脱敏）',
+      `会话：${data?.sessionId || '当前运行'}`,
+      `模式：${data?.mode || '最近运行'}`,
+      data?.startedAt ? `启动时间：${data.startedAt}` : '',
+      filters.length ? `筛选：${filters.join('；')}` : '筛选：全部',
+      '',
+      ...filterForegroundLog(rawForegroundLogItems, {
+        query: foregroundLogQuery,
+        levels: foregroundLogLevels,
+        domains: foregroundLogDomainsSelected
+      }).map(item => item.safeRaw)
+    ]
+      .filter(Boolean)
+      .join('\n')
+  }, [
+    data?.mode,
+    data?.sessionId,
+    data?.startedAt,
+    foregroundLogDomainsSelected,
+    foregroundLogLevels,
+    foregroundLogQuery,
+    rawForegroundLogItems
+  ])
   const activeTerminal = tabs.find(tab => tab.id === activeTab)
   const resetTerminals = useCallback(() => {
     if (logsOnly) {
@@ -12824,29 +13144,63 @@ function ReadonlyConsole({
     resetTerminals()
     void load({ root }).then(result => {
       if (result.data) {
+        const changedSession =
+          Boolean(result.data.sessionId) &&
+          result.data.sessionId !== foregroundSessionRef.current
+        foregroundSessionRef.current = result.data.sessionId ?? ''
+        if (changedSession) {
+          setExpandedForegroundRepeats([])
+          setForegroundLogContextIndex(null)
+        }
         setLiveOutput(appendTerminalOutput('', result.data.output ?? ''))
       }
     })
     // No polling: output streams in via the SSE robot-output event; the manual
     // refresh button re-reads the snapshot.
-  }, [load, open, resetTerminals, root, setLiveOutput])
+  }, [
+    load,
+    open,
+    resetTerminals,
+    root,
+    setExpandedForegroundRepeats,
+    setForegroundLogContextIndex,
+    setLiveOutput
+  ])
   useEffect(() => {
     if (!open) return
     const handler = (event: Event) => {
       const detail = (
-        event as CustomEvent<{ text?: string; truncated?: boolean }>
+        event as CustomEvent<{
+          taskId?: string
+          text?: string
+          truncated?: boolean
+        }>
       ).detail
-      if (detail?.text)
+      if (detail?.text) {
+        const changedSession =
+          Boolean(detail.taskId) &&
+          detail.taskId !== foregroundSessionRef.current
+        if (detail.taskId) foregroundSessionRef.current = detail.taskId
+        if (changedSession) {
+          setExpandedForegroundRepeats([])
+          setForegroundLogContextIndex(null)
+        }
         setLiveOutput(current =>
           appendTerminalOutput(
-            current,
+            changedSession ? '' : current,
             `${detail.truncated ? '…早期输出已省略…\n' : ''}${detail.text}`
           )
         )
+      }
     }
     window.addEventListener('alx:robot-output', handler)
     return () => window.removeEventListener('alx:robot-output', handler)
-  }, [open, setLiveOutput])
+  }, [
+    open,
+    setExpandedForegroundRepeats,
+    setForegroundLogContextIndex,
+    setLiveOutput
+  ])
   useEffect(() => {
     if (!logsOnly || !open) return
     const previous = previousForegroundLogRef.current
@@ -13038,7 +13392,9 @@ function ReadonlyConsole({
         return
       case 'copy-service-url':
         if (item.serviceURL)
-          void navigator.clipboard?.writeText(item.serviceURL)
+          void navigator.clipboard?.writeText(
+            redactForegroundLog(item.serviceURL)
+          )
         return
       case 'manage-master':
         if (!item.masterUserID) return
@@ -13047,6 +13403,33 @@ function ReadonlyConsole({
           masterAuthorizationIDs.includes(item.masterUserID)
         )
     }
+  }
+  const toggleLogLevel = (level: ForegroundLogLevel) =>
+    setForegroundLogLevels(current =>
+      current.includes(level)
+        ? current.filter(value => value !== level)
+        : [...current, level]
+    )
+  const toggleLogDomain = (domain: ForegroundLogDomain) =>
+    setForegroundLogDomainsSelected(current =>
+      current.includes(domain)
+        ? current.filter(value => value !== domain)
+        : [...current, domain]
+    )
+  const toggleForegroundLogContext = (index: number) =>
+    setForegroundLogContextIndex(current => (current === index ? null : index))
+  const copyForegroundLog = () =>
+    void navigator.clipboard?.writeText(foregroundLogExport)
+  const downloadForegroundLog = () => {
+    const blob = new Blob([foregroundLogExport], {
+      type: 'text/plain;charset=utf-8'
+    })
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = `alemonx-log-${data?.sessionId || 'current'}.txt`
+    anchor.click()
+    URL.revokeObjectURL(url)
   }
   const jumpToLatestForegroundLog = () => {
     const output = outputRef.current
@@ -13132,20 +13515,19 @@ function ReadonlyConsole({
               <button
                 className={cn(
                   'smart-log-window-action',
-                  foregroundLogFilter === 'attention' && 'active'
+                  (foregroundLogQuery ||
+                    foregroundLogLevels.length ||
+                    foregroundLogDomainsSelected.length) &&
+                    'active'
                 )}
-                onClick={() =>
-                  setForegroundLogFilter(value =>
-                    value === 'attention' ? 'all' : 'attention'
-                  )
-                }
-                title="仅查看异常与提醒"
+                onClick={() => setForegroundLogFiltersOpen(value => !value)}
+                title="筛选日志"
               >
                 {foregroundLogSummary.errors > 0
                   ? `异常 ${foregroundLogSummary.errors}`
                   : foregroundLogSummary.warnings > 0
                     ? `提醒 ${foregroundLogSummary.warnings}`
-                    : '正常'}
+                    : '筛选'}
               </button>
               <button
                 className="smart-log-window-action"
@@ -13168,12 +13550,21 @@ function ReadonlyConsole({
               </button>
               <button
                 className="icon-button size-8 p-0"
-                disabled={!message}
-                onClick={() => void navigator.clipboard?.writeText(message)}
-                aria-label="复制完整运行日志"
-                title="复制完整日志"
+                disabled={!rawForegroundLogItems.length}
+                onClick={copyForegroundLog}
+                aria-label="复制脱敏运行日志"
+                title="复制脱敏日志"
               >
                 <ClipboardList className="size-4" />
+              </button>
+              <button
+                className="icon-button size-8 p-0"
+                disabled={!rawForegroundLogItems.length}
+                onClick={downloadForegroundLog}
+                aria-label="下载脱敏运行日志"
+                title="下载脱敏日志"
+              >
+                <Download className="size-4" />
               </button>
             </>
           )}
@@ -13221,12 +13612,90 @@ function ReadonlyConsole({
                   有新日志，跳到最新
                 </button>
               )}
+              {foregroundLogFiltersOpen && (
+                <section
+                  className="smart-log-filter-panel"
+                  aria-label="日志筛选"
+                >
+                  <div className="flex items-center gap-2">
+                    <Search className="size-3.5 shrink-0 text-slate-400" />
+                    <input
+                      value={foregroundLogQuery}
+                      onChange={event =>
+                        setForegroundLogQuery(event.target.value)
+                      }
+                      placeholder="搜索当前会话（已脱敏）"
+                      aria-label="搜索日志"
+                    />
+                    <button
+                      type="button"
+                      className="text-button text-[11px]"
+                      onClick={() => {
+                        setForegroundLogQuery('')
+                        setForegroundLogLevels([])
+                        setForegroundLogDomainsSelected([])
+                      }}
+                    >
+                      清除
+                    </button>
+                  </div>
+                  <div className="smart-log-filter-row">
+                    <small>级别</small>
+                    {(
+                      [
+                        'error',
+                        'warning',
+                        'success',
+                        'info'
+                      ] as ForegroundLogLevel[]
+                    ).map(level => (
+                      <button
+                        type="button"
+                        key={level}
+                        className={cn(
+                          'smart-log-filter-chip',
+                          foregroundLogLevels.includes(level) && 'active'
+                        )}
+                        onClick={() => toggleLogLevel(level)}
+                      >
+                        {
+                          {
+                            error: '异常',
+                            warning: '提醒',
+                            success: '正常',
+                            info: '信息'
+                          }[level]
+                        }
+                      </button>
+                    ))}
+                  </div>
+                  <div className="smart-log-filter-row">
+                    <small>领域</small>
+                    {foregroundLogDomains.map(domain => (
+                      <button
+                        type="button"
+                        key={domain.value}
+                        className={cn(
+                          'smart-log-filter-chip',
+                          foregroundLogDomainsSelected.includes(domain.value) &&
+                            'active'
+                        )}
+                        onClick={() => toggleLogDomain(domain.value)}
+                      >
+                        {domain.label}
+                      </button>
+                    ))}
+                  </div>
+                </section>
+              )}
               {isFetching && !message ? (
                 <div className="smart-log-empty">正在读取运行输出…</div>
               ) : foregroundLogItems.length === 0 ? (
                 <div className="smart-log-empty">
-                  {foregroundLogFilter === 'attention'
-                    ? '未发现需要关注的异常或提醒。'
+                  {foregroundLogQuery ||
+                  foregroundLogLevels.length ||
+                  foregroundLogDomainsSelected.length
+                    ? '当前筛选条件下没有日志。'
                     : '当前没有可显示的前台日志。'}
                 </div>
               ) : (
@@ -13240,39 +13709,127 @@ function ReadonlyConsole({
                           <span>{item.timeLabel}</span>
                         </div>
                       )}
-                    <article
-                      className={cn(
-                        'smart-log-line',
-                        `is-${item.level}`,
-                        foregroundLogMode === 'advanced' && 'is-advanced'
-                      )}
-                    >
-                      <div className="smart-log-line-meta">
-                        <span>{item.title}</span>
-                        {item.action && (
-                          <button onClick={() => runForegroundLogAction(item)}>
-                            {foregroundLogActionLabel(item)}
-                          </button>
-                        )}
+                    {foregroundLogMode === 'advanced' ? (
+                      <div className="smart-log-raw-wrap">
+                        <pre className={`smart-log-raw is-${item.level}`}>
+                          {foregroundLogDisplayText(item, foregroundLogMode)}
+                        </pre>
+                        <button
+                          className="smart-log-context-button"
+                          onClick={() => toggleForegroundLogContext(item.index)}
+                        >
+                          上下文
+                        </button>
                       </div>
-                      <code>
-                        {foregroundLogDisplayText(item, foregroundLogMode)}
-                      </code>
-                      {foregroundLogMode !== 'advanced' &&
-                        item.details.filter(detail => detail.label !== '信息')
-                          .length > 0 && (
-                          <div className="smart-log-extracts">
-                            {item.details
-                              .filter(detail => detail.label !== '信息')
-                              .map(detail => (
-                                <span key={`${detail.label}:${detail.value}`}>
-                                  <small>{detail.label}</small>
-                                  {detail.value}
-                                </span>
-                              ))}
-                          </div>
-                        )}
-                    </article>
+                    ) : (
+                      <article
+                        className={cn('smart-log-line', `is-${item.level}`)}
+                      >
+                        <div className="smart-log-line-meta">
+                          <span className="smart-log-title">
+                            {item.title}
+                            {item.time && <small>{item.time}</small>}
+                            {item.count > 1 && (
+                              <small className="smart-log-repeat">
+                                × {item.count}
+                              </small>
+                            )}
+                          </span>
+                          <span className="smart-log-line-actions">
+                            {item.action && (
+                              <button
+                                onClick={() => runForegroundLogAction(item)}
+                              >
+                                {foregroundLogActionLabel(item)}
+                              </button>
+                            )}
+                            {item.count > 1 && (
+                              <button
+                                onClick={() =>
+                                  setExpandedForegroundRepeats(current =>
+                                    current.includes(item.id)
+                                      ? current.filter(
+                                          value => value !== item.id
+                                        )
+                                      : [...current, item.id]
+                                  )
+                                }
+                              >
+                                {expandedForegroundRepeats.includes(item.id)
+                                  ? '收起重复'
+                                  : '展开重复'}
+                              </button>
+                            )}
+                            <button
+                              onClick={() =>
+                                toggleForegroundLogContext(
+                                  item.occurrenceIndexes[0] ?? item.index
+                                )
+                              }
+                            >
+                              上下文
+                            </button>
+                          </span>
+                        </div>
+                        <code>
+                          {foregroundLogDisplayText(item, foregroundLogMode)}
+                        </code>
+                        {(foregroundLogMode === 'simple' ||
+                          (item.level !== 'error' &&
+                            item.level !== 'warning')) &&
+                          item.details.filter(detail => detail.label !== '信息')
+                            .length > 0 && (
+                            <div className="smart-log-extracts">
+                              {item.details
+                                .filter(detail => detail.label !== '信息')
+                                .map(detail => (
+                                  <span key={`${detail.label}:${detail.value}`}>
+                                    <small>{detail.label}</small>
+                                    {detail.value}
+                                  </span>
+                                ))}
+                            </div>
+                          )}
+                      </article>
+                    )}
+                    {foregroundLogMode !== 'advanced' &&
+                      item.count > 1 &&
+                      expandedForegroundRepeats.includes(item.id) && (
+                        <div className="smart-log-repeat-list">
+                          {item.occurrenceIndexes.map(occurrence => {
+                            const repeated = rawForegroundLogItems.find(
+                              value => value.index === occurrence
+                            )
+                            return repeated ? (
+                              <pre key={repeated.id}>{repeated.safeRaw}</pre>
+                            ) : null
+                          })}
+                        </div>
+                      )}
+                    {foregroundLogContextIndex !== null &&
+                      item.occurrenceIndexes.includes(
+                        foregroundLogContextIndex
+                      ) && (
+                        <section
+                          className="smart-log-context"
+                          aria-label="日志上下文"
+                        >
+                          <header>
+                            <strong>上下文</strong>
+                          </header>
+                          {foregroundLogContext.map(context => (
+                            <pre
+                              key={context.id}
+                              className={cn(
+                                context.index === foregroundLogContextIndex &&
+                                  'active'
+                              )}
+                            >
+                              {context.safeRaw}
+                            </pre>
+                          ))}
+                        </section>
+                      )}
                   </div>
                 ))
               )}

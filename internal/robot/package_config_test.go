@@ -1,6 +1,7 @@
 package robot
 
 import (
+	"alemonx/internal/packageschema"
 	"os"
 	"path/filepath"
 	"strings"
@@ -320,6 +321,53 @@ func TestSavePackageConfigEnforcesRules(t *testing.T) {
 	}
 	if _, err := (Manager{}).SavePackageConfig(root, "example", map[string]any{"port": 8080}); err != nil {
 		t.Fatalf("valid value must save: %v", err)
+	}
+}
+
+func TestSavePackageConfigAllowsIncompleteRequiredFields(t *testing.T) {
+	root := t.TempDir()
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
+	writeAppPageFixture(t, filepath.Join(root, "node_modules", "example", "package.json"), `{
+  "name":"example",
+  "alemonjs":{"config":[
+    {"name":"token","type":"string","required":true},
+    {"name":"secret","type":"string","required":true}
+  ]}
+}`)
+
+	if _, err := (Manager{}).SavePackageConfig(root, "example", map[string]any{"token": "draft-token"}); err != nil {
+		t.Fatalf("partial required configuration must save: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "alemon.config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := string(data)
+	if !strings.Contains(output, `token: "draft-token"`) || strings.Contains(output, "secret:") {
+		t.Fatalf("partial config =\n%s", output)
+	}
+}
+
+func TestMergePackageConfigKeepsUntouchedYAMLSource(t *testing.T) {
+	content := `# robot comment
+example: # package comment
+  token: "old" # keep token note
+  alias: &shared "unchanged"
+  unknown: *shared # extension note
+  # keep this separator
+  retry: 1
+other:
+  value: true
+`
+	fields := []packageschema.Field{{Name: "token", Type: "string"}, {Name: "retry", Type: "number"}}
+	updated, err := mergeConfigValuesWithLegacy(content, "example", "", fields, map[string]any{"token": "new"})
+	if err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+	for _, expected := range []string{"# robot comment", "example: # package comment", `token: "new" # keep token note`, `alias: &shared "unchanged"`, "unknown: *shared # extension note", "# keep this separator", "retry: 1", "other:"} {
+		if !strings.Contains(updated, expected) {
+			t.Fatalf("updated YAML lost %q:\n%s", expected, updated)
+		}
 	}
 }
 

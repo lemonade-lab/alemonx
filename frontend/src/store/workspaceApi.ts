@@ -1,6 +1,6 @@
 import { createApi, fetchBaseQuery } from '@reduxjs/toolkit/query/react'
 
-type RobotResult = { output: string; path?: string }
+type RobotResult = { output: string; path?: string; revision?: string }
 // ConsolePayload splits the terminal's live process output from its static
 // project context so the terminal can render them at different refresh rates.
 type ConsolePayload = {
@@ -9,6 +9,8 @@ type ConsolePayload = {
   running: boolean
   mode: string
   path?: string
+  sessionId?: string
+  startedAt?: string
 }
 type RobotTask = {
   id: string
@@ -306,7 +308,11 @@ export type RobotPortStatus = {
   kind: string
   label: string
   port: number
+  configuredPort?: number
+  actualPort?: number
   configured: boolean
+  drifted?: boolean
+  source?: string
   occupied: boolean
   pid?: number
   process?: string
@@ -854,7 +860,7 @@ export const workspaceApi = createApi({
     robotPM2Processes: build.query<{ items: PM2Process[] }, string>({
       query: root => `robot/pm2-processes?${new URLSearchParams({ root })}`
     }),
-    appPort: build.query<{ port: number; configured: boolean }, string>({
+    appPort: build.query<{ port: number; configured: boolean; configuredPort?: number; actualPort?: number; drifted?: boolean; source?: string }, string>({
       query: root => `robot/app-port?${new URLSearchParams({ root })}`
     }),
     robotApps: build.query<{ items: string[] }, string>({
@@ -874,7 +880,7 @@ export const workspaceApi = createApi({
         `robot/app-port?${new URLSearchParams({ root, probe: '1' })}`
     }),
     testPort: build.query<
-      { port: number; configured: boolean; sandbox?: boolean },
+      { port: number; configured: boolean; configuredPort?: number; actualPort?: number; drifted?: boolean; source?: string; sandbox?: boolean },
       string
     >({
       query: root => `robot/test-port?${new URLSearchParams({ root })}`
@@ -1032,7 +1038,7 @@ export const workspaceApi = createApi({
     }),
     writeRobotFile: build.mutation<
       RobotResult,
-      { root: string; file: string; content: string }
+      { root: string; file: string; content: string; expectedRevision?: string }
     >({
       query: body => ({ url: 'robot', method: 'PUT', body }),
       invalidatesTags: (_result, _error, body) => {

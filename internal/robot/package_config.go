@@ -235,23 +235,13 @@ func (m Manager) savePackageConfigDefinition(root string, definition PackageConf
 			return Result{}, fmt.Errorf("配置项 %s 不属于该包", key)
 		}
 	}
-	current, err := m.Read(root, "alemon.config.yaml")
-	if err != nil && !strings.Contains(err.Error(), "no such file") {
-		return Result{}, err
-	}
-	content := ""
-	if err == nil {
-		content = current.Output
-	}
 	legacy := ""
 	if definition.Namespace != definition.Package {
 		legacy = definition.Package
 	}
-	updated, err := mergeConfigValuesWithLegacy(content, definition.Namespace, legacy, definition.Fields, values)
-	if err != nil {
-		return Result{}, err
-	}
-	return m.Write(root, "alemon.config.yaml", updated)
+	return m.UpdateRuntimeConfig(root, "", func(content string) (string, error) {
+		return mergeConfigValuesWithLegacy(content, definition.Namespace, legacy, definition.Fields, values)
+	})
 }
 
 func (m Manager) SaveCurrentPackageConfig(root string, values map[string]any) (Result, error) {
@@ -297,19 +287,13 @@ func (m Manager) SaveLogin(root, login, packageName string) (Result, error) {
 		}
 		platformValue = definition.PlatformValueForLogin(login)
 	}
-	current, err := m.Read(root, "alemon.config.yaml")
-	if err != nil && !strings.Contains(err.Error(), "no such file") {
-		return Result{}, err
-	}
-	content := ""
-	if err == nil {
-		content = stripYAMLBOM(current.Output)
-	}
-	content = setTopLevelScalar(content, "login", strconv.Quote(login))
-	if platformValue != "" {
-		content = setTopLevelScalar(content, "platform", strconv.Quote(platformValue))
-	}
-	result, err := m.Write(root, "alemon.config.yaml", content)
+	result, err := m.UpdateRuntimeConfig(root, "", func(content string) (string, error) {
+		content = setTopLevelScalar(stripYAMLBOM(content), "login", strconv.Quote(login))
+		if platformValue != "" {
+			content = setTopLevelScalar(content, "platform", strconv.Quote(platformValue))
+		}
+		return content, nil
+	})
 	if err != nil {
 		return Result{}, err
 	}
@@ -320,17 +304,10 @@ func (m Manager) SaveLogin(root, login, packageName string) (Result, error) {
 // ClearLogin removes the active login and platform selectors. A launch that
 // explicitly chooses “不选择” must not inherit an earlier QR-capable adapter.
 func (m Manager) ClearLogin(root string) (Result, error) {
-	current, err := m.Read(root, "alemon.config.yaml")
-	if err != nil && !strings.Contains(err.Error(), "no such file") {
-		return Result{}, err
-	}
-	content := ""
-	if err == nil {
-		content = stripYAMLBOM(current.Output)
-	}
-	content = removeTopLevelScalar(content, "login")
-	content = removeTopLevelScalar(content, "platform")
-	result, err := m.Write(root, "alemon.config.yaml", content)
+	result, err := m.UpdateRuntimeConfig(root, "", func(content string) (string, error) {
+		content = removeTopLevelScalar(stripYAMLBOM(content), "login")
+		return removeTopLevelScalar(content, "platform"), nil
+	})
 	if err != nil {
 		return Result{}, err
 	}
@@ -340,10 +317,16 @@ func (m Manager) ClearLogin(root string) (Result, error) {
 
 // setTopLevelScalar replaces or appends a quoted top-level YAML scalar.
 func setTopLevelScalar(content, key, value string) string {
-	pattern := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(key) + `:\s*.*$`)
+	pattern := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(key) + `:\s*([^#\r\n]*)(\s+#.*)?$`)
 	line := key + ": " + value
 	if pattern.MatchString(content) {
-		return pattern.ReplaceAllString(content, line)
+		return pattern.ReplaceAllStringFunc(content, func(match string) string {
+			parts := pattern.FindStringSubmatch(match)
+			if len(parts) == 3 {
+				return line + parts[2]
+			}
+			return line
+		})
 	}
 	content = strings.TrimRight(content, "\n")
 	if content != "" {
@@ -421,8 +404,10 @@ func mergeConfigValuesWithLegacy(content, namespace, legacyNamespace string, fie
 	lines = keepLastYAMLSections(lines, yamlKey(namespace)+":")
 	start, end := findYAMLSection(lines, yamlKey(namespace)+":")
 	existingLines := []string{}
+	header := yamlKey(namespace) + ":"
 	if start >= 0 {
 		existingLines = append(existingLines, lines[start+1:end]...)
+		header = lines[start]
 	} else {
 		existingLines = append(existingLines, legacyLines...)
 	}
@@ -443,38 +428,113 @@ func mergeConfigValuesWithLegacy(content, namespace, legacyNamespace string, fie
 		}
 		section[field.Name] = coerced
 	}
-	// Required and rule validation runs against the merged section so clearing
-	// a value cannot silently leave an invalid configuration behind.
+	// Configuration forms save each field independently. A missing required
+	// value must not prevent another field from being persisted; readiness is
+	// checked when a login connection is selected for launch. Validate only
+	// rules for values that are present.
 	for i := range fields {
 		field := &fields[i]
 		finalValue := section[field.Name]
-		if field.Required && (finalValue == nil || isConfigEmpty(finalValue)) && !field.DefaultConfigured() {
-			label := field.Description
-			if label == "" {
-				label = field.Name
-			}
-			return "", fmt.Errorf("请填写必填配置项：%s", label)
-		}
-		if messages := field.ValidateValue(finalValue); len(messages) > 0 {
+		if messages := field.ValidateRules(finalValue); len(messages) > 0 {
 			return "", fmt.Errorf("%s 配置无效：%s", field.Name, strings.Join(messages, "；"))
 		}
 	}
-	sectionLines := marshalSection(section, fields)
+	// Change only fields submitted by the form. Re-emitting the entire namespace
+	// used to discard user comments, anchors, ordering and unknown extension
+	// fields on every keystroke. The surgical update below retains every line
+	// outside a changed field (including untouched managed fields).
+	sectionLines := patchYAMLSection(existingLines, fields, values)
 	result := make([]string, 0, len(lines)+len(sectionLines)+1)
 	if start < 0 {
 		result = append(result, lines...)
 		if len(result) > 0 {
 			result = append(result, "")
 		}
-		result = append(result, yamlKey(namespace)+":")
+		result = append(result, header)
 		result = append(result, sectionLines...)
 	} else {
 		result = append(result, lines[:start]...)
-		result = append(result, yamlKey(namespace)+":")
+		result = append(result, header)
 		result = append(result, sectionLines...)
 		result = append(result, lines[end:]...)
 	}
 	return strings.Join(result, "\n") + "\n", nil
+}
+
+// patchYAMLSection applies direct namespace fields while preserving the source
+// representation of all untouched YAML. Complex submitted values are rendered
+// only for that field; scalar line comments remain attached to the new value.
+func patchYAMLSection(lines []string, fields []packageschema.Field, values map[string]any) []string {
+	fieldNames := map[string]bool{}
+	for _, field := range fields {
+		fieldNames[field.Name] = true
+	}
+	updated := map[string]any{}
+	for name, value := range values {
+		if fieldNames[name] {
+			updated[name] = value
+		}
+	}
+	if len(updated) == 0 {
+		return append([]string(nil), lines...)
+	}
+	result := make([]string, 0, len(lines)+len(updated))
+	seen := map[string]bool{}
+	for index := 0; index < len(lines); {
+		line := lines[index]
+		matched := ""
+		for name := range updated {
+			pattern := regexp.MustCompile(`^  ` + regexp.QuoteMeta(yamlKey(name)) + `\s*:`)
+			if pattern.MatchString(line) {
+				matched = name
+				break
+			}
+		}
+		if matched == "" {
+			result = append(result, line)
+			index++
+			continue
+		}
+		seen[matched] = true
+		// Consume this direct field and its nested body, but leave comments at
+		// namespace indentation for the next field untouched.
+		next := index + 1
+		for next < len(lines) {
+			candidate := lines[next]
+			if strings.HasPrefix(candidate, "  ") && !strings.HasPrefix(candidate, "    ") && strings.TrimSpace(candidate) != "" && !strings.HasPrefix(strings.TrimSpace(candidate), "#") {
+				break
+			}
+			next++
+		}
+		if !isConfigEmpty(updated[matched]) {
+			if scalar, ok := yamlScalarWithComment(updated[matched], line); ok {
+				result = append(result, "  "+yamlKey(matched)+": "+scalar)
+			} else {
+				appendYAMLLines(&result, 1, matched, updated[matched])
+			}
+		}
+		index = next
+	}
+	for _, field := range fields {
+		value, ok := updated[field.Name]
+		if !ok || seen[field.Name] || isConfigEmpty(value) {
+			continue
+		}
+		appendYAMLLines(&result, 1, field.Name, value)
+	}
+	return result
+}
+
+func yamlScalarWithComment(value any, oldLine string) (string, bool) {
+	switch value.(type) {
+	case map[string]any, []any:
+		return "", false
+	}
+	comment := ""
+	if match := regexp.MustCompile(`\s+(#.*)$`).FindStringSubmatch(oldLine); len(match) == 2 {
+		comment = " " + match[1]
+	}
+	return yamlScalar(value) + comment, true
 }
 
 // parseIndentedBlock decodes an indented YAML block (the body of a section)
@@ -590,7 +650,7 @@ func isConfigEmpty(value any) bool {
 func findYAMLSection(lines []string, key string) (int, int) {
 	start, end := -1, len(lines)
 	for index, line := range lines {
-		if strings.TrimSpace(line) == key {
+		if yamlSectionHeader(line, key) {
 			start = index
 			continue
 		}
@@ -600,6 +660,18 @@ func findYAMLSection(lines []string, key string) (int, int) {
 		}
 	}
 	return start, end
+}
+
+func yamlSectionHeader(line, key string) bool {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == key {
+		return true
+	}
+	if !strings.HasPrefix(trimmed, key) {
+		return false
+	}
+	rest := strings.TrimSpace(strings.TrimPrefix(trimmed, key))
+	return strings.HasPrefix(rest, "#")
 }
 
 // removeYAMLSection drops the top-level section matching key, preserving every

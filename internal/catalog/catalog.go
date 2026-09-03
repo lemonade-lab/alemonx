@@ -108,7 +108,9 @@ func Fetch(kind string) ([]Group, error) {
 // branch. The catalog documentation commonly links to main or a version tag,
 // neither of which is the distributable branch for a robot plugin.
 func catalogInstall(kind string, item Item) string {
-	if kind == "modules" {
+	// Connections and modules are normal npm dependencies. Only robot plugins
+	// are source worktrees, always checked out from their release branch.
+	if kind == "modules" || kind == "environment" {
 		return item.Name
 	}
 	if repository := repositoryURL(item.URL); repository != "" {

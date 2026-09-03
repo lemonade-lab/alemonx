@@ -240,6 +240,21 @@ func TestSetAppEnabledPreservesMappedAppsWithoutRewritingOtherConfig(t *testing.
 	}
 }
 
+func TestAutoPortEnabledAcceptsBooleanAndLegacyString(t *testing.T) {
+	root := t.TempDir()
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"bot"}`)
+	writeAppPageFixture(t, filepath.Join(root, "alemon.config.yaml"), "autoPort: true\n")
+	enabled, err := (Manager{}).AutoPortEnabled(root)
+	if err != nil || !enabled {
+		t.Fatalf("boolean autoPort = %v, %v", enabled, err)
+	}
+	writeAppPageFixture(t, filepath.Join(root, "alemon.config.yaml"), "autoPort: 'true'\n")
+	enabled, err = (Manager{}).AutoPortEnabled(root)
+	if err != nil || !enabled {
+		t.Fatalf("string autoPort = %v, %v", enabled, err)
+	}
+}
+
 // TestAppPortReachableReportsUnreachableWhenPortClosed verifies the probe
 // returns unreachable for a port with no listener (safe in sandboxed CI where
 // binding sockets is not permitted).

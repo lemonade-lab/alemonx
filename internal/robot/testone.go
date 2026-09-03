@@ -3,7 +3,6 @@ package robot
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -20,8 +19,12 @@ const defaultTestPort = 17117
 // TestPortInfo describes the robot's test (CBP/sandbox) port: the configured
 // top-level port in alemon.config.yaml and whether it was explicitly declared.
 type TestPortInfo struct {
-	Port       int  `json:"port"`
-	Configured bool `json:"configured"`
+	Port           int    `json:"port"`
+	ConfiguredPort int    `json:"configuredPort"`
+	ActualPort     int    `json:"actualPort"`
+	Configured     bool   `json:"configured"`
+	Drifted        bool   `json:"drifted"`
+	Source         string `json:"source"`
 }
 
 // TestPort returns the robot's test port from alemon.config.yaml (top-level
@@ -33,15 +36,15 @@ func (Manager) TestPort(root string) (TestPortInfo, error) {
 	}
 	data, err := os.ReadFile(filepath.Join(project, "alemon.config.yaml"))
 	if err != nil {
-		return TestPortInfo{Port: defaultTestPort}, nil
+		return TestPortInfo{Port: defaultTestPort, ConfiguredPort: defaultTestPort, ActualPort: defaultTestPort, Source: "default"}, nil
 	}
 	// Only a YAML top-level port is the robot's CBP/test port.
 	if match := regexp.MustCompile(`(?m)^port\s*:\s*['\"]?(\d+)`).FindStringSubmatch(string(data)); len(match) == 2 {
 		if configured, parseErr := strconv.Atoi(match[1]); parseErr == nil && configured > 0 && configured < 65536 {
-			return TestPortInfo{Port: configured, Configured: true}, nil
+			return TestPortInfo{Port: configured, ConfiguredPort: configured, ActualPort: configured, Configured: true, Source: "config"}, nil
 		}
 	}
-	return TestPortInfo{Port: defaultTestPort}, nil
+	return TestPortInfo{Port: defaultTestPort, ConfiguredPort: defaultTestPort, ActualPort: defaultTestPort, Source: "default"}, nil
 }
 
 // SaveTestPort writes the top-level port into alemon.config.yaml, replacing an
@@ -50,21 +53,12 @@ func (m Manager) SaveTestPort(root string, port int) (Result, error) {
 	if port < 1 || port > 65535 {
 		return Result{}, errors.New("服务端口应在 1-65535 之间")
 	}
-	project, err := projectPath(root)
+	result, err := m.UpdateRuntimeConfig(root, "", func(content string) (string, error) {
+		return setTopLevelScalar(content, "port", strconv.Itoa(port)), nil
+	})
 	if err != nil {
 		return Result{}, err
 	}
-	configFile := filepath.Join(project, "alemon.config.yaml")
-	content, err := os.ReadFile(configFile)
-	if err != nil && !os.IsNotExist(err) {
-		return Result{}, fmt.Errorf("无法读取运行配置：%w", err)
-	}
-	text := string(content)
-	result, err := m.Write(root, "alemon.config.yaml", setTopLevelScalar(text, "port", strconv.Itoa(port)))
-	if err != nil {
-		return Result{}, err
-	}
-	result.Path = configFile
 	result.Output = "服务端口已设置为 " + strconv.Itoa(port) + "。"
 	return result, nil
 }

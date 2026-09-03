@@ -243,8 +243,41 @@ const defaultAppPort = 18110
 // AppPortInfo describes the robot's application port: the configured value
 // (serverPort in alemon.config.yaml) and whether it was explicitly declared.
 type AppPortInfo struct {
-	Port       int  `json:"port"`
-	Configured bool `json:"configured"`
+	Port           int    `json:"port"`
+	ConfiguredPort int    `json:"configuredPort"`
+	ActualPort     int    `json:"actualPort"`
+	Configured     bool   `json:"configured"`
+	Drifted        bool   `json:"drifted"`
+	Source         string `json:"source,omitempty"`
+}
+
+// AutoPortEnabled reports whether AlemonJS may advance a requested port when
+// it is occupied. The configured port remains the durable user preference.
+func (Manager) AutoPortEnabled(root string) (bool, error) {
+	project, err := projectPath(root)
+	if err != nil {
+		return false, err
+	}
+	data, err := os.ReadFile(filepath.Join(project, "alemon.config.yaml"))
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	var config map[string]any
+	if err := yaml.Unmarshal(data, &config); err != nil {
+		return false, fmt.Errorf("无法解析运行配置：%w", err)
+	}
+	switch value := config["autoPort"].(type) {
+	case bool:
+		return value, nil
+	case string:
+		enabled, parseErr := strconv.ParseBool(strings.TrimSpace(value))
+		return enabled && parseErr == nil, nil
+	default:
+		return false, nil
+	}
 }
 
 // AppPort returns the robot's application port from alemon.config.yaml
@@ -260,10 +293,10 @@ func (Manager) AppPort(root string) (AppPortInfo, error) {
 	}
 	if match := regexp.MustCompile(`(?m)^serverPort\s*:\s*['\"]?(\d+)`).FindStringSubmatch(string(data)); len(match) == 2 {
 		if configured, parseErr := strconv.Atoi(match[1]); parseErr == nil && configured > 0 && configured < 65536 {
-			return AppPortInfo{Port: configured, Configured: true}, nil
+			return AppPortInfo{Port: configured, ConfiguredPort: configured, ActualPort: configured, Configured: true, Source: "config"}, nil
 		}
 	}
-	return AppPortInfo{Port: defaultAppPort}, nil
+	return AppPortInfo{Port: defaultAppPort, ConfiguredPort: defaultAppPort, ActualPort: defaultAppPort, Source: "default"}, nil
 }
 
 // SaveAppPort writes serverPort into alemon.config.yaml, replacing an existing
@@ -272,21 +305,12 @@ func (m Manager) SaveAppPort(root string, port int) (Result, error) {
 	if port < 1 || port > 65535 {
 		return Result{}, errors.New("应用端口应在 1-65535 之间")
 	}
-	project, err := projectPath(root)
+	result, err := m.UpdateRuntimeConfig(root, "", func(content string) (string, error) {
+		return setTopLevelScalar(content, "serverPort", strconv.Itoa(port)), nil
+	})
 	if err != nil {
 		return Result{}, err
 	}
-	configFile := filepath.Join(project, "alemon.config.yaml")
-	content, err := os.ReadFile(configFile)
-	if err != nil && !os.IsNotExist(err) {
-		return Result{}, fmt.Errorf("无法读取运行配置：%w", err)
-	}
-	text := string(content)
-	result, err := m.Write(root, "alemon.config.yaml", setTopLevelScalar(text, "serverPort", strconv.Itoa(port)))
-	if err != nil {
-		return Result{}, err
-	}
-	result.Path = configFile
 	result.Output = "应用端口已设置为 " + strconv.Itoa(port) + "。"
 	return result, nil
 }
@@ -340,10 +364,6 @@ func (m Manager) SetAppEnabled(root, packageName string, enabled bool) (Result, 
 	if strings.TrimSpace(packageName) == "" {
 		return Result{}, errors.New("请选择要启动的本地包")
 	}
-	project, err := projectPath(root)
-	if err != nil {
-		return Result{}, err
-	}
 	if enabled {
 		items, listErr := m.LocalPackages(root)
 		if listErr != nil {
@@ -366,44 +386,17 @@ func (m Manager) SetAppEnabled(root, packageName string, enabled bool) (Result, 
 			break
 		}
 	}
-	configFile := filepath.Join(project, "alemon.config.yaml")
-	content, err := os.ReadFile(configFile)
-	if err != nil && !os.IsNotExist(err) {
-		return Result{}, fmt.Errorf("无法读取运行配置：%w", err)
-	}
-	var config map[string]any
-	if len(strings.TrimSpace(string(content))) > 0 {
-		if err := yaml.Unmarshal(content, &config); err != nil {
-			return Result{}, fmt.Errorf("无法解析运行配置：%w", err)
-		}
-	}
-	if config == nil {
-		config = map[string]any{}
-	}
-	apps := map[string]bool{}
-	switch existing := config["apps"].(type) {
-	case []any:
-		for _, item := range existing {
-			if name, ok := item.(string); ok && name != "" {
-				apps[name] = true
+	result, err := m.UpdateRuntimeConfig(root, "", func(content string) (string, error) {
+		var config map[string]any
+		if len(strings.TrimSpace(content)) > 0 {
+			if err := yaml.Unmarshal([]byte(content), &config); err != nil {
+				return "", fmt.Errorf("无法解析运行配置：%w", err)
 			}
 		}
-	case []string:
-		for _, name := range existing {
-			if name != "" {
-				apps[name] = true
-			}
-		}
-	case map[string]any:
-		for name, active := range existing {
-			if value, ok := active.(bool); ok && name != "" {
-				apps[name] = value
-			}
-		}
-	}
-	apps[packageName] = enabled
-	text := setTopLevelBooleanMap(string(content), "apps", apps)
-	result, err := m.Write(root, "alemon.config.yaml", text)
+		apps := appsFromConfig(config["apps"])
+		apps[packageName] = enabled
+		return setTopLevelBooleanMap(content, "apps", apps), nil
+	})
 	if err != nil {
 		return Result{}, err
 	}
@@ -411,9 +404,33 @@ func (m Manager) SetAppEnabled(root, packageName string, enabled bool) (Result, 
 	if enabled {
 		state = "已启用"
 	}
-	result.Path = configFile
 	result.Output = packageName + " " + state + "。"
 	return result, nil
+}
+
+func appsFromConfig(existing any) map[string]bool {
+	apps := map[string]bool{}
+	switch values := existing.(type) {
+	case []any:
+		for _, item := range values {
+			if name, ok := item.(string); ok && name != "" {
+				apps[name] = true
+			}
+		}
+	case []string:
+		for _, name := range values {
+			if name != "" {
+				apps[name] = true
+			}
+		}
+	case map[string]any:
+		for name, active := range values {
+			if value, ok := active.(bool); ok && name != "" {
+				apps[name] = value
+			}
+		}
+	}
+	return apps
 }
 
 // ValidateEnabledBackpackRelease prevents an already-enabled legacy package
