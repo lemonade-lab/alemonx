@@ -3114,10 +3114,11 @@ export function Dashboard({
     newTab = false,
     preserveCurrentFeature = false
   ) {
+    const source = isWorkbenchBrowserPageURL(url) ? 'workbench' : 'address'
     setBrowserRequestedURL({
       id: `browser-command-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       kind: 'open',
-      source: 'address',
+      source,
       url,
       tabID,
       newTab
@@ -11382,6 +11383,7 @@ function ServiceWebviewWindow({
 type BrowserTab = {
   id: string
   query: string
+  title?: string
   pageURL: string
   frameKey: number
   history: string[]
@@ -11403,6 +11405,19 @@ type BrowserCommand = {
   url?: string
   tabID?: string
   newTab?: boolean
+}
+
+function isWorkbenchBrowserPageURL(value: string) {
+  try {
+    const target = new URL(value, window.location.origin)
+    return (
+      target.origin === window.location.origin &&
+      (target.pathname.startsWith('/api/v1/robot/') ||
+        target.pathname.startsWith('/api/v1/services/'))
+    )
+  } catch {
+    return false
+  }
 }
 
 function createBrowserHomeTab(): BrowserTab {
@@ -11587,7 +11602,7 @@ function MiniBrowserWindow({
     }
     if (
       target.origin !== window.location.origin ||
-      !target.pathname.startsWith('/api/v1/robot/')
+      !isWorkbenchBrowserPageURL(target.href)
     ) {
       setError('不允许将该地址作为工作台内部页面打开。')
       return
@@ -11652,6 +11667,14 @@ function MiniBrowserWindow({
             (next.port || (next.protocol === 'https:' ? '443' : '80'))
       )
       const shouldOpenNewTab = openInNewTab || !activeTab
+      // HTTPS is completely decided in the renderer: cross-site HTTPS always
+      // belongs to the system browser, so it must not wait for a backend host
+      // classification request or briefly create an embedded tab.
+      if (!sameSite && next.protocol === 'https:') {
+        await openInSystemBrowser(complete)
+        if (tabs.length === 0) window.setTimeout(onClose, 0)
+        return
+      }
       // HTTP targets get a visible tab before asynchronous classification. In
       // particular, this keeps a plugin Web UI open request reliable while its
       // host panel and the browser window are mounting concurrently.
@@ -11693,7 +11716,7 @@ function MiniBrowserWindow({
           if (next.protocol !== 'http:') throw reason
           scope = 'private'
         }
-        if (next.protocol === 'https:' || scope !== 'private') {
+        if (scope !== 'private') {
           await openInSystemBrowser(complete)
           if (pendingTabID) removeBrowserTab(pendingTabID)
           return
@@ -11744,9 +11767,26 @@ function MiniBrowserWindow({
     }))
     setError('')
   }
+  const syncTabTitle = (tabID: string) => {
+    const frame = frameRefs.current.get(tabID)
+    if (!frame) return
+    try {
+      const title = frame.contentDocument?.title.trim() ?? ''
+      if (!title) return
+      setTabs(current =>
+        current.map(tab =>
+          tab.id === tabID && tab.title !== title ? { ...tab, title } : tab
+        )
+      )
+    } catch {
+      // A direct document may be cross-origin. Its existing URL label remains
+      // the safe fallback, while proxied and workbench documents are readable.
+    }
+  }
   const syncFrameNavigation = (tabID: string) => {
     const frame = frameRefs.current.get(tabID)
     if (!frame) return
+    syncTabTitle(tabID)
     try {
       const frameURL = new URL(frame.contentWindow?.location.href ?? '')
       const match = frameURL.pathname.match(/^\/api\/v1\/browser\/http\/([^/]+)\/(.*)$/)
@@ -11840,6 +11880,17 @@ function MiniBrowserWindow({
     window.addEventListener('message', receive)
     return () => window.removeEventListener('message', receive)
   })
+  useEffect(() => {
+    // SPAs often replace document.title after their initial load. Every browser
+    // tab has its own persistent frame, so update titles independently without
+    // disturbing DOM or JavaScript state.
+    const timer = window.setInterval(() => {
+      tabs.forEach(tab => {
+        if (tab.pageURL) syncTabTitle(tab.id)
+      })
+    }, 800)
+    return () => window.clearInterval(timer)
+  }, [tabs])
   const closeTab = (id: string) => {
     const index = tabs.findIndex(tab => tab.id === id)
     const remaining = tabs.filter(tab => tab.id !== id)
@@ -11880,8 +11931,8 @@ function MiniBrowserWindow({
                 key={tab.id}
                 className={`flex min-w-28 max-w-52 items-center gap-1 rounded-t-md border border-b-0 px-2 py-1 text-xs ${tab.id === activeTabID ? 'bg-white text-slate-800 dark:bg-slate-700 dark:text-slate-100' : 'border-transparent text-slate-500 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700/70'}`}
               >
-                <button className="min-w-0 flex-1 truncate text-left" type="button" onClick={() => setActiveTabID(tab.id)} title={tab.query}>
-                  {tab.query || '新标签页'}
+                <button className="min-w-0 flex-1 truncate text-left" type="button" onClick={() => setActiveTabID(tab.id)} title={tab.title || tab.query || '新标签页'}>
+                  {tab.title || tab.query || '新标签页'}
                 </button>
                 <button className="shrink-0 rounded p-0.5 hover:bg-slate-200 dark:hover:bg-slate-600" type="button" onClick={() => closeTab(tab.id)} aria-label="关闭标签页">
                   <X className="size-3" />

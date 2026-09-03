@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -311,6 +312,14 @@ func (s *server) localServiceProxyWith(w http.ResponseWriter, r *http.Request, p
 			// strip it: doing so makes login succeed in the browser but guarantees
 			// every following upstream request is Unauthorized.
 			authorization := request.Header.Get("X-ALX-Upstream-Authorization")
+			if strings.TrimSpace(authorization) == "" && service.RewriteAPIBase {
+				for _, cookie := range r.Cookies() {
+					if cookie.Name == cookiePrefix+"napcat_credential" {
+						authorization = "Bearer " + cookie.Value
+						break
+					}
+				}
+			}
 			request.Header.Del("Authorization")
 			request.Header.Del("X-ALX-Upstream-Authorization")
 			if service.RewriteAPIBase && strings.HasPrefix(strings.TrimSpace(authorization), "Bearer ") {
@@ -343,6 +352,9 @@ func (s *server) localServiceProxyWith(w http.ResponseWriter, r *http.Request, p
 			if service.RewriteHTML && service.RewriteAPIBase {
 				injectEmbeddedAPIBootstrap(response, mount, target.Host)
 				rewriteNapcatWebUIAssets(response, mount)
+			}
+			if service.RewriteAPIBase && strings.HasSuffix(r.URL.Path, "/api/auth/login") {
+				captureNapcatCredential(response, cookiePrefix, mount)
 			}
 			isolateLocalServiceCookies(response, cookiePrefix, mount)
 			if service.Embed {
@@ -546,6 +558,34 @@ func isolateLocalServiceCookies(response *http.Response, prefix, mount string) {
 		cookie.Path = mount
 		response.Header.Add("Set-Cookie", cookie.String())
 	}
+}
+
+// captureNapcatCredential persists the credential returned by NapCat's own
+// login endpoint. This server-side fallback keeps later empty auth checks
+// working even if NapCat replaces the page's Fetch/XHR implementation.
+func captureNapcatCredential(response *http.Response, prefix, mount string) {
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return
+	}
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		return
+	}
+	_ = response.Body.Close()
+	response.Body = io.NopCloser(bytes.NewReader(body))
+	var payload struct {
+		Data struct {
+			Credential string `json:"Credential"`
+		} `json:"data"`
+	}
+	if json.Unmarshal(body, &payload) != nil || strings.TrimSpace(payload.Data.Credential) == "" {
+		return
+	}
+	response.Header.Add("Set-Cookie", (&http.Cookie{
+		// isolateLocalServiceCookies adds the service prefix and mount path.
+		Name: "napcat_credential", Value: strings.TrimSpace(payload.Data.Credential),
+		Path: mount, MaxAge: 12 * 60 * 60, HttpOnly: true, SameSite: http.SameSiteLaxMode,
+	}).String())
 }
 
 var frameAncestorsPattern = regexp.MustCompile(`(?i)(^|;)\s*frame-ancestors\s+[^;]*`)
