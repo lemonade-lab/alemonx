@@ -22,6 +22,8 @@ import (
 
 const MinimumNodeVersion = "22.22.3"
 
+var checkerRuntimeGOOS = runtime.GOOS
+
 type Check struct {
 	ID         string `json:"id"`
 	Name       string `json:"name"`
@@ -37,7 +39,12 @@ type Report struct {
 	Checks    []Check `json:"checks"`
 	CheckedAt string  `json:"checkedAt"`
 }
-type Checker struct{ timeout time.Duration }
+type Checker struct {
+	timeout            time.Duration
+	resolveBrowser     func() (string, string)
+	missingBrowserDeps func() []string
+	canLaunchHeadless  func(string) bool
+}
 
 func NewChecker() *Checker { return &Checker{timeout: 5 * time.Second} }
 
@@ -201,18 +208,18 @@ func (c *Checker) command(id, name, argument, suggestion string) Check {
 	return Check{ID: id, Name: name, Status: "ready", Detail: version}
 }
 
-// browser is optional because Puppeteer can download a compatible browser per
-// project. Browser binaries and their Linux runtime patches are intentionally
+// browser is optional because a project can download a compatible browser as
+// needed. Browser binaries and their Linux runtime environment are intentionally
 // reported separately so each can be installed independently.
 func (c *Checker) browser() Check {
-	path, name := resolveBrowserCommand()
+	path, name := c.browserCommand()
 	if path == "" {
 		return Check{
 			ID:         "browser",
 			Name:       "浏览器",
 			Status:     "missing",
 			Detail:     "未检测到 Chrome、Chromium 或 Edge",
-			Suggestion: "可选：使用 Puppeteer 浏览器自动化时，建议安装浏览器；Puppeteer 也可以自行下载浏览器。",
+			Suggestion: "可选：需要浏览器自动化时，请安装 Chrome、Chromium 或 Edge。",
 			Optional:   true,
 		}
 	}
@@ -234,31 +241,63 @@ func (c *Checker) browser() Check {
 }
 
 func (c *Checker) browserDependencies() Check {
-	if missing := missingBrowserDependencies(); len(missing) > 0 {
-		return Check{
-			ID:         "browser-dependencies",
-			Name:       "浏览器依赖补丁",
-			Status:     "missing",
-			Detail:     "缺少运行库：" + strings.Join(missing, "、"),
-			Suggestion: "可选：安装浏览器依赖补丁，避免 Puppeteer 无法启动无头浏览器。",
-			Optional:   true,
-		}
+	path, _ := c.browserCommand()
+	if path == "" {
+		return Check{ID: "browser-dependencies", Name: "浏览器自动化运行环境", Status: "ready", Detail: "未检测到浏览器，暂不检查", Optional: true}
 	}
-	path, _ := resolveBrowserCommand()
-	if runtime.GOOS == "linux" && path != "" && !browserCanLaunchHeadless(path) {
+	if !c.headlessBrowserCanLaunch(path) {
+		missing := []string(nil)
+		if checkerRuntimeGOOS == "linux" {
+			missing = c.browserMissingDependencies()
+		}
+		detail := "无头浏览器启动失败"
+		if len(missing) > 0 {
+			detail += "；可能缺少运行库：" + strings.Join(missing, "、")
+		}
 		return Check{
 			ID:         "browser-dependencies",
-			Name:       "浏览器依赖补丁",
+			Name:       "浏览器自动化运行环境",
 			Status:     "warning",
-			Detail:     "无头模式启动失败",
-			Suggestion: "可选：浏览器版本可读取，但无法以 Puppeteer 所需的无头模式启动；请检查沙箱权限、运行库与服务器环境。",
+			Detail:     detail,
+			Suggestion: "可选：请检查浏览器权限与运行环境；Linux 可安装浏览器自动化运行环境后重试。",
 			Optional:   true,
 		}
 	}
-	if runtime.GOOS != "linux" {
-		return Check{ID: "browser-dependencies", Name: "浏览器依赖补丁", Status: "ready", Detail: "当前系统无需额外补丁", Optional: true}
+	detail := "无头浏览器可用"
+	if checkerRuntimeGOOS == "linux" && browserFontDependencyMissing(c.browserMissingDependencies()) {
+		detail += "；缺少 fonts-liberation，截图与网页文字可能使用替代字体"
 	}
-	return Check{ID: "browser-dependencies", Name: "浏览器依赖补丁", Status: "ready", Detail: "浏览器运行库已就绪", Optional: true}
+	return Check{ID: "browser-dependencies", Name: "浏览器自动化运行环境", Status: "ready", Detail: detail, Optional: true}
+}
+
+func (c *Checker) browserCommand() (string, string) {
+	if c.resolveBrowser != nil {
+		return c.resolveBrowser()
+	}
+	return resolveBrowserCommand()
+}
+
+func (c *Checker) browserMissingDependencies() []string {
+	if c.missingBrowserDeps != nil {
+		return c.missingBrowserDeps()
+	}
+	return missingBrowserDependencies()
+}
+
+func (c *Checker) headlessBrowserCanLaunch(path string) bool {
+	if c.canLaunchHeadless != nil {
+		return c.canLaunchHeadless(path)
+	}
+	return browserCanLaunchHeadless(path)
+}
+
+func browserFontDependencyMissing(missing []string) bool {
+	for _, dependency := range missing {
+		if strings.Contains(dependency, "fonts-liberation") {
+			return true
+		}
+	}
+	return false
 }
 
 // normalizeCommandOutput keeps command diagnostics readable when a Windows
@@ -440,7 +479,7 @@ func packageInstalled(ctx context.Context, manager, packageName string) bool {
 	return probe.Run() == nil
 }
 
-// browserCanLaunchHeadless verifies the behavior Puppeteer actually needs,
+// browserCanLaunchHeadless verifies the behavior browser automation needs,
 // instead of treating a successful --version invocation as sufficient.
 func browserCanLaunchHeadless(path string) bool {
 	profile, err := os.MkdirTemp("", "alx-browser-check-")

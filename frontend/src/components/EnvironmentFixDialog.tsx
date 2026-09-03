@@ -57,6 +57,7 @@ export function EnvironmentFixDialog({
 }: Props) {
   const options = links[check.id] ?? []
   const [installing, setInstalling] = useState(false)
+  const [installed, setInstalled] = useState(false)
   const [message, setMessage] = useState('')
   const [browserDownloadNotice, setBrowserDownloadNotice] = useState('')
   const isLinux = platform.startsWith('linux/')
@@ -65,12 +66,11 @@ export function EnvironmentFixDialog({
     (['browser-dependencies', 'common-dependencies'].includes(check.id)
       ? isLinux
       : ['node', 'git', 'docker', 'browser', 'fonts'].includes(check.id))
-  const isMacOS = platform.startsWith('darwin/')
-  const isWindows = platform.startsWith('windows/')
   const isManagedNode = check.id === 'node'
   const isNodeUpgrade = isManagedNode && check.status === 'outdated'
   const installOnServer = async () => {
     setInstalling(true)
+    setInstalled(false)
     setMessage('')
     try {
       const response = await fetch('/api/v1/system/environment/install', {
@@ -84,6 +84,7 @@ export function EnvironmentFixDialog({
       }
       if (!response.ok) throw new Error(body.error || '服务器安装未完成。')
       setMessage(body.output || '服务器安装已完成，请重新检查环境。')
+      setInstalled(true)
       onInstalled?.()
     } catch (reason) {
       setMessage(
@@ -119,46 +120,13 @@ export function EnvironmentFixDialog({
           {check.suggestion || '请选择官方安装包，完成后返回环境面板重新检查。'}
         </p>
         {canInstallOnServer ? (
-          <div className="mt-5 grid gap-3 rounded-lg border border-brand-200 bg-brand-50/60 p-4">
-            <div className="grid gap-1">
-              <strong className="text-sm text-brand-900">在工作台内安装</strong>
-              <small className="text-xs leading-5 text-brand-800/75">
-                {isManagedNode
-                  ? '无感安装 NVM，并通过 NVM 安装和启用 Node.js LTS。'
-                  : check.id === 'fonts'
-                    ? '安装 Noto CJK/Emoji 字体，仅影响截图与 PDF 的文字渲染。'
-                    : isMacOS
-                      ? '使用 Homebrew 自动安装。'
-                      : isWindows
-                        ? '使用 WinGet 或 Chocolatey 自动安装。'
-                        : '使用系统包管理器自动安装。'}
-              </small>
-            </div>
-            <button
-              className="primary-button inline-flex w-fit items-center gap-2"
-              disabled={installing}
-              onClick={() => void installOnServer()}
-            >
-              {installing ? (
-                <Loader2 className="size-4 animate-spin" />
-              ) : (
-                <Download className="size-4" />
-              )}
-              {installing
-                ? '正在服务器安装…'
-                : `${isNodeUpgrade ? '升级' : '安装'} ${check.name}`}
-            </button>
-            {installing && (
-              <DownloadProgress
-                label={`正在安装 ${check.name}`}
-                detail={
-                  isManagedNode
-                    ? '正在配置 NVM 并安装 LTS 环境。'
-                    : '正在安装，请稍候。'
-                }
-              />
-            )}
-          </div>
+          installing && (
+            <DownloadProgress
+              className="mt-5"
+              label={`正在安装 ${check.name}`}
+              detail="正在安装，请稍候。"
+            />
+          )
         ) : (
           <div className="mt-5 grid gap-2">
             {options.map(option => (
@@ -193,14 +161,30 @@ export function EnvironmentFixDialog({
           />
         )}
         {message && (
-          <p className="mt-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs leading-5 text-slate-600">
+          <p className="mt-5 text-xs leading-5 text-slate-500">
             {message}
           </p>
         )}
-        <footer className="mt-5 flex justify-end">
-          <button className="primary-button" onClick={onClose}>
-            完成
-          </button>
+        <footer className="mt-6 flex justify-end gap-2">
+          {canInstallOnServer && !installed ? (
+            <>
+              <button className="secondary-button" disabled={installing} onClick={onClose}>
+                取消
+              </button>
+              <button
+                className="primary-button inline-flex items-center gap-2"
+                disabled={installing}
+                onClick={() => void installOnServer()}
+              >
+                {installing ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}
+                {installing ? '安装中…' : isNodeUpgrade ? '升级' : '安装'}
+              </button>
+            </>
+          ) : (
+            <button className="primary-button" onClick={onClose}>
+              {installed ? '完成' : '关闭'}
+            </button>
+          )}
         </footer>
       </section>
     </Modal>

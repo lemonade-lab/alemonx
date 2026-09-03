@@ -357,8 +357,11 @@ func TestBrowserDependenciesAndCommonDependenciesHaveSeparatePlans(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if patchPlan.Name != "浏览器依赖补丁" || !slices.Contains(patchPlan.Packages, "libnss3") {
+	if patchPlan.Name != "浏览器自动化运行环境" || !slices.Contains(patchPlan.Packages, "libnss3") {
 		t.Fatalf("browser dependency plan = %#v", patchPlan)
+	}
+	if !slices.Contains(patchPlan.Packages, "fonts-liberation") {
+		t.Fatalf("browser automation plan must retain fonts-liberation: %#v", patchPlan)
 	}
 	commonPlan, err := environmentInstallPlan("common-dependencies", "apt-get")
 	if err != nil {
@@ -512,7 +515,7 @@ func TestLinuxBrowserInstallFallsBackToDepsOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(message, "自带") {
+	if !strings.Contains(message, "浏览器自动化") || !strings.Contains(message, "chromium") {
 		t.Fatalf("deps-only fallback message = %q", message)
 	}
 }

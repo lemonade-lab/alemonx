@@ -4219,7 +4219,9 @@ export function Dashboard({
           minimized={foregroundLogsMinimized}
           root={root}
           taskId={foregroundLogTask?.id}
-          logTitle={foregroundLogTask ? `${foregroundLogTask.name} 日志` : undefined}
+          logTitle={
+            foregroundLogTask ? `${foregroundLogTask.name} 日志` : undefined
+          }
           zIndex={windowLayers.foregroundLogs}
           onInstallDependencies={() =>
             void api('POST', { root, action: 'install' })
@@ -11324,10 +11326,7 @@ function RuntimePanel({
             onRun(action, undefined, String(processID))
           }
         />
-        <ScriptControlCard
-          root={root}
-          onOpenLogs={onOpenScriptLogs}
-        />
+        <ScriptControlCard root={root} onOpenLogs={onOpenScriptLogs} />
       </section>
     </RobotPanel>
   )
@@ -12802,9 +12801,12 @@ function ControlCard({
         )}
         {showingSubNavigation ? (
           <>
-            <div className="control-subnav-header flex items-center gap-2 pt-2">
+            <div className="control-secondary-nav control-secondary-page grid gap-0.5">
               <button
-                className="inline-flex min-h-8 items-center gap-1 rounded-md px-2 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-800 dark:text-slate-400 dark:hover:bg-slate-700 dark:hover:text-slate-100"
+                className={cn(
+                  'flex gap-2 min-h-8 items-center rounded-md px-2 text-left text-xs transition-colors',
+                  'text-slate-500  hover:bg-slate-200/40 dark:text-slate-400 dark:hover:bg-slate-700/40'
+                )}
                 onClick={() => setRootNavigationVisible(true)}
                 aria-label={`返回机器人功能，当前为${primaryLabel}`}
               >
@@ -12845,32 +12847,32 @@ function ControlCard({
                 const hasSubitems = subitemsFor(item.id).length > 0
                 return (
                   <button
-                  className={cn(
-                    'flex min-h-8 items-center gap-2 rounded-md px-2 text-left text-xs font-medium transition-colors',
-                    activePrimary === item.id
-                      ? 'workspace-nav-active'
-                      : 'text-slate-600 hover:bg-slate-200/40 dark:text-slate-400 dark:hover:bg-slate-700/40'
-                  )}
-                  onClick={() => selectPrimary(item)}
-                  key={item.id}
-                >
-                  <i className="inline-flex size-4 items-center justify-center not-italic">
-                    {item.icon}
-                  </i>
-                  <span className="min-w-0 flex-1">{item.label}</span>
-                  {pendingCatalogPrimary === item.id && (
-                    <Loader2
-                      className="size-3.5 shrink-0 animate-spin text-brand-600"
-                      aria-label="正在加载子菜单"
-                    />
-                  )}
-                  {hasSubitems && pendingCatalogPrimary !== item.id && (
-                    <ChevronRight
-                      className="size-3.5 shrink-0 text-slate-400 dark:text-slate-500"
-                      aria-label="包含子菜单"
-                    />
-                  )}
-                </button>
+                    className={cn(
+                      'flex min-h-8 items-center gap-2 rounded-md px-2 text-left text-xs font-medium transition-colors',
+                      activePrimary === item.id
+                        ? 'workspace-nav-active'
+                        : 'text-slate-600 hover:bg-slate-200/40 dark:text-slate-400 dark:hover:bg-slate-700/40'
+                    )}
+                    onClick={() => selectPrimary(item)}
+                    key={item.id}
+                  >
+                    <i className="inline-flex size-4 items-center justify-center not-italic">
+                      {item.icon}
+                    </i>
+                    <span className="min-w-0 flex-1">{item.label}</span>
+                    {pendingCatalogPrimary === item.id && (
+                      <Loader2
+                        className="size-3.5 shrink-0 animate-spin text-brand-600"
+                        aria-label="正在加载子菜单"
+                      />
+                    )}
+                    {hasSubitems && pendingCatalogPrimary !== item.id && (
+                      <ChevronRight
+                        className="size-3.5 shrink-0 text-slate-400 dark:text-slate-500"
+                        aria-label="包含子菜单"
+                      />
+                    )}
+                  </button>
                 )
               })}
             {project && (
@@ -13536,7 +13538,7 @@ function ReadonlyConsoleContent({
       id={logsOnly ? 'foreground-logs' : 'terminal'}
       open={open}
       minimized={minimized}
-      title={logsOnly ? logTitle ?? '日志' : '终端'}
+      title={logsOnly ? (logTitle ?? '日志') : '终端'}
       subtitle={
         terminalOnly
           ? `仅限当前机器人目录 · ${shellDirectory ? `./${shellDirectory}` : '.'}`
@@ -13956,7 +13958,9 @@ function FullTerminal({
   })
   const updateSession = useCallback(
     (id: string, update: (current: LocalTerminal) => LocalTerminal) =>
-      setSessions(current => current.map(item => (item.id === id ? update(item) : item))),
+      setSessions(current =>
+        current.map(item => (item.id === id ? update(item) : item))
+      ),
     []
   )
   const createTerminal = useCallback(async () => {
@@ -14012,33 +14016,65 @@ function FullTerminal({
       return
     }
     let descriptors: Array<Pick<LocalTerminal, 'id' | 'key' | 'label'>> = []
-    try { descriptors = JSON.parse(saved) } catch { sessionStorage.removeItem(storageKey) }
+    try {
+      descriptors = JSON.parse(saved)
+    } catch {
+      sessionStorage.removeItem(storageKey)
+    }
     void Promise.all(
       descriptors.map(async descriptor => {
-        const response = await fetch(`/api/v1/terminal/sessions/${descriptor.id}`, { headers: { 'X-ALX-Terminal-Key': descriptor.key } })
+        const response = await fetch(
+          `/api/v1/terminal/sessions/${descriptor.id}`,
+          { headers: { 'X-ALX-Terminal-Key': descriptor.key } }
+        )
         if (!response.ok) return null
         const result = await response.json()
-        return { ...descriptor, cwd: result.cwd, shell: result.shell, output: result.output || '', truncated: result.truncated } as LocalTerminal
+        return {
+          ...descriptor,
+          cwd: result.cwd,
+          shell: result.shell,
+          output: result.output || '',
+          truncated: result.truncated
+        } as LocalTerminal
       })
     ).then(restored => {
       const items = restored.filter(Boolean) as LocalTerminal[]
-      if (items.length) { setSessions(items); setActiveID(items[0].id) }
-      else void createTerminal()
+      if (items.length) {
+        setSessions(items)
+        setActiveID(items[0].id)
+      } else void createTerminal()
     })
   }, [createTerminal, open, sessions.length, storageKey])
   useEffect(() => {
-    sessionStorage.setItem(storageKey, JSON.stringify(sessions.map(({ id, key, label }) => ({ id, key, label }))))
+    sessionStorage.setItem(
+      storageKey,
+      JSON.stringify(sessions.map(({ id, key, label }) => ({ id, key, label })))
+    )
   }, [sessions, storageKey])
   useEffect(() => {
     if (!open || !sessions.length) return
     const timer = window.setInterval(() => {
-      sessions.forEach(item => void fetch(`/api/v1/terminal/sessions/${item.id}/heartbeat`, { method: 'POST', headers: headersFor(item) }))
+      sessions.forEach(
+        item =>
+          void fetch(`/api/v1/terminal/sessions/${item.id}/heartbeat`, {
+            method: 'POST',
+            headers: headersFor(item)
+          })
+      )
     }, 30_000)
     return () => window.clearInterval(timer)
   }, [open, sessions])
   useEffect(() => {
     if (!open || !active || !hostRef.current) return
-    const terminal = new XTerm({ cursorBlink: false, cursorStyle: 'bar', cursorWidth: 1, convertEol: true, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 13, theme: { background: '#0f172a', foreground: '#e2e8f0' } })
+    const terminal = new XTerm({
+      cursorBlink: false,
+      cursorStyle: 'bar',
+      cursorWidth: 1,
+      convertEol: true,
+      fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+      fontSize: 13,
+      theme: { background: '#0f172a', foreground: '#e2e8f0' }
+    })
     const fit = new FitAddon()
     terminal.loadAddon(fit)
     terminal.open(hostRef.current)
@@ -14047,8 +14083,18 @@ function FullTerminal({
     writtenRef.current = active.output.length
     xtermRef.current = terminal
     fitRef.current = fit
-    const send = (input: string) => void fetch(`/api/v1/terminal/sessions/${active.id}/input`, { method: 'POST', headers: headersFor(active), body: JSON.stringify({ input }) })
-    const resize = ({ cols, rows }: { cols: number; rows: number }) => void fetch(`/api/v1/terminal/sessions/${active.id}/resize`, { method: 'POST', headers: headersFor(active), body: JSON.stringify({ cols, rows }) })
+    const send = (input: string) =>
+      void fetch(`/api/v1/terminal/sessions/${active.id}/input`, {
+        method: 'POST',
+        headers: headersFor(active),
+        body: JSON.stringify({ input })
+      })
+    const resize = ({ cols, rows }: { cols: number; rows: number }) =>
+      void fetch(`/api/v1/terminal/sessions/${active.id}/resize`, {
+        method: 'POST',
+        headers: headersFor(active),
+        body: JSON.stringify({ cols, rows })
+      })
     const input = terminal.onData(send)
     const size = terminal.onResize(resize)
     resize({ cols: terminal.cols, rows: terminal.rows })
@@ -14060,26 +14106,54 @@ function FullTerminal({
       }
     })
     observer.observe(hostRef.current)
-    return () => { observer.disconnect(); input.dispose(); size.dispose(); terminal.dispose(); xtermRef.current = null; fitRef.current = null }
+    return () => {
+      observer.disconnect()
+      input.dispose()
+      size.dispose()
+      terminal.dispose()
+      xtermRef.current = null
+      fitRef.current = null
+    }
   }, [active?.id, open])
   useEffect(() => {
-    if (!active || !xtermRef.current || active.output.length <= writtenRef.current) return
+    if (
+      !active ||
+      !xtermRef.current ||
+      active.output.length <= writtenRef.current
+    )
+      return
     xtermRef.current.write(active.output.slice(writtenRef.current))
     writtenRef.current = active.output.length
   }, [active?.output, active?.id])
   useEffect(() => {
     if (!open || !active) return
-    const source = new EventSource(`/api/v1/terminal/sessions/${active.id}/stream?key=${encodeURIComponent(active.key)}`)
+    const source = new EventSource(
+      `/api/v1/terminal/sessions/${active.id}/stream?key=${encodeURIComponent(active.key)}`
+    )
     source.onmessage = event => {
-      const payload = JSON.parse(event.data) as { text?: string; snapshot?: boolean; truncated?: boolean }
-      if (payload.truncated) updateSession(active.id, item => ({ ...item, truncated: true }))
-      if (payload.text) updateSession(active.id, item => ({ ...item, output: payload.snapshot ? payload.text || '' : `${item.output}${payload.text}` }))
+      const payload = JSON.parse(event.data) as {
+        text?: string
+        snapshot?: boolean
+        truncated?: boolean
+      }
+      if (payload.truncated)
+        updateSession(active.id, item => ({ ...item, truncated: true }))
+      if (payload.text)
+        updateSession(active.id, item => ({
+          ...item,
+          output: payload.snapshot
+            ? payload.text || ''
+            : `${item.output}${payload.text}`
+        }))
     }
     return () => source.close()
   }, [active?.id, active?.key, open, updateSession])
   useEffect(() => {
     if (!open || minimized) return
-    window.requestAnimationFrame(() => { fitRef.current?.fit(); xtermRef.current?.focus() })
+    window.requestAnimationFrame(() => {
+      fitRef.current?.fit()
+      xtermRef.current?.focus()
+    })
   }, [active?.id, minimized, open])
 
   const closeAll = () => {
@@ -14089,25 +14163,91 @@ function FullTerminal({
     sessionStorage.removeItem(storageKey)
     onClose()
   }
-  const copyOutput = () => active && void navigator.clipboard?.writeText(active.output)
+  const copyOutput = () =>
+    active && void navigator.clipboard?.writeText(active.output)
   const downloadOutput = () => {
     if (!active) return
-    const url = URL.createObjectURL(new Blob([active.output], { type: 'text/plain;charset=utf-8' }))
-    const anchor = document.createElement('a'); anchor.href = url; anchor.download = `${active.label}.log`; anchor.click(); URL.revokeObjectURL(url)
+    const url = URL.createObjectURL(
+      new Blob([active.output], { type: 'text/plain;charset=utf-8' })
+    )
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = `${active.label}.log`
+    anchor.click()
+    URL.revokeObjectURL(url)
   }
   return (
     <DesktopWindow
-      id="terminal" open={open} minimized={minimized} title="终端"
+      id="terminal"
+      open={open}
+      minimized={minimized}
+      title="终端"
       subtitle={active ? `${active.cwd} · ${active.shell}` : '本机交互式终端'}
-      icon={<Terminal className="size-4 shrink-0 text-brand-600 dark:text-brand-200" />}
-      onClose={closeAll} onMinimize={onMinimize} zIndex={zIndex} onActivate={onActivate}
-      initialPosition={{ left: 16, top: 16 }} width={760} height={650}
-      headerLeft={<nav className="readonly-console-tabs" aria-label="终端列表">{sessions.map(item => <button className={cn('readonly-console-tab', activeID === item.id && 'active')} key={item.id} onClick={() => setActiveID(item.id)}><span>{item.label}</span><X className="size-3" onClick={event => { event.stopPropagation(); closeTerminal(item) }} /></button>)}</nav>}
-      actions={<div className="flex items-center gap-1"><button className="icon-button size-8 p-0" onClick={copyOutput} title="复制输出"><ClipboardList className="size-4" /></button><button className="icon-button size-8 p-0" onClick={downloadOutput} title="下载输出"><Download className="size-4" /></button></div>}
+      icon={
+        <Terminal className="size-4 shrink-0 text-brand-600 dark:text-brand-200" />
+      }
+      onClose={closeAll}
+      onMinimize={onMinimize}
+      zIndex={zIndex}
+      onActivate={onActivate}
+      initialPosition={{ left: 16, top: 16 }}
+      width={760}
+      height={650}
+      headerLeft={
+        <nav className="readonly-console-tabs" aria-label="终端列表">
+          {sessions.map(item => (
+            <button
+              className={cn(
+                'readonly-console-tab',
+                activeID === item.id && 'active'
+              )}
+              key={item.id}
+              onClick={() => setActiveID(item.id)}
+            >
+              <span>{item.label}</span>
+              <X
+                className="size-3"
+                onClick={event => {
+                  event.stopPropagation()
+                  closeTerminal(item)
+                }}
+              />
+            </button>
+          ))}
+        </nav>
+      }
+      actions={
+        <div className="flex items-center gap-1">
+          <button
+            className="icon-button size-8 p-0"
+            onClick={copyOutput}
+            title="复制输出"
+          >
+            <ClipboardList className="size-4" />
+          </button>
+          <button
+            className="icon-button size-8 p-0"
+            onClick={downloadOutput}
+            title="下载输出"
+          >
+            <Download className="size-4" />
+          </button>
+        </div>
+      }
     >
       <div className="flex h-full min-h-0 flex-col gap-2 p-2">
-        {active?.truncated && <p className="text-xs text-amber-600">早期输出已被循环缓冲清理；终端仍在运行。</p>}
-        <div className="readonly-console-shell min-h-0 flex-1"><div ref={hostRef} className="h-full" onPointerDown={() => xtermRef.current?.focus()} /></div>
+        {active?.truncated && (
+          <p className="text-xs text-amber-600">
+            早期输出已被循环缓冲清理；终端仍在运行。
+          </p>
+        )}
+        <div className="readonly-console-shell min-h-0 flex-1">
+          <div
+            ref={hostRef}
+            className="h-full"
+            onPointerDown={() => xtermRef.current?.focus()}
+          />
+        </div>
       </div>
     </DesktopWindow>
   )

@@ -20,7 +20,7 @@ type EnvironmentInstallPlan struct {
 	Packages       []string
 	// BrowserPackage is the system browser binary selected for RPM hosts when
 	// the configured repositories provide one. Empty means the plan installs
-	// only the fixed runtime libraries and fonts and Puppeteer uses the
+	// only the fixed runtime libraries and fonts and browser automation uses the
 	// browser it downloads per project.
 	BrowserPackage string
 }
@@ -99,14 +99,14 @@ func environmentInstallPlan(checkID, manager string) (EnvironmentInstallPlan, er
 			plan.Packages = []string{"chromium"}
 		}
 	case "browser-dependencies":
-		plan.Name = "浏览器依赖补丁"
+		plan.Name = "浏览器自动化运行环境"
 		switch manager {
 		case "apt-get", "dnf", "yum", "apk", "pacman":
 			for _, group := range browserDependencyPackageCandidates(manager) {
 				plan.Packages = append(plan.Packages, group[0])
 			}
 		default:
-			return EnvironmentInstallPlan{}, errors.New("当前系统无需安装浏览器依赖补丁")
+			return EnvironmentInstallPlan{}, errors.New("当前系统无需安装浏览器自动化运行环境")
 		}
 	case "common-dependencies":
 		plan.Name = "常用环境依赖"
@@ -171,7 +171,7 @@ var rpmBrowserPackageAvailable = func(manager string) string {
 }
 
 // browserDependencyPackagesForHost is deliberately limited to RPM hosts.
-// Puppeteer often downloads Chromium itself there, but it still needs these
+// Browser automation may download Chromium itself there, but it still needs these
 // host libraries and fonts to start. Keep this package list host-owned rather
 // than accepting arbitrary browser input from the UI.
 func browserDependencyPackagesForHost() []string {
@@ -232,7 +232,7 @@ func browserPackageCandidates(manager string) [][]string {
 }
 
 // browserCorePackageCandidates are the runtime libraries a headless browser
-// needs to start. A missing core library can break Puppeteer.
+// needs to start. A missing core library can break browser automation.
 func browserCorePackageCandidates() [][]string {
 	return [][]string{
 		{"alsa-lib"},
@@ -253,7 +253,7 @@ func browserCorePackageCandidates() [][]string {
 	}
 }
 
-// debianBrowserCorePackageCandidates are the Puppeteer-documented runtime
+// debianBrowserCorePackageCandidates are the browser automation runtime
 // libraries for Debian/Ubuntu. The -t64 variants cover Ubuntu 24.04's package
 // renames.
 func debianBrowserCorePackageCandidates() [][]string {
@@ -471,7 +471,7 @@ func InstallEnvironment(ctx context.Context, checkID string) (string, error) {
 
 // installBrowserEnvironment installs only a browser binary. Runtime libraries
 // are intentionally handled by installBrowserDependencies so users can repair
-// a downloaded Puppeteer browser without installing another system browser.
+// a downloaded automation browser without installing another system browser.
 func installBrowserEnvironment(ctx context.Context, plan EnvironmentInstallPlan) (string, error) {
 	manager := plan.PackageManager
 	if manager == "dnf" || manager == "yum" {
@@ -529,9 +529,9 @@ func installBrowserDependencies(ctx context.Context, plan EnvironmentInstallPlan
 		}
 	}
 	if len(failed) == 0 {
-		return "已安装浏览器依赖补丁。请重新检查环境确认。", nil
+		return "已安装浏览器自动化运行环境。请重新检查环境确认。", nil
 	}
-	return fmt.Sprintf("已安装部分浏览器依赖补丁；以下软件包未找到：%s。请检查软件源或网络后重试。", strings.Join(failed, "、")), nil
+	return fmt.Sprintf("已安装部分浏览器自动化运行环境；以下软件包未找到：%s。请检查软件源或网络后重试。", strings.Join(failed, "、")), nil
 }
 
 // installRPMBrowserEnvironment installs the fixed runtime libraries and fonts
@@ -620,7 +620,7 @@ func installRPMBrowserEnvironment(ctx context.Context, plan EnvironmentInstallPl
 	if reposPrepared {
 		browserNote = "已由 ALemonX 启用 EPEL/CRB 并刷新软件源，但仍未找到 Chromium、Chrome 或 Edge 软件包"
 	}
-	return fmt.Sprintf("已在当前主机安装浏览器运行库；%s。仅当项目已自带或下载浏览器时才能进行 Puppeteer 自动化，请重新检查环境确认。", browserNote), nil
+	return fmt.Sprintf("已在当前主机安装浏览器自动化运行环境；%s。仅当项目已自带或下载浏览器时才能进行浏览器自动化，请重新检查环境确认。", browserNote), nil
 }
 
 // installLinuxBrowserEnvironment installs the runtime libraries and the
@@ -668,7 +668,7 @@ func installLinuxBrowserEnvironment(ctx context.Context, plan EnvironmentInstall
 	if browserName == "" && len(failed) == total {
 		return "", fmt.Errorf("服务器安装 %s 失败：以下软件包均未安装：%s。请检查软件源或网络后重试", plan.Name, strings.Join(failed, "、"))
 	}
-	return fmt.Sprintf("已在当前主机安装浏览器运行库；以下软件包未能安装：%s（可能影响浏览器自动化功能）。Puppeteer 将使用项目自带的浏览器；如软件源确实缺少这些包，请检查软件源或网络后重试。请重新检查环境确认。", strings.Join(failed, "、")), nil
+	return fmt.Sprintf("已在当前主机安装浏览器自动化运行环境；以下软件包未能安装：%s（可能影响浏览器自动化功能）。如软件源确实缺少这些包，请检查软件源或网络后重试。请重新检查环境确认。", strings.Join(failed, "、")), nil
 }
 
 // installFontsEnvironment installs the optional Noto CJK/Emoji fonts. Fonts

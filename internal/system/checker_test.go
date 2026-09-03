@@ -1,6 +1,9 @@
 package system
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestNodeVersionAtLeast(t *testing.T) {
 	for _, test := range []struct {
@@ -42,6 +45,50 @@ func TestOptionalFontsDoesNotBlockEnvironment(t *testing.T) {
 	checks := []Check{{ID: "fonts", Status: "missing", Optional: true}, {ID: "node", Status: "ready"}}
 	if !checksAreUsable(checks) {
 		t.Fatal("optional fonts should not block the environment")
+	}
+}
+
+func TestBrowserAutomationEnvironmentSkipsWithoutBrowser(t *testing.T) {
+	checker := &Checker{
+		resolveBrowser: func() (string, string) { return "", "" },
+		missingBrowserDeps: func() []string {
+			t.Fatal("browser dependencies must not be checked without a browser")
+			return nil
+		},
+	}
+	check := checker.browserDependencies()
+	if check.Status != "ready" || check.Name != "浏览器自动化运行环境" || !strings.Contains(check.Detail, "暂不检查") {
+		t.Fatalf("browser automation check = %#v", check)
+	}
+}
+
+func TestBrowserAutomationEnvironmentKeepsFontNoticeNonBlocking(t *testing.T) {
+	previousOS := checkerRuntimeGOOS
+	checkerRuntimeGOOS = "linux"
+	t.Cleanup(func() { checkerRuntimeGOOS = previousOS })
+	checker := &Checker{
+		resolveBrowser:     func() (string, string) { return "/browser", "Chromium" },
+		canLaunchHeadless:  func(string) bool { return true },
+		missingBrowserDeps: func() []string { return []string{"fonts-liberation"} },
+	}
+	check := checker.browserDependencies()
+	if check.Status != "ready" || !strings.Contains(check.Detail, "无头浏览器可用") || !strings.Contains(check.Detail, "fonts-liberation") {
+		t.Fatalf("browser automation check = %#v", check)
+	}
+}
+
+func TestBrowserAutomationEnvironmentWarnsAfterHeadlessFailure(t *testing.T) {
+	previousOS := checkerRuntimeGOOS
+	checkerRuntimeGOOS = "linux"
+	t.Cleanup(func() { checkerRuntimeGOOS = previousOS })
+	checker := &Checker{
+		resolveBrowser:     func() (string, string) { return "/browser", "Chromium" },
+		canLaunchHeadless:  func(string) bool { return false },
+		missingBrowserDeps: func() []string { return []string{"libnss3"} },
+	}
+	check := checker.browserDependencies()
+	if check.Status != "warning" || !strings.Contains(check.Detail, "无头浏览器启动失败") || !strings.Contains(check.Detail, "libnss3") {
+		t.Fatalf("browser automation check = %#v", check)
 	}
 }
 
