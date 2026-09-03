@@ -117,6 +117,9 @@ func (s *server) robotScriptsHandler(w http.ResponseWriter, r *http.Request) {
 			for _, task := range s.operations {
 				if task.Root == root && task.Action == "script:"+item.Name {
 					entry.Record = task.Output
+					if entry.TaskID == "" {
+						entry.TaskID = task.ID
+					}
 					break
 				}
 			}

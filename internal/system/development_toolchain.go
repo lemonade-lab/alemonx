@@ -83,6 +83,9 @@ func DevelopmentCommandEnvironment() []string {
 
 func developmentCommandDirectories() []string {
 	directories := []string{}
+	if bin := NVMNodeBin(); bin != "" {
+		directories = append(directories, bin)
+	}
 	if bin := ManagedNodeBin(); bin != "" {
 		directories = append(directories, bin)
 	}
@@ -100,7 +103,6 @@ func developmentCommandDirectories() []string {
 			filepath.Join(home, ".asdf", "shims"),
 		)
 		for _, pattern := range []string{
-			filepath.Join(home, ".nvm", "versions", "node", "*", "bin"),
 			filepath.Join(home, ".local", "share", "fnm", "node-versions", "*", "installation", "bin"),
 		} {
 			matches, _ := filepath.Glob(pattern)

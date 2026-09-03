@@ -20,7 +20,7 @@ import (
 	"golang.org/x/text/transform"
 )
 
-const minimumNodeVersion = "22.22.3"
+const MinimumNodeVersion = "22.22.3"
 
 type Check struct {
 	ID         string `json:"id"`
@@ -42,13 +42,21 @@ type Checker struct{ timeout time.Duration }
 func NewChecker() *Checker { return &Checker{timeout: 5 * time.Second} }
 
 func (c *Checker) CheckGoal(goalID, variant string) Report {
-	checks := []Check{c.browser(), c.fonts()}
+	checks := []Check{
+		c.command("node", "NodeJS", "--version", "请安装 Node.js LTS 版本后重新检查。"),
+		c.command("git", "Git", "--version", "请安装 Git 后重新检查。"),
+		c.fonts(),
+		c.browser(),
+		c.browserDependencies(),
+		c.commonDependencies(),
+	}
+	nodeRequired, gitRequired := false, false
 	switch goalID {
 	case "install", "develop":
-		checks = append(checks, c.command("node", "Node.js", "--version", "请安装 Node.js LTS 版本后重新检查。"), c.command("git", "Git", "--version", "请安装 Git 后重新检查。"))
+		nodeRequired, gitRequired = true, true
 	case "web":
 		if variant == "clean" {
-			checks = append(checks, c.command("node", "Node.js", "--version", "请安装 Node.js LTS 版本后重新检查。"), c.command("git", "Git", "--version", "请安装 Git 后重新检查。"))
+			nodeRequired, gitRequired = true, true
 		} else {
 			checks = append(checks, c.command("docker", "Docker", "--version", "请安装并启动 Docker Desktop 后重新检查。"))
 		}
@@ -59,11 +67,14 @@ func (c *Checker) CheckGoal(goalID, variant string) Report {
 			// Git 发布实际只需要 Node.js 与 Git。Yarn/PNPM 会在执行时
 			// 通过 npx 临时运行，jq 也没有参与当前发布链路，不能把它们
 			// 误报为新用户必须全局安装的环境。
-			checks = append(checks, c.command("node", "Node.js", "--version", "请安装 Node.js LTS 版本后重新检查。"), c.command("git", "Git", "--version", "请安装 Git 后重新检查。"))
+			nodeRequired, gitRequired = true, true
 		} else {
-			checks = append(checks, c.command("node", "Node.js", "--version", "请安装 Node.js LTS 版本后重新检查。"), c.command("npm", "npm", "--version", "请随 Node.js 一并安装 npm 后重新检查。"))
+			nodeRequired = true
+			checks = append(checks, c.command("npm", "npm", "--version", "请随 Node.js 一并安装 npm 后重新检查。"))
 		}
 	}
+	checks[0].Optional = !nodeRequired
+	checks[1].Optional = !gitRequired
 	ready := platformSupported() && checksAreUsable(checks)
 	return Report{goalID, ready, runtime.GOOS + "/" + runtime.GOARCH, checks, time.Now().Format(time.RFC3339)}
 }
@@ -72,7 +83,7 @@ func (c *Checker) CheckGoal(goalID, variant string) Report {
 // in screenshots or PDFs, never browser startup, so they must not influence
 // the browser environment result.
 func (c *Checker) fonts() Check {
-	check := Check{ID: "fonts", Name: "系统字体（CJK/Emoji）", Status: "ready", Detail: "系统已内置", Optional: true}
+	check := Check{ID: "fonts", Name: "系统字体", Status: "ready", Detail: "系统已内置 CJK/Emoji 字体", Optional: true}
 	if runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
 		return check
 	}
@@ -83,6 +94,29 @@ func (c *Checker) fonts() Check {
 	check.Detail = "未检测到中文/Emoji 字体"
 	check.Suggestion = "可选：安装 Noto CJK/Emoji 字体，避免机器人图片消息、无头浏览器截图或导出 PDF 时缺字。"
 	return check
+}
+
+func (c *Checker) commonDependencies() Check {
+	if runtime.GOOS != "linux" {
+		return Check{ID: "common-dependencies", Name: "常用环境依赖", Status: "ready", Detail: "当前系统已提供常用命令", Optional: true}
+	}
+	missing := make([]string, 0, 3)
+	for _, command := range []string{"curl", "tar", "unzip"} {
+		if _, err := ResolveCommand(command); err != nil {
+			missing = append(missing, command)
+		}
+	}
+	if len(missing) == 0 {
+		return Check{ID: "common-dependencies", Name: "常用环境依赖", Status: "ready", Detail: "curl、tar、unzip 已就绪", Optional: true}
+	}
+	return Check{
+		ID:         "common-dependencies",
+		Name:       "常用环境依赖",
+		Status:     "missing",
+		Detail:     "缺少：" + strings.Join(missing, "、"),
+		Suggestion: "可选：安装常用环境依赖，便于下载、解压和管理开发工具。",
+		Optional:   true,
+	}
 }
 
 func hasCJKFonts() bool {
@@ -155,31 +189,30 @@ func (c *Checker) command(id, name, argument, suggestion string) Check {
 		}
 		version += "已自动修复当前服务 PATH"
 	}
-	if id == "node" && !nodeVersionAtLeast(rawVersion, minimumNodeVersion) {
+	if id == "node" && !nodeVersionAtLeast(rawVersion, MinimumNodeVersion) {
 		return Check{
 			ID:         id,
 			Name:       name,
 			Status:     "outdated",
-			Detail:     version + " · 低于最低要求 v" + minimumNodeVersion,
-			Suggestion: "当前 Node.js 版本低于 v" + minimumNodeVersion + "。建议升级；不限制继续使用，但部分项目或依赖可能无法正常运行。",
+			Detail:     version + " · 低于最低要求 v" + MinimumNodeVersion,
+			Suggestion: "当前 Node.js 版本低于 v" + MinimumNodeVersion + "。建议升级；不限制继续使用，但部分项目或依赖可能无法正常运行。",
 		}
 	}
 	return Check{ID: id, Name: name, Status: "ready", Detail: version}
 }
 
 // browser is optional because Puppeteer can download a compatible browser per
-// project. A system Chrome/Chromium/Edge still makes automation faster and
-// more predictable, especially on servers where the package must use shared
-// graphics libraries.
+// project. Browser binaries and their Linux runtime patches are intentionally
+// reported separately so each can be installed independently.
 func (c *Checker) browser() Check {
 	path, name := resolveBrowserCommand()
 	if path == "" {
 		return Check{
 			ID:         "browser",
-			Name:       "浏览器及依赖包",
+			Name:       "浏览器",
 			Status:     "missing",
 			Detail:     "未检测到 Chrome、Chromium 或 Edge",
-			Suggestion: "可选：使用 Puppeteer 浏览器自动化时，建议安装浏览器及依赖包；Puppeteer 也可以自行下载浏览器。",
+			Suggestion: "可选：使用 Puppeteer 浏览器自动化时，建议安装浏览器；Puppeteer 也可以自行下载浏览器。",
 			Optional:   true,
 		}
 	}
@@ -189,35 +222,43 @@ func (c *Checker) browser() Check {
 	if ctx.Err() != nil || err != nil {
 		return Check{
 			ID:         "browser",
-			Name:       "浏览器及依赖包",
+			Name:       "浏览器",
 			Status:     "warning",
 			Detail:     "已找到 " + name + "，但无法正常启动",
-			Suggestion: "可选：请修复浏览器或重新安装浏览器及依赖包后重试。",
+			Suggestion: "可选：请修复或重新安装浏览器后重试。",
 			Optional:   true,
 		}
 	}
 	version := strings.TrimSpace(strings.Split(normalizeCommandOutput(output), "\n")[0])
+	return Check{ID: "browser", Name: "浏览器", Status: "ready", Detail: version, Optional: true}
+}
+
+func (c *Checker) browserDependencies() Check {
 	if missing := missingBrowserDependencies(); len(missing) > 0 {
 		return Check{
-			ID:         "browser",
-			Name:       "浏览器及依赖包",
-			Status:     "warning",
-			Detail:     version + " · 缺少依赖包：" + strings.Join(missing, "、"),
-			Suggestion: "可选：建议安装浏览器依赖包，避免 Puppeteer 无法启动无头浏览器。",
+			ID:         "browser-dependencies",
+			Name:       "浏览器依赖补丁",
+			Status:     "missing",
+			Detail:     "缺少运行库：" + strings.Join(missing, "、"),
+			Suggestion: "可选：安装浏览器依赖补丁，避免 Puppeteer 无法启动无头浏览器。",
 			Optional:   true,
 		}
 	}
-	if !browserCanLaunchHeadless(path) {
+	path, _ := resolveBrowserCommand()
+	if runtime.GOOS == "linux" && path != "" && !browserCanLaunchHeadless(path) {
 		return Check{
-			ID:         "browser",
-			Name:       "浏览器及依赖包",
+			ID:         "browser-dependencies",
+			Name:       "浏览器依赖补丁",
 			Status:     "warning",
-			Detail:     version + " · 无头模式启动失败",
+			Detail:     "无头模式启动失败",
 			Suggestion: "可选：浏览器版本可读取，但无法以 Puppeteer 所需的无头模式启动；请检查沙箱权限、运行库与服务器环境。",
 			Optional:   true,
 		}
 	}
-	return Check{ID: "browser", Name: "浏览器及依赖包", Status: "ready", Detail: version, Optional: true}
+	if runtime.GOOS != "linux" {
+		return Check{ID: "browser-dependencies", Name: "浏览器依赖补丁", Status: "ready", Detail: "当前系统无需额外补丁", Optional: true}
+	}
+	return Check{ID: "browser-dependencies", Name: "浏览器依赖补丁", Status: "ready", Detail: "浏览器运行库已就绪", Optional: true}
 }
 
 // normalizeCommandOutput keeps command diagnostics readable when a Windows
@@ -474,9 +515,13 @@ func parseNodeVersion(value string) ([3]int, bool) {
 }
 
 // ResolveCommand resolves a prerequisite without relying solely on the PATH
-// captured when AlemonX started. The managed Node runtime deliberately wins
-// over an older system Node so installs immediately use the LTS chosen here.
+// captured when AlemonX started. An NVM-selected Node runtime deliberately
+// wins over an older system Node so installs immediately use the LTS chosen
+// through the workbench.
 func ResolveCommand(name string) (string, error) {
+	if path := nvmNodeCommand(name); path != "" {
+		return path, nil
+	}
 	if path := ManagedNodeCommand(name); path != "" {
 		return path, nil
 	}
@@ -562,6 +607,15 @@ func windowsCommandDirectories(name string) []string {
 		}
 		if localAppData := os.Getenv("LOCALAPPDATA"); localAppData != "" {
 			directories = append(directories, filepath.Join(localAppData, "Programs", "nodejs"))
+		}
+		if appData := os.Getenv("APPDATA"); appData != "" {
+			directories = append(directories, filepath.Join(appData, "nvm"))
+		}
+	case "nvm":
+		for _, root := range programFiles {
+			if root != "" {
+				directories = append(directories, filepath.Join(root, "nvm"))
+			}
 		}
 		if appData := os.Getenv("APPDATA"); appData != "" {
 			directories = append(directories, filepath.Join(appData, "nvm"))

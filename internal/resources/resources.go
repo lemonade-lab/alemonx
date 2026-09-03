@@ -33,7 +33,10 @@ import (
 	"alemonx/internal/workspace"
 )
 
-const versionMarker = ".alemonx-version"
+const (
+	versionMarker    = ".alemonx-version"
+	nvmBundleVersion = "0.40.7"
+)
 
 // Tool describes one runtime package and the entry point used to run it.
 type Tool struct {
@@ -128,6 +131,83 @@ func ToolCommand(name string) (string, []string, bool) {
 		return "", nil, false
 	}
 	return "node", []string{entry}, true
+}
+
+// MaterializeNVM writes the reviewed, embedded NVM bundle to target. The
+// target is versioned by its caller, so existing Node versions are never
+// overwritten by a bundle refresh. NVM is intentionally not installed into a
+// shell profile: callers source nvm.sh only in the process that needs it.
+func MaterializeNVM(target string) (bool, error) {
+	mu.Lock()
+	defer mu.Unlock()
+	if embedded == nil {
+		return false, errors.New("嵌入资源未初始化")
+	}
+	if nvmBundleComplete(target) {
+		return false, nil
+	}
+	if _, err := os.Stat(target); err == nil {
+		return false, errors.New("内置 NVM 目录不完整，请删除后重新安装")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return false, err
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		return false, err
+	}
+	staging, err := os.MkdirTemp(filepath.Dir(target), ".nvm-")
+	if err != nil {
+		return false, err
+	}
+	defer os.RemoveAll(staging)
+	if err := copyEmbeddedDirectory("nvm/v"+nvmBundleVersion, staging); err != nil {
+		return false, fmt.Errorf("物化内置 NVM 失败：%w", err)
+	}
+	if err := os.WriteFile(filepath.Join(staging, versionMarker), []byte(nvmBundleVersion+"\n"), 0o600); err != nil {
+		return false, err
+	}
+	if err := os.Chmod(filepath.Join(staging, "nvm-exec"), 0o700); err != nil {
+		return false, err
+	}
+	if err := os.Rename(staging, target); err != nil {
+		if nvmBundleComplete(target) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+func nvmBundleComplete(target string) bool {
+	for _, name := range []string{"nvm.sh", "nvm-exec", "LICENSE.md", versionMarker} {
+		info, err := os.Stat(filepath.Join(target, name))
+		if err != nil || info.IsDir() {
+			return false
+		}
+	}
+	data, err := os.ReadFile(filepath.Join(target, versionMarker))
+	return err == nil && strings.TrimSpace(string(data)) == nvmBundleVersion
+}
+
+func copyEmbeddedDirectory(source, target string) error {
+	if err := fs.WalkDir(embedded, source, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		relative := strings.TrimPrefix(path, source)
+		relative = strings.TrimPrefix(relative, "/")
+		output := filepath.Join(target, relative)
+		if entry.IsDir() {
+			return os.MkdirAll(output, 0o700)
+		}
+		data, err := fs.ReadFile(embedded, path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(output, data, 0o600)
+	}); err != nil {
+		return err
+	}
+	return nil
 }
 
 // toolDirectory returns the stable workspace directory for a tool,

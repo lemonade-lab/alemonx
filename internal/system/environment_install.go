@@ -76,7 +76,7 @@ func environmentInstallPlan(checkID, manager string) (EnvironmentInstallPlan, er
 			plan.Packages = []string{"docker"}
 		}
 	case "browser":
-		plan.Name = "浏览器及依赖包"
+		plan.Name = "浏览器"
 		switch manager {
 		case "pkg":
 			plan.Packages = []string{"chromium"}
@@ -87,25 +87,34 @@ func environmentInstallPlan(checkID, manager string) (EnvironmentInstallPlan, er
 		case "brew":
 			plan.Packages = []string{"--cask", "google-chrome"}
 		case "dnf", "yum":
-			// RHEL-family repositories do not always ship a browser binary
-			// (el9 needs EPEL or a vendor repository). Probe the configured
-			// repositories and include the first available browser package;
-			// the fixed runtime library and font list is always installed so
-			// Puppeteer can start the browser it downloads per project.
-			packages := browserDependencyPackages(manager)
 			if browser := rpmBrowserPackageAvailable(manager); browser != "" {
 				plan.BrowserPackage = browser
-				packages = append([]string{browser}, packages...)
+				plan.Packages = []string{browser}
 			}
-			plan.Packages = packages
 		case "apt-get", "apk", "pacman":
-			// Non-RPM hosts may rename the browser package (Ubuntu ships
-			// chromium-browser on some releases) and the runtime libraries
-			// Puppeteer still needs when it downloads its own browser. The
-			// install path tries every candidate group one at a time.
-			plan.Packages = flattenedBrowserPlan(manager)
+			for _, group := range browserPackageCandidates(manager) {
+				plan.Packages = append(plan.Packages, group...)
+			}
 		default:
 			plan.Packages = []string{"chromium"}
+		}
+	case "browser-dependencies":
+		plan.Name = "浏览器依赖补丁"
+		switch manager {
+		case "apt-get", "dnf", "yum", "apk", "pacman":
+			for _, group := range browserDependencyPackageCandidates(manager) {
+				plan.Packages = append(plan.Packages, group[0])
+			}
+		default:
+			return EnvironmentInstallPlan{}, errors.New("当前系统无需安装浏览器依赖补丁")
+		}
+	case "common-dependencies":
+		plan.Name = "常用环境依赖"
+		switch manager {
+		case "apt-get", "dnf", "yum", "apk", "pacman":
+			plan.Packages = []string{"curl", "tar", "unzip"}
+		default:
+			return EnvironmentInstallPlan{}, errors.New("当前系统已内置常用环境依赖，无需安装")
 		}
 	case "fonts":
 		plan.Name = "系统字体（CJK/Emoji）"
@@ -429,17 +438,20 @@ func hostPackageManager() (string, error) {
 // host without opening an external browser.
 func InstallEnvironment(ctx context.Context, checkID string) (string, error) {
 	if strings.TrimSpace(checkID) == "node" {
-		return InstallManagedNode(ctx)
+		return InstallNodeWithNVM(ctx)
 	}
 	plan, err := EnvironmentInstallPlanForHost(checkID)
 	if err != nil {
 		return "", err
 	}
 	if checkID == "browser" && (plan.PackageManager == "dnf" || plan.PackageManager == "yum") {
-		return installRPMBrowserEnvironment(ctx, plan)
+		return installBrowserEnvironment(ctx, plan)
 	}
 	if checkID == "browser" && (plan.PackageManager == "apt-get" || plan.PackageManager == "apk" || plan.PackageManager == "pacman") {
-		return installLinuxBrowserEnvironment(ctx, plan)
+		return installBrowserEnvironment(ctx, plan)
+	}
+	if checkID == "browser-dependencies" {
+		return installBrowserDependencies(ctx, plan)
 	}
 	if checkID == "fonts" && (plan.PackageManager == "apt-get" || plan.PackageManager == "dnf" || plan.PackageManager == "yum" || plan.PackageManager == "pacman" || plan.PackageManager == "apk") {
 		return installFontsEnvironment(ctx, plan)
@@ -455,6 +467,71 @@ func InstallEnvironment(ctx context.Context, checkID string) (string, error) {
 		return fmt.Sprintf("已在当前主机安装 %s。请重新检查环境确认版本。", plan.Name), nil
 	}
 	return "", packageInstallFailure(plan.Name, text, runErr, ctx)
+}
+
+// installBrowserEnvironment installs only a browser binary. Runtime libraries
+// are intentionally handled by installBrowserDependencies so users can repair
+// a downloaded Puppeteer browser without installing another system browser.
+func installBrowserEnvironment(ctx context.Context, plan EnvironmentInstallPlan) (string, error) {
+	manager := plan.PackageManager
+	if manager == "dnf" || manager == "yum" {
+		prepareRPMRepositories(ctx, manager)
+	} else {
+		packageManagerPrecondition(ctx, manager)
+	}
+	candidates := [][]string{plan.Packages}
+	switch manager {
+	case "dnf", "yum":
+		candidates = make([][]string, 0, len(rpmBrowserPackages))
+		if plan.BrowserPackage != "" {
+			candidates = append(candidates, []string{plan.BrowserPackage})
+		}
+		for _, candidate := range rpmBrowserPackages {
+			if candidate != plan.BrowserPackage {
+				candidates = append(candidates, []string{candidate})
+			}
+		}
+	case "apt-get", "apk", "pacman":
+		candidates = browserPackageCandidates(manager)
+	}
+	failed := make([]string, 0, len(candidates))
+	for _, group := range candidates {
+		installed, err := installCandidateGroup(ctx, manager, plan.Name, group)
+		if err != nil {
+			return "", err
+		}
+		if installed != "" {
+			RefreshCommandEnvironment("browser")
+			return fmt.Sprintf("已在当前主机安装浏览器（%s）。请重新检查环境确认版本。", installed), nil
+		}
+		if len(group) > 0 {
+			failed = append(failed, group[0])
+		}
+	}
+	return "", fmt.Errorf("服务器安装浏览器失败：以下软件包均未安装：%s。请检查软件源或网络后重试", strings.Join(failed, "、"))
+}
+
+func installBrowserDependencies(ctx context.Context, plan EnvironmentInstallPlan) (string, error) {
+	manager := plan.PackageManager
+	if manager == "dnf" || manager == "yum" {
+		prepareRPMRepositories(ctx, manager)
+	} else {
+		packageManagerPrecondition(ctx, manager)
+	}
+	failed := make([]string, 0, len(browserDependencyPackageCandidates(manager)))
+	for _, group := range browserDependencyPackageCandidates(manager) {
+		installed, err := installCandidateGroup(ctx, manager, plan.Name, group)
+		if err != nil {
+			return "", err
+		}
+		if installed == "" {
+			failed = append(failed, group[0])
+		}
+	}
+	if len(failed) == 0 {
+		return "已安装浏览器依赖补丁。请重新检查环境确认。", nil
+	}
+	return fmt.Sprintf("已安装部分浏览器依赖补丁；以下软件包未找到：%s。请检查软件源或网络后重试。", strings.Join(failed, "、")), nil
 }
 
 // installRPMBrowserEnvironment installs the fixed runtime libraries and fonts

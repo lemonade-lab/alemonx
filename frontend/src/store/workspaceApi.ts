@@ -422,6 +422,15 @@ export type PluginDownloadCacheSummary = {
   limit: number
   entries: number
 }
+export type NVMNodeStatus = {
+  available: boolean
+  versions: string[]
+  activeVersion?: string
+  recommendedVersion: string
+  recommendedInstalled: boolean
+  latestVersion?: string
+  latestInstalled: boolean
+}
 
 export const workspaceApi = createApi({
   reducerPath: 'workspaceApi',
@@ -659,6 +668,17 @@ export const workspaceApi = createApi({
     systemMcp: build.query<{ running: boolean }, void>({
       query: () => 'system/mcp'
     }),
+    nvmNodeStatus: build.query<NVMNodeStatus, void>({
+      query: () => 'system/node/nvm',
+      providesTags: ['EnvironmentReport']
+    }),
+    manageNVMNode: build.mutation<
+      { output: string; status: NVMNodeStatus },
+      { action: 'install' | 'use'; version: string }
+    >({
+      query: body => ({ url: 'system/node/nvm', method: 'POST', body }),
+      invalidatesTags: ['EnvironmentReport']
+    }),
     systemNetwork: build.query<SystemNetworkSettings, void>({
       query: () => 'system/network',
       providesTags: ['SystemNetwork']
@@ -843,10 +863,14 @@ export const workspaceApi = createApi({
     }),
     robotConsole: build.query<
       ConsolePayload,
-      { root: string; refresh?: boolean }
+      { root: string; refresh?: boolean; taskId?: string }
     >({
-      query: ({ root, refresh }) =>
-        `robot/console?${new URLSearchParams(refresh ? { root, refresh: '1' } : { root })}`
+      query: ({ root, refresh, taskId }) => {
+        const params = new URLSearchParams({ root })
+        if (refresh) params.set('refresh', '1')
+        if (taskId) params.set('taskId', taskId)
+        return `robot/console?${params}`
+      }
     }),
     robotRuntime: build.query<RuntimeOverview, string>({
       query: root => `robot/runtime?${new URLSearchParams({ root })}`,
@@ -1135,6 +1159,8 @@ export const {
   useLazySetupPluginDevelopmentLogsQuery,
   useUploadSetupPluginArchiveMutation,
   useSystemMcpQuery,
+  useNvmNodeStatusQuery,
+  useManageNVMNodeMutation,
   useSystemNetworkQuery,
   useDependencySourcesQuery,
   useDependencySourceTaskQuery,

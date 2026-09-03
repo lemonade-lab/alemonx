@@ -150,6 +150,7 @@ import {
 } from './SidebarWindow'
 import { qqChatWindowStorageKey } from './qqChatStorage'
 import { SSHControl } from './SSHControl'
+import { NodeNVMPanel } from './NodeNVMPanel'
 import { GitHubAuthControl } from './GitHubAuthControl'
 import { ConfigFieldsEditor, ConfigSourceLinks } from './PackageConfigFields'
 import { sameConfigValues } from './configFieldUtils'
@@ -1088,6 +1089,10 @@ export function Dashboard({
   const [foregroundLogsOpen, setForegroundLogsOpen] = useStoreState(false)
   const [foregroundLogsMinimized, setForegroundLogsMinimized] =
     useStoreState(false)
+  const [foregroundLogTask, setForegroundLogTask] = useState<{
+    id: string
+    name: string
+  } | null>(null)
   const [serviceWebview, setServiceWebview] = useStoreState<{
     title: string
     url: string
@@ -3351,6 +3356,13 @@ export function Dashboard({
             activateFloatingWindow('pm2Logs')
           }}
           onOpenForegroundLogs={() => {
+            setForegroundLogTask(null)
+            setForegroundLogsOpen(true)
+            setForegroundLogsMinimized(false)
+            activateFloatingWindow('foregroundLogs')
+          }}
+          onOpenScriptLogs={task => {
+            setForegroundLogTask(task)
             setForegroundLogsOpen(true)
             setForegroundLogsMinimized(false)
             activateFloatingWindow('foregroundLogs')
@@ -4206,6 +4218,8 @@ export function Dashboard({
           logsOnly
           minimized={foregroundLogsMinimized}
           root={root}
+          taskId={foregroundLogTask?.id}
+          logTitle={foregroundLogTask ? `${foregroundLogTask.name} 日志` : undefined}
           zIndex={windowLayers.foregroundLogs}
           onInstallDependencies={() =>
             void api('POST', { root, action: 'install' })
@@ -6244,15 +6258,54 @@ function EnvironmentPage({
   onFix: (check: Check) => void
   sidebarLayout?: boolean
 }) {
+  const [environmentView, setEnvironmentView] = useState<'general' | 'nodejs'>(
+    'general'
+  )
   const checks = report?.checks ?? []
+  const checkOrder = [
+    'node',
+    'git',
+    'fonts',
+    'browser',
+    'browser-dependencies',
+    'common-dependencies'
+  ]
+  const orderedChecks = [...checks].sort((left, right) => {
+    const leftIndex = checkOrder.indexOf(left.id)
+    const rightIndex = checkOrder.indexOf(right.id)
+    return (
+      (leftIndex === -1 ? checkOrder.length : leftIndex) -
+      (rightIndex === -1 ? checkOrder.length : rightIndex)
+    )
+  })
   const requiredChecks = checks.filter(check => !check.optional)
   const readyCount = requiredChecks.filter(
     check => check.status === 'ready'
   ).length
   const allReady =
     requiredChecks.length > 0 && readyCount === requiredChecks.length
+  const showGeneral = !sidebarLayout || environmentView === 'general'
+  const showNodeJS = !sidebarLayout || environmentView === 'nodejs'
   return (
     <section className="workspace-content system-feature-page mx-auto max-w-215">
+      {sidebarLayout && (
+        <SidebarWindowSectionNav>
+          <button
+            type="button"
+            aria-current={environmentView === 'general' ? 'page' : undefined}
+            onClick={() => setEnvironmentView('general')}
+          >
+            <Settings className="size-4" /> 通用
+          </button>
+          <button
+            type="button"
+            aria-current={environmentView === 'nodejs' ? 'page' : undefined}
+            onClick={() => setEnvironmentView('nodejs')}
+          >
+            <Terminal className="size-4" /> NodeJS
+          </button>
+        </SidebarWindowSectionNav>
+      )}
       {!sidebarLayout && (
         <header className="system-feature-header">
           <span
@@ -6288,15 +6341,15 @@ function EnvironmentPage({
         </header>
       )}
 
-      {checking && (
+      {showGeneral && checking && (
         <p className="m-0 py-3 text-xs leading-5 text-slate-500">
           正在读取 Node.js、Git 和系统工具状态。
         </p>
       )}
 
-      {!checking && checks.length > 0 && (
+      {showGeneral && !checking && checks.length > 0 && (
         <div className="grid gap-1.5 py-3">
-          {checks.map(check => {
+          {orderedChecks.map(check => {
             const ready = check.status === 'ready'
             return (
               <article
@@ -6347,7 +6400,10 @@ function EnvironmentPage({
                   >
                     {check.id === 'node' && check.status === 'outdated'
                       ? '升级'
-                      : check.id === 'browser' || check.id === 'fonts'
+                      : check.id === 'browser' ||
+                          check.id === 'browser-dependencies' ||
+                          check.id === 'common-dependencies' ||
+                          check.id === 'fonts'
                         ? '安装'
                         : '修复'}
                   </button>
@@ -6358,9 +6414,11 @@ function EnvironmentPage({
         </div>
       )}
 
-      {!checking && !checks.length && (
+      {showGeneral && !checking && !checks.length && (
         <p className="m-0 py-3 text-xs text-slate-500">尚未获取检查结果。</p>
       )}
+
+      {showNodeJS && <NodeNVMPanel onChanged={onRefresh} />}
 
       {sidebarLayout ? (
         <SidebarWindowActions>
@@ -6397,6 +6455,7 @@ function EnvironmentPage({
     </section>
   )
 }
+
 function EmptyWorkspace({
   onAdd,
   onClone
@@ -9877,15 +9936,17 @@ type ScriptControlItem = {
   record?: string
 }
 
-function ScriptControlCard({ root }: { root: string }) {
+function ScriptControlCard({
+  root,
+  onOpenLogs
+}: {
+  root: string
+  onOpenLogs: (task: { id: string; name: string }) => void
+}) {
   const [items, setItems] = useStoreState<ScriptControlItem[]>([])
   const [collapsed, setCollapsed] = useState(true)
   const [error, setError] = useStoreState('')
   const [busyScript, setBusyScript] = useStoreState('')
-  const [record, setRecord] = useStoreState<{
-    name: string
-    output: string
-  } | null>(null)
   const [editing, setEditing] = useStoreState<{
     previousName: string
     name: string
@@ -9940,13 +10001,14 @@ function ScriptControlCard({ root }: { root: string }) {
       setBusyScript('')
     }
   }
-  const openRecord = async (script: string) => {
+  const openLogs = async (script: string) => {
     const records = (await load(true)) ?? []
     const item = records.find(candidate => candidate.name === script)
-    setRecord({
-      name: script,
-      output: item?.record || '该脚本暂时没有执行记录。'
-    })
+    if (!item?.taskId) {
+      setError('该脚本暂时没有执行日志。')
+      return
+    }
+    onOpenLogs({ id: item.taskId, name: script })
   }
   const saveScript = async () => {
     if (!editing || busyScript) return
@@ -10043,11 +10105,11 @@ function ScriptControlCard({ root }: { root: string }) {
                     disabled={Boolean(busyScript)}
                     onClick={event => {
                       event.stopPropagation()
-                      void openRecord(item.name)
+                      void openLogs(item.name)
                     }}
                   >
                     <ClipboardList className="size-3.5" />
-                    记录
+                    日志
                   </button>
                   <button
                     className="text-button gap-1"
@@ -10069,25 +10131,6 @@ function ScriptControlCard({ root }: { root: string }) {
             ))}
           </div>
         ))}
-      <Modal
-        open={Boolean(record)}
-        onClose={() => setRecord(null)}
-        ariaLabel="脚本执行记录"
-      >
-        <section className="grid max-h-[min(82vh,36rem)] w-full max-w-2xl grid-rows-[auto_minmax(0,1fr)_auto] gap-3 rounded-xl bg-white p-5 shadow-xl">
-          <header>
-            <strong>{record?.name} 执行记录</strong>
-          </header>
-          <pre className="m-0 min-h-0 overflow-y-auto whitespace-pre-wrap rounded-lg bg-slate-950 p-3 text-xs text-slate-100">
-            {record?.output}
-          </pre>
-          <footer className="flex justify-end">
-            <Button variant="secondary" onClick={() => setRecord(null)}>
-              关闭
-            </Button>
-          </footer>
-        </section>
-      </Modal>
       <Modal
         open={Boolean(editing)}
         onClose={() => !busyScript && setEditing(null)}
@@ -10156,6 +10199,7 @@ function RuntimePanel({
   onRefresh,
   onRefreshOverview,
   onOpenForegroundLogs,
+  onOpenScriptLogs,
   onOpenPM2Logs,
   onClearOperationLog,
   onRun,
@@ -10176,6 +10220,7 @@ function RuntimePanel({
   onRefresh: () => void
   onRefreshOverview: () => Promise<RuntimeOverview | undefined>
   onOpenForegroundLogs: () => void
+  onOpenScriptLogs: (task: { id: string; name: string }) => void
   onOpenPM2Logs: () => void
   onClearOperationLog: () => void
   onRun: (
@@ -11279,7 +11324,10 @@ function RuntimePanel({
             onRun(action, undefined, String(processID))
           }
         />
-        <ScriptControlCard root={root} />
+        <ScriptControlCard
+          root={root}
+          onOpenLogs={onOpenScriptLogs}
+        />
       </section>
     </RobotPanel>
   )
@@ -12956,10 +13004,12 @@ function StatusDot({
   )
 }
 
-function ReadonlyConsole({
+function ReadonlyConsoleContent({
   open,
   terminalOnly = false,
   logsOnly = false,
+  taskId,
+  logTitle,
   minimized,
   root,
   onClose,
@@ -12977,6 +13027,8 @@ function ReadonlyConsole({
   open: boolean
   terminalOnly?: boolean
   logsOnly?: boolean
+  taskId?: string
+  logTitle?: string
   minimized: boolean
   root: string
   onClose: () => void
@@ -13142,7 +13194,7 @@ function ReadonlyConsole({
   useEffect(() => {
     if (!open || !root) return
     resetTerminals()
-    void load({ root }).then(result => {
+    void load({ root, taskId }).then(result => {
       if (result.data) {
         const changedSession =
           Boolean(result.data.sessionId) &&
@@ -13162,6 +13214,7 @@ function ReadonlyConsole({
     open,
     resetTerminals,
     root,
+    taskId,
     setExpandedForegroundRepeats,
     setForegroundLogContextIndex,
     setLiveOutput
@@ -13176,6 +13229,7 @@ function ReadonlyConsole({
           truncated?: boolean
         }>
       ).detail
+      if (taskId && detail?.taskId !== taskId) return
       if (detail?.text) {
         const changedSession =
           Boolean(detail.taskId) &&
@@ -13197,6 +13251,7 @@ function ReadonlyConsole({
     return () => window.removeEventListener('alx:robot-output', handler)
   }, [
     open,
+    taskId,
     setExpandedForegroundRepeats,
     setForegroundLogContextIndex,
     setLiveOutput
@@ -13217,7 +13272,9 @@ function ReadonlyConsole({
     )
       return
     const terminal = new XTerm({
-      cursorBlink: true,
+      cursorBlink: false,
+      cursorStyle: 'bar',
+      cursorWidth: 1,
       convertEol: true,
       fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
       fontSize: 13,
@@ -13479,7 +13536,7 @@ function ReadonlyConsole({
       id={logsOnly ? 'foreground-logs' : 'terminal'}
       open={open}
       minimized={minimized}
-      title={logsOnly ? '日志' : '终端'}
+      title={logsOnly ? logTitle ?? '日志' : '终端'}
       subtitle={
         terminalOnly
           ? `仅限当前机器人目录 · ${shellDirectory ? `./${shellDirectory}` : '.'}`
@@ -13571,7 +13628,7 @@ function ReadonlyConsole({
           <button
             className="icon-button size-8 p-0"
             disabled={isFetching}
-            onClick={() => void load({ root, refresh: true })}
+            onClick={() => void load({ root, taskId, refresh: true })}
             aria-label={logsOnly ? '刷新运行日志' : '刷新运行终端'}
             title="刷新"
           >
@@ -13836,6 +13893,221 @@ function ReadonlyConsole({
             </div>
           </div>
         ) : null}
+      </div>
+    </DesktopWindow>
+  )
+}
+
+function ReadonlyConsole(props: Parameters<typeof ReadonlyConsoleContent>[0]) {
+  if (!props.terminalOnly) return <ReadonlyConsoleContent {...props} />
+  return (
+    <FullTerminal
+      open={props.open}
+      minimized={props.minimized}
+      root={props.root}
+      onClose={props.onClose}
+      onMinimize={props.onMinimize}
+      zIndex={props.zIndex}
+      onActivate={props.onActivate}
+    />
+  )
+}
+
+type LocalTerminal = {
+  id: string
+  key: string
+  cwd: string
+  shell: string
+  label: string
+  output: string
+  truncated?: boolean
+}
+
+function FullTerminal({
+  open,
+  minimized,
+  root,
+  onClose,
+  onMinimize,
+  zIndex,
+  onActivate
+}: {
+  open: boolean
+  minimized: boolean
+  root: string
+  onClose: () => void
+  onMinimize: () => void
+  zIndex: number
+  onActivate: () => void
+}) {
+  const storageKey = `alx-terminal-sessions:${root}`
+  const hostRef = useRef<HTMLDivElement>(null)
+  const xtermRef = useRef<XTerm | null>(null)
+  const fitRef = useRef<FitAddon | null>(null)
+  const writtenRef = useRef(0)
+  const creatingRef = useRef(false)
+  const [sessions, setSessions] = useState<LocalTerminal[]>([])
+  const [activeID, setActiveID] = useState('')
+  const active = sessions.find(item => item.id === activeID)
+
+  const headersFor = (item: LocalTerminal) => ({
+    'Content-Type': 'application/json',
+    'X-ALX-Terminal-Key': item.key
+  })
+  const updateSession = useCallback(
+    (id: string, update: (current: LocalTerminal) => LocalTerminal) =>
+      setSessions(current => current.map(item => (item.id === id ? update(item) : item))),
+    []
+  )
+  const createTerminal = useCallback(async () => {
+    if (creatingRef.current) return
+    creatingRef.current = true
+    const response = await fetch('/api/v1/terminal/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cwd: root })
+    })
+    const result = await response.json()
+    if (!response.ok || typeof result.id !== 'string') {
+      window.alert(result.error || '无法创建终端。')
+      creatingRef.current = false
+      return
+    }
+    const item: LocalTerminal = {
+      id: result.id,
+      key: result.key,
+      cwd: result.cwd,
+      shell: result.shell,
+      label: `终端 ${sessions.length + 1}`,
+      output: ''
+    }
+    setSessions(current => [...current, item])
+    setActiveID(item.id)
+    creatingRef.current = false
+  }, [root, sessions.length])
+  const closeTerminal = useCallback(
+    (item: LocalTerminal) => {
+      void fetch(`/api/v1/terminal/sessions/${item.id}`, {
+        method: 'DELETE',
+        headers: headersFor(item)
+      })
+      setSessions(current => {
+        const next = current.filter(candidate => candidate.id !== item.id)
+        if (next.length === 0) onClose()
+        return next
+      })
+      setActiveID(current => (current === item.id ? '' : current))
+    },
+    [onClose]
+  )
+
+  // Restore only descriptors, never credentials in long-lived storage. The
+  // daemon keeps the PTY alive across a browser refresh and validates every
+  // descriptor before it becomes visible again.
+  useEffect(() => {
+    if (!open || sessions.length) return
+    const saved = sessionStorage.getItem(storageKey)
+    if (!saved) {
+      void createTerminal()
+      return
+    }
+    let descriptors: Array<Pick<LocalTerminal, 'id' | 'key' | 'label'>> = []
+    try { descriptors = JSON.parse(saved) } catch { sessionStorage.removeItem(storageKey) }
+    void Promise.all(
+      descriptors.map(async descriptor => {
+        const response = await fetch(`/api/v1/terminal/sessions/${descriptor.id}`, { headers: { 'X-ALX-Terminal-Key': descriptor.key } })
+        if (!response.ok) return null
+        const result = await response.json()
+        return { ...descriptor, cwd: result.cwd, shell: result.shell, output: result.output || '', truncated: result.truncated } as LocalTerminal
+      })
+    ).then(restored => {
+      const items = restored.filter(Boolean) as LocalTerminal[]
+      if (items.length) { setSessions(items); setActiveID(items[0].id) }
+      else void createTerminal()
+    })
+  }, [createTerminal, open, sessions.length, storageKey])
+  useEffect(() => {
+    sessionStorage.setItem(storageKey, JSON.stringify(sessions.map(({ id, key, label }) => ({ id, key, label }))))
+  }, [sessions, storageKey])
+  useEffect(() => {
+    if (!open || !sessions.length) return
+    const timer = window.setInterval(() => {
+      sessions.forEach(item => void fetch(`/api/v1/terminal/sessions/${item.id}/heartbeat`, { method: 'POST', headers: headersFor(item) }))
+    }, 30_000)
+    return () => window.clearInterval(timer)
+  }, [open, sessions])
+  useEffect(() => {
+    if (!open || !active || !hostRef.current) return
+    const terminal = new XTerm({ cursorBlink: false, cursorStyle: 'bar', cursorWidth: 1, convertEol: true, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 13, theme: { background: '#0f172a', foreground: '#e2e8f0' } })
+    const fit = new FitAddon()
+    terminal.loadAddon(fit)
+    terminal.open(hostRef.current)
+    fit.fit()
+    terminal.write(active.output)
+    writtenRef.current = active.output.length
+    xtermRef.current = terminal
+    fitRef.current = fit
+    const send = (input: string) => void fetch(`/api/v1/terminal/sessions/${active.id}/input`, { method: 'POST', headers: headersFor(active), body: JSON.stringify({ input }) })
+    const resize = ({ cols, rows }: { cols: number; rows: number }) => void fetch(`/api/v1/terminal/sessions/${active.id}/resize`, { method: 'POST', headers: headersFor(active), body: JSON.stringify({ cols, rows }) })
+    const input = terminal.onData(send)
+    const size = terminal.onResize(resize)
+    resize({ cols: terminal.cols, rows: terminal.rows })
+    const observer = new ResizeObserver(() => {
+      try {
+        fit.fit()
+      } catch {
+        // A minimized window is measured as zero-width; the next resize fits it.
+      }
+    })
+    observer.observe(hostRef.current)
+    return () => { observer.disconnect(); input.dispose(); size.dispose(); terminal.dispose(); xtermRef.current = null; fitRef.current = null }
+  }, [active?.id, open])
+  useEffect(() => {
+    if (!active || !xtermRef.current || active.output.length <= writtenRef.current) return
+    xtermRef.current.write(active.output.slice(writtenRef.current))
+    writtenRef.current = active.output.length
+  }, [active?.output, active?.id])
+  useEffect(() => {
+    if (!open || !active) return
+    const source = new EventSource(`/api/v1/terminal/sessions/${active.id}/stream?key=${encodeURIComponent(active.key)}`)
+    source.onmessage = event => {
+      const payload = JSON.parse(event.data) as { text?: string; snapshot?: boolean; truncated?: boolean }
+      if (payload.truncated) updateSession(active.id, item => ({ ...item, truncated: true }))
+      if (payload.text) updateSession(active.id, item => ({ ...item, output: payload.snapshot ? payload.text || '' : `${item.output}${payload.text}` }))
+    }
+    return () => source.close()
+  }, [active?.id, active?.key, open, updateSession])
+  useEffect(() => {
+    if (!open || minimized) return
+    window.requestAnimationFrame(() => { fitRef.current?.fit(); xtermRef.current?.focus() })
+  }, [active?.id, minimized, open])
+
+  const closeAll = () => {
+    sessions.forEach(closeTerminal)
+    setSessions([])
+    setActiveID('')
+    sessionStorage.removeItem(storageKey)
+    onClose()
+  }
+  const copyOutput = () => active && void navigator.clipboard?.writeText(active.output)
+  const downloadOutput = () => {
+    if (!active) return
+    const url = URL.createObjectURL(new Blob([active.output], { type: 'text/plain;charset=utf-8' }))
+    const anchor = document.createElement('a'); anchor.href = url; anchor.download = `${active.label}.log`; anchor.click(); URL.revokeObjectURL(url)
+  }
+  return (
+    <DesktopWindow
+      id="terminal" open={open} minimized={minimized} title="终端"
+      subtitle={active ? `${active.cwd} · ${active.shell}` : '本机交互式终端'}
+      icon={<Terminal className="size-4 shrink-0 text-brand-600 dark:text-brand-200" />}
+      onClose={closeAll} onMinimize={onMinimize} zIndex={zIndex} onActivate={onActivate}
+      initialPosition={{ left: 16, top: 16 }} width={760} height={650}
+      headerLeft={<nav className="readonly-console-tabs" aria-label="终端列表">{sessions.map(item => <button className={cn('readonly-console-tab', activeID === item.id && 'active')} key={item.id} onClick={() => setActiveID(item.id)}><span>{item.label}</span><X className="size-3" onClick={event => { event.stopPropagation(); closeTerminal(item) }} /></button>)}</nav>}
+      actions={<div className="flex items-center gap-1"><button className="icon-button size-8 p-0" onClick={copyOutput} title="复制输出"><ClipboardList className="size-4" /></button><button className="icon-button size-8 p-0" onClick={downloadOutput} title="下载输出"><Download className="size-4" /></button></div>}
+    >
+      <div className="flex h-full min-h-0 flex-col gap-2 p-2">
+        {active?.truncated && <p className="text-xs text-amber-600">早期输出已被循环缓冲清理；终端仍在运行。</p>}
+        <div className="readonly-console-shell min-h-0 flex-1"><div ref={hostRef} className="h-full" onPointerDown={() => xtermRef.current?.focus()} /></div>
       </div>
     </DesktopWindow>
   )

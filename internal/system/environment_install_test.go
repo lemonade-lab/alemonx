@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestBrowserInstallPlanForDNFIncludesPuppeteerDependencies(t *testing.T) {
+func TestBrowserInstallPlanForDNFOnlyIncludesBrowser(t *testing.T) {
 	original := rpmBrowserPackageAvailable
 	rpmBrowserPackageAvailable = func(string) string { return "chromium" }
 	defer func() { rpmBrowserPackageAvailable = original }()
@@ -24,17 +24,19 @@ func TestBrowserInstallPlanForDNFIncludesPuppeteerDependencies(t *testing.T) {
 	for _, pkg := range plan.Packages {
 		packages[pkg] = true
 	}
-	for _, pkg := range []string{"chromium", "alsa-lib", "gtk3", "mesa-libgbm"} {
+	for _, pkg := range []string{"chromium"} {
 		if !packages[pkg] {
 			t.Fatalf("DNF browser plan lacks %q: %#v", pkg, plan.Packages)
 		}
 	}
-	if packages["wqy-microhei-fonts"] {
-		t.Fatalf("browser plan must not include fonts: %#v", plan.Packages)
+	for _, pkg := range []string{"alsa-lib", "gtk3", "mesa-libgbm", "wqy-microhei-fonts"} {
+		if packages[pkg] {
+			t.Fatalf("browser plan must not include %q: %#v", pkg, plan.Packages)
+		}
 	}
 }
 
-func TestBrowserInstallPlanForRPMWithoutBrowserPackageSkipsBrowser(t *testing.T) {
+func TestBrowserInstallPlanForRPMWithoutBrowserPackageIsEmpty(t *testing.T) {
 	original := rpmBrowserPackageAvailable
 	rpmBrowserPackageAvailable = func(string) string { return "" }
 	defer func() { rpmBrowserPackageAvailable = original }()
@@ -47,30 +49,8 @@ func TestBrowserInstallPlanForRPMWithoutBrowserPackageSkipsBrowser(t *testing.T)
 		if plan.BrowserPackage != "" {
 			t.Fatalf("%s browser plan browser = %q, want empty", manager, plan.BrowserPackage)
 		}
-		for _, pkg := range plan.Packages {
-			if pkg == "chromium" {
-				t.Fatalf("%s browser plan must not include a browser when repositories lack one: %#v", manager, plan.Packages)
-			}
-		}
-		for _, pkg := range []string{"alsa-lib", "gtk3", "mesa-libgbm"} {
-			found := false
-			for _, candidate := range plan.Packages {
-				if candidate == pkg {
-					found = true
-					break
-				}
-			}
-			if !found {
-				t.Fatalf("%s browser plan lacks dependency %q: %#v", manager, pkg, plan.Packages)
-			}
-		}
-		if packages := map[string]bool{}; true {
-			for _, pkg := range plan.Packages {
-				packages[pkg] = true
-			}
-			if packages["wqy-microhei-fonts"] {
-				t.Fatalf("%s browser plan must not include fonts: %#v", manager, plan.Packages)
-			}
+		if len(plan.Packages) != 0 {
+			t.Fatalf("%s browser plan = %#v, want no repository-probed browser", manager, plan.Packages)
 		}
 	}
 }
@@ -351,7 +331,7 @@ func TestRPMBrowserInstallFailsWhenNothingInstalls(t *testing.T) {
 	}
 }
 
-func TestBrowserInstallPlanForAPTUsesCandidates(t *testing.T) {
+func TestBrowserInstallPlanForAPTOnlyUsesBrowserCandidates(t *testing.T) {
 	plan, err := environmentInstallPlan("browser", "apt-get")
 	if err != nil {
 		t.Fatal(err)
@@ -360,13 +340,76 @@ func TestBrowserInstallPlanForAPTUsesCandidates(t *testing.T) {
 	for _, pkg := range plan.Packages {
 		packages[pkg] = true
 	}
-	for _, pkg := range []string{"chromium", "chromium-browser", "libnss3", "libgbm1", "libxkbcommon0"} {
+	for _, pkg := range []string{"chromium", "chromium-browser"} {
 		if !packages[pkg] {
 			t.Fatalf("apt browser plan lacks %q: %#v", pkg, plan.Packages)
 		}
 	}
-	if packages["wqy-microhei-fonts"] {
-		t.Fatalf("browser plan must not include fonts: %#v", plan.Packages)
+	for _, pkg := range []string{"libnss3", "libgbm1", "libxkbcommon0", "wqy-microhei-fonts"} {
+		if packages[pkg] {
+			t.Fatalf("browser plan must not include %q: %#v", pkg, plan.Packages)
+		}
+	}
+}
+
+func TestBrowserDependenciesAndCommonDependenciesHaveSeparatePlans(t *testing.T) {
+	patchPlan, err := environmentInstallPlan("browser-dependencies", "apt-get")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if patchPlan.Name != "浏览器依赖补丁" || !slices.Contains(patchPlan.Packages, "libnss3") {
+		t.Fatalf("browser dependency plan = %#v", patchPlan)
+	}
+	commonPlan, err := environmentInstallPlan("common-dependencies", "apt-get")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if commonPlan.Name != "常用环境依赖" || !slices.Equal(commonPlan.Packages, []string{"curl", "tar", "unzip"}) {
+		t.Fatalf("common dependency plan = %#v", commonPlan)
+	}
+}
+
+func TestBrowserInstallDoesNotInstallDependencyPatches(t *testing.T) {
+	originalRun := runPackageCommand
+	var calls [][]string
+	runPackageCommand = func(_ context.Context, _ string, args []string) (string, error) {
+		calls = append(calls, args)
+		return "Installed", nil
+	}
+	defer func() { runPackageCommand = originalRun }()
+
+	if _, err := installBrowserEnvironment(context.Background(), EnvironmentInstallPlan{CheckID: "browser", Name: "浏览器", PackageManager: "apt-get"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range calls {
+		if slices.Contains(args, "libnss3") || slices.Contains(args, "libgbm1") {
+			t.Fatalf("browser install must not include dependency patches: %#v", calls)
+		}
+	}
+}
+
+func TestBrowserDependencyInstallDoesNotInstallBrowserBinary(t *testing.T) {
+	originalRun := runPackageCommand
+	var calls [][]string
+	runPackageCommand = func(_ context.Context, _ string, args []string) (string, error) {
+		calls = append(calls, args)
+		return "Installed", nil
+	}
+	defer func() { runPackageCommand = originalRun }()
+
+	plan, err := environmentInstallPlan("browser-dependencies", "apt-get")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := installBrowserDependencies(context.Background(), plan); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range calls {
+		for _, browser := range []string{"chromium", "chromium-browser", "google-chrome-stable"} {
+			if slices.Contains(args, browser) {
+				t.Fatalf("dependency install must not include browser binary: %#v", calls)
+			}
+		}
 	}
 }
 

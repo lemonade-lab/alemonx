@@ -1,17 +1,17 @@
-//go:build !windows
+//go:build windows
 
 package web
 
-// The terminal API deliberately lives outside the robot API. A robot is a
-// useful starting directory, not a security sandbox: this is the local user's
-// terminal and it can work in every directory the local user can access.
+// Windows keeps the same HTTP/session contract as Unix. The process adapter is
+// intentionally isolated here so a future ConPTY implementation can replace
+// the pipes without changing callers or exposing a second API.
 
 import (
-	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -19,8 +19,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/creack/pty"
 )
 
 const terminalOutputLimit = 1024 * 1024
@@ -29,7 +27,7 @@ const terminalSessionLimit = 12
 
 type terminalSession struct {
 	id, owner, key, cwd, shell string
-	pty                        *os.File
+	input                      io.WriteCloser
 	cmd                        *exec.Cmd
 	mu                         sync.Mutex
 	output                     string
@@ -37,7 +35,6 @@ type terminalSession struct {
 	lastSeen                   time.Time
 	subscribers                map[chan string]struct{}
 }
-
 type terminalSessionStore struct {
 	mu       sync.Mutex
 	sessions map[string]*terminalSession
@@ -57,7 +54,6 @@ type terminalResizeRequest struct {
 func newTerminalSessionStore() *terminalSessionStore {
 	return &terminalSessionStore{sessions: map[string]*terminalSession{}}
 }
-
 func terminalRandomID() string {
 	value := make([]byte, 18)
 	if _, err := rand.Read(value); err != nil {
@@ -65,40 +61,31 @@ func terminalRandomID() string {
 	}
 	return hex.EncodeToString(value)
 }
-
 func terminalShell(requested string) (string, error) {
-	shell := strings.TrimSpace(requested)
-	if shell == "" {
-		shell = strings.TrimSpace(os.Getenv("SHELL"))
+	if strings.TrimSpace(requested) != "" {
+		return requested, nil
 	}
-	if shell == "" {
-		shell = "/bin/sh"
+	if value, err := exec.LookPath("pwsh.exe"); err == nil {
+		return value, nil
 	}
-	if !filepath.IsAbs(shell) {
-		return "", fmt.Errorf("Shell 必须是本机可执行文件的绝对路径。")
+	if value, err := exec.LookPath("powershell.exe"); err == nil {
+		return value, nil
 	}
-	info, err := os.Stat(shell)
-	if err != nil || info.IsDir() || info.Mode()&0o111 == 0 {
-		return "", fmt.Errorf("Shell 不可执行：%s", shell)
-	}
-	return shell, nil
+	return exec.LookPath("cmd.exe")
 }
-
 func terminalDirectory(cwd string) (string, error) {
 	if strings.TrimSpace(cwd) == "" {
 		cwd, _ = os.Getwd()
 	}
 	resolved, err := filepath.Abs(filepath.Clean(cwd))
 	if err != nil {
-		return "", fmt.Errorf("无法解析目录：%w", err)
+		return "", err
 	}
-	info, err := os.Stat(resolved)
-	if err != nil || !info.IsDir() {
+	if info, err := os.Stat(resolved); err != nil || !info.IsDir() {
 		return "", fmt.Errorf("目录不存在或不可访问：%s", resolved)
 	}
 	return resolved, nil
 }
-
 func (s *server) terminalOwner(r *http.Request) (string, bool) {
 	if s.auth == nil {
 		return "local", false
@@ -109,7 +96,6 @@ func (s *server) terminalOwner(r *http.Request) (string, bool) {
 	}
 	return status.Account, true
 }
-
 func (s *server) terminalSessionFor(r *http.Request, id string) (*terminalSession, bool) {
 	s.terminalSessions.mu.Lock()
 	session := s.terminalSessions.sessions[id]
@@ -130,7 +116,6 @@ func (s *server) terminalSessionFor(r *http.Request, id string) (*terminalSessio
 	session.mu.Unlock()
 	return session, true
 }
-
 func (s *server) terminalSessionsHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
 		s.listTerminalSessions(w, r)
@@ -141,7 +126,7 @@ func (s *server) terminalSessionsHandler(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	var input terminalCreateRequest
-	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+	if json.NewDecoder(r.Body).Decode(&input) != nil {
 		writeError(w, http.StatusBadRequest, "终端会话格式无效。")
 		return
 	}
@@ -168,21 +153,46 @@ func (s *server) terminalSessionsHandler(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusTooManyRequests, fmt.Sprintf("每个账户最多同时打开 %d 个终端。", terminalSessionLimit))
 		return
 	}
-	cmd := exec.CommandContext(context.Background(), shell, "-i")
-	cmd.Dir, cmd.Env = cwd, append(os.Environ(), "TERM=xterm-256color", "PS1=$ ")
-	terminal, err := pty.Start(cmd)
+	cmd := exec.Command(shell)
+	cmd.Dir = cwd
+	inputPipe, err := cmd.StdinPipe()
 	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	output, err := cmd.StdoutPipe()
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	errors, _ := cmd.StderrPipe()
+	if err = cmd.Start(); err != nil {
 		writeError(w, http.StatusBadRequest, "交互式终端启动失败："+err.Error())
 		return
 	}
-	session := &terminalSession{id: terminalRandomID(), owner: owner, key: terminalRandomID(), cwd: cwd, shell: shell, pty: terminal, cmd: cmd, lastSeen: time.Now(), subscribers: map[chan string]struct{}{}}
+	session := &terminalSession{id: terminalRandomID(), owner: owner, key: terminalRandomID(), cwd: cwd, shell: shell, input: inputPipe, cmd: cmd, lastSeen: time.Now(), subscribers: map[chan string]struct{}{}}
 	s.terminalSessions.mu.Lock()
 	s.terminalSessions.sessions[session.id] = session
 	s.terminalSessions.mu.Unlock()
-	go s.readTerminalSession(session)
+	go s.readWindowsTerminal(session, output)
+	if errors != nil {
+		go s.readWindowsTerminal(session, errors)
+	}
+	go func() { _ = cmd.Wait(); s.closeTerminalSession(session.id) }()
 	writeJSON(w, http.StatusOK, map[string]any{"id": session.id, "key": session.key, "cwd": cwd, "shell": shell, "outputLimit": terminalOutputLimit})
 }
-
+func (s *server) readWindowsTerminal(session *terminalSession, reader io.Reader) {
+	buffer := make([]byte, 32*1024)
+	for {
+		n, err := reader.Read(buffer)
+		if n > 0 {
+			s.appendTerminalOutput(session, string(buffer[:n]))
+		}
+		if err != nil {
+			return
+		}
+	}
+}
 func (s *server) listTerminalSessions(w http.ResponseWriter, r *http.Request) {
 	owner, authenticated := s.terminalOwner(r)
 	keys := map[string]bool{}
@@ -199,27 +209,11 @@ func (s *server) listTerminalSessions(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"sessions": items})
 }
-
 func terminalSummary(session *terminalSession) map[string]any {
 	session.mu.Lock()
 	defer session.mu.Unlock()
 	return map[string]any{"id": session.id, "cwd": session.cwd, "shell": session.shell, "output": session.output, "truncated": session.truncated}
 }
-
-func (s *server) readTerminalSession(session *terminalSession) {
-	buffer := make([]byte, 32*1024)
-	for {
-		n, err := session.pty.Read(buffer)
-		if n > 0 {
-			s.appendTerminalOutput(session, string(buffer[:n]))
-		}
-		if err != nil {
-			s.closeTerminalSession(session.id)
-			return
-		}
-	}
-}
-
 func (s *server) appendTerminalOutput(session *terminalSession, text string) {
 	session.mu.Lock()
 	session.output += text
@@ -236,7 +230,6 @@ func (s *server) appendTerminalOutput(session *terminalSession, text string) {
 	}
 	session.mu.Unlock()
 }
-
 func (s *server) closeTerminalSession(id string) {
 	s.terminalSessions.mu.Lock()
 	session := s.terminalSessions.sessions[id]
@@ -246,7 +239,7 @@ func (s *server) closeTerminalSession(id string) {
 		return
 	}
 	_ = session.cmd.Process.Kill()
-	_ = session.pty.Close()
+	_ = session.input.Close()
 	session.mu.Lock()
 	for subscriber := range session.subscribers {
 		close(subscriber)
@@ -254,7 +247,6 @@ func (s *server) closeTerminalSession(id string) {
 	}
 	session.mu.Unlock()
 }
-
 func (s *server) terminalSessionHandler(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/v1/terminal/sessions/"), "/")
 	if len(parts) == 0 || parts[0] == "" {
@@ -288,7 +280,7 @@ func (s *server) terminalSessionHandler(w http.ResponseWriter, r *http.Request) 
 				writeError(w, http.StatusBadRequest, "终端输入格式无效。")
 				return
 			}
-			if _, err := session.pty.Write([]byte(input.Input)); err != nil {
+			if _, err := session.input.Write([]byte(input.Input)); err != nil {
 				writeError(w, http.StatusGone, "终端会话已结束。")
 				return
 			}
@@ -300,10 +292,6 @@ func (s *server) terminalSessionHandler(w http.ResponseWriter, r *http.Request) 
 			var input terminalResizeRequest
 			if json.NewDecoder(r.Body).Decode(&input) != nil || input.Cols == 0 || input.Rows == 0 {
 				writeError(w, http.StatusBadRequest, "终端尺寸格式无效。")
-				return
-			}
-			if err := pty.Setsize(session.pty, &pty.Winsize{Cols: input.Cols, Rows: input.Rows}); err != nil {
-				writeError(w, http.StatusBadRequest, "终端尺寸更新失败。")
 				return
 			}
 			writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
@@ -322,7 +310,6 @@ func (s *server) terminalSessionHandler(w http.ResponseWriter, r *http.Request) 
 	}
 	writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
 }
-
 func (s *server) streamTerminalSession(w http.ResponseWriter, r *http.Request, session *terminalSession) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -330,7 +317,6 @@ func (s *server) streamTerminalSession(w http.ResponseWriter, r *http.Request, s
 		return
 	}
 	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
 	ch := make(chan string, 32)
 	session.mu.Lock()
 	snapshot, truncated := session.output, session.truncated
@@ -359,7 +345,6 @@ func (s *server) streamTerminalSession(w http.ResponseWriter, r *http.Request, s
 		}
 	}
 }
-
 func (s *server) reapTerminalSessions() {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()

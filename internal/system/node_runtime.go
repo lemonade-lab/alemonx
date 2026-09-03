@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"alemonx/internal/resources"
 	"alemonx/internal/systemnetwork"
 )
 
@@ -23,13 +24,340 @@ const (
 	nodeIndexURL        = "https://nodejs.org/dist/index.json"
 	nodeDownloadLimit   = 180 << 20
 	nodeDownloadTimeout = 12 * time.Minute
+	nvmVersion          = "v0.40.7"
 )
 
-var userCacheDir = os.UserCacheDir
+var (
+	userCacheDir = os.UserCacheDir
+	userHomeDir  = os.UserHomeDir
+)
 
 type nodeRelease struct {
 	Version string          `json:"version"`
 	LTS     json.RawMessage `json:"lts"`
+}
+
+// NVMNodeStatus describes Node.js versions managed by the user's NVM when it
+// is available, otherwise by ALemonX's isolated NVM installation.
+type NVMNodeStatus struct {
+	Available            bool     `json:"available"`
+	Versions             []string `json:"versions"`
+	ActiveVersion        string   `json:"activeVersion,omitempty"`
+	RecommendedVersion   string   `json:"recommendedVersion"`
+	RecommendedInstalled bool     `json:"recommendedInstalled"`
+	LatestVersion        string   `json:"latestVersion,omitempty"`
+	LatestInstalled      bool     `json:"latestInstalled"`
+}
+
+// NVMStatus returns locally installed versions and the default selected by
+// the workbench. It performs no network or shell operation.
+func NVMStatus() NVMNodeStatus {
+	directory, err := preferredNVMDirectory()
+	if err != nil {
+		return NVMNodeStatus{Versions: []string{}, RecommendedVersion: "v" + MinimumNodeVersion}
+	}
+	entries, err := os.ReadDir(filepath.Join(directory, "versions", "node"))
+	if err != nil {
+		return NVMNodeStatus{Versions: []string{}, RecommendedVersion: "v" + MinimumNodeVersion}
+	}
+	status := NVMNodeStatus{Available: true, Versions: []string{}, RecommendedVersion: "v" + MinimumNodeVersion}
+	for _, entry := range entries {
+		if entry.IsDir() && isNodeVersion(entry.Name()) {
+			bin := filepath.Join(directory, "versions", "node", entry.Name(), "bin", "node")
+			if info, statErr := os.Stat(bin); statErr == nil && !info.IsDir() {
+				status.Versions = append(status.Versions, entry.Name())
+			}
+		}
+	}
+	sortNodeVersions(status.Versions)
+	status.RecommendedInstalled = containsNodeVersion(status.Versions, MinimumNodeVersion)
+	if data, readErr := os.ReadFile(filepath.Join(directory, "alias", "default")); readErr == nil {
+		candidate := strings.TrimSpace(string(data))
+		for _, version := range status.Versions {
+			if candidate == version {
+				status.ActiveVersion = version
+				break
+			}
+		}
+	}
+	if status.ActiveVersion == "" && len(status.Versions) > 0 {
+		status.ActiveVersion = status.Versions[0]
+	}
+	return status
+}
+
+// InstallNVMNodeVersion installs an explicit semver through NVM and makes it
+// the workbench default. The input is intentionally limited to a concrete
+// Node version so it cannot be interpreted as an NVM option.
+func InstallNVMNodeVersion(ctx context.Context, version string) (string, error) {
+	version = normalizeNodeVersion(version)
+	if version == "" {
+		return "", errors.New("Node.js 版本格式无效，请使用例如 22.22.3")
+	}
+	directory, _, err := preferredOrEnsureNVM()
+	if err != nil {
+		return "", err
+	}
+	if err := runNVM(ctx, directory, "install", version); err != nil {
+		return "", err
+	}
+	return "已下载 Node.js v" + version + "。", nil
+}
+
+// UseNVMNodeVersion changes the NVM default and updates this process PATH so
+// subsequent workbench commands use the selected runtime immediately.
+func UseNVMNodeVersion(ctx context.Context, version string) (string, error) {
+	version = normalizeNodeVersion(version)
+	if version == "" {
+		return "", errors.New("Node.js 版本格式无效")
+	}
+	directory, err := preferredNVMDirectory()
+	if err != nil {
+		return "", err
+	}
+	if !containsNodeVersion(NVMStatus().Versions, version) {
+		return "", errors.New("该 Node.js 版本尚未通过 NVM 安装")
+	}
+	return useNVMNodeVersion(ctx, directory, version)
+}
+
+func useNVMNodeVersion(ctx context.Context, directory, version string) (string, error) {
+	if err := runNVM(ctx, directory, "alias", "default", version); err != nil {
+		return "", err
+	}
+	if err := runNVM(ctx, directory, "use", version); err != nil {
+		return "", err
+	}
+	bin := filepath.Join(directory, "versions", "node", "v"+version, "bin")
+	if info, err := os.Stat(filepath.Join(bin, "node")); err != nil || info.IsDir() {
+		return "", errors.New("NVM 未返回可用的 Node.js 运行时")
+	}
+	prependCommandPath(bin)
+	RefreshCommandEnvironment("node", "npm", "npx")
+	return "已切换工作台 Node.js 至 v" + version + "。", nil
+}
+
+func runNVM(ctx context.Context, directory string, args ...string) error {
+	shell, err := exec.LookPath("bash")
+	if err != nil {
+		return errors.New("未检测到 Bash，无法运行 NVM")
+	}
+	command := "nvm"
+	for _, arg := range args {
+		command += " '" + arg + "'"
+	}
+	script := "set -eu\nexport NVM_DIR=\"$1\"\n. \"$NVM_DIR/nvm.sh\"\n" + command
+	output, runErr := exec.CommandContext(ctx, shell, "-c", script, "alemonx-nvm", directory).CombinedOutput()
+	if runErr != nil {
+		return fmt.Errorf("NVM 执行 %s 失败：%s", strings.Join(args, " "), limitedNodeOutput(output, runErr))
+	}
+	return nil
+}
+
+func normalizeNodeVersion(version string) string {
+	version = strings.TrimPrefix(strings.TrimSpace(version), "v")
+	parts := strings.Split(version, ".")
+	if len(parts) != 3 {
+		return ""
+	}
+	for _, part := range parts {
+		if part == "" {
+			return ""
+		}
+		for _, char := range part {
+			if char < '0' || char > '9' {
+				return ""
+			}
+		}
+	}
+	return version
+}
+
+func isNodeVersion(version string) bool { return normalizeNodeVersion(version) != "" }
+
+func containsNodeVersion(versions []string, target string) bool {
+	for _, version := range versions {
+		if version == "v"+target {
+			return true
+		}
+	}
+	return false
+}
+
+func sortNodeVersions(versions []string) {
+	sort.Slice(versions, func(i, j int) bool {
+		left, leftOK := parseNodeVersion(versions[i])
+		right, rightOK := parseNodeVersion(versions[j])
+		if leftOK && rightOK {
+			for index := range left {
+				if left[index] != right[index] {
+					return left[index] > right[index]
+				}
+			}
+		}
+		return versions[i] > versions[j]
+	})
+}
+
+// InstallNodeWithNVM keeps Node.js upgrades scoped to the current user. On
+// POSIX hosts it materializes the embedded official NVM shell implementation
+// into ALemonX's cache (without editing shell profiles), then uses it to
+// install and select LTS.
+// Windows uses the separate nvm-windows implementation when it is available.
+func InstallNodeWithNVM(ctx context.Context) (string, error) {
+	if runtime.GOOS == "windows" {
+		return installNodeWithNVMWindows(ctx)
+	}
+	directory, installedNVM, err := ensureNVM()
+	if err != nil {
+		return "", err
+	}
+	bin, version, err := installNVMNodeLTS(ctx, directory)
+	if err != nil {
+		return "", err
+	}
+	prependCommandPath(bin)
+	RefreshCommandEnvironment("node", "npm", "npx")
+	prefix := "已通过 NVM 安装并启用 Node.js LTS " + version + "。"
+	if installedNVM {
+		prefix = "已安装 NVM，并通过 NVM 安装并启用 Node.js LTS " + version + "。"
+	}
+	return prefix + " 请重新检查环境确认版本。", nil
+}
+
+// nvmDirectory is the workbench-owned fallback location. It intentionally
+// remains separate from a user's existing NVM installation.
+func nvmDirectory() (string, error) {
+	base, err := nodeRuntimeBase()
+	if err != nil {
+		return "", fmt.Errorf("无法确定 NVM 安装目录：%w", err)
+	}
+	return filepath.Join(filepath.Dir(base), "nvm", nvmVersion), nil
+}
+
+// preferredNVMDirectory first discovers a standard user NVM installation so
+// the UI and runtime respect versions already managed by the user. Desktop
+// apps often do not inherit NVM_DIR, therefore ~/.nvm is checked as well.
+func preferredNVMDirectory() (string, error) {
+	if directory := localNVMDirectory(); directory != "" {
+		return directory, nil
+	}
+	return nvmDirectory()
+}
+
+func localNVMDirectory() string {
+	candidates := []string{}
+	if directory := strings.TrimSpace(os.Getenv("NVM_DIR")); directory != "" && filepath.IsAbs(directory) {
+		candidates = append(candidates, directory)
+	}
+	if home, err := userHomeDir(); err == nil && home != "" {
+		candidates = append(candidates, filepath.Join(home, ".nvm"))
+	}
+	for _, directory := range candidates {
+		path := filepath.Join(directory, "nvm.sh")
+		if info, err := os.Stat(path); err == nil && !info.IsDir() {
+			return directory
+		}
+	}
+	return ""
+}
+
+func preferredOrEnsureNVM() (string, bool, error) {
+	if directory := localNVMDirectory(); directory != "" {
+		return directory, false, nil
+	}
+	return ensureNVM()
+}
+
+func ensureNVM() (string, bool, error) {
+	directory, err := nvmDirectory()
+	if err != nil {
+		return "", false, err
+	}
+	installed, err := resources.MaterializeNVM(directory)
+	if err != nil {
+		return "", false, err
+	}
+	return directory, installed, nil
+}
+
+func installNVMNodeLTS(ctx context.Context, directory string) (string, string, error) {
+	shell, err := exec.LookPath("bash")
+	if err != nil {
+		return "", "", errors.New("未检测到 Bash，无法运行 NVM")
+	}
+	const script = `set -eu
+export NVM_DIR="$1"
+. "$NVM_DIR/nvm.sh"
+nvm install --lts
+nvm alias default 'lts/*' >/dev/null
+nvm use default >/dev/null
+printf '__ALX_NODE_BIN__=%s\n' "$(dirname "$(command -v node)")"
+printf '__ALX_NODE_VERSION__=%s\n' "$(node --version)"`
+	output, runErr := exec.CommandContext(ctx, shell, "-c", script, "alemonx-nvm", directory).CombinedOutput()
+	if runErr != nil {
+		return "", "", fmt.Errorf("NVM 安装 Node.js LTS 失败：%s", limitedNodeOutput(output, runErr))
+	}
+	bin, version := "", ""
+	for _, line := range strings.Split(string(output), "\n") {
+		line = strings.TrimSpace(line)
+		if value, ok := strings.CutPrefix(line, "__ALX_NODE_BIN__="); ok {
+			bin = value
+		}
+		if value, ok := strings.CutPrefix(line, "__ALX_NODE_VERSION__="); ok {
+			version = value
+		}
+	}
+	if bin == "" || version == "" || !filepath.IsAbs(bin) {
+		return "", "", errors.New("NVM 未返回有效的 Node.js 安装路径")
+	}
+	if relative, relErr := filepath.Rel(directory, bin); relErr != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return "", "", errors.New("NVM 返回的 Node.js 安装路径无效")
+	}
+	if info, statErr := os.Stat(filepath.Join(bin, "node")); statErr != nil || info.IsDir() {
+		return "", "", errors.New("NVM 未安装可用的 Node.js")
+	}
+	return bin, version, nil
+}
+
+func installNodeWithNVMWindows(ctx context.Context) (string, error) {
+	nvm, err := ResolveCommand("nvm")
+	if err != nil {
+		manager, managerErr := hostPackageManager()
+		if managerErr != nil {
+			return "", errors.New("未检测到 NVM for Windows，且无法找到可用的包管理器进行安装")
+		}
+		packages := []string(nil)
+		switch manager {
+		case "winget":
+			packages = []string{"CoreyButler.NVMforWindows"}
+		case "choco":
+			packages = []string{"nvm"}
+		default:
+			return "", fmt.Errorf("未检测到 NVM for Windows；当前包管理器 %s 不支持自动安装", manager)
+		}
+		output, runErr := runPackageCommand(ctx, manager, installArguments(manager, packages))
+		if runErr != nil {
+			return "", fmt.Errorf("安装 NVM for Windows 失败：%s", limitedNodeOutput([]byte(output), runErr))
+		}
+		RefreshCommandEnvironment("nvm")
+		nvm, err = ResolveCommand("nvm")
+		if err != nil {
+			return "", errors.New("NVM for Windows 已安装，但当前服务未找到 nvm；请重新启动工作台后重试")
+		}
+	}
+	version, err := latestNodeLTS(ctx)
+	if err != nil {
+		return "", err
+	}
+	for _, args := range [][]string{{"install", version}, {"use", version}} {
+		output, runErr := exec.CommandContext(ctx, nvm, args...).CombinedOutput()
+		if runErr != nil {
+			return "", fmt.Errorf("NVM 执行 %s 失败：%s", strings.Join(args, " "), limitedNodeOutput(output, runErr))
+		}
+	}
+	RefreshCommandEnvironment("node", "npm", "npx")
+	return "已通过 NVM for Windows 安装并启用 Node.js LTS " + version + "。请重新检查环境确认版本。", nil
 }
 
 // InstallManagedNode downloads a verified Node.js LTS package through the
@@ -92,6 +420,12 @@ func latestNodeLTS(ctx context.Context) (string, error) {
 		}
 	}
 	return "", errors.New("Node.js 下载源未提供可用的 LTS 版本")
+}
+
+// LatestNodeLTS returns the newest LTS release advertised by the configured
+// Node.js index. It is exported for read-only UI recommendations.
+func LatestNodeLTS(ctx context.Context) (string, error) {
+	return latestNodeLTS(ctx)
 }
 
 func nodeAssetName(version string) (string, error) {
@@ -231,6 +565,89 @@ func installNodeArchive(ctx context.Context, archive, version string) (string, e
 		return "", err
 	}
 	return bin, nil
+}
+
+// NVMNodeBin returns the newest Node runtime installed by nvm. nvm itself is
+// shell-scoped, so resolving the selected binary directory lets the desktop
+// service and its child processes use it without loading a shell profile.
+func NVMNodeBin() string {
+	if runtime.GOOS == "windows" {
+		return ""
+	}
+	directory, err := preferredNVMDirectory()
+	if err != nil {
+		return ""
+	}
+	// Prefer the explicit NVM default. Falling back to the newest installed
+	// release keeps compatibility with installations created before defaults
+	// were persisted by the workbench.
+	if active := NVMStatus().ActiveVersion; active != "" {
+		bin := filepath.Join(directory, "versions", "node", active, "bin")
+		if info, statErr := os.Stat(filepath.Join(bin, "node")); statErr == nil && !info.IsDir() {
+			return bin
+		}
+	}
+	entries, err := os.ReadDir(filepath.Join(directory, "versions", "node"))
+	if err != nil {
+		return ""
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		left, leftOK := parseNodeVersion(entries[i].Name())
+		right, rightOK := parseNodeVersion(entries[j].Name())
+		if leftOK && rightOK {
+			for index := range left {
+				if left[index] != right[index] {
+					return left[index] > right[index]
+				}
+			}
+		}
+		return entries[i].Name() > entries[j].Name()
+	})
+	for _, entry := range entries {
+		bin := filepath.Join(directory, "versions", "node", entry.Name(), "bin")
+		if info, err := os.Stat(filepath.Join(bin, "node")); err == nil && !info.IsDir() {
+			return bin
+		}
+	}
+	return ""
+}
+
+func nvmNodeCommand(name string) string {
+	if name != "node" && name != "npm" && name != "npx" {
+		return ""
+	}
+	bin := NVMNodeBin()
+	if bin == "" {
+		return ""
+	}
+	path := filepath.Join(bin, name)
+	if info, err := os.Stat(path); err == nil && !info.IsDir() {
+		return path
+	}
+	return ""
+}
+
+func prependCommandPath(directory string) {
+	if directory == "" {
+		return
+	}
+	entries := filepath.SplitList(os.Getenv("PATH"))
+	merged := make([]string, 0, len(entries)+1)
+	seen := map[string]bool{}
+	for _, entry := range append([]string{directory}, entries...) {
+		if entry == "" {
+			continue
+		}
+		key := filepath.Clean(entry)
+		if runtime.GOOS == "windows" {
+			key = strings.ToLower(key)
+		}
+		if !seen[key] {
+			seen[key] = true
+			merged = append(merged, entry)
+		}
+	}
+	_ = os.Setenv("PATH", strings.Join(merged, string(os.PathListSeparator)))
 }
 
 // ManagedNodeBin returns the newest verified Node runtime installed by the

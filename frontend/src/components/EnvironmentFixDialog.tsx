@@ -12,10 +12,7 @@ type Props = {
   onInstalled?: () => void
 }
 
-const links: Record<
-  string,
-  Array<{ label: string; href: string }>
-> = {
+const links: Record<string, Array<{ label: string; href: string }>> = {
   node: [
     {
       label: 'Node.js 官方下载',
@@ -62,11 +59,12 @@ export function EnvironmentFixDialog({
   const [installing, setInstalling] = useState(false)
   const [message, setMessage] = useState('')
   const [browserDownloadNotice, setBrowserDownloadNotice] = useState('')
+  const isLinux = platform.startsWith('linux/')
   const canInstallOnServer =
-    (platform.startsWith('linux/') ||
-      platform.startsWith('darwin/') ||
-      platform.startsWith('windows/')) &&
-    ['node', 'git', 'docker', 'browser', 'fonts'].includes(check.id)
+    (isLinux || platform.startsWith('darwin/') || platform.startsWith('windows/')) &&
+    (['browser-dependencies', 'common-dependencies'].includes(check.id)
+      ? isLinux
+      : ['node', 'git', 'docker', 'browser', 'fonts'].includes(check.id))
   const isMacOS = platform.startsWith('darwin/')
   const isWindows = platform.startsWith('windows/')
   const isManagedNode = check.id === 'node'
@@ -80,22 +78,23 @@ export function EnvironmentFixDialog({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ checkId: check.id, confirm: true })
       })
-      const body = (await response.json()) as { output?: string; error?: string }
+      const body = (await response.json()) as {
+        output?: string
+        error?: string
+      }
       if (!response.ok) throw new Error(body.error || '服务器安装未完成。')
       setMessage(body.output || '服务器安装已完成，请重新检查环境。')
       onInstalled?.()
     } catch (reason) {
-      setMessage(reason instanceof Error ? reason.message : '服务器安装未完成。')
+      setMessage(
+        reason instanceof Error ? reason.message : '服务器安装未完成。'
+      )
     } finally {
       setInstalling(false)
     }
   }
   return (
-    <Modal
-      open
-      onClose={onClose}
-      ariaLabel="环境修复"
-    >
+    <Modal open onClose={onClose} ariaLabel="环境修复">
       <section
         className="relative w-full max-w-110 rounded-xl border border-slate-200 bg-white p-6 shadow-[0_24px_60px_rgb(28_26_23/0.24)]"
         role="dialog"
@@ -125,14 +124,14 @@ export function EnvironmentFixDialog({
               <strong className="text-sm text-brand-900">在工作台内安装</strong>
               <small className="text-xs leading-5 text-brand-800/75">
                 {isManagedNode
-                  ? '自动下载 Node.js LTS 并校验安装。'
+                  ? '无感安装 NVM，并通过 NVM 安装和启用 Node.js LTS。'
                   : check.id === 'fonts'
                     ? '安装 Noto CJK/Emoji 字体，仅影响截图与 PDF 的文字渲染。'
-                  : isMacOS
-                  ? '使用 Homebrew 自动安装。'
-                  : isWindows
-                    ? '使用 WinGet 或 Chocolatey 自动安装。'
-                    : '使用系统包管理器自动安装。'}
+                    : isMacOS
+                      ? '使用 Homebrew 自动安装。'
+                      : isWindows
+                        ? '使用 WinGet 或 Chocolatey 自动安装。'
+                        : '使用系统包管理器自动安装。'}
               </small>
             </div>
             <button
@@ -140,7 +139,11 @@ export function EnvironmentFixDialog({
               disabled={installing}
               onClick={() => void installOnServer()}
             >
-              {installing ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}
+              {installing ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <Download className="size-4" />
+              )}
               {installing
                 ? '正在服务器安装…'
                 : `${isNodeUpgrade ? '升级' : '安装'} ${check.name}`}
@@ -148,32 +151,36 @@ export function EnvironmentFixDialog({
             {installing && (
               <DownloadProgress
                 label={`正在安装 ${check.name}`}
-                detail={isManagedNode ? '正在下载并安装 LTS 环境包。' : '正在安装，请稍候。'}
+                detail={
+                  isManagedNode
+                    ? '正在配置 NVM 并安装 LTS 环境。'
+                    : '正在安装，请稍候。'
+                }
               />
             )}
           </div>
         ) : (
           <div className="mt-5 grid gap-2">
             {options.map(option => (
-            <a
-              className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 p-3 text-brand-700 transition hover:border-brand-200 hover:bg-brand-50"
-              href={option.href}
-              target="_blank"
-              rel="noreferrer"
-              key={option.href}
-              onClick={() =>
-                setBrowserDownloadNotice(
-                  '已交给浏览器下载，完成后回到这里继续。'
-                )
-              }
-            >
-              <span className="min-w-0">
-                <strong className="text-sm font-semibold">
-                  {option.label}
-                </strong>
-              </span>
-              <ArrowUpRight className="size-4 shrink-0 text-slate-400" />
-            </a>
+              <a
+                className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 p-3 text-brand-700 transition hover:border-brand-200 hover:bg-brand-50"
+                href={option.href}
+                target="_blank"
+                rel="noreferrer"
+                key={option.href}
+                onClick={() =>
+                  setBrowserDownloadNotice(
+                    '已交给浏览器下载，完成后回到这里继续。'
+                  )
+                }
+              >
+                <span className="min-w-0">
+                  <strong className="text-sm font-semibold">
+                    {option.label}
+                  </strong>
+                </span>
+                <ArrowUpRight className="size-4 shrink-0 text-slate-400" />
+              </a>
             ))}
           </div>
         )}

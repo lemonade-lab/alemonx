@@ -21,6 +21,27 @@ func embeddedBundle() fstest.MapFS {
 			Data: []byte(`{"name":"yarn"}`),
 		},
 		"packages/pm2/package.json": {Data: []byte(`{}`)},
+		"nvm/v0.40.7/nvm.sh":        {Data: []byte(`# nvm`)},
+		"nvm/v0.40.7/nvm-exec":      {Data: []byte(`#!/bin/sh`)},
+		"nvm/v0.40.7/LICENSE.md":    {Data: []byte(`MIT`)},
+	}
+}
+
+func TestMaterializeNVMUsesEmbeddedBundle(t *testing.T) {
+	Init(embeddedBundle(), workspace.Layout{})
+	target := filepath.Join(t.TempDir(), "nvm", "v0.40.7")
+	created, err := MaterializeNVM(target)
+	if err != nil || !created {
+		t.Fatalf("MaterializeNVM = %t, %v", created, err)
+	}
+	for _, name := range []string{"nvm.sh", "nvm-exec", "LICENSE.md", versionMarker} {
+		if _, err := os.Stat(filepath.Join(target, name)); err != nil {
+			t.Fatalf("missing %s: %v", name, err)
+		}
+	}
+	created, err = MaterializeNVM(target)
+	if err != nil || created {
+		t.Fatalf("second MaterializeNVM = %t, %v", created, err)
 	}
 }
 

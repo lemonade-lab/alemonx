@@ -404,6 +404,7 @@ type server struct {
 	redisManager          *redis.Manager
 	liveUploadsMu         sync.Mutex
 	liveUploads           map[string]liveUpload
+	terminalSessions      *terminalSessionStore
 }
 
 type pluginStatusSnapshot struct {
@@ -768,7 +769,8 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	downloadBroker := newPluginDownloadBroker(networkManager)
 	downloadBroker.setRegistry(plugins)
 	plugins.SetRunnerEnvironmentProvider(downloadBroker.environment)
-	s := &server{version: version, frontendBuild: options.FrontendBuild, assets: assets, static: http.FileServer(http.FS(assets)), checker: system.NewChecker(), network: networkManager, plugins: plugins, auth: identity, ai: aiManager, agentSessions: sessionStore, agentTaskStore: taskStore, agentTasks: tasks, taskService: &agent.TaskService{Manager: tasks}, goalStore: goalStore, opsStore: opsStore, chatHistory: chatHistory, testoneRecords: testoneRecords, opsProjects: opsProjects, opsBackground: startBackground, opsPaused: opsStartupErr != nil, goalSchedulerStop: make(chan struct{}), goalRunning: map[string]bool{}, agentConfirms: newAgentConfirmManager(), development: map[string]developmentProcess{}, scriptProcesses: map[string]scriptProcess{}, botAppPageRuntimes: map[string]*botAppPageRuntime{}, stopping: map[string]bool{}, consoleCache: map[string]consoleSnapshot{}, outputBuffers: map[string]*operationOutputBuffer{}, directoryRoots: managedDirectoryRoots(), events: newRobotEventHub(), eventGateway: newEventGateway(), operationEvents: operationEvents, operations: operationEvents.snapshot(), opsEvents: newOpsEventHub(), mcpEvents: newMCPEventHub(), mcpMonitorStop: make(chan struct{}), pluginEventsStop: make(chan struct{}), updateMonitorStop: make(chan struct{}), updateState: updateStatusState{Update: releases.Update{Current: version}}, nodeID: fmt.Sprintf("%s-%d", hostname(), os.Getpid()), pluginStatusCache: map[string]*pluginStatusSnapshot{}, hostContexts: map[string]pluginHostContext{}, privilegeStore: privileges, pluginDownloadBroker: downloadBroker, sudoAttempts: map[string]sudoAttempt{}, runPrivilegedCommand: system.RunSudoCommand, installEnvironment: system.InstallEnvironment, liveUploads: map[string]liveUpload{}}
+	s := &server{version: version, frontendBuild: options.FrontendBuild, assets: assets, static: http.FileServer(http.FS(assets)), checker: system.NewChecker(), network: networkManager, plugins: plugins, auth: identity, ai: aiManager, agentSessions: sessionStore, agentTaskStore: taskStore, agentTasks: tasks, taskService: &agent.TaskService{Manager: tasks}, goalStore: goalStore, opsStore: opsStore, chatHistory: chatHistory, testoneRecords: testoneRecords, opsProjects: opsProjects, opsBackground: startBackground, opsPaused: opsStartupErr != nil, goalSchedulerStop: make(chan struct{}), goalRunning: map[string]bool{}, agentConfirms: newAgentConfirmManager(), development: map[string]developmentProcess{}, scriptProcesses: map[string]scriptProcess{}, botAppPageRuntimes: map[string]*botAppPageRuntime{}, stopping: map[string]bool{}, consoleCache: map[string]consoleSnapshot{}, outputBuffers: map[string]*operationOutputBuffer{}, directoryRoots: managedDirectoryRoots(), events: newRobotEventHub(), eventGateway: newEventGateway(), operationEvents: operationEvents, operations: operationEvents.snapshot(), opsEvents: newOpsEventHub(), mcpEvents: newMCPEventHub(), mcpMonitorStop: make(chan struct{}), pluginEventsStop: make(chan struct{}), updateMonitorStop: make(chan struct{}), updateState: updateStatusState{Update: releases.Update{Current: version}}, nodeID: fmt.Sprintf("%s-%d", hostname(), os.Getpid()), pluginStatusCache: map[string]*pluginStatusSnapshot{}, hostContexts: map[string]pluginHostContext{}, privilegeStore: privileges, pluginDownloadBroker: downloadBroker, sudoAttempts: map[string]sudoAttempt{}, runPrivilegedCommand: system.RunSudoCommand, installEnvironment: system.InstallEnvironment, liveUploads: map[string]liveUpload{}, terminalSessions: newTerminalSessionStore()}
+	go s.reapTerminalSessions()
 	s.redisManager = redis.NewManager(filepath.Join(filepath.Dir(taskStore.TasksDir()), "alx-redis.json"))
 	if options.RedisPort > 0 || options.RedisDisabled {
 		status := s.redisManager.Status()
@@ -1061,6 +1063,7 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	mux.HandleFunc("/api/v1/system/ssh", s.sshHandler)
 	mux.HandleFunc("/api/v1/system/service", s.systemServiceHandler)
 	mux.HandleFunc("/api/v1/system/environment/install", s.environmentInstallHandler)
+	mux.HandleFunc("/api/v1/system/node/nvm", s.nodeNVMHandler)
 	mux.HandleFunc("/api/v1/system/network", s.systemNetworkHandler)
 	mux.HandleFunc("/api/v1/system/dependency-sources", s.dependencySourcesHandler)
 	mux.HandleFunc("/api/v1/system/redis", s.systemRedisHandler)
@@ -1112,11 +1115,8 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	mux.HandleFunc("/api/v1/robot/projects", s.robotProjectsHandler)
 	mux.HandleFunc("/api/v1/robot/validate", s.robotValidateHandler)
 	mux.HandleFunc("/api/v1/robot/console", s.robotConsoleHandler)
-	mux.HandleFunc("/api/v1/robot/terminal", s.robotTerminalHandler)
-	mux.HandleFunc("/api/v1/robot/terminal/session", s.robotTerminalSessionHandler)
-	mux.HandleFunc("/api/v1/robot/terminal/input", s.robotTerminalInputHandler)
-	mux.HandleFunc("/api/v1/robot/terminal/resize", s.robotTerminalResizeHandler)
-	mux.HandleFunc("/api/v1/robot/terminal/close", s.robotTerminalCloseHandler)
+	mux.HandleFunc("/api/v1/terminal/sessions", s.terminalSessionsHandler)
+	mux.HandleFunc("/api/v1/terminal/sessions/", s.terminalSessionHandler)
 	mux.HandleFunc("/api/v1/robot/pm2-logs", s.robotPM2LogsHandler)
 	mux.HandleFunc("/api/v1/robot/pm2-logs/days", s.robotPM2LogDaysHandler)
 	mux.HandleFunc("/api/v1/robot/pm2-logs/stream", s.robotPM2LogStreamHandler)
@@ -4274,6 +4274,43 @@ func (s *server) robotConsoleHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if taskID := strings.TrimSpace(r.URL.Query().Get("taskId")); taskID != "" {
+		s.mu.RLock()
+		var task operationTask
+		for _, candidate := range s.operations {
+			if candidate.ID == taskID && candidate.Root == root && strings.HasPrefix(candidate.Action, "script:") {
+				task = candidate
+				break
+			}
+		}
+		s.mu.RUnlock()
+		if task.ID == "" {
+			writeError(w, http.StatusNotFound, "未找到该脚本的运行日志。")
+			return
+		}
+		mode := "脚本 " + strings.TrimPrefix(task.Action, "script:")
+		payload := consolePayload{
+			Path:      root,
+			Snapshot:  console.Output,
+			Mode:      mode,
+			SessionID: task.ID,
+			Running:   task.Status == "running",
+		}
+		if !task.CreatedAt.IsZero() {
+			startedAt := task.CreatedAt
+			payload.StartedAt = &startedAt
+		}
+		if task.Status == "running" {
+			payload.Output = "$ " + mode + "实时输出\n" + task.Output
+		} else {
+			payload.Output = "$ " + mode + "运行日志\n" + task.Output
+			if task.Status == "failed" && task.Error != "" {
+				payload.Output += "\n\n" + task.Error
+			}
+		}
+		writeJSON(w, http.StatusOK, payload)
 		return
 	}
 	// Prefer the process that is actually running; otherwise show the most
@@ -8891,6 +8928,76 @@ func (s *server) environmentInstallHandler(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, map[string]string{"output": output})
 }
 
+// nodeNVMHandler exposes only the workbench-owned NVM runtime. It never
+// reads or edits a user's shell profile or a separately installed NVM.
+func (s *server) nodeNVMHandler(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		status := system.NVMStatus()
+		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+		defer cancel()
+		if latest, err := system.LatestNodeLTS(ctx); err == nil {
+			status.LatestVersion = latest
+			for _, version := range status.Versions {
+				if version == latest {
+					status.LatestInstalled = true
+					break
+				}
+			}
+		}
+		writeJSON(w, http.StatusOK, status)
+		return
+	case http.MethodPost:
+		// continue below
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
+		return
+	}
+	if runtime.GOOS == "windows" {
+		writeError(w, http.StatusBadRequest, "NodeJS 版本管理暂不支持 Windows。")
+		return
+	}
+	if s.auth != nil {
+		status, err := s.auth.Status(s.authToken(r))
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "无法读取当前账户权限。")
+			return
+		}
+		if status.Enabled && (!status.Authenticated || !status.SuperAdmin) {
+			writeError(w, http.StatusForbidden, "只有已登录的超级管理员可以管理 NodeJS 版本。")
+			return
+		}
+	}
+	var input struct {
+		Action  string `json:"action"`
+		Version string `json:"version"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 16<<10)).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, "NodeJS 版本请求无效。")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 12*time.Minute)
+	defer cancel()
+	var (
+		output string
+		err    error
+	)
+	switch input.Action {
+	case "install":
+		output, err = system.InstallNVMNodeVersion(ctx, input.Version)
+	case "use":
+		output, err = system.UseNVMNodeVersion(ctx, input.Version)
+	default:
+		writeError(w, http.StatusBadRequest, "NodeJS 操作无效。")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"output": output, "status": system.NVMStatus()})
+}
+
 func findGoal(id string) (goal, bool) {
 	for _, item := range goals {
 		if item.ID == id {
@@ -8982,6 +9089,12 @@ func requiredPermissionForRequest(r *http.Request) string {
 	}
 	if strings.HasPrefix(path, "/api/v1/auth/") {
 		return ""
+	}
+	// A terminal is a local-shell capability. Its read endpoints include live
+	// process output, so they are never viewer-readable merely because they use
+	// GET.
+	if strings.HasPrefix(path, "/api/v1/terminal/") {
+		return "workbench.manage"
 	}
 	// The main dashboard updates only its own validated active-project context
 	// here. This is safe for a viewer and lets a plugin later read the same

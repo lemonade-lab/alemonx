@@ -2277,69 +2277,12 @@ func runNamedPackageManager(root, manager string, args ...string) (string, error
 // the intended LTS version. Prefer .nvmrc, then nvm's default alias.
 func packageManagerEnvironment(root string) map[string]string {
 	values := map[string]string{}
-	if bin := preferredNVMNodeBin(root); bin != "" {
+	if bin := system.NVMNodeBin(); bin != "" {
 		values["PATH"] = bin + string(os.PathListSeparator) + os.Getenv("PATH")
 	} else if bin := system.ManagedNodeBin(); bin != "" {
 		values["PATH"] = bin + string(os.PathListSeparator) + os.Getenv("PATH")
 	}
 	return values
-}
-
-func preferredNVMNodeBin(root string) string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	wanted := ""
-	if data, err := os.ReadFile(filepath.Join(root, ".nvmrc")); err == nil {
-		wanted = strings.TrimPrefix(strings.TrimSpace(string(data)), "v")
-	}
-	if wanted == "" {
-		if data, err := os.ReadFile(filepath.Join(home, ".nvm", "alias", "default")); err == nil {
-			wanted = strings.TrimPrefix(strings.TrimSpace(string(data)), "v")
-		}
-	}
-	if wanted == "" || strings.ContainsAny(wanted, "/ ") {
-		return ""
-	}
-	versions, err := os.ReadDir(filepath.Join(home, ".nvm", "versions", "node"))
-	if err != nil {
-		return ""
-	}
-	candidates := []string{}
-	for _, entry := range versions {
-		name := strings.TrimPrefix(entry.Name(), "v")
-		if entry.IsDir() && nodeVersionMatches(name, wanted) {
-			if info, err := os.Stat(filepath.Join(home, ".nvm", "versions", "node", entry.Name(), "bin", "node")); err == nil && !info.IsDir() {
-				candidates = append(candidates, entry.Name())
-			}
-		}
-	}
-	if len(candidates) == 0 {
-		return ""
-	}
-	sort.Slice(candidates, func(i, j int) bool { return nodeVersionGreater(candidates[i], candidates[j]) })
-	return filepath.Join(home, ".nvm", "versions", "node", candidates[0], "bin")
-}
-
-func nodeVersionMatches(version, wanted string) bool {
-	version, wanted = strings.TrimPrefix(version, "v"), strings.TrimPrefix(wanted, "v")
-	if version == wanted {
-		return true
-	}
-	return regexp.MustCompile(`^\d+$`).MatchString(wanted) && strings.HasPrefix(version, wanted+".")
-}
-
-func nodeVersionGreater(left, right string) bool {
-	var l1, l2, l3, r1, r2, r3 int
-	_, _ = fmt.Sscanf(strings.TrimPrefix(left, "v"), "%d.%d.%d", &l1, &l2, &l3)
-	_, _ = fmt.Sscanf(strings.TrimPrefix(right, "v"), "%d.%d.%d", &r1, &r2, &r3)
-	for _, pair := range [][2]int{{l1, r1}, {l2, r2}, {l3, r3}} {
-		if pair[0] != pair[1] {
-			return pair[0] > pair[1]
-		}
-	}
-	return false
 }
 
 func runWithEnv(root string, values map[string]string, name string, args ...string) (string, error) {

@@ -8,6 +8,7 @@ import (
 )
 
 func TestResolveDevelopmentCommandFindsUserYarnOutsideServicePATH(t *testing.T) {
+	isolateUserNVM(t)
 	home := t.TempDir()
 	previousHome := developmentUserHomeDir
 	developmentUserHomeDir = func() (string, error) { return home, nil }
@@ -35,6 +36,7 @@ func TestResolveDevelopmentCommandFindsUserYarnOutsideServicePATH(t *testing.T) 
 }
 
 func TestPrepareDevelopmentCommandFallsBackToCorepack(t *testing.T) {
+	isolateUserNVM(t)
 	home := t.TempDir()
 	previousHome := developmentUserHomeDir
 	developmentUserHomeDir = func() (string, error) { return home, nil }
