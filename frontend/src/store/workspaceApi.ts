@@ -76,6 +76,7 @@ type LocalPackageVersions = {
   current: string
   latest?: string
   versions: string[]
+  labels?: Record<string, string>
   branch?: string
   ahead?: number
   dirty?: boolean

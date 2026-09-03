@@ -32,6 +32,7 @@ export type ForegroundLogItem = {
   action: ForegroundLogAction
   serviceURL: string | null
   masterUserID: string | null
+  details: Array<{ label: string; value: string }>
 }
 
 const MAX_CONTENT_CHARS = 48 * 1024
@@ -67,6 +68,18 @@ const BARE_LOCAL_SERVICE_PATTERN =
   /(?:localhost|127\.0\.0\.1|0\.0\.0\.0|(?:10|192\.168)\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}):\d{2,5}(?:\/[^\s'"<>]*)?/i
 const MASTER_COMMAND_PATTERN = /\[MessageText:[^\]\r\n]*\/我是主人[^\]\r\n]*\]/
 const MESSAGE_USER_ID_PATTERN = /\[UserId:([^\]\r\n]+)\]/i
+const STRUCTURED_FIELD_PATTERN = /(?:^|[,\n]\s*)([A-Za-z_][\w-]*)\s*:\s*(?:'([^']*)'|"([^"]*)"|([^,}\n]+))/g
+const STRUCTURED_LABELS: Record<string, string> = {
+  message: '信息',
+  runtime_mode: '运行模式',
+  transport: '传输方式',
+  gscore_url: '服务地址',
+  service_url: '服务地址',
+  server_url: '服务地址',
+  url: '服务地址',
+  endpoint: '服务地址',
+  port: '端口'
+}
 
 function trimContent(value: string) {
   if (value.length <= MAX_CONTENT_CHARS) return value
@@ -82,7 +95,8 @@ function stripLogPrefix(value: string) {
 }
 
 function timeLabel(value: string) {
-  return value.replace(ANSI_PATTERN, '').trim().match(TIMESTAMP_PATTERN)?.[2] ?? null
+  const matched = value.replace(ANSI_PATTERN, '').trim().match(TIMESTAMP_PATTERN)
+  return matched ? `${matched[1] ?? ''}${matched[2]}`.trim() : null
 }
 
 function isBlockStart(value: string) {
@@ -156,18 +170,44 @@ function masterCommandUserID(raw: string) {
   return /^[A-Za-z0-9._:-]{1,160}$/.test(userID) ? userID : null
 }
 
+function structuredDetails(raw: string) {
+  const body = raw.trim()
+  if (!body.startsWith('{') || !body.endsWith('}')) return []
+  const details: Array<{ label: string; value: string }> = []
+  STRUCTURED_FIELD_PATTERN.lastIndex = 0
+  for (const match of body.slice(1, -1).matchAll(STRUCTURED_FIELD_PATTERN)) {
+    const key = match[1]
+    const value = (match[2] ?? match[3] ?? match[4] ?? '').trim()
+    if (!value || !STRUCTURED_LABELS[key]) continue
+    details.push({ label: STRUCTURED_LABELS[key], value })
+  }
+  return details
+}
+
+function structuredSummary(details: Array<{ label: string; value: string }>) {
+  const message = details.find(item => item.label === '信息')?.value
+  const rest = details.filter(item => item.label !== '信息')
+  return rest.length
+    ? rest.map(item => `${item.label}：${item.value}`).join(' · ')
+    : message ?? ''
+}
+
 function classify(raw: string, index: number): ForegroundLogItem {
   const firstLine = raw.split(/\r?\n/, 1)[0] ?? raw
   const text = sanitizeSimpleText(firstLine)
   const url = serviceURL(raw)
   const common = stripLogPrefix(firstLine)
   const masterUserID = masterCommandUserID(raw)
+  const details = structuredDetails(raw)
   let domain: ForegroundLogDomain = 'unknown'
   let level: ForegroundLogLevel = 'info'
   let title = '运行输出'
   let action: ForegroundLogAction = null
 
-  if (masterUserID) {
+  if (details.length) {
+    domain = details.some(item => item.label === '服务地址') ? 'service' : 'runtime'
+    title = details.find(item => item.label === '信息')?.value || '运行信息'
+  } else if (masterUserID) {
     domain = 'login'
     title = '主人权限请求'
     action = 'manage-master'
@@ -226,14 +266,15 @@ function classify(raw: string, index: number): ForegroundLogItem {
   return {
     id: `${index}:${raw.slice(0, 80)}`,
     raw,
-    text: text || common || '运行输出',
+    text: structuredSummary(details) || text || common || '运行输出',
     title,
     timeLabel: timeLabel(firstLine),
     level,
     domain,
     action,
     serviceURL: url,
-    masterUserID
+    masterUserID,
+    details
   }
 }
 
@@ -270,6 +311,8 @@ export function foregroundLogDisplayText(
   mode: ForegroundLogMode
 ) {
   if (mode === 'advanced') return item.raw.replace(ANSI_PATTERN, '')
-  if (mode === 'common') return stripLogPrefix(item.raw)
+  // 常用模式保留异常和提醒全文，其余信息与简洁模式一样摘取重点。
+  if (mode === 'common' && (item.level === 'error' || item.level === 'warning'))
+    return stripLogPrefix(item.raw)
   return item.text
 }

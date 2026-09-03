@@ -5314,6 +5314,34 @@ textarea:focus-visible {
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
+.smart-log-line.is-advanced {
+  background: transparent;
+  border-color: var(--theme-border-default);
+  border-radius: 6px;
+}
+.smart-log-extracts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.smart-log-extracts span {
+  align-items: baseline;
+  background: var(--theme-surface-input);
+  border: 1px solid var(--theme-border-default);
+  border-radius: 999px;
+  color: var(--theme-text-primary);
+  display: inline-flex;
+  font: 0.68rem/1.35 ui-monospace, SFMono-Regular, Menlo, monospace;
+  gap: 4px;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  padding: 3px 7px;
+}
+.smart-log-extracts small {
+  color: var(--theme-text-muted);
+  font: inherit;
+  white-space: nowrap;
+}
 .smart-log-empty {
   color: var(--theme-text-muted);
   font-size: 0.75rem;

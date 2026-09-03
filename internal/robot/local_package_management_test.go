@@ -164,9 +164,6 @@ func TestSwitchLocalPackageVersionRequiresConfirmationBeforeDiscardingGitChanges
 	writeAppPageFixture(t, filepath.Join(plugin, "package.json"), `{"name":"local-plugin","version":"1.0.0","local":true}`)
 	writeAppPageFixture(t, filepath.Join(plugin, "scratch.txt"), "local change")
 
-	if _, err := switchLocalPackageVersion(root, "local-plugin", "v1.0.0", false); err == nil || !strings.Contains(err.Error(), "仅允许同步 release") {
-		t.Fatalf("tag switch must be rejected, err=%v", err)
-	}
 	if _, err := switchLocalPackageVersion(root, "local-plugin", "release", false); err == nil || !strings.Contains(err.Error(), "存在未提交修改") {
 		t.Fatalf("ordinary switch should preserve local changes, err=%v", err)
 	}

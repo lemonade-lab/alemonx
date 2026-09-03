@@ -479,9 +479,6 @@ func replaceLocalPackage(root, packageName, version string) (Result, error) {
 }
 
 func switchLocalPackageVersion(root, packageName, version string, force bool) (Result, error) {
-	if version != "release" {
-		return Result{}, errors.New("背包插件仅允许同步 release 分支")
-	}
 	items, err := (Manager{}).LocalPackages(root)
 	if err != nil {
 		return Result{}, err
@@ -501,6 +498,21 @@ func switchLocalPackageVersion(root, packageName, version string, force bool) (R
 			if !force && (status.Dirty || status.Branch != "release" || status.Ahead > 0) {
 				return Result{}, releaseSyncConfirmationError(status)
 			}
+			target := "origin/release"
+			if version != "" && version != "release" {
+				if !regexp.MustCompile(`^[0-9a-f]{7,40}$`).MatchString(version) {
+					return Result{}, errors.New("请选择 release 分支中的有效提交")
+				}
+				resolved, resolveErr := gitRun(item.Path, "rev-parse", "--verify", version+"^{commit}")
+				if resolveErr != nil {
+					return Result{}, errors.New("找不到所选 release 提交")
+				}
+				resolved = strings.TrimSpace(resolved)
+				if _, ancestorErr := gitRun(item.Path, "merge-base", "--is-ancestor", resolved, "origin/release"); ancestorErr != nil {
+					return Result{}, errors.New("所选提交不属于 release 分支")
+				}
+				target = resolved
+			}
 			var logs []string
 			if force {
 				resetOutput, resetErr := gitRun(item.Path, "reset", "--hard")
@@ -513,10 +525,10 @@ func switchLocalPackageVersion(root, packageName, version string, force bool) (R
 				}
 				logs = append(logs, "已丢弃该插件工作区的本地 Git 修改。", resetOutput, cleanOutput)
 			}
-			output, checkoutErr := gitRun(item.Path, "checkout", "-B", "release", "origin/release")
+			output, checkoutErr := gitRun(item.Path, "checkout", "-B", "release", target)
 			logs = append(logs, output)
 			if checkoutErr == nil {
-				output, checkoutErr = gitRun(item.Path, "reset", "--hard", "origin/release")
+				output, checkoutErr = gitRun(item.Path, "reset", "--hard", target)
 				logs = append(logs, output)
 			}
 			output = strings.TrimSpace(strings.Join(logs, "\n"))

@@ -111,13 +111,14 @@ type LocalPackage struct {
 // backpack entry. A checked-out Git package always wins over npm metadata,
 // matching the framework's source-first plugin convention.
 type LocalPackageVersions struct {
-	Source   string   `json:"source"`
-	Current  string   `json:"current"`
-	Latest   string   `json:"latest,omitempty"`
-	Versions []string `json:"versions"`
-	Branch   string   `json:"branch,omitempty"`
-	Ahead    int      `json:"ahead,omitempty"`
-	Dirty    bool     `json:"dirty,omitempty"`
+	Source   string            `json:"source"`
+	Current  string            `json:"current"`
+	Latest   string            `json:"latest,omitempty"`
+	Versions []string          `json:"versions"`
+	Labels   map[string]string `json:"labels,omitempty"`
+	Branch   string            `json:"branch,omitempty"`
+	Ahead    int               `json:"ahead,omitempty"`
+	Dirty    bool              `json:"dirty,omitempty"`
 }
 
 func (m Manager) LocalPackageVersions(root, packageName string) (LocalPackageVersions, error) {
@@ -130,11 +131,22 @@ func (m Manager) LocalPackageVersions(root, packageName string) (LocalPackageVer
 			continue
 		}
 		if output, gitErr := gitRun(item.Path, "rev-parse", "--is-inside-work-tree"); gitErr == nil && strings.TrimSpace(output) == "true" {
+			if _, fetchErr := gitRun(item.Path, "fetch", "origin", "release"); fetchErr != nil {
+				return LocalPackageVersions{}, errors.New("无法读取 release 分支提交")
+			}
 			status, statusErr := releaseGitStatus(item.Path)
 			if statusErr != nil {
 				return LocalPackageVersions{}, statusErr
 			}
-			return LocalPackageVersions{Source: "git", Current: status.Head, Latest: "release", Versions: []string{"release"}, Branch: status.Branch, Ahead: status.Ahead, Dirty: status.Dirty}, nil
+			commits, labels, commitsErr := releaseCommits(item.Path)
+			if commitsErr != nil {
+				return LocalPackageVersions{}, commitsErr
+			}
+			latest := ""
+			if len(commits) > 0 {
+				latest = commits[0]
+			}
+			return LocalPackageVersions{Source: "git", Current: status.Head, Latest: latest, Versions: commits, Labels: labels, Branch: status.Branch, Ahead: status.Ahead, Dirty: status.Dirty}, nil
 		}
 		versions, loadErr := catalog.LoadPackageVersions(item.Name)
 		if loadErr != nil {
@@ -143,6 +155,26 @@ func (m Manager) LocalPackageVersions(root, packageName string) (LocalPackageVer
 		return LocalPackageVersions{Source: "npm", Current: item.Version, Latest: versions.Latest, Versions: versions.Versions}, nil
 	}
 	return LocalPackageVersions{}, errors.New("背包中没有这个本地插件包")
+}
+
+// releaseCommits exposes a compact, readable history for choosing a version
+// while preserving release as the checked-out branch.
+func releaseCommits(path string) ([]string, map[string]string, error) {
+	output, err := gitRun(path, "log", "-n", "12", "--format=%H%x1f%s", "origin/release")
+	if err != nil {
+		return nil, nil, errors.New("无法读取 release 分支提交记录")
+	}
+	commits := make([]string, 0, 12)
+	labels := map[string]string{}
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		parts := strings.SplitN(line, "\x1f", 2)
+		if len(parts) != 2 || !regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(parts[0]) {
+			continue
+		}
+		commits = append(commits, parts[0])
+		labels[parts[0]] = parts[0][:8] + " · " + strings.TrimSpace(parts[1])
+	}
+	return commits, labels, nil
 }
 
 func newerGitTag(left, right string) bool {

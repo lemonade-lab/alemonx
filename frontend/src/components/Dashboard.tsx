@@ -8706,7 +8706,9 @@ function BackpackPackageManager({
               >
                 {versions.versions.map(candidate => (
                   <option key={candidate} value={candidate}>
-                    {versions.source === 'npm' ? `v${candidate}` : candidate}
+                    {versions.source === 'npm'
+                      ? `v${candidate}`
+                      : (versions.labels?.[candidate] ?? candidate)}
                   </option>
                 ))}
               </select>
@@ -8716,6 +8718,8 @@ function BackpackPackageManager({
                   busy ||
                   !version ||
                   version === versions.current ||
+                  (versions.source === 'git' &&
+                    version.startsWith(versions.current)) ||
                   version.replace(/^v/, '') === item.version
                 }
                 onClick={() => void onReplace(item.name, version)}
@@ -8730,6 +8734,8 @@ function BackpackPackageManager({
                     busy ||
                     !version ||
                     version === versions.current ||
+                    (versions.source === 'git' &&
+                      version.startsWith(versions.current)) ||
                     version.replace(/^v/, '') === item.version
                   }
                   onClick={() => setForceSwitchOpen(true)}
@@ -8901,7 +8907,7 @@ function CatalogDetail({
               versionsLoading ||
               Boolean(versionsError) ||
               noRepositoryTag ||
-              (repositoryInstall && !version.trim())
+              (!releaseBranchInstall && repositoryInstall && !version.trim())
             }
             onClick={() => onRun(installAction, installTarget)}
           >
@@ -13226,7 +13232,7 @@ function ReadonlyConsole({
               ) : (
                 foregroundLogItems.map((item, index) => (
                   <div key={item.id}>
-                    {foregroundLogMode === 'simple' &&
+                    {foregroundLogMode !== 'advanced' &&
                       item.timeLabel &&
                       item.timeLabel !==
                         foregroundLogItems[index - 1]?.timeLabel && (
@@ -13235,7 +13241,11 @@ function ReadonlyConsole({
                         </div>
                       )}
                     <article
-                      className={cn('smart-log-line', `is-${item.level}`)}
+                      className={cn(
+                        'smart-log-line',
+                        `is-${item.level}`,
+                        foregroundLogMode === 'advanced' && 'is-advanced'
+                      )}
                     >
                       <div className="smart-log-line-meta">
                         <span>{item.title}</span>
@@ -13248,6 +13258,20 @@ function ReadonlyConsole({
                       <code>
                         {foregroundLogDisplayText(item, foregroundLogMode)}
                       </code>
+                      {foregroundLogMode !== 'advanced' &&
+                        item.details.filter(detail => detail.label !== '信息')
+                          .length > 0 && (
+                          <div className="smart-log-extracts">
+                            {item.details
+                              .filter(detail => detail.label !== '信息')
+                              .map(detail => (
+                                <span key={`${detail.label}:${detail.value}`}>
+                                  <small>{detail.label}</small>
+                                  {detail.value}
+                                </span>
+                              ))}
+                          </div>
+                        )}
                     </article>
                   </div>
                 ))
