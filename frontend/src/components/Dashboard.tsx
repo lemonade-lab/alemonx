@@ -4266,6 +4266,11 @@ export function Dashboard({
               key={`${feature}-${browserHomeVersion}`}
               minimized={state.minimized}
               browserCommand={browserRequestedURL}
+              onCommandConsumed={id =>
+                setBrowserRequestedURL(current =>
+                  current?.id === id ? null : current
+                )
+              }
               zIndex={zIndex}
               onClose={() => closeSystemWindow(feature)}
               onMinimize={() =>
@@ -11495,7 +11500,8 @@ function MiniBrowserWindow({
   zIndex,
   onClose,
   onMinimize,
-  onActivate
+  onActivate,
+  onCommandConsumed
 }: {
   minimized: boolean
   browserCommand: BrowserCommand | null
@@ -11503,12 +11509,18 @@ function MiniBrowserWindow({
   onClose: () => void
   onMinimize: () => void
   onActivate: () => void
+  onCommandConsumed: (id: string) => void
 }) {
   const [homeQuery, setHomeQuery] = useState('')
-  // A visible browser always owns at least one tab. In particular, a URL that
-  // is handed off to the system browser must not leave this window displaying
-  // the home screen without a matching "首页" tab.
-  const [tabs, setTabs] = useState<BrowserTab[]>(() => [createBrowserHomeTab()])
+  // Directly opening the browser gets one blank tab. A concrete navigation is
+  // itself the first tab, so service and plugin launches never leave a spare
+  // home tab behind.
+  const startsWithNavigation = Boolean(
+    browserCommand?.kind === 'open' && browserCommand.url
+  )
+  const [tabs, setTabs] = useState<BrowserTab[]>(() =>
+    startsWithNavigation ? [] : [createBrowserHomeTab()]
+  )
   const [activeTabID, setActiveTabID] = useState(() => tabs[0]?.id ?? '')
   const [error, setError] = useState('')
   const lastBrowserCommandID = useRef('')
@@ -11547,6 +11559,19 @@ function MiniBrowserWindow({
       body: JSON.stringify({ url: target.displayURL })
     })
     if (!response.ok) throw new Error('无法交给系统浏览器打开。')
+  }
+  const removeBrowserTab = (id: string) => {
+    setTabs(current => {
+      const remaining = current.filter(tab => tab.id !== id)
+      if (remaining.length === 0) {
+        // The only tab was a provisional HTTP tab that has been classified for
+        // the system browser. Do not leave an empty embedded browser behind.
+        window.setTimeout(onClose, 0)
+        return remaining
+      }
+      if (activeTabID === id) setActiveTabID(remaining.at(-1)?.id ?? '')
+      return remaining
+    })
   }
   const openWorkbenchPage = (
     path: string,
@@ -11626,6 +11651,27 @@ function MiniBrowserWindow({
           (current.port || (current.protocol === 'https:' ? '443' : '80')) ===
             (next.port || (next.protocol === 'https:' ? '443' : '80'))
       )
+      const shouldOpenNewTab = openInNewTab || !activeTab
+      // HTTP targets get a visible tab before asynchronous classification. In
+      // particular, this keeps a plugin Web UI open request reliable while its
+      // host panel and the browser window are mounting concurrently.
+      const pendingTabID = shouldOpenNewTab
+        ? tabID ?? `browser-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+        : ''
+      if (shouldOpenNewTab && next.protocol === 'http:') {
+        setTabs(current => [
+          ...current,
+          {
+            id: pendingTabID,
+            query: complete.displayURL,
+            pageURL: '',
+            frameKey: 0,
+            history: [],
+            historyIndex: -1
+          }
+        ])
+        setActiveTabID(pendingTabID)
+      }
       if (!sameSite) {
         let scope = 'public'
         try {
@@ -11649,24 +11695,29 @@ function MiniBrowserWindow({
         }
         if (next.protocol === 'https:' || scope !== 'private') {
           await openInSystemBrowser(complete)
+          if (pendingTabID) removeBrowserTab(pendingTabID)
           return
         }
       }
       setError('')
-      const nextHistory = openInNewTab || !activeTab
+      const nextHistory = shouldOpenNewTab
         ? [next.href]
         : activeTab.history.slice(0, activeTab.historyIndex + 1)
       if (nextHistory.at(-1) !== next.href) nextHistory.push(next.href)
       const nextTab: BrowserTab = {
-        id: tabID ?? `browser-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        id: pendingTabID || tabID || `browser-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         query: sameSite ? addressTextFor(next) : complete.displayURL,
         pageURL: frameURLFor(next),
         frameKey: 1,
         history: nextHistory,
         historyIndex: nextHistory.length - 1
       }
-      if (openInNewTab || !activeTab) {
-        setTabs(current => [...current, nextTab])
+      if (shouldOpenNewTab) {
+        setTabs(current =>
+          pendingTabID
+            ? current.map(tab => (tab.id === pendingTabID ? nextTab : tab))
+            : [...current, nextTab]
+        )
         setActiveTabID(nextTab.id)
       } else {
         setTabs(current => current.map(tab => (tab.id === activeTab.id ? { ...nextTab, id: tab.id } : tab)))
@@ -11727,6 +11778,7 @@ function MiniBrowserWindow({
     if (!browserCommand || browserCommand.id === lastBrowserCommandID.current)
       return
     lastBrowserCommandID.current = browserCommand.id
+    onCommandConsumed(browserCommand.id)
     if (browserCommand.kind === 'close' && browserCommand.tabID) {
       closeTab(browserCommand.tabID)
       return
@@ -11796,11 +11848,7 @@ function MiniBrowserWindow({
         new CustomEvent('alx-browser-tab-closed', { detail: { id } })
       )
     if (remaining.length === 0) {
-      const homeTab = createBrowserHomeTab()
-      setTabs([homeTab])
-      setActiveTabID(homeTab.id)
-      setHomeQuery('')
-      setError('')
+      onClose()
       return
     }
     setTabs(remaining)
@@ -11833,7 +11881,7 @@ function MiniBrowserWindow({
                 className={`flex min-w-28 max-w-52 items-center gap-1 rounded-t-md border border-b-0 px-2 py-1 text-xs ${tab.id === activeTabID ? 'bg-white text-slate-800 dark:bg-slate-700 dark:text-slate-100' : 'border-transparent text-slate-500 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700/70'}`}
               >
                 <button className="min-w-0 flex-1 truncate text-left" type="button" onClick={() => setActiveTabID(tab.id)} title={tab.query}>
-                  {tab.query || '首页'}
+                  {tab.query || '新标签页'}
                 </button>
                 <button className="shrink-0 rounded p-0.5 hover:bg-slate-200 dark:hover:bg-slate-600" type="button" onClick={() => closeTab(tab.id)} aria-label="关闭标签页">
                   <X className="size-3" />
