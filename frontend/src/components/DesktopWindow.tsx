@@ -11,7 +11,7 @@ import { Minus, X } from 'lucide-react'
 import { Modal } from './Modal'
 import { registerDesktopWindowShortcut } from './desktopWindowShortcuts'
 import { isWindowHeaderInteractiveTarget } from './desktopWindowInteraction'
-import { useIsPadViewport } from '../hooks/useIsPadViewport'
+import { useIsPadViewport, useIsPhoneViewport } from '../hooks/useIsPadViewport'
 import { clampWindowRectToViewport } from '../lib/windowRect'
 
 export type ResizeCorner = 'nw' | 'ne' | 'sw' | 'se'
@@ -102,6 +102,7 @@ export function DesktopWindow({
   const [layoutReady, setLayoutReady] = useState(!storageKey)
   const windowRef = useRef<HTMLElement>(null)
   const isPadView = useIsPadViewport()
+  const isPhoneView = useIsPhoneViewport()
   const dragStart = useRef<{
     pointerId: number
     x: number
@@ -149,6 +150,15 @@ export function DesktopWindow({
   useLayoutEffect(() => {
     if (!open) return
     const applyViewport = () => {
+      if (isPhoneView) {
+        setWindowRect({
+          left: 0,
+          top: 0,
+          width: window.innerWidth,
+          height: window.innerHeight
+        })
+        return
+      }
       if (maximized) {
         setWindowRect({
           left: 16,
@@ -168,7 +178,7 @@ export function DesktopWindow({
     applyViewport()
     window.addEventListener('resize', applyViewport)
     return () => window.removeEventListener('resize', applyViewport)
-  }, [maximized, open])
+  }, [isPhoneView, maximized, open])
 
   const previewMove = useCallback((event: Pick<PointerEvent, 'clientX' | 'clientY' | 'pointerId'>) => {
     const start = dragStart.current
@@ -303,17 +313,25 @@ export function DesktopWindow({
       zIndex,
       minimized,
       onClose,
-      onMinimize,
-      onToggleMaximize: toggleMaximize
+      // Phone windows are full-screen task pages. Keyboard shortcuts must not
+      // put them into a hidden/minimized state with no desktop dock to restore.
+      onMinimize: isPhoneView ? undefined : onMinimize,
+      onToggleMaximize: isPhoneView ? undefined : toggleMaximize
     })
-  }, [id, minimized, onClose, onMinimize, open, toggleMaximize, zIndex])
+  }, [id, isPhoneView, minimized, onClose, onMinimize, open, toggleMaximize, zIndex])
 
   // A persisted window must not paint at its fallback coordinates first. Read
   // its saved geometry before the browser paints, otherwise users see a brief
   // jump from the default top-left position to the restored position.
   if (!open || !layoutReady) return null
   return (
-    <Modal open zIndex={zIndex} className="floating-window-backdrop" ariaLabel={title}>
+    <Modal
+      open
+      zIndex={zIndex}
+      className="floating-window-backdrop"
+      trapFocus={isPhoneView}
+      lockScroll={isPhoneView}
+    >
       <section
         ref={windowRef}
         className="floating-window grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900"
@@ -361,9 +379,11 @@ export function DesktopWindow({
           </div>
           <div className="flex items-center gap-1">
             {actions}
-            <button className="icon-button size-8 p-0" onClick={onMinimize} aria-label={`最小化${title}`} title="最小化">
-              <Minus className="size-4" />
-            </button>
+            {!isPhoneView && (
+              <button className="icon-button size-8 p-0" onClick={onMinimize} aria-label={`最小化${title}`} title="最小化">
+                <Minus className="size-4" />
+              </button>
+            )}
             <button className="icon-button size-8 p-0" onClick={onClose} aria-label={`关闭${title}`} title="关闭">
               <X className="size-4" />
             </button>

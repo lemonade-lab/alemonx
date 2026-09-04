@@ -61,3 +61,15 @@ test('clamping re-anchors the position without shrinking the preferred size', ()
   expect(clamped.left).toBe(184)
   expect(clamped.top).toBe(184)
 })
+
+test('phone-sized viewports never place a clamped window outside the viewport', () => {
+  const clamped = clampWindowRectToViewport(
+    { left: 64, top: 56, width: 860, height: 620 },
+    { minWidth: 440, minHeight: 320 },
+    { width: 320, height: 568 }
+  )
+
+  expect(clamped.left).toBe(0)
+  expect(clamped.width).toBe(320)
+  expect(clamped.left + clamped.width).toBeLessThanOrEqual(320)
+})

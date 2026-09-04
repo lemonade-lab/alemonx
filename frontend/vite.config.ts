@@ -8,8 +8,6 @@ export default defineConfig({
   resolve: {
     alias: [
       {
-        // The migrated testone sandbox imports itself through this scoped
-        // alias so it never collides with ALemonX's own @/ imports.
         find: '@testone',
         replacement: fileURLToPath(new URL('./src/features/testone', import.meta.url))
       }

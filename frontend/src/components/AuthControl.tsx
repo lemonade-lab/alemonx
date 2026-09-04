@@ -318,7 +318,7 @@ export function AuthControl({ embedded = false }: { embedded?: boolean }) {
           </SettingsPage>
         ) : (
           <section
-            className="topbar-popover absolute right-0 top-[calc(100%+8px)] z-50 grid w-[min(22.5rem,calc(100vw-2rem))] max-h-[calc(100vh-5rem)] gap-2.5 overflow-y-auto rounded-xl border border-slate-200 bg-white p-3 shadow-[0_18px_42px_rgb(28_26_23/0.13)]"
+            className="topbar-popover absolute right-0 top-[calc(100%+8px)] z-50 grid w-[min(22.5rem,calc(100vw-2rem))] max-h-[calc(100dvh-5rem)] gap-2.5 overflow-y-auto rounded-xl border border-slate-200 bg-white p-3 shadow-[0_18px_42px_rgb(28_26_23/0.13)]"
             role="dialog"
             aria-label="身份认证"
             onKeyDown={event => {

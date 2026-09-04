@@ -5,6 +5,7 @@ import { buildMessageKey } from '@testone/core/messageKey';
 import VirtualizedList from './VirtualizedList';
 import logger from '@testone/core/logger';
 import { Button } from '../ui/Button';
+import { useViewportPopoverPosition } from '../../../hooks/useViewportPopoverPosition';
 
 // 定义类型
 type MessageWindowProps = {
@@ -57,6 +58,12 @@ function MessageWindow({
     y: number;
     item: MessageItem | null;
   } | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const menuStyle = useViewportPopoverPosition({
+    anchor: menu ? new DOMRect(menu.x, menu.y, 0, 0) : null,
+    open: Boolean(menu),
+    popoverRef: menuRef
+  });
   // 监听消息数量变化，自动滚动到底部
   const messageLength = message.length;
   const prevLenRef = useRef(messageLength);
@@ -206,8 +213,9 @@ function MessageWindow({
       </section>
       {menu && menu.item && (
         <div
+          ref={menuRef}
           className="msg-context-menu fixed z-50  text-sm text-[var(--foreground,#eee)] shadow-lg rounded-md  p-2 flex flex-col gap-2 min-w-20"
-          style={{ top: menu.y + 4, left: menu.x + 4 }}
+          style={menuStyle}
         >
           {selectMode ? (
             <>

@@ -2101,7 +2101,7 @@ export function AgentChatPage({
         ariaLabel="AI 接口配置"
         onClose={() => setSettings(false)}
       >
-        <section className="grid max-h-[calc(100vh-32px)] w-full max-w-[540px] content-start gap-4 overflow-auto rounded-[14px] border border-(--theme-border-default) bg-(--theme-surface-panel) p-6 shadow-[var(--theme-shadow-pop)]">
+        <section className="grid max-h-[calc(100dvh-32px)] w-full max-w-[540px] content-start gap-4 overflow-auto rounded-[14px] border border-(--theme-border-default) bg-(--theme-surface-panel) p-6 shadow-[var(--theme-shadow-pop)]">
           <header className="flex items-start justify-between gap-3.5">
             <div>
               <h3 className="text-base font-semibold text-(--theme-text-strong)">

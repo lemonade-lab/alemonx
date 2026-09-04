@@ -140,6 +140,7 @@ import { GLOBAL_MODAL_Z_INDEX, Modal } from './Modal'
 import { AccountManagementPage } from './AccountManagement'
 import { RobotGitControl } from './RobotGitControl'
 import { useIsMobileViewport } from '../hooks/useIsMobileViewport'
+import { useViewportPopoverPosition } from '../hooks/useViewportPopoverPosition'
 import { TestCenter } from './TestCenter'
 import { LiveChat } from './LiveChat'
 import { DesktopWindow } from './DesktopWindow'
@@ -516,6 +517,14 @@ export function DirectoryPicker({
     y: number
     target?: Directory
   } | null>(null)
+  const contextMenuRef = useRef<HTMLDivElement | null>(null)
+  const contextMenuStyle = useViewportPopoverPosition({
+    anchor: contextMenu
+      ? new DOMRect(contextMenu.x, contextMenu.y, 0, 0)
+      : null,
+    open: Boolean(contextMenu),
+    popoverRef: contextMenuRef
+  })
   const [newFolderName, setNewFolderName] = useStoreState('')
   const [deleteTarget, setDeleteTarget] = useStoreState<Directory | null>(null)
 
@@ -699,7 +708,7 @@ export function DirectoryPicker({
       ariaLabel={title}
     >
       <section
-        className="directory-picker finder-picker theme-finder grid h-[min(700px,calc(100vh-32px))] w-full max-w-5xl grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_24px_70px_rgb(28_26_23/0.26)]"
+        className="directory-picker finder-picker theme-finder grid h-[min(700px,calc(100dvh-32px))] w-full max-w-5xl grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_24px_70px_rgb(28_26_23/0.26)]"
         role="dialog"
         aria-label={title}
       >
@@ -958,8 +967,9 @@ export function DirectoryPicker({
       </section>
       {contextMenu && (
         <div
+          ref={contextMenuRef}
           className="fixed z-210 grid min-w-32 overflow-hidden rounded-md border border-slate-200 bg-white py-1 shadow-lg"
-          style={{ left: contextMenu.x, top: contextMenu.y }}
+          style={contextMenuStyle}
           role="menu"
           onClick={event => event.stopPropagation()}
         >
@@ -1223,7 +1233,10 @@ export function Dashboard({
   })
   // The backend serialises an empty plugin registry as JSON null; normalise to
   // an array so render-time .find/.filter never reads a null value.
-  const setupPlugins = useMemo(() => setupPluginsData ?? [], [setupPluginsData])
+  const setupPlugins = useMemo(
+    () => (Array.isArray(setupPluginsData) ? setupPluginsData : []),
+    [setupPluginsData]
+  )
   useEffect(() => {
     const registeredSystemWindows: Record<
       string,
@@ -5133,7 +5146,7 @@ function GitCloneDialog({
       ariaLabel={mode === 'package' ? '克隆插件包' : '从 Git 克隆机器人'}
     >
       <section
-        className="git-dialog git-clone-dialog grid max-h-[min(720px,calc(100vh-32px))] w-full max-w-xl grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_22px_58px_rgb(28_26_23/0.25)]"
+        className="git-dialog git-clone-dialog grid max-h-[min(720px,calc(100dvh-32px))] w-full max-w-xl grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_22px_58px_rgb(28_26_23/0.25)]"
         role="dialog"
         aria-label={mode === 'package' ? '克隆插件包' : '从 Git 克隆机器人'}
       >

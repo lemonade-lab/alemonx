@@ -192,7 +192,7 @@ export default function EventLogPanel() {
       {expanded && (
         <div
           className="flex flex-col"
-          style={{ minHeight: 'calc(100vh / 4)', maxHeight: '240px' }}
+          style={{ minHeight: 'calc(100dvh / 4)', maxHeight: '240px' }}
         >
           {/* 工具栏 */}
           <div className="flex items-center gap-2 px-3 py-1 border-t border-[var(--panel-border)]">

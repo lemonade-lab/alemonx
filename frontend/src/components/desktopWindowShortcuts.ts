@@ -3,7 +3,7 @@ export type DesktopWindowShortcutRegistration = {
   zIndex: number
   minimized: boolean
   onClose: () => void
-  onMinimize: () => void
+  onMinimize?: () => void
   onToggleMaximize?: () => void
 }
 
@@ -52,10 +52,11 @@ function installListener() {
       }
       if (key === 'm') {
         if (event.shiftKey && !activeWindow.onToggleMaximize) return
+        if (!event.shiftKey && !activeWindow.onMinimize) return
         event.preventDefault()
         event.stopImmediatePropagation()
         if (event.shiftKey) activeWindow.onToggleMaximize?.()
-        else activeWindow.onMinimize()
+        else activeWindow.onMinimize?.()
       }
     },
     { capture: true }

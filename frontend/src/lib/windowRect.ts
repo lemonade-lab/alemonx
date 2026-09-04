@@ -39,18 +39,43 @@ export function clampWindowRectToViewport(
   } = options
   const viewportWidth = viewport?.width ?? window.innerWidth
   const viewportHeight = viewport?.height ?? window.innerHeight
+  // On a 320px phone, a 16px desktop gutter plus a 320px minimum width used
+  // to place the right edge outside the viewport. Preserve gutters whenever
+  // possible, but reduce them before allowing a displayed rect to overflow.
+  const horizontalMargin = Math.max(
+    0,
+    Math.min(margin, (viewportWidth - Math.min(minViewportWidth, viewportWidth)) / 2)
+  )
+  const verticalMargin = Math.max(
+    0,
+    Math.min(margin, (viewportHeight - Math.min(minViewportHeight, viewportHeight)) / 2)
+  )
+  const minimumWidth = Math.min(
+    minViewportWidth,
+    viewportWidth - horizontalMargin * 2
+  )
+  const minimumHeight = Math.min(
+    minViewportHeight,
+    viewportHeight - verticalMargin * 2
+  )
   const width = Math.min(
-    Math.max(minViewportWidth, viewportWidth - gutter),
+    Math.max(minimumWidth, viewportWidth - gutter),
     Math.max(minWidth, rect.width)
   )
   const height = Math.min(
-    Math.max(minViewportHeight, viewportHeight - gutter),
+    Math.max(minimumHeight, viewportHeight - gutter),
     Math.max(minHeight, rect.height)
   )
   return {
     width,
     height,
-    left: Math.max(margin, Math.min(viewportWidth - width - margin, rect.left)),
-    top: Math.max(margin, Math.min(viewportHeight - height - margin, rect.top))
+    left: Math.max(
+      horizontalMargin,
+      Math.min(viewportWidth - width - horizontalMargin, rect.left)
+    ),
+    top: Math.max(
+      verticalMargin,
+      Math.min(viewportHeight - height - verticalMargin, rect.top)
+    )
   }
 }

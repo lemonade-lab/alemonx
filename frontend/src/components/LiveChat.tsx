@@ -65,6 +65,7 @@ import { ConfirmDialog } from './ConfirmDialog'
 import { QQArkCardSegment } from './QQArkCard'
 import { QQFaceSegment } from './QQFace'
 import { createRandomID } from '../lib/randomId'
+import { COMPACT_COMPONENT_QUERY } from '../hooks/viewportBreakpoints'
 import {
   parseQQInlineSegments,
   parseQQArkCard,
@@ -76,6 +77,8 @@ import {
   type QQArkCard,
   type QQMessageSegment as Segment
 } from './qqMessageMedia'
+
+const isCompactLiveChat = () => window.matchMedia(COMPACT_COMPONENT_QUERY).matches
 type LiveEvent = {
   name?: string
   Platform?: string
@@ -3223,7 +3226,7 @@ export function LiveChat({ root }: { root: string }) {
       setSelected(conversation.id)
       setText(drafts[conversation.id] || '')
       setActiveNav('messages')
-      if (window.matchMedia('(max-width: 759px)').matches) setRightOpen(false)
+      if (isCompactLiveChat()) setRightOpen(false)
     },
     [drafts]
   )
@@ -3241,7 +3244,7 @@ export function LiveChat({ root }: { root: string }) {
       setSelected(conversation.id)
       setText(drafts[conversation.id] || '')
       setActiveNav('messages')
-      if (window.matchMedia('(max-width: 759px)').matches) setRightOpen(false)
+      if (isCompactLiveChat()) setRightOpen(false)
     },
     [drafts]
   )
@@ -3628,7 +3631,7 @@ function QQ9ChatShell(props: QQ9ShellProps) {
   const chooseConversation = (id: string) => {
     props.selectConversation(id)
     setProfileOpen(false)
-    if (window.matchMedia('(max-width: 759px)').matches)
+    if (isCompactLiveChat())
       props.setRightOpen(false)
   }
   useEffect(() => {
@@ -4033,7 +4036,7 @@ function QQ9ChatShell(props: QQ9ShellProps) {
                   aria-label="打开会话资料抽屉"
                   disabled={!props.currentEvent}
                   onClick={() => {
-                    if (window.matchMedia('(max-width: 759px)').matches) {
+                    if (isCompactLiveChat()) {
                       props.setActiveNav('profile')
                       props.setRightOpen(true)
                     } else {

@@ -334,7 +334,7 @@
     box-sizing: border-box;
     display: flex;
     flex-direction: column;
-    height: min(760px, calc(100vh - 56px));
+    height: min(760px, calc(100dvh - 56px));
     max-width: 1240px;
     overflow: hidden;
     width: 100%;
@@ -351,7 +351,7 @@
       var(--theme-surface-page);
     box-sizing: border-box;
     display: flex;
-    height: 100vh;
+    height: 100dvh;
     justify-content: center;
     overflow: hidden;
     padding: 28px 24px;
@@ -1420,7 +1420,7 @@ button {
   border-radius: 12px;
   box-shadow: 0 24px 70px rgb(28 26 23 / 0.26);
   display: grid;
-  max-height: min(760px, calc(100vh - 48px));
+  max-height: min(760px, calc(100dvh - 48px));
   max-width: 920px;
   overflow: hidden;
   width: 100%;
@@ -1475,7 +1475,24 @@ button {
 
 .floating-window-header {
   cursor: grab;
+  min-width: 0;
   user-select: none;
+}
+
+/* Header controls may live in a narrow floating window. Keep both native
+ * selects and custom menus inside the browser viewport instead of allowing a
+ * long selected label or popup panel to extend past the system window. */
+.floating-window-header select {
+  max-width: min(18rem, calc(100vw - 8rem));
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.floating-window-header :is(.topbar-popover, .workspace-context-menu, .agent-composer-popup, [role='menu'], [role='listbox']) {
+  max-height: calc(100dvh - 24px);
+  max-width: calc(100vw - 24px);
+  overflow: auto;
 }
 
 .floating-window-header:active {
@@ -2895,7 +2912,7 @@ button {
   );
   display: flex;
   justify-content: center;
-  min-height: 100vh;
+  min-height: 100dvh;
   padding: 20px;
 }
 .ssh-keys .secondary-button,
@@ -3148,7 +3165,7 @@ button {
     width: calc(100% - 20px);
   }
   .git-clone-form {
-    max-height: calc(100vh - 164px);
+    max-height: calc(100dvh - 164px);
     padding: 13px;
   }
   .git-clone-fields {
@@ -3209,7 +3226,7 @@ button {
 }
 .environment-check-list {
   display: grid;
-  max-height: min(390px, calc(100vh - 190px));
+  max-height: min(390px, calc(100dvh - 190px));
   overflow-y: overlay;
 }
 .environment-check-list article {
@@ -4529,7 +4546,7 @@ button {
   box-shadow: 0 22px 58px rgb(28 26 23 / 0.25);
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr) auto;
-  height: min(560px, calc(100vh - 72px));
+  height: min(560px, calc(100dvh - 72px));
   overflow: hidden;
   width: min(640px, calc(100% - 32px));
 }
@@ -4753,7 +4770,7 @@ textarea:focus-visible {
 .dashboard-shell {
   margin: 0 auto;
   max-width: 1180px;
-  min-height: 100vh;
+  min-height: 100dvh;
   padding: 0 34px 65px;
 }
 
@@ -5016,7 +5033,7 @@ textarea:focus-visible {
   box-shadow: 0 18px 48px rgb(28 26 23 / 0.2);
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-  height: min(620px, calc(100vh - 48px));
+  height: min(620px, calc(100dvh - 48px));
   max-width: none;
   overflow: hidden;
   pointer-events: auto;
@@ -6305,7 +6322,7 @@ textarea:focus-visible {
 
 .finder-picker {
   grid-template-rows: 54px minmax(0, 1fr) 58px;
-  height: min(650px, calc(100vh - 72px));
+  height: min(650px, calc(100dvh - 72px));
   width: min(800px, calc(100% - 32px));
 }
 .finder-sidebar button.active {
@@ -6695,7 +6712,7 @@ textarea:hover {
   }
 
   .guide-window {
-    height: calc(100vh - 40px);
+    height: calc(100dvh - 40px);
     max-height: none;
   }
   .wizard-page {
@@ -6747,7 +6764,7 @@ textarea:hover {
 /* Wide-screen workbench: leave the extra canvas breathing room for a vertical
  * Dock, while keeping the existing dashboard window unchanged on tablets. */
 .workbench-stage {
-  min-height: 100vh;
+  min-height: 100dvh;
 }
 
 .workbench-dock {
@@ -6787,7 +6804,7 @@ textarea:hover {
   background: transparent;
   border: 0;
   box-shadow: none;
-  max-height: min(760px, calc(100vh - 64px));
+  max-height: min(760px, calc(100dvh - 64px));
   overflow: auto;
   padding: 12px;
   width: min(960px, 100%);
@@ -6857,7 +6874,7 @@ textarea:hover {
 
 @media (min-width: 1440px) {
   .workbench-stage {
-    min-height: 100vh;
+    min-height: 100dvh;
     position: relative;
   }
 
@@ -7442,7 +7459,7 @@ button > svg,
 }
 .git-workspace-dialog {
   grid-template-rows: auto minmax(0, 1fr);
-  height: min(720px, calc(100vh - 48px));
+  height: min(720px, calc(100dvh - 48px));
   min-height: 0;
 }
 .git-workspace-content {
@@ -8356,7 +8373,7 @@ button > svg,
   border: 1px solid var(--theme-border-default);
   border-radius: 18px;
   box-shadow: var(--theme-shadow-pop);
-  height: min(760px, calc(100vh - 56px));
+  height: min(760px, calc(100dvh - 56px));
   max-width: 1240px;
   width: 100%;
 }
@@ -8541,7 +8558,7 @@ button > svg,
   .dashboard-window {
     border-radius: 0;
     box-shadow: none;
-    height: 100vh;
+    height: 100dvh;
     max-width: none;
     width: 100%;
   }
@@ -8553,7 +8570,7 @@ button > svg,
   .app-embed-window {
     border-radius: 0;
     box-shadow: none;
-    height: 100vh;
+    height: 100dvh;
     max-width: none;
   }
 }
@@ -8737,6 +8754,117 @@ button > svg,
   }
 }
 @media (max-width: 640px) {
+}
+
+/* Responsive contract: phone <=700, compact component <=759, stacked
+ * workbench navigation <=940, tablet window shell <=1024. Components should
+ * use their named container query whenever their parent can be narrow. */
+/* Phone is a first-class layout, rather than a shrunken desktop window. */
+@media (max-width: 700px) {
+  .floating-window {
+    border-radius: 0 !important;
+    height: 100dvh !important;
+    left: 0 !important;
+    max-height: none !important;
+    top: 0 !important;
+    width: 100vw !important;
+  }
+
+  .floating-window-header {
+    cursor: default;
+    min-height: 56px;
+    padding-left: max(12px, env(safe-area-inset-left));
+    padding-right: max(12px, env(safe-area-inset-right));
+    padding-top: env(safe-area-inset-top);
+  }
+
+  .floating-window-header .icon-button,
+  .floating-window-header > div:last-child > button,
+  .primary-button,
+  .secondary-button,
+  .danger-button,
+  .icon-button {
+    min-height: 44px;
+    min-width: 44px;
+  }
+
+  .text-button {
+    min-height: 40px;
+  }
+
+  [data-sidebar-window-body] {
+    padding-bottom: max(24px, env(safe-area-inset-bottom));
+    padding-left: max(16px, env(safe-area-inset-left));
+    padding-right: max(16px, env(safe-area-inset-right));
+  }
+
+  [data-sidebar-window-shell] {
+    min-width: 0;
+  }
+
+  [data-sidebar-window-sidebar] {
+    padding-bottom: 10px;
+    padding-top: 10px;
+  }
+
+  [data-sidebar-window-nav] > button,
+  [data-sidebar-window-side-actions] button {
+    min-height: 44px;
+  }
+
+  .workspace-context-menu,
+  .topbar-popover,
+  .environment-panel,
+  .operation-tasks-popover,
+  .agent-composer-popup,
+  .mcp-popover {
+    max-width: calc(100vw - 24px);
+  }
+
+  .operation-tasks-popover,
+  .agent-composer-popup,
+  .mcp-popover {
+    max-height: min(70dvh, 520px);
+    overflow: auto;
+  }
+
+  .agent-question-preview,
+  .topbar-popover {
+    max-height: calc(100dvh - 24px);
+    max-width: calc(100vw - 24px);
+    overflow: auto;
+  }
+
+  .runtime-overview .grid-cols-3,
+  .runtime-overview .grid-cols-2,
+  .robot-config-fields,
+  .env-config-entry,
+  .git-workspace-content .grid-cols-2 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .smart-log-filter-panel,
+  .readonly-console-body,
+  .workspace-content,
+  .agent-thread {
+    min-width: 0;
+  }
+
+  .git-workspace-dialog,
+  .app-embed-window,
+  .guide-window,
+  .dashboard-window {
+    height: 100dvh;
+  }
+
+  /* A dialog body, not the document, owns overflow on short screens. */
+  [role='dialog'] > :is(.overflow-auto, .overflow-y-auto),
+  .readonly-console-body,
+  .smart-log-filter-panel,
+  .git-diff-body,
+  pre {
+    overscroll-behavior: contain;
+  }
 }
 
 /* Floating application windows stay above the workbench without replacing it. */

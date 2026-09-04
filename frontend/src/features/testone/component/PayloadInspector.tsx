@@ -1,6 +1,7 @@
 import { useMemo, useCallback, useState } from 'react';
 import type { MessageItem } from '@testone/typing';
 import dayjs from 'dayjs';
+import { Modal } from '../../../components/Modal';
 
 interface PayloadInspectorProps {
   item: MessageItem | null;
@@ -40,13 +41,14 @@ export default function PayloadInspector({
   if (!open || !item) return null;
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
-      onClick={onClose}
+    <Modal
+      open
+      onClose={onClose}
+      ariaLabel="消息结构查看器"
+      className="testone-modal-surface bg-black/40"
     >
       <div
-        className="w-[520px] max-h-[80vh] flex flex-col bg-[var(--editorWidget-background)] border border-[var(--panel-border)] rounded-lg shadow-xl"
-        onClick={e => e.stopPropagation()}
+        className="flex w-[min(520px,calc(100vw-32px))] max-h-[calc(100dvh-32px)] flex-col overflow-hidden bg-[var(--editorWidget-background)] border border-[var(--panel-border)] rounded-lg shadow-xl"
       >
         {/* 头部 */}
         <div className="flex items-center justify-between px-4 py-2 border-b border-[var(--panel-border)]">
@@ -164,6 +166,6 @@ export default function PayloadInspector({
           )}
         </div>
       </div>
-    </div>
+    </Modal>
   );
 }

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { MessageItem, Reaction } from '@testone/typing';
 import { Button } from '@testone/ui/Button';
+import { Modal } from '../../../../components/Modal';
 
 type ModalReactionListProps = {
   open: boolean;
@@ -29,13 +30,14 @@ export default function ModalReactionList({
   if (!open || !message || !reaction) return null;
 
   return (
-    <div
-      className="fixed inset-0 z-50 bg-black bg-opacity-50 flex items-center justify-center"
-      onClick={onClose}
+    <Modal
+      open
+      onClose={onClose}
+      ariaLabel="回应用户列表"
+      className="testone-modal-surface bg-black/50"
     >
       <div
-        className="bg-[var(--editor-background)] rounded-lg shadow-lg p-4 min-w-[300px] max-w-[500px]"
-        onClick={e => e.stopPropagation()}
+        className="max-h-[calc(100dvh-32px)] w-[min(500px,calc(100vw-32px))] overflow-y-auto rounded-lg bg-[var(--editor-background)] p-4 shadow-lg"
       >
         <div className="mb-4">
           <h2 className="text-lg font-bold text-[var(--foreground)]">
@@ -72,6 +74,6 @@ export default function ModalReactionList({
           </Button>
         </div>
       </div>
-    </div>
+    </Modal>
   );
 }

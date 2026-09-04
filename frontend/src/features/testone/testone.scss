@@ -201,3 +201,38 @@
 .testone-modal .ant-modal-title {
   color: var(--theme-text-strong) !important;
 }
+
+/* TestOne's custom modals are portaled through the workbench Modal. Bridge
+ * the feature-local aliases so they preserve the active project theme. */
+.testone-modal-surface {
+  --editorWidget-background: var(--theme-surface-panel);
+  --editor-background: var(--theme-surface-page);
+  --panel-background: var(--theme-surface-panel);
+  --input-background: var(--theme-surface-input);
+  --foreground: var(--theme-text-primary);
+  --descriptionForeground: var(--theme-text-muted);
+  --panel-border: var(--theme-border-default);
+  --editorWidget-border: var(--theme-border-strong);
+  --button-background: var(--theme-accent);
+  --button-foreground: var(--theme-accent-contrast);
+}
+
+@media (max-width: 700px) {
+  .testone-modal .ant-modal {
+    margin: 16px auto;
+    max-width: calc(100vw - 32px);
+    padding-bottom: env(safe-area-inset-bottom);
+    top: 0;
+    width: calc(100vw - 32px) !important;
+  }
+
+  .testone-modal .ant-modal-content {
+    max-height: calc(100dvh - 32px);
+    overflow-y: auto;
+  }
+
+  .testone-root button,
+  .testone-root [role='button'] {
+    min-height: 40px;
+  }
+}

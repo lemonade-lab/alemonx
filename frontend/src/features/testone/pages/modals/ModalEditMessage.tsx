@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Button } from '@testone/ui/Button';
 import { MessageItem } from '@testone/typing';
 import { DataEnums } from '@testone/typing';
+import { Modal } from '../../../../components/Modal';
 
 type ModalEditMessageProps = {
   open: boolean;
@@ -45,13 +46,14 @@ export default function ModalEditMessage({
   };
 
   return (
-    <div
-      className="fixed inset-0 z-50 bg-black bg-opacity-50 flex items-center justify-center"
-      onClick={onCancel}
+    <Modal
+      open
+      onClose={onCancel}
+      ariaLabel="编辑消息"
+      className="testone-modal-surface bg-black/50"
     >
       <div
-        className="bg-[var(--editor-background)] rounded-lg shadow-lg p-4 min-w-[400px] max-w-[600px]"
-        onClick={e => e.stopPropagation()}
+        className="max-h-[calc(100dvh-32px)] w-[min(600px,calc(100vw-32px))] overflow-y-auto rounded-lg bg-[var(--editor-background)] p-4 shadow-lg"
       >
         <div className="mb-4">
           <h2 className="text-lg font-bold text-[var(--foreground)]">
@@ -89,6 +91,6 @@ export default function ModalEditMessage({
           </Button>
         </div>
       </div>
-    </div>
+    </Modal>
   );
 }

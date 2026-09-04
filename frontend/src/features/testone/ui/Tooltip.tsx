@@ -1,6 +1,7 @@
 import React, { useState, ReactNode, useRef, useLayoutEffect } from 'react';
 import { createPortal } from 'react-dom';
 import classNames from 'classnames';
+import { useViewportPopoverPosition } from '../../../hooks/useViewportPopoverPosition';
 
 interface TooltipProps {
   content: ReactNode;
@@ -40,7 +41,14 @@ export function Tooltip({
 }: TooltipProps) {
   const [visible, setVisible] = useState(false);
   const anchorRef = useRef<HTMLDivElement | null>(null);
-  const [style, setStyle] = useState<React.CSSProperties | undefined>();
+  const tooltipRef = useRef<HTMLDivElement | null>(null);
+  const [anchor, setAnchor] = useState<DOMRect | null>(null);
+  const style = useViewportPopoverPosition({
+    anchor,
+    open: portal && visible,
+    placement: placement === 'bottom' ? 'bottom' : placement === 'left' ? 'left' : placement === 'right' ? 'right' : 'top',
+    popoverRef: tooltipRef
+  });
 
   // 克隆子元素，添加事件
   const child = React.cloneElement(children as any, {
@@ -63,75 +71,12 @@ export function Tooltip({
   });
 
   useLayoutEffect(() => {
-    if (!portal || !visible) return;
-    const el = anchorRef.current;
-    if (!el) return;
-    const rect = el.getBoundingClientRect();
-    const gap = 8;
-    let top = 0;
-    let left = 0;
-    switch (placement) {
-      case 'bottom':
-        top = rect.bottom + gap;
-        left = rect.left + rect.width / 2;
-        break;
-      case 'left':
-        top = rect.top + rect.height / 2;
-        left = rect.left - gap;
-        break;
-      case 'right':
-        top = rect.top + rect.height / 2;
-        left = rect.right + gap;
-        break;
-      case 'topright':
-        top = rect.top - gap;
-        left = rect.right;
-        break;
-      case 'topleft':
-        top = rect.top - gap;
-        left = rect.left;
-        break;
-      case 'bottomright':
-        top = rect.bottom + gap;
-        left = rect.right;
-        break;
-      case 'bottomleft':
-        top = rect.bottom + gap;
-        left = rect.left;
-        break;
-      case 'top':
-      default:
-        top = rect.top - gap;
-        left = rect.left + rect.width / 2;
-    }
-    let transform = 'translate(-50%, -100%)';
-    if (placement === 'bottom') {
-      transform = 'translate(-50%, 0)';
-    } else if (placement === 'left') {
-      transform = 'translate(-100%, -50%)';
-    } else if (placement === 'right') {
-      transform = 'translate(0, -50%)';
-    } else if (placement === 'bottomright') {
-      transform = 'translate(-100%, 0)';
-    } else if (placement === 'bottomleft') {
-      transform = 'translate(0, 0)';
-    } else if (placement === 'topright') {
-      transform = 'translate(-100%, -100%)';
-    } else if (placement === 'topleft') {
-      transform = 'translate(0, -100%)';
-    }
-    setStyle({
-      position: 'fixed',
-      top,
-      left,
-      transform,
-      zIndex: 9999,
-      pointerEvents: 'none'
-    });
-  }, [portal, visible, placement]);
+    if (portal && visible) setAnchor(anchorRef.current?.getBoundingClientRect() ?? null);
+  }, [portal, visible]);
 
   const tooltipInner = visible ? (
     <div
+      ref={tooltipRef}
       className={classNames(
         'px-2 py-1 text-sm rounded shadow-lg border',
         'bg-[var(--editorWidget-background)]',
@@ -142,7 +87,7 @@ export function Tooltip({
         !portal && placementStyle[placement],
         className
       )}
-      style={portal ? style : undefined}
+      style={portal ? { ...style, zIndex: 9999, pointerEvents: 'none' } : undefined}
     >
       {content}
     </div>
