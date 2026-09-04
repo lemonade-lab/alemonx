@@ -51,7 +51,7 @@ export function NodeNVMPanel({ onChanged }: { onChanged: () => void }) {
         </div>
         <div className="h-px bg-slate-200 dark:bg-slate-800" />
         <div className="flex items-center justify-between gap-2">
-          <span className="text-xs font-medium text-slate-500">最新版本（LTS）</span>
+          <span className="text-xs font-medium text-slate-500">最新 LTS（仅供参考）</span>
           {status?.latestVersion ? (
             <div className="flex items-center gap-1.5">
               <code className="text-xs font-semibold text-slate-700 dark:text-slate-200">{status.latestVersion}</code>

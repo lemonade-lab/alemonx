@@ -50,7 +50,7 @@ func NewChecker() *Checker { return &Checker{timeout: 5 * time.Second} }
 
 func (c *Checker) CheckGoal(goalID, variant string) Report {
 	checks := []Check{
-		c.command("node", "NodeJS", "--version", "请安装 Node.js LTS 版本后重新检查。"),
+		c.command("node", "NodeJS", "--version", "请安装 Node.js 22 稳定版后重新检查。"),
 		c.command("git", "Git", "--version", "请安装 Git 后重新检查。"),
 		c.fonts(),
 		c.browser(),

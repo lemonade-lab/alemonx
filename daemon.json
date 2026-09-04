@@ -1,0 +1,15 @@
+{
+    "registry-mirrors": [
+        "https://registry.cn-hangzhou.aliyuncs.com",
+        "https://docker.m.daocloud.io",
+        "https://mirror.iscas.ac.cn",
+        "https://mirrors.ustc.edu.cn",
+        "https://mirrors.sohu.com",
+        "https://docker.xuanyuan.me",
+        "https://docker.1ms.run",
+        "https://atomhub.openatom.cn",
+        "https://ccr.ccs.tencentyun.com",
+        "https://hub.rat.dev",
+        "https://xuanyuan.cloud"
+    ]
+}

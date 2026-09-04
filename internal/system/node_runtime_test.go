@@ -42,6 +42,19 @@ func TestNodeArchitecture(t *testing.T) {
 	}
 }
 
+func TestNVMDefaultInstallTargetsNode22(t *testing.T) {
+	for _, forbidden := range []string{"nvm install --lts", "lts/*"} {
+		if strings.Contains(nvmInstallNode22Script, forbidden) {
+			t.Fatalf("default NVM script must not select the newest LTS: %q", nvmInstallNode22Script)
+		}
+	}
+	for _, required := range []string{"nvm install 22", "nvm alias default 22"} {
+		if !strings.Contains(nvmInstallNode22Script, required) {
+			t.Fatalf("default NVM script lacks %q: %q", required, nvmInstallNode22Script)
+		}
+	}
+}
+
 func TestManagedNodeCommandResolvesBundledRuntime(t *testing.T) {
 	isolateUserNVM(t)
 	cache := t.TempDir()
@@ -157,35 +170,69 @@ func TestNVMStatusReturnsEmptyVersionsInsteadOfNil(t *testing.T) {
 	}
 }
 
-func TestNVMStatusPrefersExistingUserNVM(t *testing.T) {
-	t.Setenv("NVM_DIR", "")
-	home := t.TempDir()
-	previousHome := userHomeDir
-	userHomeDir = func() (string, error) { return home, nil }
-	t.Cleanup(func() { userHomeDir = previousHome })
-	directory := filepath.Join(home, ".nvm")
-	bin := filepath.Join(directory, "versions", "node", "v22.22.3", "bin")
-	if err := os.MkdirAll(bin, 0o700); err != nil {
+func TestNVMStatusUsesExistingUserNVMDirectory(t *testing.T) {
+	cache := t.TempDir()
+	previousCache := userCacheDir
+	userCacheDir = func() (string, error) { return cache, nil }
+	t.Cleanup(func() { userCacheDir = previousCache })
+	userNVM := t.TempDir()
+	t.Setenv("NVM_DIR", userNVM)
+	if err := os.WriteFile(filepath.Join(userNVM, "nvm.sh"), []byte("# nvm"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(directory, "nvm.sh"), []byte("# nvm"), 0o600); err != nil {
+	userBin := filepath.Join(userNVM, "versions", "node", "v24.0.0", "bin")
+	if err := os.MkdirAll(userBin, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(bin, "node"), []byte("node"), 0o700); err != nil {
+	if err := os.WriteFile(filepath.Join(userBin, "node"), []byte("node"), 0o700); err != nil {
 		t.Fatal(err)
+	}
+	managedBin := filepath.Join(cache, "alemonx", "environments", "nvm", nvmVersion, "versions", "node", "v22.22.3", "bin")
+	if err := os.MkdirAll(managedBin, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(managedBin, "node"), []byte("node"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if got := NVMNodeBin(); got != userBin {
+		t.Fatalf("NVMNodeBin() = %q, want user runtime %q", got, userBin)
+	}
+}
+
+func TestNVMStatusResolvesMajorDefaultAlias(t *testing.T) {
+	isolateUserNVM(t)
+	cache := t.TempDir()
+	previousCache := userCacheDir
+	userCacheDir = func() (string, error) { return cache, nil }
+	t.Cleanup(func() { userCacheDir = previousCache })
+	directory := filepath.Join(cache, "alemonx", "environments", "nvm", nvmVersion)
+	for _, version := range []string{"v22.22.3", "v26.0.0"} {
+		bin := filepath.Join(directory, "versions", "node", version, "bin")
+		if err := os.MkdirAll(bin, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(bin, "node"), []byte("node"), 0o700); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := os.MkdirAll(filepath.Join(directory, "alias"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(directory, "alias", "default"), []byte("v22.22.3\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(directory, "alias", "default"), []byte("22\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	status := NVMStatus()
-	if !status.Available || status.ActiveVersion != "v22.22.3" || len(status.Versions) != 1 {
-		t.Fatalf("NVMStatus() = %#v, want existing user NVM", status)
+	if status := NVMStatus(); status.ActiveVersion != "v22.22.3" {
+		t.Fatalf("NVMStatus() = %#v, want v22.22.3 active", status)
 	}
-	if got := NVMNodeBin(); got != bin {
-		t.Fatalf("NVMNodeBin() = %q, want %q", got, bin)
+}
+
+func TestPrependCommandPathRemovesPreviousNVMRuntime(t *testing.T) {
+	oldBin := "/tmp/nvm/versions/node/v26.0.0/bin"
+	newBin := "/tmp/nvm/versions/node/v22.22.3/bin"
+	t.Setenv("PATH", oldBin+string(os.PathListSeparator)+"/usr/bin")
+	prependCommandPath(newBin)
+	if got := os.Getenv("PATH"); strings.Contains(got, oldBin) || !strings.HasPrefix(got, newBin+string(os.PathListSeparator)) {
+		t.Fatalf("PATH = %q, want only selected NVM runtime", got)
 	}
 }
 
