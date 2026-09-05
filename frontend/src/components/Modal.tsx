@@ -99,7 +99,7 @@ export function Modal({
   return createPortal(
     <div
       ref={overlayRef}
-      className={`fixed inset-0 flex items-center justify-center bg-slate-950/30 p-4 ${className}`}
+      className={`fixed inset-0 flex items-center justify-center bg-slate-950/30 ${className}`}
       style={{ zIndex }}
       role={ariaLabel ? 'dialog' : 'presentation'}
       aria-modal={ariaLabel ? 'true' : undefined}

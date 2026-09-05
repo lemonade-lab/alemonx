@@ -2608,6 +2608,9 @@ button {
   display: grid;
   gap: 2px;
   min-width: 136px;
+  max-height: calc(100dvh - 24px);
+  max-width: calc(100vw - 24px);
+  overflow: auto;
   padding: 4px;
   position: absolute;
   z-index: 20;
@@ -2646,7 +2649,7 @@ button {
   bottom: calc(100% + 8px);
   left: 16px;
   max-height: 220px;
-  overflow: overlay;
+  overflow: auto;
 }
 .qq9-mention-menu button {
   align-items: center;
@@ -8756,6 +8759,90 @@ button > svg,
 @media (max-width: 640px) {
 }
 
+/* Finder becomes a browse-first sheet on phones: locations become a compact
+ * horizontal strip instead of consuming most of the 320px content width. */
+@media (max-width: 700px) {
+  .theme-finder {
+    border-radius: 0 !important;
+    height: 100dvh !important;
+    max-height: none !important;
+    width: 100vw !important;
+  }
+  .theme-finder > section {
+    grid-template-columns: minmax(0, 1fr) !important;
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  .theme-finder > section > aside {
+    display: flex;
+    gap: 4px;
+    max-height: 60px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 8px;
+  }
+  .theme-finder > section > aside > small {
+    display: none;
+  }
+  .theme-finder > section > aside > button {
+    flex: 0 0 auto;
+    min-height: 44px;
+    white-space: nowrap;
+  }
+  .theme-finder > section > main > header,
+  .theme-finder > section > main > div > button {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .theme-finder > section > main > div > button {
+    min-height: 44px;
+  }
+  .theme-finder > section > main > header > span:last-child,
+  .theme-finder > section > main > div > button > small {
+    display: none;
+  }
+  .theme-finder > footer {
+    padding-bottom: max(12px, env(safe-area-inset-bottom)) !important;
+  }
+  .theme-finder > header.finder-header {
+    gap: 8px;
+    padding: 8px max(12px, env(safe-area-inset-right)) 10px
+      max(12px, env(safe-area-inset-left)) !important;
+  }
+  .finder-location {
+    justify-self: stretch;
+    text-align: left;
+  }
+  .theme-finder .finder-context-tools {
+    flex-wrap: wrap;
+    gap: 6px;
+    justify-content: flex-start;
+  }
+  .theme-finder .finder-context-tools > div[role='tablist'] {
+    max-width: 100%;
+    overflow-x: auto;
+  }
+  .theme-finder .finder-context-tools > label {
+    flex: 1 1 136px;
+    min-width: 0;
+    width: auto;
+  }
+  .theme-finder .finder-context-tools > input {
+    min-width: 76px;
+  }
+  .theme-finder > footer {
+    align-items: stretch;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding-left: max(12px, env(safe-area-inset-left));
+    padding-right: max(12px, env(safe-area-inset-right));
+  }
+  .theme-finder > footer > span {
+    flex-basis: 100%;
+  }
+  .theme-finder > footer > div {
+    margin-left: auto;
+  }
+}
+
 /* Responsive contract: phone <=700, compact component <=759, stacked
  * workbench navigation <=940, tablet window shell <=1024. Components should
  * use their named container query whenever their parent can be narrow. */
@@ -8818,7 +8905,9 @@ button > svg,
   .operation-tasks-popover,
   .agent-composer-popup,
   .mcp-popover {
+    max-height: calc(100dvh - 24px);
     max-width: calc(100vw - 24px);
+    overflow: auto;
   }
 
   .operation-tasks-popover,

@@ -66,6 +66,7 @@ import { QQArkCardSegment } from './QQArkCard'
 import { QQFaceSegment } from './QQFace'
 import { createRandomID } from '../lib/randomId'
 import { COMPACT_COMPONENT_QUERY } from '../hooks/viewportBreakpoints'
+import { useViewportPopoverPosition } from '../hooks/useViewportPopoverPosition'
 import {
   parseQQInlineSegments,
   parseQQArkCard,
@@ -4193,8 +4194,23 @@ function QQ9Message({
   onReadProfile: () => void
 }) {
   const articleRef = useRef<HTMLElement | null>(null)
+  const avatarButtonRef = useRef<HTMLButtonElement | null>(null)
+  const avatarMenuRef = useRef<HTMLSpanElement | null>(null)
+  const messageMenuRef = useRef<HTMLDivElement | null>(null)
   const [menuOpen, setMenuOpen] = useState(false)
   const [avatarMenuOpen, setAvatarMenuOpen] = useState(false)
+  const messageMenuStyle = useViewportPopoverPosition({
+    anchor: menuOpen ? articleRef.current?.getBoundingClientRect() ?? null : null,
+    open: menuOpen,
+    popoverRef: messageMenuRef
+  })
+  const avatarMenuStyle = useViewportPopoverPosition({
+    anchor: avatarMenuOpen
+      ? avatarButtonRef.current?.getBoundingClientRect() ?? null
+      : null,
+    open: avatarMenuOpen,
+    popoverRef: avatarMenuRef
+  })
   const contact = contactFromEvent(event)
   const canDelete =
     isQQ && mine && event.delivery === 'sent' && event.serverMessageID
@@ -4231,6 +4247,7 @@ function QQ9Message({
       }}
     >
       <button
+        ref={avatarButtonRef}
         className="relative inline-flex size-7.5 shrink-0 items-center justify-center overflow-hidden rounded-full border border-(--theme-border-default) bg-(--theme-surface-active) text-[13px] font-bold text-(--theme-text-secondary) [&_img]:size-full [&_img]:object-cover"
         disabled={!contact}
         onContextMenu={contextEvent => {
@@ -4250,8 +4267,10 @@ function QQ9Message({
         )}
         {avatarMenuOpen && contact ? (
           <span
+            ref={avatarMenuRef}
             className="qq9-popover-menu qq9-avatar-menu"
             role="menu"
+            style={avatarMenuStyle}
             onClick={menuEvent => menuEvent.stopPropagation()}
           >
             <button
@@ -4325,7 +4344,12 @@ function QQ9Message({
           </button>
         ))}
         {menuOpen ? (
-          <div className="qq9-popover-menu qq9-message-menu" role="menu">
+          <div
+            ref={messageMenuRef}
+            className="qq9-popover-menu qq9-message-menu"
+            role="menu"
+            style={messageMenuStyle}
+          >
             <button onClick={copyMessage}>
               <Copy className="size-3.5" aria-hidden="true" />
               复制消息
@@ -4557,6 +4581,8 @@ function QQ9Composer({
   | 'send'
 > & { openHistory: () => void }) {
   const [mentionOpen, setMentionOpen] = useState(false)
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null)
+  const mentionMenuRef = useRef<HTMLDivElement | null>(null)
   const canMention = currentScope === 'group'
   const mentionQuery = text.match(/(?:^|\s)@([^\s@]*)$/)?.[1] || ''
   const mentionCandidates = (canMention ? contacts : [])
@@ -4564,6 +4590,14 @@ function QQ9Composer({
       contact.label.toLowerCase().includes(mentionQuery.toLowerCase())
     )
     .slice(0, 8)
+  const mentionMenuStyle = useViewportPopoverPosition({
+    anchor: mentionOpen
+      ? textareaRef.current?.getBoundingClientRect() ?? null
+      : null,
+    open: mentionOpen,
+    placement: 'top',
+    popoverRef: mentionMenuRef
+  })
   useEffect(() => {
     if (!canMention) setMentionOpen(false)
   }, [canMention])
@@ -4634,6 +4668,7 @@ function QQ9Composer({
           </button>
         </div>
         <textarea
+          ref={textareaRef}
           className="qq9-text-input mt-1.5 block h-18 min-h-12 max-h-30 box-border w-full max-w-full resize-none px-2 py-2 text-(--theme-text-primary) disabled:cursor-not-allowed disabled:opacity-55"
           value={text}
           disabled={!isQQ || state !== 'connected'}
@@ -4656,7 +4691,12 @@ function QQ9Composer({
           }}
         />
         {canMention && mentionOpen && (
-          <div className="qq9-mention-menu" role="listbox">
+          <div
+            ref={mentionMenuRef}
+            className="qq9-mention-menu"
+            role="listbox"
+            style={mentionMenuStyle}
+          >
             {mentionCandidates.map(contact => (
               <button
                 key={contact.id}

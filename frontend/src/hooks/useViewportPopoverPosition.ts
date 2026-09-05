@@ -29,9 +29,17 @@ export function useViewportPopoverPosition({
   gutter = 12
 }: Options): CSSProperties | undefined {
   const [style, setStyle] = useState<CSSProperties>()
+  // Callers may construct a DOMRect during render. Depend on its numeric
+  // values rather than object identity, otherwise positioning itself causes an
+  // update loop (especially for a long-press context menu).
+  const anchorLeft = anchor?.left ?? 0
+  const anchorTop = anchor?.top ?? 0
+  const anchorRight = anchor?.right ?? 0
+  const anchorBottom = anchor?.bottom ?? 0
+  const anchorHeight = anchor?.height ?? 0
 
   useLayoutEffect(() => {
-    if (!open || !anchor || !popoverRef.current) return
+    if (!open || !popoverRef.current) return
     const update = () => {
       const popup = popoverRef.current
       if (!popup) return
@@ -41,32 +49,42 @@ export function useViewportPopoverPosition({
       const rightEdge = (viewport?.offsetLeft ?? 0) + (viewport?.width ?? window.innerWidth) - gutter
       const bottomEdge = (viewport?.offsetTop ?? 0) + (viewport?.height ?? window.innerHeight) - gutter
       const rect = popup.getBoundingClientRect()
-      let left = anchor.left
-      let top = anchor.bottom + gap
-      if (placement === 'top') top = anchor.top - rect.height - gap
+      let left = anchorLeft
+      let top = anchorBottom + gap
+      if (placement === 'top') top = anchorTop - rect.height - gap
       if (placement === 'left') {
-        left = anchor.left - rect.width - gap
-        top = anchor.top + (anchor.height - rect.height) / 2
+        left = anchorLeft - rect.width - gap
+        top = anchorTop + (anchorHeight - rect.height) / 2
       }
       if (placement === 'right') {
-        left = anchor.right + gap
-        top = anchor.top + (anchor.height - rect.height) / 2
+        left = anchorRight + gap
+        top = anchorTop + (anchorHeight - rect.height) / 2
       }
       // Vertical placements flip before clamping, retaining the anchor when
       // there is enough room on the opposite side.
-      if (placement === 'bottom' && top + rect.height > bottomEdge && anchor.top - rect.height - gap >= topEdge)
-        top = anchor.top - rect.height - gap
-      if (placement === 'top' && top < topEdge && anchor.bottom + rect.height + gap <= bottomEdge)
-        top = anchor.bottom + gap
+      if (placement === 'bottom' && top + rect.height > bottomEdge && anchorTop - rect.height - gap >= topEdge)
+        top = anchorTop - rect.height - gap
+      if (placement === 'top' && top < topEdge && anchorBottom + rect.height + gap <= bottomEdge)
+        top = anchorBottom + gap
       left = Math.max(leftEdge, Math.min(rightEdge - rect.width, left))
       top = Math.max(topEdge, Math.min(bottomEdge - rect.height, top))
-      setStyle({
+      const next = {
+        bottom: 'auto',
         left,
         maxHeight: Math.max(0, bottomEdge - top),
         maxWidth: Math.max(0, rightEdge - leftEdge),
         position: 'fixed',
+        right: 'auto',
         top
-      })
+      } satisfies CSSProperties
+      setStyle(current =>
+        current?.left === next.left &&
+        current?.top === next.top &&
+        current?.maxHeight === next.maxHeight &&
+        current?.maxWidth === next.maxWidth
+          ? current
+          : next
+      )
     }
     update()
     const viewport = window.visualViewport
@@ -80,7 +98,7 @@ export function useViewportPopoverPosition({
       viewport?.removeEventListener('resize', update)
       viewport?.removeEventListener('scroll', update)
     }
-  }, [anchor, gap, gutter, open, placement, popoverRef])
+  }, [anchorBottom, anchorHeight, anchorLeft, anchorRight, anchorTop, gap, gutter, open, placement, popoverRef])
 
   return style
 }

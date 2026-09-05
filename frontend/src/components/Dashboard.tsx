@@ -518,6 +518,11 @@ export function DirectoryPicker({
     target?: Directory
   } | null>(null)
   const contextMenuRef = useRef<HTMLDivElement | null>(null)
+  const lastDirectoryTapRef = useRef<{
+    path: string
+    timestamp: number
+  } | null>(null)
+  const openedDirectoryByTapRef = useRef(false)
   const contextMenuStyle = useViewportPopoverPosition({
     anchor: contextMenu
       ? new DOMRect(contextMenu.x, contextMenu.y, 0, 0)
@@ -895,6 +900,13 @@ export function DirectoryPicker({
                   )}
                   key={item.path}
                   onClick={event => {
+                    // Touch devices do not reliably dispatch dblclick. A
+                    // short second tap is the mobile equivalent, and must not
+                    // re-select the directory after navigation has started.
+                    if (openedDirectoryByTapRef.current) {
+                      openedDirectoryByTapRef.current = false
+                      return
+                    }
                     if (selectionMode === 'directory' && item.kind === 'file')
                       return
                     if (selectionMode === 'file' && item.kind === 'directory') {
@@ -912,6 +924,27 @@ export function DirectoryPicker({
                   onDoubleClick={() =>
                     item.kind === 'directory' && visit(item.path)
                   }
+                  onPointerUp={event => {
+                    if (
+                      event.pointerType !== 'touch' ||
+                      item.kind !== 'directory'
+                    )
+                      return
+                    const timestamp = performance.now()
+                    const previous = lastDirectoryTapRef.current
+                    lastDirectoryTapRef.current = {
+                      path: item.path,
+                      timestamp
+                    }
+                    if (
+                      previous?.path === item.path &&
+                      timestamp - previous.timestamp <= 450
+                    ) {
+                      openedDirectoryByTapRef.current = true
+                      lastDirectoryTapRef.current = null
+                      visit(item.path)
+                    }
+                  }}
                   onContextMenu={event => {
                     if (item.kind !== 'directory') return
                     event.preventDefault()
@@ -942,7 +975,7 @@ export function DirectoryPicker({
         </section>
         <footer className="flex items-center justify-between gap-3 border-t border-slate-200 px-4 py-3">
           <span
-            className="min-w-0 truncate text-xs text-slate-500"
+            className="hiden ms:flex   min-w-0 truncate text-xs text-slate-500"
             title={data?.path ?? ''}
           >
             {data?.path ?? '正在读取目录…'}
@@ -5571,6 +5604,18 @@ function ProjectItem({
   const moreRef = useRef<HTMLDivElement | null>(null)
   const ctxRef = useRef<HTMLDivElement | null>(null)
   const projectMenuRef = useRef<HTMLDivElement | null>(null)
+  const ctxMenuStyle = useViewportPopoverPosition({
+    anchor: ctxMenu ? new DOMRect(ctxMenu.x, ctxMenu.y, 0, 0) : null,
+    open: Boolean(ctxMenu),
+    popoverRef: ctxRef
+  })
+  const projectMenuStyle = useViewportPopoverPosition({
+    anchor: projectMenu
+      ? new DOMRect(projectMenu.x, projectMenu.y, 0, 0)
+      : null,
+    open: Boolean(projectMenu),
+    popoverRef: projectMenuRef
+  })
   useEffect(() => {
     void validate(project.path)
   }, [project.path, validate])
@@ -5750,7 +5795,7 @@ function ProjectItem({
         <div
           ref={ctxRef}
           className="workspace-context-menu fixed z-200"
-          style={{ left: ctxMenu.x, top: ctxMenu.y }}
+          style={ctxMenuStyle}
         >
           <button
             className="flex min-h-8 items-center gap-2 rounded px-2 text-left text-xs text-slate-600 transition hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700"
@@ -5778,7 +5823,7 @@ function ProjectItem({
         <div
           ref={projectMenuRef}
           className="workspace-context-menu fixed z-200"
-          style={{ left: projectMenu.x, top: projectMenu.y }}
+          style={projectMenuStyle}
           role="menu"
           aria-label={`${project.name} 的操作`}
         >
