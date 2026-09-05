@@ -41,16 +41,18 @@ const (
 	RouteGitee    Route = "gitee"
 	RouteNPM      Route = "npm"
 	RouteNode     Route = "node"
+	RoutePython   Route = "python"
 	RouteCDN      Route = "cdn"
 	RouteOfficial Route = "official"
 )
 
-var allRoutes = []Route{RouteGitHub, RouteGitee, RouteNPM, RouteNode, RouteCDN, RouteOfficial}
+var allRoutes = []Route{RouteGitHub, RouteGitee, RouteNPM, RouteNode, RoutePython, RouteCDN, RouteOfficial}
 
 const (
 	defaultGitHubMirror = "https://ghfast.top/{url}"
 	defaultNPMMirror    = "https://registry.npmmirror.com{path}"
 	defaultNodeMirror   = "https://npmmirror.com/mirrors/node{nodepath}"
+	defaultPythonMirror = "https://registry.npmmirror.com/-/binary/python{pythonpath}"
 )
 
 // MirrorPreset is a host-maintained template available for a system route.
@@ -75,8 +77,9 @@ var mirrorPresets = map[Route][]MirrorPreset{
 		{Label: "github.akams.cn", Value: "https://github.akams.cn/{url}"},
 		{Label: "gh.jasonzeng.dev", Value: "https://gh.jasonzeng.dev/{url}"},
 	},
-	RouteNPM:  {{Label: "npmmirror", Value: defaultNPMMirror}},
-	RouteNode: {{Label: "npmmirror Node.js", Value: defaultNodeMirror}},
+	RouteNPM:    {{Label: "npmmirror", Value: defaultNPMMirror}},
+	RouteNode:   {{Label: "npmmirror Node.js", Value: defaultNodeMirror}},
+	RoutePython: {{Label: "npmmirror Python", Value: defaultPythonMirror}},
 }
 
 // RouteSettings is a self-contained answer for one resource category. A
@@ -161,6 +164,7 @@ var (
 		RouteGitee:    "https://gitee.com/api/v5/version",
 		RouteNPM:      "https://registry.npmjs.org/",
 		RouteNode:     "https://nodejs.org/dist/index.json",
+		RoutePython:   "https://www.python.org/ftp/python/",
 		RouteCDN:      "https://cdn.jsdelivr.net/",
 		RouteOfficial: "https://download.alemonjs.com/",
 	}
@@ -215,6 +219,43 @@ func DefaultClient(timeout time.Duration) *http.Client {
 	manager := defaultManager
 	defaultMu.RUnlock()
 	return manager.Client(timeout)
+}
+
+// PythonBuildMirrorURL returns the base URL accepted by pyenv's python-build.
+// A direct/system route deliberately returns an empty value so python-build
+// retains its upstream source selection.
+func PythonBuildMirrorURL() string {
+	item := pythonRouteSettings()
+	if (item.Mode != ModeMirror && item.Mode != ModeCustomMirror) || !strings.Contains(item.MirrorURL, "{pythonpath}") {
+		return ""
+	}
+	return strings.TrimSuffix(strings.TrimSpace(strings.Replace(item.MirrorURL, "{pythonpath}", "", 1)), "/")
+}
+
+// PythonBuildEnvironment translates the selected Python route for pyenv,
+// whose downloads run in a child process rather than through an HTTP client.
+func PythonBuildEnvironment() []string {
+	item := pythonRouteSettings()
+	switch item.Mode {
+	case ModeMirror, ModeCustomMirror:
+		return []string{"PYTHON_BUILD_MIRROR_URL=" + PythonBuildMirrorURL(), "HTTP_PROXY=", "HTTPS_PROXY=", "http_proxy=", "https_proxy="}
+	case ModeManual:
+		return []string{"PYTHON_BUILD_MIRROR_URL=", "HTTP_PROXY=" + item.ProxyURL, "HTTPS_PROXY=" + item.ProxyURL, "http_proxy=" + item.ProxyURL, "https_proxy=" + item.ProxyURL}
+	case ModeDirect:
+		return []string{"PYTHON_BUILD_MIRROR_URL=", "HTTP_PROXY=", "HTTPS_PROXY=", "http_proxy=", "https_proxy="}
+	default:
+		return nil
+	}
+}
+
+func pythonRouteSettings() storedRouteSettings {
+	defaultMu.RLock()
+	manager := defaultManager
+	defaultMu.RUnlock()
+	manager.mu.RLock()
+	saved := manager.settings
+	manager.mu.RUnlock()
+	return normalizedRoutes(saved.Routes, saved.Mode, saved.ProxyURL)[RoutePython]
 }
 
 func (m *Manager) Settings() Settings {
@@ -494,18 +535,20 @@ func shouldFallbackToOfficialAPI(request *http.Request, response *http.Response,
 }
 
 func validateMirrorURL(value string) error {
-	urlCount, pathCount, nodePathCount := strings.Count(value, "{url}"), strings.Count(value, "{path}"), strings.Count(value, "{nodepath}")
-	if (urlCount == 1 && pathCount == 0 && nodePathCount == 0) || (urlCount == 0 && pathCount == 1 && nodePathCount == 0) || (urlCount == 0 && pathCount == 0 && nodePathCount == 1) {
+	urlCount, pathCount, nodePathCount, pythonPathCount := strings.Count(value, "{url}"), strings.Count(value, "{path}"), strings.Count(value, "{nodepath}"), strings.Count(value, "{pythonpath}")
+	if (urlCount == 1 && pathCount == 0 && nodePathCount == 0 && pythonPathCount == 0) || (urlCount == 0 && pathCount == 1 && nodePathCount == 0 && pythonPathCount == 0) || (urlCount == 0 && pathCount == 0 && nodePathCount == 1 && pythonPathCount == 0) || (urlCount == 0 && pathCount == 0 && nodePathCount == 0 && pythonPathCount == 1) {
 		// A mirror can either proxy the complete URL (GitHub accelerators) or
 		// replace only the host while preserving a path (NPM registries).
 	} else {
-		return errors.New("请使用包含 {url}、{path} 或 {nodepath} 的完整镜像模板")
+		return errors.New("请使用包含 {url}、{path}、{nodepath} 或 {pythonpath} 的完整镜像模板")
 	}
 	marker := "{url}"
 	if pathCount == 1 {
 		marker = "{path}"
 	} else if nodePathCount == 1 {
 		marker = "{nodepath}"
+	} else if pythonPathCount == 1 {
+		marker = "{pythonpath}"
 	}
 	prefix := strings.Split(value, marker)[0]
 	parsed, err := url.Parse(prefix)
@@ -526,6 +569,9 @@ func rewriteMirrorURL(template string, source *url.URL) (*url.URL, error) {
 	if strings.Contains(template, "{nodepath}") {
 		path = strings.TrimPrefix(path, "/dist")
 		template = strings.Replace(template, "{nodepath}", path, 1)
+	} else if strings.Contains(template, "{pythonpath}") {
+		path = strings.TrimPrefix(path, "/ftp/python")
+		template = strings.Replace(template, "{pythonpath}", path, 1)
 	} else {
 		template = strings.Replace(template, "{path}", path, 1)
 	}
@@ -560,6 +606,7 @@ func defaultRoutes() map[Route]storedRouteSettings {
 		RouteGitee:    {Mode: ModeDirect},
 		RouteNPM:      {Mode: ModeMirror, MirrorURL: defaultNPMMirror},
 		RouteNode:     {Mode: ModeMirror, MirrorURL: defaultNodeMirror},
+		RoutePython:   {Mode: ModeMirror, MirrorURL: defaultPythonMirror},
 		RouteCDN:      {Mode: ModeDirect},
 		RouteOfficial: {Mode: ModeDirect},
 	}
@@ -606,6 +653,8 @@ func routeForURL(target *url.URL) (Route, bool) {
 		return RouteNPM, true
 	case host == "nodejs.org" || host == "npmmirror.com":
 		return RouteNode, true
+	case host == "python.org" || strings.HasSuffix(host, ".python.org"):
+		return RoutePython, true
 	case host == "cdn.jsdelivr.net":
 		return RouteCDN, true
 	case host == "download.alemonjs.com":

@@ -144,7 +144,7 @@ export type PM2Process = {
 export type SystemNetworkMode =
   'system' | 'manual' | 'direct' | 'mirror' | 'custom-mirror'
 export type SystemNetworkRoute =
-  'github' | 'gitee' | 'npm' | 'node' | 'cdn' | 'official'
+  'github' | 'gitee' | 'npm' | 'node' | 'python' | 'cdn' | 'official'
 export type SystemNetworkRouteSettings = {
   mode: SystemNetworkMode
   mirrorUrl?: string

@@ -1,14 +1,21 @@
 package system
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
+
+	"alemonx/internal/systemnetwork"
 )
 
 // PythonRuntimeStatus separates managed Python installations from the Python
@@ -97,20 +104,101 @@ func ensurePythonRoot(ctx context.Context) (string, error) {
 		return "", err
 	}
 	root := filepath.Join(home, ".pyenv")
-	git, err := exec.LookPath("git")
-	if err != nil {
-		return "", errors.New("未检测到 Git，无法准备 Python 版本管理")
-	}
-	output, err := exec.CommandContext(ctx, git, "clone", "--depth=1", "https://github.com/pyenv/pyenv.git", root).CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("准备 Python 版本管理失败：%s", strings.TrimSpace(string(output)))
+	if err := downloadPyenv(ctx, root); err != nil {
+		return "", err
 	}
 	return root, nil
 }
 
+const pyenvArchiveURL = "https://github.com/pyenv/pyenv/archive/refs/heads/master.tar.gz"
+
+// downloadPyenv keeps the bootstrap archive inside AlemonX's controlled
+// networking. In particular it observes the GitHub mirror selected in system
+// settings instead of relying on the terminal's Git configuration.
+func downloadPyenv(ctx context.Context, root string) error {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, pyenvArchiveURL, nil)
+	if err != nil {
+		return err
+	}
+	response, err := systemnetwork.DefaultClient(2 * time.Minute).Do(request)
+	if err != nil {
+		return fmt.Errorf("下载 Python 版本管理组件失败：%w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return fmt.Errorf("下载 Python 版本管理组件失败：服务器返回 %s", response.Status)
+	}
+	staging, err := os.MkdirTemp(filepath.Dir(root), ".pyenv-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(staging)
+	if err := extractPyenvArchive(response.Body, staging); err != nil {
+		return fmt.Errorf("准备 Python 版本管理失败：%w", err)
+	}
+	if _, err := os.Stat(filepath.Join(staging, "bin", "pyenv")); err != nil {
+		return errors.New("准备 Python 版本管理失败：下载内容不完整")
+	}
+	if err := os.Rename(staging, root); err != nil {
+		return fmt.Errorf("准备 Python 版本管理失败：%w", err)
+	}
+	return nil
+}
+
+func extractPyenvArchive(source io.Reader, destination string) error {
+	gzipReader, err := gzip.NewReader(source)
+	if err != nil {
+		return err
+	}
+	defer gzipReader.Close()
+	archive := tar.NewReader(gzipReader)
+	for {
+		header, err := archive.Next()
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		parts := strings.Split(filepath.Clean(header.Name), "/")
+		if len(parts) < 2 || parts[0] == "." || parts[0] == ".." {
+			continue
+		}
+		relative := filepath.Join(parts[1:]...)
+		if relative == "." || strings.HasPrefix(relative, ".."+string(os.PathSeparator)) {
+			return errors.New("下载内容包含无效路径")
+		}
+		target := filepath.Join(destination, relative)
+		switch header.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(target, os.FileMode(header.Mode)); err != nil {
+				return err
+			}
+		case tar.TypeReg:
+			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+				return err
+			}
+			file, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(header.Mode))
+			if err != nil {
+				return err
+			}
+			_, copyErr := io.Copy(file, archive)
+			closeErr := file.Close()
+			if copyErr != nil {
+				return copyErr
+			}
+			if closeErr != nil {
+				return closeErr
+			}
+		}
+	}
+}
+
 func runPyenv(ctx context.Context, root string, args ...string) error {
 	command := exec.CommandContext(ctx, filepath.Join(root, "bin", "pyenv"), args...)
-	command.Env = append(os.Environ(), "PYENV_ROOT="+root, "PATH="+filepath.Join(root, "bin")+string(os.PathListSeparator)+os.Getenv("PATH"))
+	environment := append(os.Environ(), "PYENV_ROOT="+root, "PATH="+filepath.Join(root, "bin")+string(os.PathListSeparator)+os.Getenv("PATH"))
+	environment = append(environment, systemnetwork.PythonBuildEnvironment()...)
+	command.Env = environment
 	output, err := command.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("Python 版本操作失败：%s", strings.TrimSpace(string(output)))

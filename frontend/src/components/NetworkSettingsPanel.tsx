@@ -27,6 +27,7 @@ const defaultRoutes: Record<SystemNetworkRoute, SystemNetworkRouteSettings> = {
   gitee: { mode: 'direct' },
   npm: { mode: 'mirror', mirrorUrl: 'https://registry.npmmirror.com{path}' },
   node: { mode: 'mirror', mirrorUrl: 'https://npmmirror.com/mirrors/node{nodepath}' },
+  python: { mode: 'mirror', mirrorUrl: 'https://registry.npmmirror.com/-/binary/python{pythonpath}' },
   cdn: { mode: 'direct' },
   official: { mode: 'direct' }
 }
@@ -42,6 +43,7 @@ const routes: Array<{
   { id: 'gitee', label: 'Gitee 资源', description: '软件目录中的仓库版本与资料。', hosts: 'gitee.com · gitee.com/api/v5', icon: Network },
   { id: 'npm', label: 'NPM 软件目录', description: '仅查询软件目录元数据，不影响项目依赖安装。', hosts: 'registry.npmjs.org', icon: Package },
   { id: 'node', label: 'Node.js 环境包', description: '工作台内安装 Node.js 时使用；默认通过 npmmirror 下载、校验并缓存。', hosts: 'nodejs.org · npmmirror.com/mirrors/node', icon: Download },
+  { id: 'python', label: 'Python 环境包', description: '工作台内安装 Python 时使用；默认通过 npmmirror 下载并校验。', hosts: 'python.org · registry.npmmirror.com/-/binary/python', icon: Download },
   { id: 'cdn', label: '内容 CDN', description: '软件目录的 jsDelivr 缓存资源。', hosts: 'cdn.jsdelivr.net', icon: Cloud },
   { id: 'official', label: 'AlemonX 官方下载', description: '官方系统资源与引导页 Android 下载。', hosts: 'download.alemonjs.com', icon: Download }
 ]
@@ -226,10 +228,14 @@ export function NetworkSettingsPanel() {
                       title={
                         item.id === 'npm'
                           ? '使用 {path} 保留软件包路径，例如 https://registry.example{path}。'
+                          : item.id === 'node'
+                            ? '使用 {nodepath} 保留 Node.js 发布文件路径，例如 https://mirror.example{nodepath}。'
+                            : item.id === 'python'
+                              ? '使用 {pythonpath} 保留 Python 源码包路径，例如 https://mirror.example{pythonpath}。'
                           : '使用 {url} 代表原始官方地址，例如 https://mirror.example/{url}。'
                       }
                     >
-                      {item.id === 'npm' ? '使用 {path}' : '使用 {url}'}
+                      {item.id === 'npm' ? '使用 {path}' : item.id === 'node' ? '使用 {nodepath}' : item.id === 'python' ? '使用 {pythonpath}' : '使用 {url}'}
                     </small>
                   </span>
                   <input
@@ -237,7 +243,7 @@ export function NetworkSettingsPanel() {
                     autoComplete="url"
                     inputMode="url"
                     onChange={event => updateRoute(item.id, { mirrorUrl: event.target.value })}
-                    placeholder="https://mirror.example/{url}"
+                    placeholder={item.id === 'python' ? 'https://mirror.example{pythonpath}' : item.id === 'node' ? 'https://mirror.example{nodepath}' : 'https://mirror.example/{url}'}
                     spellCheck={false}
                     value={setting.mirrorUrl ?? ''}
                   />

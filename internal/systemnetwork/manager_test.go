@@ -75,6 +75,9 @@ func TestDefaultRoutesPreferAvailableMirrors(t *testing.T) {
 	if npm := routes[RouteNPM]; npm.Mode != ModeMirror || npm.MirrorURL != defaultNPMMirror {
 		t.Fatalf("NPM defaults = %#v", npm)
 	}
+	if python := routes[RoutePython]; python.Mode != ModeMirror || python.MirrorURL != defaultPythonMirror {
+		t.Fatalf("Python defaults = %#v", python)
+	}
 	if routes[RouteGitee].Mode != ModeDirect || routes[RouteOfficial].Mode != ModeDirect {
 		t.Fatalf("unsupported mirror defaults = %#v", routes)
 	}
@@ -159,6 +162,42 @@ func TestMirrorURLRewritesOnlyTheSelectedRoute(t *testing.T) {
 	rewritten, err = rewriteMirrorURL(defaultNodeMirror, node)
 	if err != nil || rewritten.String() != "https://npmmirror.com/mirrors/node/v24.19.0/SHASUMS256.txt" {
 		t.Fatalf("node mirror rewrite = %v, %v", rewritten, err)
+	}
+	python, err := url.Parse("https://www.python.org/ftp/python/3.12.10/Python-3.12.10.tgz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rewritten, err = rewriteMirrorURL(defaultPythonMirror, python)
+	if err != nil || rewritten.String() != "https://registry.npmmirror.com/-/binary/python/3.12.10/Python-3.12.10.tgz" {
+		t.Fatalf("python mirror rewrite = %v, %v", rewritten, err)
+	}
+}
+
+func TestPythonBuildMirrorUsesActivePythonRoute(t *testing.T) {
+	previous := defaultManager
+	defer SetDefault(previous)
+	manager, err := NewAt("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	SetDefault(manager)
+	if got := PythonBuildMirrorURL(); got != "https://registry.npmmirror.com/-/binary/python" {
+		t.Fatalf("default Python build mirror = %q", got)
+	}
+	if _, err := manager.Save(Settings{Routes: map[Route]RouteSettings{RoutePython: {Mode: ModeDirect}}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := PythonBuildMirrorURL(); got != "" {
+		t.Fatalf("direct Python route should not set a mirror: %q", got)
+	}
+	if got := strings.Join(PythonBuildEnvironment(), " "); !strings.Contains(got, "PYTHON_BUILD_MIRROR_URL=") || !strings.Contains(got, "HTTPS_PROXY=") {
+		t.Fatalf("direct Python environment = %q", got)
+	}
+	if _, err := manager.Save(Settings{Routes: map[Route]RouteSettings{RoutePython: {Mode: ModeManual, ProxyURL: "http://127.0.0.1:7890"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(PythonBuildEnvironment(), " "); !strings.Contains(got, "HTTPS_PROXY=http://127.0.0.1:7890") {
+		t.Fatalf("manual Python environment = %q", got)
 	}
 }
 
