@@ -211,7 +211,7 @@ func (c *Checker) command(id, name, argument, suggestion string) Check {
 // must describe `node --version` from the current process PATH, not select a
 // managed runtime or rewrite PATH as a side effect of checking.
 func commandPathForCheck(id string) (string, error) {
-	if id == "node" {
+	if id == "node" || id == "npm" || id == "npx" {
 		return exec.LookPath(id)
 	}
 	RefreshCommandEnvironment(id)
@@ -602,7 +602,15 @@ func RefreshCommandEnvironment(names ...string) []string {
 	directories := []string{}
 	seen := map[string]bool{}
 	for _, name := range names {
-		path, err := ResolveCommand(name)
+		// Node selection is explicit. Do not let a status refresh silently put a
+		// cached or managed Node ahead of the current process PATH.
+		var path string
+		var err error
+		if name == "node" || name == "npm" || name == "npx" {
+			path, err = exec.LookPath(name)
+		} else {
+			path, err = ResolveCommand(name)
+		}
 		if err != nil {
 			continue
 		}

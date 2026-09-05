@@ -1,6 +1,13 @@
 # ALemonX runtime base. Rebuild and publish this image manually when Debian
 # security updates or runtime system dependencies need to change.
+FROM python:3.12-bookworm AS python-runtime
+
 FROM node:22.22.3
+
+# Debian Bookworm's system Python is 3.11. Copy the official Python 3.12
+# runtime into the Node base so python, python3 and pip share one default.
+COPY --from=python-runtime /usr/local /usr/local
+RUN python3 --version | grep -E '^Python 3\.12\.'
 
 # Keep package indexes and downloaded archives in BuildKit's cache.  The helper
 # refreshes indexes immediately before an install, so a rebuilt layer cannot use
@@ -39,15 +46,9 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     fonts-noto-cjk fonts-noto-color-emoji \
     && echo "✅ 字体安装完成"
 
-# Python 环境安装（保留原有依赖）
-RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
-    alx-apt-install \
-    python3 python3-pip python3-venv python3-dev \
-    && echo "✅ Python installed"
-
 # 创建 Python 软链接
-RUN ln -sf /usr/bin/python3 /usr/bin/python \
+RUN ln -sf /usr/local/bin/python3 /usr/local/bin/python \
+    && ln -sf /usr/local/bin/python3 /usr/bin/python \
     && echo "✅ Python symlink created"
 
 # 创建虚拟环境并升级 pip（关键修改）

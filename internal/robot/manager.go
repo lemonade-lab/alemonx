@@ -2296,9 +2296,11 @@ func runWithOutput(root string, values map[string]string, combined bool, name st
 	timeout := commandTimeout(name, args...)
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, nodeToolPath(name), args...)
+	path := nodeToolPath(name)
+	cmd := exec.CommandContext(ctx, path, args...)
 	cmd.Dir = root
 	cmd.Env = os.Environ()
+	applyNodeSiblingEnvironment(cmd, path)
 	applyManagedNodeEnvironment(cmd)
 	HideWindow(cmd)
 	for key, value := range values {
@@ -2340,6 +2342,33 @@ func runWithOutput(root string, values map[string]string, combined bool, name st
 	return text, nil
 }
 
+// applyNodeSiblingEnvironment keeps npx/npm and their node interpreter from
+// the same runtime. These scripts commonly start with `#!/usr/bin/env node`;
+// executing an absolute npx path alone is insufficient when the service PATH
+// was empty at launch.
+func applyNodeSiblingEnvironment(command *exec.Cmd, executable string) {
+	base := filepath.Base(executable)
+	if base != "npx" && base != "npm" && base != "yarn" && base != "pnpm" {
+		return
+	}
+	directory := filepath.Dir(executable)
+	if info, err := os.Stat(filepath.Join(directory, "node")); err != nil || info.IsDir() {
+		return
+	}
+	if command.Env == nil {
+		command.Env = os.Environ()
+	}
+	prefix := "PATH="
+	value := directory + string(os.PathListSeparator) + os.Getenv("PATH")
+	for index := len(command.Env) - 1; index >= 0; index-- {
+		if strings.HasPrefix(command.Env[index], prefix) {
+			command.Env[index] = prefix + value
+			return
+		}
+	}
+	command.Env = append(command.Env, prefix+value)
+}
+
 func commandTimeout(name string, args ...string) time.Duration {
 	base := strings.ToLower(filepath.Base(name))
 	if base == "git" && len(args) > 0 {
@@ -2365,7 +2394,7 @@ func commandNotFound(err error, output string) bool {
 		return true
 	}
 	text := strings.ToLower(err.Error() + "\n" + output)
-	return strings.Contains(text, "executable file not found") || strings.Contains(text, "command not found") || strings.Contains(text, "is not recognized as an internal or external command")
+	return strings.Contains(text, "executable file not found") || strings.Contains(text, "command not found") || strings.Contains(text, "is not recognized as an internal or external command") || strings.Contains(text, "env: node: no such file or directory")
 }
 
 func missingCommandAdvice(name string) error {

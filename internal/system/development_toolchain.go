@@ -16,9 +16,8 @@ var (
 )
 
 // PrepareDevelopmentCommand resolves a source-plugin command in the same
-// environment a developer normally uses. Service managers do not load shell
-// profiles, so Node version managers and package-manager directories must be
-// added explicitly instead of relying on an interactive SSH session.
+// environment a developer normally uses. The current service PATH stays first
+// so Yarn, Corepack and npx execute with the same Node as `node --version`.
 //
 // Yarn and pnpm have a portable fallback: Corepack from the selected Node
 // runtime, then npx. Neither fallback installs a global package or modifies
@@ -58,7 +57,7 @@ func DevelopmentCommandEnvironment() []string {
 	entries := filepath.SplitList(os.Getenv("PATH"))
 	merged := make([]string, 0, len(directories)+len(entries))
 	seen := map[string]bool{}
-	for _, directory := range append(directories, entries...) {
+	for _, directory := range append(entries, directories...) {
 		if directory == "" {
 			continue
 		}
@@ -83,12 +82,6 @@ func DevelopmentCommandEnvironment() []string {
 
 func developmentCommandDirectories() []string {
 	directories := []string{}
-	if bin := NVMNodeBin(); bin != "" {
-		directories = append(directories, bin)
-	}
-	if bin := ManagedNodeBin(); bin != "" {
-		directories = append(directories, bin)
-	}
 	if runtime.GOOS == "windows" {
 		return append(directories, windowsCommandDirectories("node")...)
 	}

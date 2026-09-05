@@ -67,6 +67,17 @@ func TestPrepareDevelopmentCommandFallsBackToCorepack(t *testing.T) {
 	}
 }
 
+func TestDevelopmentCommandEnvironmentKeepsCurrentNodeFirst(t *testing.T) {
+	current := t.TempDir()
+	previousSystemDirectories := developmentSystemCommandDirectories
+	developmentSystemCommandDirectories = func(string) []string { return []string{t.TempDir()} }
+	t.Cleanup(func() { developmentSystemCommandDirectories = previousSystemDirectories })
+	t.Setenv("PATH", current)
+	if got := filepath.SplitList(environmentValue(DevelopmentCommandEnvironment(), "PATH")); len(got) == 0 || got[0] != current {
+		t.Fatalf("development PATH = %#v, want current PATH first", got)
+	}
+}
+
 func environmentValue(environment []string, key string) string {
 	prefix := key + "="
 	for _, value := range environment {

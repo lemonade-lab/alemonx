@@ -6368,7 +6368,9 @@ function EnvironmentPage({
   const [environmentView, setEnvironmentView] = useState<'general' | 'nodejs' | 'python'>(
     'general'
   )
-  const checks = report?.checks ?? []
+  // NodeJS has its own version-management page. Keeping it out of the
+  // general checklist avoids showing two competing “current” versions.
+  const checks = (report?.checks ?? []).filter(check => check.id !== 'node')
   const checkOrder = [
     'node',
     'git',
@@ -6454,7 +6456,7 @@ function EnvironmentPage({
 
       {showGeneral && checking && (
         <p className="m-0 py-3 text-xs leading-5 text-slate-500">
-          正在读取 Node.js、Git 和系统工具状态。
+          正在读取 Git 和系统工具状态。
         </p>
       )}
 
