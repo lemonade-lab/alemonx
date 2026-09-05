@@ -173,8 +173,7 @@ func platformSupported() bool {
 
 func (c *Checker) command(id, name, argument, suggestion string) Check {
 	previousPath, previousErr := exec.LookPath(id)
-	RefreshCommandEnvironment(id)
-	path, err := ResolveCommand(id)
+	path, err := commandPathForCheck(id)
 	if err != nil {
 		return Check{ID: id, Name: name, Status: "missing", Detail: "未检测到", Suggestion: suggestion}
 	}
@@ -206,6 +205,17 @@ func (c *Checker) command(id, name, argument, suggestion string) Check {
 		}
 	}
 	return Check{ID: id, Name: name, Status: "ready", Detail: version}
+}
+
+// commandPathForCheck keeps a Node.js environment report observational: it
+// must describe `node --version` from the current process PATH, not select a
+// managed runtime or rewrite PATH as a side effect of checking.
+func commandPathForCheck(id string) (string, error) {
+	if id == "node" {
+		return exec.LookPath(id)
+	}
+	RefreshCommandEnvironment(id)
+	return ResolveCommand(id)
 }
 
 // browser is optional because a project can download a compatible browser as

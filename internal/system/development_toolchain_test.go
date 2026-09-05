@@ -9,6 +9,10 @@ import (
 
 func TestResolveDevelopmentCommandFindsUserYarnOutsideServicePATH(t *testing.T) {
 	isolateUserNVM(t)
+	cache := t.TempDir()
+	previousCache := userCacheDir
+	userCacheDir = func() (string, error) { return cache, nil }
+	t.Cleanup(func() { userCacheDir = previousCache })
 	home := t.TempDir()
 	previousHome := developmentUserHomeDir
 	developmentUserHomeDir = func() (string, error) { return home, nil }
@@ -37,6 +41,10 @@ func TestResolveDevelopmentCommandFindsUserYarnOutsideServicePATH(t *testing.T) 
 
 func TestPrepareDevelopmentCommandFallsBackToCorepack(t *testing.T) {
 	isolateUserNVM(t)
+	cache := t.TempDir()
+	previousCache := userCacheDir
+	userCacheDir = func() (string, error) { return cache, nil }
+	t.Cleanup(func() { userCacheDir = previousCache })
 	home := t.TempDir()
 	previousHome := developmentUserHomeDir
 	developmentUserHomeDir = func() (string, error) { return home, nil }

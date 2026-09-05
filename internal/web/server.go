@@ -1064,6 +1064,7 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	mux.HandleFunc("/api/v1/system/service", s.systemServiceHandler)
 	mux.HandleFunc("/api/v1/system/environment/install", s.environmentInstallHandler)
 	mux.HandleFunc("/api/v1/system/node/nvm", s.nodeNVMHandler)
+	mux.HandleFunc("/api/v1/system/python", s.pythonRuntimeHandler)
 	mux.HandleFunc("/api/v1/system/network", s.systemNetworkHandler)
 	mux.HandleFunc("/api/v1/system/dependency-sources", s.dependencySourcesHandler)
 	mux.HandleFunc("/api/v1/system/redis", s.systemRedisHandler)
@@ -8735,8 +8736,6 @@ func (s *server) robotPackageGitCloneHandler(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusBadRequest, "Git 信息无法识别。")
 		return
 	}
-	// Backpack plugins are managed exclusively from the release branch.
-	input.Branch = "release"
 	if _, err := s.robots.Validate(input.Root); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -8996,6 +8995,58 @@ func (s *server) nodeNVMHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"output": output, "status": system.NVMStatus()})
+}
+
+func (s *server) pythonRuntimeHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		writeJSON(w, http.StatusOK, system.PythonRuntimeStatusForHost())
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
+		return
+	}
+	if runtime.GOOS == "windows" {
+		writeError(w, http.StatusBadRequest, "Python 版本管理暂不支持 Windows。")
+		return
+	}
+	if s.auth != nil {
+		status, err := s.auth.Status(s.authToken(r))
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "无法读取当前账户权限。")
+			return
+		}
+		if status.Enabled && (!status.Authenticated || !status.SuperAdmin) {
+			writeError(w, http.StatusForbidden, "只有已登录的超级管理员可以管理 Python 版本。")
+			return
+		}
+	}
+	var input struct {
+		Action  string `json:"action"`
+		Version string `json:"version"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 16<<10)).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, "Python 版本请求无效。")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Minute)
+	defer cancel()
+	var output string
+	var err error
+	switch input.Action {
+	case "install":
+		output, err = system.InstallPythonVersion(ctx, input.Version)
+	case "use":
+		output, err = system.UsePythonVersion(ctx, input.Version)
+	default:
+		writeError(w, http.StatusBadRequest, "Python 操作无效。")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"output": output, "status": system.PythonRuntimeStatusForHost()})
 }
 
 func findGoal(id string) (goal, bool) {

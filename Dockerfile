@@ -56,7 +56,10 @@ RUN set -eu; \
 # 最终运行阶段
 FROM ${ALX_RUNTIME_BASE} AS runtime
 
-RUN mkdir -p /app /app/plugins /app/workspace /data /root/.ssh
+# `latest` is retained as the existing release channel, but it must have been
+# published from Dockerfile.base with the pinned Node release below.
+RUN test "$(node --version)" = "v22.22.3" \
+    && mkdir -p /app /app/plugins /app/workspace /data /root/.ssh
 
 WORKDIR /app
 COPY --from=builder /out/alx /app/alx

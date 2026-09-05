@@ -78,12 +78,18 @@ export function EnvironmentFixDialog({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ checkId: check.id, confirm: true })
       })
-      const body = (await response.json()) as {
-        output?: string
-        error?: string
+      const text = await response.text()
+      let body: { output?: string; error?: string } = {}
+      try {
+        body = JSON.parse(text) as { output?: string; error?: string }
+      } catch {
+        // Some desktop or reverse-proxy failure pages are plain text. Keep the
+        // original diagnostic instead of replacing it with a JSON parse error.
       }
-      if (!response.ok) throw new Error(body.error || '服务器安装未完成。')
-      setMessage(body.output || '服务器安装已完成，请重新检查环境。')
+      if (!response.ok) {
+        throw new Error(body.error || text.trim() || '服务器安装未完成。')
+      }
+      setMessage(body.output || text.trim() || '服务器安装已完成，请重新检查环境。')
       setInstalled(true)
       onInstalled?.()
     } catch (reason) {

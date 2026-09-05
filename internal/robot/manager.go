@@ -181,14 +181,17 @@ func (m Manager) LocalPackageVersions(root, packageName string) (LocalPackageVer
 			continue
 		}
 		if output, gitErr := gitRun(item.Path, "rev-parse", "--is-inside-work-tree"); gitErr == nil && strings.TrimSpace(output) == "true" {
-			if _, fetchErr := gitRun(item.Path, "fetch", "origin", "release"); fetchErr != nil {
-				return LocalPackageVersions{}, errors.New("无法读取 release 分支提交")
-			}
 			status, statusErr := releaseGitStatus(item.Path)
 			if statusErr != nil {
 				return LocalPackageVersions{}, statusErr
 			}
-			commits, labels, commitsErr := releaseCommits(item.Path)
+			if !isReleaseBranch(status.Branch) {
+				return LocalPackageVersions{}, errors.New("当前插件不在 release 发布分支")
+			}
+			if _, fetchErr := gitRun(item.Path, "fetch", "origin", status.Branch); fetchErr != nil {
+				return LocalPackageVersions{}, errors.New("无法读取发布分支提交")
+			}
+			commits, labels, commitsErr := releaseCommits(item.Path, status.Branch)
 			if commitsErr != nil {
 				return LocalPackageVersions{}, commitsErr
 			}
@@ -209,8 +212,8 @@ func (m Manager) LocalPackageVersions(root, packageName string) (LocalPackageVer
 
 // releaseCommits exposes a compact, readable history for choosing a version
 // while preserving release as the checked-out branch.
-func releaseCommits(path string) ([]string, map[string]string, error) {
-	output, err := gitRun(path, "log", "-n", "12", "--format=%H%x1f%s", "origin/release")
+func releaseCommits(path, branch string) ([]string, map[string]string, error) {
+	output, err := gitRun(path, "log", "-n", "12", "--format=%H%x1f%s", "origin/"+branch)
 	if err != nil {
 		return nil, nil, errors.New("无法读取 release 分支提交记录")
 	}

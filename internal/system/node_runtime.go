@@ -52,8 +52,8 @@ type NVMNodeStatus struct {
 }
 
 // NVMStatus returns locally managed versions and the active Node.js runtime.
-// When no managed runtime is available, it reports the system node resolved
-// from this process's PATH.
+// ActiveVersion is populated exclusively from a real `node --version` call;
+// managed defaults and downloaded versions are never treated as current use.
 func NVMStatus() NVMNodeStatus {
 	status := NVMNodeStatus{Versions: []string{}, RecommendedVersion: "v" + MinimumNodeVersion}
 	directory, err := preferredNVMDirectory()
@@ -69,16 +69,10 @@ func NVMStatus() NVMNodeStatus {
 				}
 			}
 			sortNodeVersions(status.Versions)
-			status.ActiveVersion = nvmDefaultVersion(directory, status.Versions)
 		}
 	}
 	status.RecommendedInstalled = containsNodeVersion(status.Versions, MinimumNodeVersion)
-	if status.ActiveVersion == "" && len(status.Versions) > 0 {
-		status.ActiveVersion = status.Versions[0]
-	}
-	if status.ActiveVersion == "" {
-		status.ActiveVersion = systemNodeVersion()
-	}
+	status.ActiveVersion = systemNodeVersion()
 	return status
 }
 
@@ -642,18 +636,24 @@ func NVMNodeBin() string {
 	if err != nil {
 		return ""
 	}
-	// Prefer the explicit NVM default. Falling back to the newest installed
-	// release keeps compatibility with installations created before defaults
-	// were persisted by the workbench.
-	if active := NVMStatus().ActiveVersion; active != "" {
+	versions := make([]string, 0)
+	entries, err := os.ReadDir(filepath.Join(directory, "versions", "node"))
+	if err != nil {
+		return ""
+	}
+	for _, entry := range entries {
+		if entry.IsDir() && isNodeVersion(entry.Name()) {
+			versions = append(versions, entry.Name())
+		}
+	}
+	// This default controls which NVM binary workbench operations select. It
+	// is deliberately separate from NVMStatus.ActiveVersion, which reports
+	// only the result of the real `node --version` command.
+	if active := nvmDefaultVersion(directory, versions); active != "" {
 		bin := filepath.Join(directory, "versions", "node", active, "bin")
 		if info, statErr := os.Stat(filepath.Join(bin, "node")); statErr == nil && !info.IsDir() {
 			return bin
 		}
-	}
-	entries, err := os.ReadDir(filepath.Join(directory, "versions", "node"))
-	if err != nil {
-		return ""
 	}
 	sort.Slice(entries, func(i, j int) bool {
 		left, leftOK := parseNodeVersion(entries[i].Name())

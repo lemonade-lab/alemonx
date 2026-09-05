@@ -431,6 +431,7 @@ export type NVMNodeStatus = {
   latestVersion?: string
   latestInstalled: boolean
 }
+export type PythonRuntimeStatus = { available: boolean; versions: string[]; activeVersion?: string }
 
 export const workspaceApi = createApi({
   reducerPath: 'workspaceApi',
@@ -677,6 +678,17 @@ export const workspaceApi = createApi({
       { action: 'install' | 'use'; version: string }
     >({
       query: body => ({ url: 'system/node/nvm', method: 'POST', body }),
+      invalidatesTags: ['EnvironmentReport']
+    }),
+    pythonRuntimeStatus: build.query<PythonRuntimeStatus, void>({
+      query: () => 'system/python',
+      providesTags: ['EnvironmentReport']
+    }),
+    managePythonRuntime: build.mutation<
+      { output: string; status: PythonRuntimeStatus },
+      { action: 'install' | 'use'; version: string }
+    >({
+      query: body => ({ url: 'system/python', method: 'POST', body }),
       invalidatesTags: ['EnvironmentReport']
     }),
     systemNetwork: build.query<SystemNetworkSettings, void>({
@@ -1161,6 +1173,8 @@ export const {
   useSystemMcpQuery,
   useNvmNodeStatusQuery,
   useManageNVMNodeMutation,
+  usePythonRuntimeStatusQuery,
+  useManagePythonRuntimeMutation,
   useSystemNetworkQuery,
   useDependencySourcesQuery,
   useDependencySourceTaskQuery,

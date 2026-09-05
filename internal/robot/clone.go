@@ -21,6 +21,10 @@ import (
 )
 
 var gitBranchPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]*$`)
+
+// releaseBranchPattern accepts any explicitly named release channel. Git's
+// own branch-name validation still applies before a clone is started.
+var releaseBranchPattern = regexp.MustCompile(`(?i)release`)
 var cloneDirectoryPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 var gitCloneProgressPattern = regexp.MustCompile(`(?i)(compressing objects|receiving objects|resolving deltas):\s*(\d+)%`)
 
@@ -40,6 +44,10 @@ type CloneProgress struct {
 type HTTPSAuthorization struct {
 	Username string
 	Token    string
+}
+
+func isReleaseBranch(branch string) bool {
+	return releaseBranchPattern.MatchString(strings.TrimSpace(branch))
 }
 
 func (authorization HTTPSAuthorization) validFor(repository *url.URL, mirror string) error {
@@ -196,9 +204,10 @@ func CloneLocalPackageWithProgress(root, repository, branch, name, mirror string
 // CloneLocalPackageWithAuthorization clones a package with ephemeral HTTPS
 // credentials when the repository is private.
 func CloneLocalPackageWithAuthorization(root, repository, branch, name, mirror string, depth int, authorization HTTPSAuthorization, onProgress func(CloneProgress)) (Result, error) {
-	// Backpack plugins are release artifacts. Enforce this at the package
-	// boundary so non-HTTP callers cannot clone development branches here.
-	branch = "release"
+	branch = strings.TrimSpace(branch)
+	if !isReleaseBranch(branch) {
+		return Result{}, errors.New("背包插件只能选择 release 发布分支")
+	}
 	project, err := projectPath(root)
 	if err != nil {
 		return Result{}, err

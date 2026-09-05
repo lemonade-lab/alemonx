@@ -152,6 +152,7 @@ import {
 import { qqChatWindowStorageKey } from './qqChatStorage'
 import { SSHControl } from './SSHControl'
 import { NodeNVMPanel } from './NodeNVMPanel'
+import { PythonRuntimePanel } from './PythonRuntimePanel'
 import { GitHubAuthControl } from './GitHubAuthControl'
 import { ConfigFieldsEditor, ConfigSourceLinks } from './PackageConfigFields'
 import { sameConfigValues } from './configFieldUtils'
@@ -5093,8 +5094,11 @@ function GitCloneDialog({
       return
     }
     const controller = new AbortController()
+    // Show feedback immediately; the debounce only defers network traffic
+    // while the URL is still being typed.
+    setBranchesLoading(true)
+    setBranches([])
     const timer = window.setTimeout(() => {
-      setBranchesLoading(true)
       void fetch(
         `/api/v1/robot/git-clone/branches?${new URLSearchParams({ repository: value })}`,
         { signal: controller.signal }
@@ -5109,12 +5113,23 @@ function GitCloneDialog({
           return data
         })
         .then(data => {
-          setBranches(data.branches ?? [])
+          const availableBranches =
+            mode === 'package'
+              ? (data.branches ?? []).filter(item =>
+                  /release/i.test(item)
+                )
+              : (data.branches ?? [])
+          setBranches(availableBranches)
           setBranch(current => {
-            if (mode === 'package') return current || 'release'
-            return data.branches?.includes(current)
+            if (mode === 'package')
+              return availableBranches.includes(current)
+                ? current
+                : (availableBranches.includes('release')
+                    ? 'release'
+                    : (availableBranches[0] ?? ''))
+            return availableBranches.includes(current)
               ? current
-              : (data.defaultBranch ?? data.branches?.[0] ?? '')
+              : (data.defaultBranch ?? availableBranches[0] ?? '')
           })
         })
         .catch(() => {
@@ -5371,22 +5386,53 @@ function GitCloneDialog({
               </label>
               <div className="grid gap-3 sm:grid-cols-2">
                 {mode === 'package' ? (
-                  <span className="grid gap-1 text-xs font-semibold text-slate-600">
-                    插件分支
-                    <span className="inline-flex h-9 items-center rounded-md border border-slate-300 bg-slate-50 px-2.5 text-sm font-normal text-slate-600">
-                      发布分支（release）
-                    </span>
-                  </span>
-                ) : (
                   <label className="grid gap-1 text-xs font-semibold text-slate-600">
-                    分支{branchesLoading ? '（正在读取…）' : '（可选）'}
+                    <span className="flex items-center gap-1.5">
+                      发布分支
+                      {branchesLoading && (
+                        <span className="inline-flex items-center gap-1 font-normal text-slate-500">
+                          <Loader2 className="size-3 animate-spin" /> 正在读取…
+                        </span>
+                      )}
+                    </span>
                     <select
                       className="h-9 rounded-md border border-slate-300 bg-white px-2.5 text-sm font-normal text-slate-800 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100 disabled:bg-slate-100"
                       value={branch}
                       onChange={event => setBranch(event.target.value)}
                       disabled={!branches.length || branchesLoading}
                     >
-                      <option value="">默认分支</option>
+                      {branchesLoading ? (
+                        <option value="">正在读取发布分支…</option>
+                      ) : !branches.length ? (
+                        <option value="">未找到发布分支</option>
+                      ) : null}
+                      {branches.map(item => (
+                        <option key={item} value={item}>{formatBranchLabel(item)}</option>
+                      ))}
+                    </select>
+                    <small className="font-normal leading-5 text-slate-500">
+                      仅显示分支名中包含 release 的发布分支。
+                    </small>
+                  </label>
+                ) : (
+                  <label className="grid gap-1 text-xs font-semibold text-slate-600">
+                    <span className="flex items-center gap-1.5">
+                      分支{branchesLoading ? '' : '（可选）'}
+                      {branchesLoading && (
+                        <span className="inline-flex items-center gap-1 font-normal text-slate-500">
+                          <Loader2 className="size-3 animate-spin" /> 正在读取…
+                        </span>
+                      )}
+                    </span>
+                    <select
+                      className="h-9 rounded-md border border-slate-300 bg-white px-2.5 text-sm font-normal text-slate-800 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100 disabled:bg-slate-100"
+                      value={branch}
+                      onChange={event => setBranch(event.target.value)}
+                      disabled={!branches.length || branchesLoading}
+                    >
+                      <option value="">
+                        {branchesLoading ? '正在读取远程分支…' : '默认分支'}
+                      </option>
                       {branches.map(item => (
                         <option key={item} value={item}>
                           {formatBranchLabel(item)}
@@ -5506,6 +5552,7 @@ function GitCloneDialog({
                   !sshLoading &&
                   !sshKeys.length) ||
                 !repository.trim() ||
+                (mode === 'package' && (branchesLoading || !branch)) ||
                 !destination ||
                 !name.trim() ||
                 !target ||
@@ -6318,7 +6365,7 @@ function EnvironmentPage({
   onFix: (check: Check) => void
   sidebarLayout?: boolean
 }) {
-  const [environmentView, setEnvironmentView] = useState<'general' | 'nodejs'>(
+  const [environmentView, setEnvironmentView] = useState<'general' | 'nodejs' | 'python'>(
     'general'
   )
   const checks = report?.checks ?? []
@@ -6346,6 +6393,7 @@ function EnvironmentPage({
     requiredChecks.length > 0 && readyCount === requiredChecks.length
   const showGeneral = !sidebarLayout || environmentView === 'general'
   const showNodeJS = !sidebarLayout || environmentView === 'nodejs'
+  const showPython = !sidebarLayout || environmentView === 'python'
   return (
     <section className="workspace-content system-feature-page mx-auto max-w-215">
       {sidebarLayout && (
@@ -6363,6 +6411,9 @@ function EnvironmentPage({
             onClick={() => setEnvironmentView('nodejs')}
           >
             <Terminal className="size-4" /> NodeJS
+          </button>
+          <button type="button" aria-current={environmentView === 'python' ? 'page' : undefined} onClick={() => setEnvironmentView('python')}>
+            <Code2 className="size-4" /> Python
           </button>
         </SidebarWindowSectionNav>
       )}
@@ -6479,6 +6530,7 @@ function EnvironmentPage({
       )}
 
       {showNodeJS && <NodeNVMPanel onChanged={onRefresh} />}
+      {showPython && <PythonRuntimePanel onChanged={onRefresh} />}
 
       {sidebarLayout ? (
         <SidebarWindowActions>

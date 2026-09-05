@@ -380,7 +380,7 @@ func (m Manager) SetAppEnabled(root, packageName string, enabled bool) (Result, 
 			if statusErr != nil {
 				return Result{}, statusErr
 			}
-			if status.Branch != "release" || status.Dirty || status.Ahead > 0 {
+			if !isReleaseBranch(status.Branch) || status.Dirty || status.Ahead > 0 {
 				return Result{}, releaseSyncConfirmationError(status)
 			}
 			break
@@ -455,7 +455,7 @@ func (m Manager) ValidateEnabledBackpackRelease(root string) error {
 		if statusErr != nil {
 			return statusErr
 		}
-		if status.Branch != "release" || status.Dirty || status.Ahead > 0 {
+		if !isReleaseBranch(status.Branch) || status.Dirty || status.Ahead > 0 {
 			return fmt.Errorf("背包插件 %s：%w", item.Name, releaseSyncConfirmationError(status))
 		}
 	}

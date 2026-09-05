@@ -488,18 +488,25 @@ func switchLocalPackageVersion(root, packageName, version string, force bool) (R
 			continue
 		}
 		if output, gitErr := gitRun(item.Path, "rev-parse", "--is-inside-work-tree"); gitErr == nil && strings.TrimSpace(output) == "true" {
-			if output, fetchErr := gitRun(item.Path, "fetch", "origin", "release"); fetchErr != nil {
-				return Result{Path: item.Path, Output: output}, errors.New("无法从 Git 仓库获取 release 分支")
-			}
 			status, statusErr := releaseGitStatus(item.Path)
 			if statusErr != nil {
 				return Result{}, statusErr
 			}
-			if !force && (status.Dirty || status.Branch != "release" || status.Ahead > 0) {
+			if !isReleaseBranch(status.Branch) {
+				return Result{}, errors.New("当前插件不在 release 发布分支")
+			}
+			if output, fetchErr := gitRun(item.Path, "fetch", "origin", status.Branch); fetchErr != nil {
+				return Result{Path: item.Path, Output: output}, errors.New("无法获取插件发布分支")
+			}
+			status, statusErr = releaseGitStatus(item.Path)
+			if statusErr != nil {
+				return Result{}, statusErr
+			}
+			if !force && (status.Dirty || status.Ahead > 0) {
 				return Result{}, releaseSyncConfirmationError(status)
 			}
-			target := "origin/release"
-			if version != "" && version != "release" {
+			target := "origin/" + status.Branch
+			if version != "" && version != status.Branch {
 				if !regexp.MustCompile(`^[0-9a-f]{7,40}$`).MatchString(version) {
 					return Result{}, errors.New("请选择 release 分支中的有效提交")
 				}
@@ -508,7 +515,7 @@ func switchLocalPackageVersion(root, packageName, version string, force bool) (R
 					return Result{}, errors.New("找不到所选 release 提交")
 				}
 				resolved = strings.TrimSpace(resolved)
-				if _, ancestorErr := gitRun(item.Path, "merge-base", "--is-ancestor", resolved, "origin/release"); ancestorErr != nil {
+				if _, ancestorErr := gitRun(item.Path, "merge-base", "--is-ancestor", resolved, target); ancestorErr != nil {
 					return Result{}, errors.New("所选提交不属于 release 分支")
 				}
 				target = resolved
@@ -525,7 +532,7 @@ func switchLocalPackageVersion(root, packageName, version string, force bool) (R
 				}
 				logs = append(logs, "已丢弃该插件工作区的本地 Git 修改。", resetOutput, cleanOutput)
 			}
-			output, checkoutErr := gitRun(item.Path, "checkout", "-B", "release", target)
+			output, checkoutErr := gitRun(item.Path, "checkout", "-B", status.Branch, target)
 			logs = append(logs, output)
 			if checkoutErr == nil {
 				output, checkoutErr = gitRun(item.Path, "reset", "--hard", target)
@@ -535,7 +542,7 @@ func switchLocalPackageVersion(root, packageName, version string, force bool) (R
 			if checkoutErr != nil {
 				return Result{Path: item.Path, Output: output}, checkoutErr
 			}
-			return Result{Path: item.Path, Output: "已同步 release 分支。\n" + output}, nil
+			return Result{Path: item.Path, Output: "已同步 " + status.Branch + " 发布分支。\n" + output}, nil
 		}
 		return replaceLocalPackage(root, packageName, version)
 	}
@@ -560,8 +567,8 @@ func releaseGitStatus(path string) (releaseStatus, error) {
 		return releaseStatus{}, errors.New("无法确认 Git 工作区状态")
 	}
 	status := releaseStatus{Branch: strings.TrimSpace(branch), Head: strings.TrimSpace(head), Dirty: strings.TrimSpace(dirty) != ""}
-	if status.Branch == "release" {
-		counts, err := gitRun(path, "rev-list", "--left-right", "--count", "origin/release...release")
+	if isReleaseBranch(status.Branch) {
+		counts, err := gitRun(path, "rev-list", "--left-right", "--count", "origin/"+status.Branch+"..."+status.Branch)
 		if err != nil {
 			return releaseStatus{}, errors.New("无法比较本地与远程 release 分支")
 		}
@@ -575,7 +582,7 @@ func releaseGitStatus(path string) (releaseStatus, error) {
 
 func releaseSyncConfirmationError(status releaseStatus) error {
 	reasons := make([]string, 0, 3)
-	if status.Branch != "release" {
+	if !isReleaseBranch(status.Branch) {
 		reasons = append(reasons, "当前不在 release 分支")
 	}
 	if status.Dirty {

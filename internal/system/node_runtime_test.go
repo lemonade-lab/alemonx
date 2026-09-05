@@ -28,6 +28,13 @@ func isolateUserNVM(t *testing.T) {
 	t.Cleanup(func() { userHomeDir = previous })
 }
 
+func hideSystemNode(t *testing.T) {
+	t.Helper()
+	previous := nodeLookPath
+	nodeLookPath = func(string) (string, error) { return "", os.ErrNotExist }
+	t.Cleanup(func() { nodeLookPath = previous })
+}
+
 func TestNodeArchitecture(t *testing.T) {
 	for architecture, want := range map[string]string{
 		"amd64": "x64", "arm64": "arm64", "386": "x86", "arm": "armv7l",
@@ -78,18 +85,17 @@ func TestManagedNodeCommandResolvesBundledRuntime(t *testing.T) {
 	if got := ManagedNodeCommand("yarn"); got != "" {
 		t.Fatalf("ManagedNodeCommand(yarn) = %q, want empty", got)
 	}
-	t.Setenv("PATH", "")
+	// The environment check now describes the actual node command. Make that
+	// command explicit instead of expecting the check to rewrite PATH.
+	t.Setenv("PATH", bin)
 	report := NewChecker().CheckGoal("build", "npm")
 	checked := map[string]bool{}
 	for _, check := range report.Checks {
 		if check.ID == "node" || check.ID == "npm" {
 			checked[check.ID] = true
 			if check.Status != "ready" {
-				t.Fatalf("check %#v should be ready after repairing PATH", check)
+				t.Fatalf("check %#v should be ready from the actual PATH", check)
 			}
-		}
-		if check.ID == "node" && !strings.Contains(check.Detail, "已自动修复当前服务 PATH") {
-			t.Fatalf("node check should report PATH repair: %#v", check)
 		}
 	}
 	if !checked["node"] || !checked["npm"] {
@@ -128,8 +134,9 @@ func TestNVMNodeCommandTakesPriorityOverSystemNode(t *testing.T) {
 	}
 }
 
-func TestNVMStatusUsesDefaultAliasForActiveVersion(t *testing.T) {
+func TestNVMStatusDoesNotTreatManagedDefaultAsCurrentNode(t *testing.T) {
 	isolateUserNVM(t)
+	hideSystemNode(t)
 	cache := t.TempDir()
 	previousCache := userCacheDir
 	userCacheDir = func() (string, error) { return cache, nil }
@@ -151,11 +158,43 @@ func TestNVMStatusUsesDefaultAliasForActiveVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 	status := NVMStatus()
-	if !status.Available || status.ActiveVersion != "v22.22.3" {
-		t.Fatalf("NVMStatus() = %#v, want v22.22.3 active", status)
+	if !status.Available || status.ActiveVersion != "" {
+		t.Fatalf("NVMStatus() = %#v, want no active version without node --version", status)
 	}
 	if got := NVMNodeBin(); got != filepath.Join(directory, "versions", "node", "v22.22.3", "bin") {
 		t.Fatalf("NVMNodeBin() = %q, want default version bin", got)
+	}
+}
+
+func TestNVMStatusUsesSystemNodeOverManagedDefault(t *testing.T) {
+	isolateUserNVM(t)
+	cache := t.TempDir()
+	previousCache := userCacheDir
+	userCacheDir = func() (string, error) { return cache, nil }
+	t.Cleanup(func() { userCacheDir = previousCache })
+	directory := filepath.Join(cache, "alemonx", "environments", "nvm", nvmVersion)
+	bin := filepath.Join(directory, "versions", "node", "v22.22.3", "bin")
+	if err := os.MkdirAll(bin, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bin, "node"), []byte("node"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(directory, "alias"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "alias", "default"), []byte("v22.22.3\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	systemNode := filepath.Join(t.TempDir(), "node")
+	if err := os.WriteFile(systemNode, []byte("#!/bin/sh\necho v18.20.4\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	previousNodeLookup := nodeLookPath
+	nodeLookPath = func(string) (string, error) { return systemNode, nil }
+	t.Cleanup(func() { nodeLookPath = previousNodeLookup })
+	if status := NVMStatus(); status.ActiveVersion != "v18.20.4" {
+		t.Fatalf("NVMStatus() = %#v, want actual system node v18.20.4", status)
 	}
 }
 
@@ -217,8 +256,9 @@ func TestNVMStatusUsesExistingUserNVMDirectory(t *testing.T) {
 	}
 }
 
-func TestNVMStatusResolvesMajorDefaultAlias(t *testing.T) {
+func TestNVMStatusDoesNotUseMajorDefaultAliasAsCurrentNode(t *testing.T) {
 	isolateUserNVM(t)
+	hideSystemNode(t)
 	cache := t.TempDir()
 	previousCache := userCacheDir
 	userCacheDir = func() (string, error) { return cache, nil }
@@ -239,8 +279,8 @@ func TestNVMStatusResolvesMajorDefaultAlias(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(directory, "alias", "default"), []byte("22\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if status := NVMStatus(); status.ActiveVersion != "v22.22.3" {
-		t.Fatalf("NVMStatus() = %#v, want v22.22.3 active", status)
+	if status := NVMStatus(); status.ActiveVersion != "" {
+		t.Fatalf("NVMStatus() = %#v, want no active version without node --version", status)
 	}
 }
 
