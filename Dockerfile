@@ -2,7 +2,7 @@
 ARG ALX_RUNTIME_BASE=ccr.ccs.tencentyun.com/ningmengchongshui/alemonbase:latest
 
 # 前端构建阶段 - 构建 React 工作台
-FROM node:22 AS frontend
+FROM node:22.22.3 AS frontend
 WORKDIR /src/frontend
 COPY frontend/package.json frontend/yarn.lock ./
 RUN corepack enable && yarn install --frozen-lockfile --non-interactive
@@ -10,7 +10,7 @@ COPY frontend/ ./
 RUN yarn build
 
 # 资源准备阶段 - 安装 Yarn 依赖
-FROM node:22 AS resources
+FROM node:22.22.3 AS resources
 WORKDIR /out
 COPY resources/packages/yarn/package.json resources/packages/yarn/package-lock.json ./yarn/
 RUN (cd yarn && npm ci --no-bin-links --ignore-scripts --no-audit --no-fund)
@@ -62,8 +62,10 @@ WORKDIR /app
 COPY --from=builder /out/alx /app/alx
 
 # 授权
-RUN chmod 700 /root/.ssh \
-    && ssh-keyscan github.com >> /root/.ssh/known_hosts
+# docker-compose 会将持久数据挂载到 /root；启动脚本会在挂载完成后写入
+# GitHub、Gitee 的主机指纹，避免 known_hosts 被挂载覆盖。
+COPY scripts/docker-entrypoint.sh /usr/local/bin/alx-entrypoint
+RUN chmod 755 /usr/local/bin/alx-entrypoint
 
 # 设置环境变量
 ENV HOME=/root \
@@ -74,5 +76,5 @@ ENV HOME=/root \
     YARN_CACHE_FOLDER=/app/.yarn_cache
 
 EXPOSE 17390
-ENTRYPOINT ["/usr/bin/tini", "--", "/app/alx"]
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/alx-entrypoint", "/app/alx"]
 CMD ["--host", "0.0.0.0", "--port", "17390"]

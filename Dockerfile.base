@@ -1,6 +1,6 @@
 # ALemonX runtime base. Rebuild and publish this image manually when Debian
 # security updates or runtime system dependencies need to change.
-FROM node:22
+FROM node:22.22.3
 
 # Keep package indexes and downloaded archives in BuildKit's cache.  The helper
 # refreshes indexes immediately before an install, so a rebuilt layer cannot use

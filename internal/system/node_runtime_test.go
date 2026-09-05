@@ -170,6 +170,24 @@ func TestNVMStatusReturnsEmptyVersionsInsteadOfNil(t *testing.T) {
 	}
 }
 
+func TestNVMStatusShowsSystemNodeWithoutManagedVersions(t *testing.T) {
+	isolateUserNVM(t)
+	cache := t.TempDir()
+	previousCache := userCacheDir
+	userCacheDir = func() (string, error) { return cache, nil }
+	t.Cleanup(func() { userCacheDir = previousCache })
+	bin := t.TempDir()
+	node := filepath.Join(bin, "node")
+	if err := os.WriteFile(node, []byte("#!/bin/sh\necho v20.18.1\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	status := NVMStatus()
+	if status.Available || status.ActiveVersion != "v20.18.1" || len(status.Versions) != 0 {
+		t.Fatalf("NVMStatus() = %#v, want system node v20.18.1 without managed versions", status)
+	}
+}
+
 func TestNVMStatusUsesExistingUserNVMDirectory(t *testing.T) {
 	cache := t.TempDir()
 	previousCache := userCacheDir

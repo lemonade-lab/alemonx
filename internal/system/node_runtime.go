@@ -31,6 +31,7 @@ const (
 var (
 	userCacheDir = os.UserCacheDir
 	userHomeDir  = os.UserHomeDir
+	nodeLookPath = exec.LookPath
 )
 
 type nodeRelease struct {
@@ -50,33 +51,53 @@ type NVMNodeStatus struct {
 	LatestInstalled      bool     `json:"latestInstalled"`
 }
 
-// NVMStatus returns locally installed versions and the default selected by
-// the workbench. It performs no network or shell operation.
+// NVMStatus returns locally managed versions and the active Node.js runtime.
+// When no managed runtime is available, it reports the system node resolved
+// from this process's PATH.
 func NVMStatus() NVMNodeStatus {
+	status := NVMNodeStatus{Versions: []string{}, RecommendedVersion: "v" + MinimumNodeVersion}
 	directory, err := preferredNVMDirectory()
-	if err != nil {
-		return NVMNodeStatus{Versions: []string{}, RecommendedVersion: "v" + MinimumNodeVersion}
-	}
-	entries, err := os.ReadDir(filepath.Join(directory, "versions", "node"))
-	if err != nil {
-		return NVMNodeStatus{Versions: []string{}, RecommendedVersion: "v" + MinimumNodeVersion}
-	}
-	status := NVMNodeStatus{Available: true, Versions: []string{}, RecommendedVersion: "v" + MinimumNodeVersion}
-	for _, entry := range entries {
-		if entry.IsDir() && isNodeVersion(entry.Name()) {
-			bin := filepath.Join(directory, "versions", "node", entry.Name(), "bin", "node")
-			if info, statErr := os.Stat(bin); statErr == nil && !info.IsDir() {
-				status.Versions = append(status.Versions, entry.Name())
+	if err == nil {
+		if entries, readErr := os.ReadDir(filepath.Join(directory, "versions", "node")); readErr == nil {
+			status.Available = true
+			for _, entry := range entries {
+				if entry.IsDir() && isNodeVersion(entry.Name()) {
+					bin := filepath.Join(directory, "versions", "node", entry.Name(), "bin", "node")
+					if info, statErr := os.Stat(bin); statErr == nil && !info.IsDir() {
+						status.Versions = append(status.Versions, entry.Name())
+					}
+				}
 			}
+			sortNodeVersions(status.Versions)
+			status.ActiveVersion = nvmDefaultVersion(directory, status.Versions)
 		}
 	}
-	sortNodeVersions(status.Versions)
 	status.RecommendedInstalled = containsNodeVersion(status.Versions, MinimumNodeVersion)
-	status.ActiveVersion = nvmDefaultVersion(directory, status.Versions)
 	if status.ActiveVersion == "" && len(status.Versions) > 0 {
 		status.ActiveVersion = status.Versions[0]
 	}
+	if status.ActiveVersion == "" {
+		status.ActiveVersion = systemNodeVersion()
+	}
 	return status
+}
+
+func systemNodeVersion() string {
+	path, err := nodeLookPath("node")
+	if err != nil {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, path, "--version").Output()
+	if err != nil || ctx.Err() != nil {
+		return ""
+	}
+	version := normalizeNodeVersion(strings.TrimSpace(string(output)))
+	if version == "" {
+		return ""
+	}
+	return "v" + version
 }
 
 // InstallNVMNodeVersion installs an explicit semver through NVM and makes it
