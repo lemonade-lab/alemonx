@@ -10119,7 +10119,8 @@ function PackageDocumentationPanel({
     error
   } = useCatalogDocumentQuery(docURL ?? '', { skip: !docURL })
   return (
-    <section >
+    <section className="grid gap-3 rounded-xl border border-slate-200 bg-white p-4 text-sm">
+      <strong className="text-slate-800">{kindLabel}文档</strong>
       {docURL ? (
         <ConfigReadmeCard
           docURL={docURL}
