@@ -1,0 +1,6 @@
+# Usage: docker compose -f docker-compose.yml -f docker-compose.yunzai.yml up -d
+# The same data/ and workspace/ mounts are retained. On first start, the image
+# adds its Yunzai seed to workspace/ without overwriting existing entries.
+services:
+  alx:
+    image: ${ALX_YUNZAI_IMAGE:-ccr.ccs.tencentyun.com/ningmengchongshui/alemonx-yunzai:latest}

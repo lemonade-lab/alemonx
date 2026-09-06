@@ -1,4 +1,4 @@
-.PHONY: help dev bundle-resources build test test-agent test-all test-sqlite test-space format lint dev-fe build-frontend test-sse verify-sse release-check docker-build docker-buildx docker-buildx-push docker-base-build docker-base-buildx docker-base-buildx-push docker-up docker-down docker-logs docker-local-dev
+.PHONY: help dev bundle-resources build test test-agent test-all test-sqlite test-space format lint dev-fe build-frontend test-sse verify-sse release-check docker-build docker-buildx docker-buildx-push docker-yunzai-build docker-yunzai-buildx docker-yunzai-buildx-push docker-base-build docker-base-buildx docker-base-buildx-push docker-up docker-down docker-logs docker-local-dev
 
 .DEFAULT_GOAL := help
 
@@ -119,6 +119,15 @@ docker-buildx: ## Manually validate or publish the multi-architecture Docker ima
 
 docker-buildx-push: ## Manually validate or publish the multi-architecture Docker image
 	ALX_PUSH=1 ./scripts/docker-buildx.sh
+
+docker-yunzai-build: docker-build ## Build the local alemonx-yunzai image
+	docker build -f Dockerfile.yunzai --build-arg ALX_YUNZAI_BASE=$${ALX_YUNZAI_BASE:-alemonx:local} -t $${ALX_YUNZAI_IMAGE:-alemonx-yunzai:local} .
+
+docker-yunzai-buildx: ## Validate the multi-architecture alemonx-yunzai image
+	./scripts/docker-yunzai-buildx.sh
+
+docker-yunzai-buildx-push: ## Build and publish the multi-architecture alemonx-yunzai image
+	ALX_YUNZAI_PUSH=1 ./scripts/docker-yunzai-buildx.sh
 
 docker-local-dev: ## Start a local Docker development environment
 	./scripts/docker-local-dev.sh

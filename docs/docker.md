@@ -100,6 +100,24 @@ NapCat 启动后会在容器回环地址创建 QQ 桌面入口。该入口不映
 docker compose -f docker-compose.yml -f docker-compose.snowluma.yml up -d
 ```
 
+## Yunzai 预置版
+
+`alemonx-yunzai` 在基础 ALemonX 镜像上预置 QQ、Finder、LoadYunzai、TRSS-Yunzai、Miao、Genshin 与锅巴插件源码。首次启动会把这些文件复制到持久化的 `workspace/`，而不会覆盖已有机器人、插件配置或 QQ 登录状态。
+
+本地构建：
+
+```sh
+make docker-yunzai-build
+ALX_YUNZAI_IMAGE=alemonx-yunzai:local docker compose -f docker-compose.yml -f docker-compose.yunzai.yml up -d
+```
+
+多架构验证或发布：
+
+```sh
+make docker-yunzai-buildx
+ALX_YUNZAI_VERSION=v1.2.3 make docker-yunzai-buildx-push
+```
+
 该模式会添加 `SYS_PTRACE` 与受控的 seccomp 放宽项，仅应在确认需要 SnowLuma 的主机上启用。
 
 ## 发布与构建边界

@@ -92,6 +92,24 @@ The image ships Noto CJK and Emoji fonts plus **Chromium**, so Chinese text and 
 
 It also preinstalls the Linux runtime required by QQ/NapCat: Xvfb, XKB, GTK/NSS/GBM, audio, CUPS, and X11 libraries. Compose reserves 1 GiB for `/dev/shm`, avoiding the small Docker default that can crash Electron renderers. Installing the QQ plugin therefore does not need the privileged “prepare QQ login runtime” action; the plugin still downloads QQ/NapCat and starts its isolated Xvfb display and login flow.
 
+## Yunzai pre-seeded image
+
+`alemonx-yunzai` layers QQ, Finder, LoadYunzai, TRSS-Yunzai, Miao, Genshin, and Guoba plugin sources over the base ALemonX image. On first start it copies the seed into the persistent `workspace/` directory without overwriting an existing bot, plugin configuration, or QQ login state.
+
+Build and run it locally:
+
+```sh
+make docker-yunzai-build
+ALX_YUNZAI_IMAGE=alemonx-yunzai:local docker compose -f docker-compose.yml -f docker-compose.yunzai.yml up -d
+```
+
+For multi-platform validation or publishing:
+
+```sh
+make docker-yunzai-buildx
+ALX_YUNZAI_VERSION=v1.2.3 make docker-yunzai-buildx-push
+```
+
 ## Publishing and build boundary
 
 The application image can be released manually through the GitHub Actions **发布腾讯云 Docker 镜像** workflow. On the repository's **Actions** page, choose the workflow and select **Run workflow**, then enter the Tencent Cloud TCR/CCR registry domain, namespace, image repository, login username, and password or access token. The form defaults to the current Tencent Cloud registry and also accepts a custom Tencent Cloud registry domain. The workflow masks the password in logs; however, GitHub Actions manual forms have no password field type, so it may be retained in workflow-run metadata. Use it only in trusted repositories. Each build automatically reads the nearest Git tag reachable from the selected commit and pushes that version plus `latest` for `linux/amd64` and `linux/arm64`.

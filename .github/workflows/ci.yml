@@ -116,7 +116,7 @@ jobs:
           redis_url="https://github.com/tporadowski/redis/releases/download/v5.0.14.1/Redis-x64-5.0.14.1.zip"
           redis_archive="release/redis-runtime-v5.0.14.1-windows-amd64.zip"
           curl --fail --location --retry 3 --retry-delay 2 "$redis_url" --output "$redis_archive"
-          unzip -l "$redis_archive" | grep -E '(^|/)redis-server\.exe$' >/dev/null || {
+          unzip -Z1 "$redis_archive" | grep -E '(^|/)redis-server\.exe$' >/dev/null || {
             echo "Windows Redis runtime archive does not contain redis-server.exe" >&2
             exit 1
           }

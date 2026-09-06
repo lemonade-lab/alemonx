@@ -1,0 +1,28 @@
+# ALemonX image pre-seeded with the Yunzai robot stack. The seed is copied into
+# the persistent workspace on first container start; writing it directly to
+# /app/workspace here would be hidden by Docker Compose's workspace bind mount.
+ARG ALX_YUNZAI_BASE=ccr.ccs.tencentyun.com/ningmengchongshui/alemonx:latest
+FROM ${ALX_YUNZAI_BASE}
+
+USER root
+
+RUN set -eux; \
+    mkdir -p /opt/alx-yunzai-seed/plugins /opt/alx-yunzai-seed/bots/alemonb/packages; \
+    git clone --depth=1 https://github.com/lemonade-lab/alemonx-qq.git /opt/alx-yunzai-seed/plugins/alemonx-qq; \
+    git clone --depth=1 https://github.com/lemonade-lab/alemonx-finder.git /opt/alx-yunzai-seed/plugins/alemonx-finder; \
+    git clone --depth=1 --branch release https://github.com/yunzaijs/alemonjs-load-yunzai.git /opt/alx-yunzai-seed/bots/alemonb/packages/alemonjs-load-yunzai; \
+    git clone --depth=1 https://github.com/TimeRainStarSky/Yunzai.git /opt/alx-yunzai-seed/bots/alemonb/Yunzai; \
+    git clone --depth=1 https://github.com/yoimiya-kokomi/miao-plugin.git /opt/alx-yunzai-seed/bots/alemonb/Yunzai/plugins/miao-plugin; \
+    git clone --depth=1 https://github.com/TimeRainStarSky/Yunzai-genshin.git /opt/alx-yunzai-seed/bots/alemonb/Yunzai/plugins/genshin; \
+    git clone --depth=1 https://github.com/guoba-yunzai/guoba-plugin.git /opt/alx-yunzai-seed/bots/alemonb/Yunzai/plugins/Guoba-Plugin; \
+    find /opt/alx-yunzai-seed -type d -name .git -prune -exec rm -rf {} +
+
+# The bot template supplies package metadata and the AlemonJS runtime entry;
+# the repositories above supply the Yunzai implementation and its plugins.
+COPY resources/templates/bot/ /opt/alx-yunzai-seed/bots/alemonb/
+COPY scripts/docker-yunzai-entrypoint.sh /usr/local/bin/alx-yunzai-entrypoint
+RUN chmod 755 /usr/local/bin/alx-yunzai-entrypoint
+
+ENV ALX_YUNZAI_SEED=/opt/alx-yunzai-seed
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/alx-yunzai-entrypoint", "/app/alx"]
+CMD ["--host", "0.0.0.0", "--port", "17390"]
