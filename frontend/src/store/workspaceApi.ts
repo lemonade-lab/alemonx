@@ -88,8 +88,9 @@ type LocalPackageVersions = {
 type LocalPackageStatus = {
   name: string
   enabled: boolean
-  source: string
-  branch?: string
+    source: string
+    branch?: string
+    repository?: string
   dirty?: boolean
   ahead?: number
   workspaceEnabled: boolean

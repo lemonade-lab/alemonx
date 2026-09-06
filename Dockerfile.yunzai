@@ -6,16 +6,25 @@ FROM ${ALX_YUNZAI_BASE}
 
 USER root
 
+ARG TARGETARCH
+# Pin formal ALX plugin releases so the Docker build remains reproducible. The
+# installation itself still goes through `alx plugin install`, which validates
+# the marketplace source, compatible release asset, checksum and manifest.
+ARG ALX_QQ_VERSION=v0.1.12
+ARG ALX_FINDER_VERSION=v0.0.3
+
 RUN set -eux; \
-    mkdir -p /opt/alx-yunzai-seed/plugins /opt/alx-yunzai-seed/bots/alemonb/packages; \
-    git clone --depth=1 https://github.com/lemonade-lab/alemonx-qq.git /opt/alx-yunzai-seed/plugins/alemonx-qq; \
-    git clone --depth=1 https://github.com/lemonade-lab/alemonx-finder.git /opt/alx-yunzai-seed/plugins/alemonx-finder; \
+    mkdir -p /opt/alx-yunzai-seed/bots/alemonb/packages; \
+    case "$TARGETARCH" in amd64|arm64) ;; *) echo "不支持的 alemonx-qq 构建架构：$TARGETARCH" >&2; exit 1;; esac; \
+    ALX_WORKSPACE=/opt/alx-yunzai-seed /app/alx plugin install alemonx-qq "$ALX_QQ_VERSION" "alemonx-qq-linux-$TARGETARCH.zip"; \
+    if [ "$TARGETARCH" = amd64 ]; then \
+      ALX_WORKSPACE=/opt/alx-yunzai-seed /app/alx plugin install alemonx-finder "$ALX_FINDER_VERSION" "alemonx-finder-linux-amd64.zip"; \
+    fi; \
     git clone --depth=1 --branch release https://github.com/yunzaijs/alemonjs-load-yunzai.git /opt/alx-yunzai-seed/bots/alemonb/packages/alemonjs-load-yunzai; \
     git clone --depth=1 https://github.com/TimeRainStarSky/Yunzai.git /opt/alx-yunzai-seed/bots/alemonb/Yunzai; \
     git clone --depth=1 https://github.com/yoimiya-kokomi/miao-plugin.git /opt/alx-yunzai-seed/bots/alemonb/Yunzai/plugins/miao-plugin; \
     git clone --depth=1 https://github.com/TimeRainStarSky/Yunzai-genshin.git /opt/alx-yunzai-seed/bots/alemonb/Yunzai/plugins/genshin; \
-    git clone --depth=1 https://github.com/guoba-yunzai/guoba-plugin.git /opt/alx-yunzai-seed/bots/alemonb/Yunzai/plugins/Guoba-Plugin; \
-    find /opt/alx-yunzai-seed -type d -name .git -prune -exec rm -rf {} +
+    git clone --depth=1 https://github.com/guoba-yunzai/guoba-plugin.git /opt/alx-yunzai-seed/bots/alemonb/Yunzai/plugins/Guoba-Plugin
 
 # The bot template supplies package metadata and the AlemonJS runtime entry;
 # the repositories above supply the Yunzai implementation and its plugins.

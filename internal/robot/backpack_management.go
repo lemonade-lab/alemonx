@@ -19,6 +19,7 @@ type LocalPackageStatus struct {
 	Enabled          bool     `json:"enabled"`
 	Source           string   `json:"source"`
 	Branch           string   `json:"branch,omitempty"`
+	Repository       string   `json:"repository,omitempty"`
 	Dirty            bool     `json:"dirty,omitempty"`
 	Ahead            int      `json:"ahead,omitempty"`
 	WorkspaceEnabled bool     `json:"workspaceEnabled"`
@@ -35,6 +36,88 @@ type LocalPackageStash struct {
 	Ref       string `json:"ref"`
 	CreatedAt int64  `json:"createdAt"`
 	Message   string `json:"message"`
+}
+
+type localPackageGitConfiguration struct {
+	Repository string `json:"repository"`
+	Branch     string `json:"branch"`
+}
+
+// ConfigureLocalPackageGit attaches a trusted backpack directory to a remote
+// without replacing its files. For a non-Git directory it creates local refs
+// for the chosen remote branch but deliberately does not check it out: the
+// existing plugin code remains runnable until the user explicitly switches a
+// version.
+func (m Manager) ConfigureLocalPackageGit(root, name, raw string) (Result, error) {
+	item, err := m.localPackage(root, name)
+	if err != nil {
+		return Result{}, err
+	}
+	if !item.Valid {
+		return Result{}, errors.New("背包插件缺少有效 package.json")
+	}
+	var config localPackageGitConfiguration
+	if err := json.Unmarshal([]byte(raw), &config); err != nil {
+		return Result{}, errors.New("Git 地址配置无效")
+	}
+	config.Repository = strings.TrimSpace(config.Repository)
+	config.Branch = strings.TrimSpace(config.Branch)
+	if err := validLocalPackageGitRemote(config.Repository); err != nil {
+		return Result{}, err
+	}
+	if !isGitBranch(config.Branch) {
+		return Result{}, errors.New("请选择有效的 Git 分支")
+	}
+	inside, gitErr := gitRun(item.Path, "rev-parse", "--is-inside-work-tree")
+	newRepository := gitErr != nil || strings.TrimSpace(inside) != "true"
+	if newRepository {
+		if output, initErr := gitRun(item.Path, "init"); initErr != nil {
+			return Result{Path: item.Path, Output: output}, fmt.Errorf("初始化插件 Git 工作区失败：%w", initErr)
+		}
+	}
+	if output, remoteErr := gitRun(item.Path, "remote", "get-url", "origin"); remoteErr == nil && strings.TrimSpace(output) != "" {
+		if output, setErr := gitRun(item.Path, "remote", "set-url", "origin", config.Repository); setErr != nil {
+			return Result{Path: item.Path, Output: output}, fmt.Errorf("更新插件 Git 地址失败：%w", setErr)
+		}
+	} else if output, addErr := gitRun(item.Path, "remote", "add", "origin", config.Repository); addErr != nil {
+		return Result{Path: item.Path, Output: output}, fmt.Errorf("保存插件 Git 地址失败：%w", addErr)
+	}
+	if !newRepository {
+		branch, _ := gitRun(item.Path, "symbolic-ref", "--quiet", "--short", "HEAD")
+		if isGitBranch(branch) && strings.TrimSpace(branch) != config.Branch {
+			return Result{}, errors.New("Git 地址已保存；现有 Git 插件请在版本页切换分支")
+		}
+	}
+	refspec := "+refs/heads/" + config.Branch + ":refs/remotes/origin/" + config.Branch
+	output, fetchErr := gitRun(item.Path, "fetch", "origin", refspec)
+	if fetchErr != nil {
+		return Result{Path: item.Path, Output: output}, fmt.Errorf("Git 地址已保存，但无法拉取 %s 分支：%w", config.Branch, fetchErr)
+	}
+	if newRepository {
+		if branchOutput, branchErr := gitRun(item.Path, "branch", "-f", config.Branch, "origin/"+config.Branch); branchErr != nil {
+			return Result{Path: item.Path, Output: branchOutput}, fmt.Errorf("无法建立本地 Git 分支：%w", branchErr)
+		}
+		if headOutput, headErr := gitRun(item.Path, "symbolic-ref", "HEAD", "refs/heads/"+config.Branch); headErr != nil {
+			return Result{Path: item.Path, Output: headOutput}, fmt.Errorf("无法设置插件 Git 分支：%w", headErr)
+		}
+	}
+	return Result{Path: item.Path, Output: "已保存 Git 地址并拉取 " + config.Branch + " 分支。现有插件文件未被覆盖；请在版本页选择“切换”或“强制切换”后再替换代码。"}, nil
+}
+
+func validLocalPackageGitRemote(repository string) error {
+	if repository == "" || strings.ContainsAny(repository, " \r\n\t") || strings.HasPrefix(repository, "-") {
+		return errors.New("请填写有效的 Git 地址")
+	}
+	if strings.HasPrefix(repository, "git@") {
+		if !strings.Contains(repository, ":") || strings.ContainsAny(repository, " ") {
+			return errors.New("请填写有效的 SSH Git 地址")
+		}
+		return nil
+	}
+	if !strings.HasPrefix(repository, "https://") && !strings.HasPrefix(repository, "ssh://") && !strings.HasPrefix(repository, "file://") {
+		return errors.New("Git 地址仅支持 HTTPS、SSH 或本地 file 地址")
+	}
+	return nil
 }
 
 func (m Manager) localPackage(root, name string) (LocalPackage, error) {
@@ -77,6 +160,8 @@ func (m Manager) LocalPackageStatus(root, name string) (LocalPackageStatus, erro
 		status.Source = "git"
 		branch, _ := gitRun(item.Path, "symbolic-ref", "--quiet", "--short", "HEAD")
 		status.Branch = strings.TrimSpace(branch)
+		repository, _ := gitRun(item.Path, "remote", "get-url", "origin")
+		status.Repository = strings.TrimSpace(repository)
 		if !isGitBranch(status.Branch) {
 			status.Issues = append(status.Issues, "当前未检出有效 Git 分支")
 		}

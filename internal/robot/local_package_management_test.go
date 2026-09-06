@@ -109,6 +109,45 @@ func TestRefreshLocalPackageHistoryUnshallowsCurrentBranch(t *testing.T) {
 	}
 }
 
+func TestConfigureLocalPackageGitPreservesExistingPluginFiles(t *testing.T) {
+	root := t.TempDir()
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
+	seed := filepath.Join(t.TempDir(), "seed")
+	writeAppPageFixture(t, filepath.Join(seed, "package.json"), `{"name":"local-plugin","version":"1.0.0"}`)
+	for _, command := range [][]string{
+		{"init", "-b", "main"},
+		{"config", "user.name", "Test User"},
+		{"config", "user.email", "test@example.com"},
+		{"add", "."},
+		{"commit", "-m", "initial"},
+	} {
+		if _, err := gitRun(seed, command...); err != nil {
+			t.Skipf("git is unavailable for Git address configuration test: %v", err)
+		}
+	}
+	remote := filepath.Join(t.TempDir(), "plugin.git")
+	for _, command := range [][]string{{"init", "--bare", remote}, {"remote", "add", "origin", remote}, {"push", "-u", "origin", "main"}} {
+		if _, err := gitRun(seed, command...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	plugin := filepath.Join(root, "packages", "local-plugin")
+	writeAppPageFixture(t, filepath.Join(plugin, "package.json"), `{"name":"local-plugin","version":"0.1.0","keep":true}`)
+	if _, err := (Manager{}).ConfigureLocalPackageGit(root, "local-plugin", `{"repository":"file://`+remote+`","branch":"main"}`); err != nil {
+		t.Fatalf("configure Git address: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(plugin, "package.json"))
+	if err != nil || !strings.Contains(string(data), `"keep":true`) {
+		t.Fatalf("existing plugin file was changed: %q, %v", data, err)
+	}
+	if branch, err := gitRun(plugin, "symbolic-ref", "--short", "HEAD"); err != nil || strings.TrimSpace(branch) != "main" {
+		t.Fatalf("branch = %q, %v", branch, err)
+	}
+	if remoteURL, err := gitRun(plugin, "remote", "get-url", "origin"); err != nil || strings.TrimSpace(remoteURL) != "file://"+remote {
+		t.Fatalf("remote = %q, %v", remoteURL, err)
+	}
+}
+
 func readWorkspaceManifest(t *testing.T, root string) map[string]any {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join(root, "package.json"))

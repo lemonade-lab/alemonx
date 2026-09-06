@@ -94,7 +94,7 @@ It also preinstalls the Linux runtime required by QQ/NapCat: Xvfb, XKB, GTK/NSS/
 
 ## Yunzai pre-seeded image
 
-`alemonx-yunzai` layers QQ, Finder, LoadYunzai, TRSS-Yunzai, Miao, Genshin, and Guoba plugin sources over the base ALemonX image. On first start it copies the seed into the persistent `workspace/` directory without overwriting an existing bot, plugin configuration, or QQ login state.
+`alemonx-yunzai` layers QQ, Finder (its current upstream release only ships a Linux amd64 asset), LoadYunzai, TRSS-Yunzai, Miao, Genshin, and Guoba over the base ALemonX image. QQ and Finder use ALX's formal Release installation and verification flow; the Yunzai-related repositories retain their `.git` directories for in-workspace updates. On first start it copies the seed into the persistent `workspace/` directory without overwriting an existing bot, plugin configuration, or QQ login state.
 
 Build and run it locally:
 

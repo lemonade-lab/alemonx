@@ -365,21 +365,6 @@ func (m Manager) SetAppEnabled(root, packageName string, enabled bool) (Result, 
 	if strings.TrimSpace(packageName) == "" {
 		return Result{}, errors.New("请选择要启动的本地包")
 	}
-	if enabled {
-		items, listErr := m.LocalPackages(root)
-		if listErr != nil {
-			return Result{}, listErr
-		}
-		for _, item := range items {
-			if item.Name != packageName {
-				continue
-			}
-			if !isGitBackpackPackage(item.Path) {
-				return Result{}, errors.New("背包插件必须位于已检出的 Git 分支才能启用")
-			}
-			break
-		}
-	}
 	result, err := m.UpdateRuntimeConfig(root, "", func(content string) (string, error) {
 		content = normalizeRuntimeConfigYAML(content)
 		var config map[string]any
@@ -428,28 +413,12 @@ func appsFromConfig(existing any) map[string]bool {
 	return apps
 }
 
-// ValidateEnabledBackpackRelease prevents an already-enabled package from
-// bypassing the checked-out Git branch rule when a robot is started. Local
-// changes and commits ahead of origin are runnable; only a sync may overwrite
-// them and therefore needs the stricter releaseGitStatus check.
+// ValidateEnabledBackpackRelease is retained for runtime-entry compatibility.
+// Running a backpack plugin only needs the package code already on disk; Git
+// provenance belongs to optional version, sync, and recovery operations.
 func (m Manager) ValidateEnabledBackpackRelease(root string) error {
-	enabled, err := m.EnabledApps(root)
-	if err != nil {
-		return err
-	}
-	items, err := m.LocalPackages(root)
-	if err != nil {
-		return err
-	}
-	for _, item := range items {
-		if !item.Valid || !containsString(enabled, item.Name) {
-			continue
-		}
-		if !isGitBackpackPackage(item.Path) {
-			return fmt.Errorf("背包插件 %s 必须位于已检出的 Git 分支才能运行", item.Name)
-		}
-	}
-	return nil
+	_, err := m.EnabledApps(root)
+	return err
 }
 
 // isGitBackpackPackage is deliberately narrower than releaseGitStatus: a

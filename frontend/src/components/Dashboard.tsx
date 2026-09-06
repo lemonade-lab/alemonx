@@ -9093,6 +9093,8 @@ function BackpackPackageManager({
   >('overview')
   const [version, setVersion] = useStoreState('')
   const [commitPage, setCommitPage] = useState(1)
+  const [gitRepository, setGitRepository] = useStoreState('')
+  const [gitBranch, setGitBranch] = useStoreState('main')
   const [forceSwitchOpen, setForceSwitchOpen] = useStoreState(false)
   const [selectedChange, setSelectedChange] = useStoreState('')
   const [saveState, setSaveState] = useStoreState<
@@ -9169,6 +9171,11 @@ function BackpackPackageManager({
   useEffect(() => {
     if (versions?.latest && !version) setVersion(versions.latest)
   }, [versions, setVersion, version])
+  useEffect(() => {
+    if (!status) return
+    setGitRepository(status.repository || '')
+    setGitBranch(status.branch || 'main')
+  }, [status, setGitBranch, setGitRepository])
   const refreshCommitHistory = async () => {
     const refreshed = await onPackageAction(
       'refresh-local-package-history',
@@ -9178,6 +9185,16 @@ function BackpackPackageManager({
     setCommitPage(1)
     await refetchVersions()
     void refetchStatus()
+  }
+  const configureGit = async () => {
+    const configured = await onPackageAction(
+      'configure-local-package-git',
+      item.name,
+      JSON.stringify({ repository: gitRepository, branch: gitBranch })
+    )
+    if (!configured) return
+    setCommitPage(1)
+    await Promise.all([refetchStatus(), refetchVersions()])
   }
   return (
     <RobotPanel
@@ -9440,13 +9457,38 @@ function BackpackPackageManager({
               ))
             )}
           </section>
-        ) : versionsFetching ? (
+        ) : tab === 'version' && (
+          <section className="grid gap-4 rounded-xl border border-slate-200 bg-white p-4 text-sm">
+            <div className="grid gap-1">
+              <strong className="text-slate-800">Git 版本源</strong>
+              <p className="m-0 text-xs leading-5 text-slate-500">
+                {status?.source === 'git'
+                  ? '修改远程地址后，可刷新当前分支的 commit 列表。'
+                  : '此插件目前不受 Git 管理。配置仓库后不会覆盖现有文件；请自行选择 commit 切换。'}
+              </p>
+            </div>
+            <div className="grid gap-3 border-t border-slate-200 pt-3 sm:grid-cols-[minmax(0,1fr)_10rem_auto] sm:items-end">
+              <label className="grid gap-1 text-xs font-medium text-slate-600">
+                <span>Git 地址</span>
+                <input className="h-9 rounded-md border border-slate-300 bg-white px-2 text-sm text-slate-800 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100" value={gitRepository} onChange={event => setGitRepository(event.target.value)} placeholder="https://git.example.com/owner/repository.git" />
+              </label>
+              <label className="grid gap-1 text-xs font-medium text-slate-600">
+                <span>分支</span>
+                <input className="h-9 rounded-md border border-slate-300 bg-white px-2 text-sm text-slate-800 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100" value={gitBranch} onChange={event => setGitBranch(event.target.value)} placeholder="main" />
+              </label>
+              <button className="secondary-button" disabled={busy || !gitRepository.trim() || !gitBranch.trim()} onClick={() => void configureGit()}>
+                <GitBranch className="size-4" />保存 Git 地址
+              </button>
+            </div>
+          </section>
+        )}
+        {tab === 'version' && versionsFetching ? (
           <p className="backpack-manager-note">正在读取可安装版本…</p>
-        ) : versionsError || !versions?.versions.length ? (
+        ) : tab === 'version' && (versionsError || !versions?.versions.length) ? (
           <p className="backpack-manager-note">
             暂时无法读取此插件的版本。当前本地版本为 {item.version || '未知'}。
           </p>
-        ) : (
+        ) : tab === 'version' && versions && (
           <section className="grid gap-4 rounded-xl border border-slate-200 bg-white p-4">
             <div className="grid gap-3">
               <div className="flex flex-wrap items-center justify-between gap-2">

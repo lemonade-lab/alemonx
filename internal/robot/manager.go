@@ -2002,6 +2002,8 @@ func (m Manager) Run(root, action, message, packageName, version, tag, token str
 		})
 	case "refresh-local-package-history":
 		return m.RefreshLocalPackageHistory(root, packageName)
+	case "configure-local-package-git":
+		return m.ConfigureLocalPackageGit(root, packageName, message)
 	case "restore-local-package-stash":
 		return m.ApplyLocalPackageStash(root, packageName, message, true)
 	case "drop-local-package-stash":
