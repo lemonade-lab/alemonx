@@ -82,7 +82,22 @@ type LocalPackageVersions = {
   branch?: string
   ahead?: number
   dirty?: boolean
+  page?: number
+  hasMore?: boolean
 }
+type LocalPackageStatus = {
+  name: string
+  enabled: boolean
+  source: string
+  branch?: string
+  dirty?: boolean
+  ahead?: number
+  workspaceEnabled: boolean
+  configComplete: boolean
+  issues: string[]
+}
+type LocalPackageChange = { path: string; status: string }
+type LocalPackageStash = { ref: string; createdAt: number; message: string }
 export type RobotChatRecordSummary = {
   root: string
   messages: number
@@ -850,10 +865,10 @@ export const workspaceApi = createApi({
     }),
     localPackageVersions: build.query<
       LocalPackageVersions,
-      { root: string; package: string }
+      { root: string; package: string; page?: number }
     >({
-      query: ({ root, package: packageName }) =>
-        `robot/package-versions?${new URLSearchParams({ root, package: packageName })}`
+      query: ({ root, package: packageName, page = 1 }) =>
+        `robot/package-versions?${new URLSearchParams({ root, package: packageName, page: String(page) })}`
     }),
     localPackageReadme: build.query<
       RobotResult,
@@ -861,6 +876,43 @@ export const workspaceApi = createApi({
     >({
       query: ({ root, package: packageName }) =>
         `robot/package-readme?${new URLSearchParams({ root, package: packageName })}`
+    }),
+    localPackageStatus: build.query<
+      LocalPackageStatus,
+      { root: string; package: string }
+    >({
+      query: ({ root, package: packageName }) =>
+        `robot/packages/status?${new URLSearchParams({ root, package: packageName })}`,
+      providesTags: (_result, _error, arg) => [
+        { type: 'LocalPackages', id: arg.root }
+      ]
+    }),
+    localPackageStatuses: build.query<{ items: LocalPackageStatus[] }, string>({
+      query: root => `robot/packages/status?${new URLSearchParams({ root })}`,
+      providesTags: (_result, _error, root) => [
+        { type: 'LocalPackages', id: root }
+      ]
+    }),
+    localPackageChanges: build.query<
+      { items: LocalPackageChange[] },
+      { root: string; package: string }
+    >({
+      query: ({ root, package: packageName }) =>
+        `robot/packages/changes?${new URLSearchParams({ root, package: packageName })}`
+    }),
+    localPackageDiff: build.query<
+      GitDiff,
+      { root: string; package: string; path: string }
+    >({
+      query: ({ root, package: packageName, path }) =>
+        `robot/packages/diff?${new URLSearchParams({ root, package: packageName, path })}`
+    }),
+    localPackageStashes: build.query<
+      { items: LocalPackageStash[] },
+      { root: string; package: string }
+    >({
+      query: ({ root, package: packageName }) =>
+        `robot/packages/stashes?${new URLSearchParams({ root, package: packageName })}`
     }),
     packageManifest: build.query<PackageManifest, string>({
       query: root => `robot/manifest?${new URLSearchParams({ root })}`,
@@ -1206,6 +1258,11 @@ export const {
   useClearRobotChatHistoryMutation,
   useLocalPackageVersionsQuery,
   useLocalPackageReadmeQuery,
+  useLocalPackageStatusQuery,
+  useLocalPackageStatusesQuery,
+  useLocalPackageChangesQuery,
+  useLocalPackageDiffQuery,
+  useLocalPackageStashesQuery,
   usePackageManifestQuery,
   useRobotTasksQuery,
   useLazyRobotTaskQuery,

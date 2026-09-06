@@ -197,9 +197,14 @@ type LocalPackageVersions struct {
 	Branch   string            `json:"branch,omitempty"`
 	Ahead    int               `json:"ahead,omitempty"`
 	Dirty    bool              `json:"dirty,omitempty"`
+	Page     int               `json:"page,omitempty"`
+	HasMore  bool              `json:"hasMore,omitempty"`
 }
 
-func (m Manager) LocalPackageVersions(root, packageName string) (LocalPackageVersions, error) {
+func (m Manager) LocalPackageVersions(root, packageName string, page int) (LocalPackageVersions, error) {
+	if page < 1 {
+		page = 1
+	}
 	items, err := m.LocalPackages(root)
 	if err != nil {
 		return LocalPackageVersions{}, err
@@ -213,49 +218,53 @@ func (m Manager) LocalPackageVersions(root, packageName string) (LocalPackageVer
 			if statusErr != nil {
 				return LocalPackageVersions{}, statusErr
 			}
-			if !isReleaseBranch(status.Branch) {
-				return LocalPackageVersions{}, errors.New("当前插件不在 release 发布分支")
+			if !isGitBranch(status.Branch) {
+				return LocalPackageVersions{}, errors.New("当前插件未检出有效 Git 分支")
 			}
 			if _, fetchErr := gitRun(item.Path, "fetch", "origin", status.Branch); fetchErr != nil {
-				return LocalPackageVersions{}, errors.New("无法读取发布分支提交")
+				return LocalPackageVersions{}, errors.New("无法读取当前分支提交")
 			}
-			commits, labels, commitsErr := releaseCommits(item.Path, status.Branch)
+			commits, labels, hasMore, commitsErr := releaseCommits(item.Path, status.Branch, page)
 			if commitsErr != nil {
 				return LocalPackageVersions{}, commitsErr
 			}
-			latest := ""
-			if len(commits) > 0 {
-				latest = commits[0]
-			}
-			return LocalPackageVersions{Source: "git", Current: status.Head, Latest: latest, Versions: commits, Labels: labels, Branch: status.Branch, Ahead: status.Ahead, Dirty: status.Dirty}, nil
+			latest, _ := gitRun(item.Path, "rev-parse", "origin/"+status.Branch)
+			latest = strings.TrimSpace(latest)
+			return LocalPackageVersions{Source: "git", Current: status.Head, Latest: latest, Versions: commits, Labels: labels, Branch: status.Branch, Ahead: status.Ahead, Dirty: status.Dirty, Page: page, HasMore: hasMore}, nil
 		}
 		versions, loadErr := catalog.LoadPackageVersions(item.Name)
 		if loadErr != nil {
 			return LocalPackageVersions{}, loadErr
 		}
-		return LocalPackageVersions{Source: "npm", Current: item.Version, Latest: versions.Latest, Versions: versions.Versions}, nil
+		return LocalPackageVersions{Source: "npm", Current: item.Version, Latest: versions.Latest, Versions: versions.Versions, Page: 1}, nil
 	}
 	return LocalPackageVersions{}, errors.New("背包中没有这个本地插件包")
 }
 
-// releaseCommits exposes a compact, readable history for choosing a version
-// while preserving release as the checked-out branch.
-func releaseCommits(path, branch string) ([]string, map[string]string, error) {
-	output, err := gitRun(path, "log", "-n", "12", "--format=%H%x1f%s", "origin/"+branch)
+// releaseCommits exposes a compact, readable history for the checked-out
+// branch. The legacy name is retained because its callers are private.
+const releaseCommitPageSize = 20
+
+func releaseCommits(path, branch string, page int) ([]string, map[string]string, bool, error) {
+	offset := (page - 1) * releaseCommitPageSize
+	output, err := gitRun(path, "log", "--skip", strconv.Itoa(offset), "-n", strconv.Itoa(releaseCommitPageSize+1), "--format=%H%x1f%s", "origin/"+branch)
 	if err != nil {
-		return nil, nil, errors.New("无法读取 release 分支提交记录")
+		return nil, nil, false, errors.New("无法读取当前分支提交记录")
 	}
-	commits := make([]string, 0, 12)
+	commits := make([]string, 0, releaseCommitPageSize)
 	labels := map[string]string{}
 	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
 		parts := strings.SplitN(line, "\x1f", 2)
 		if len(parts) != 2 || !regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(parts[0]) {
 			continue
 		}
+		if len(commits) == releaseCommitPageSize {
+			return commits, labels, true, nil
+		}
 		commits = append(commits, parts[0])
 		labels[parts[0]] = parts[0][:8] + " · " + strings.TrimSpace(parts[1])
 	}
-	return commits, labels, nil
+	return commits, labels, false, nil
 }
 
 func newerGitTag(left, right string) bool {
@@ -1956,7 +1965,7 @@ func (m Manager) Run(root, action, message, packageName, version, tag, token str
 		}
 	case "install-package":
 		if !strings.HasPrefix(packageName, "git+") || !allowedPackage(packageName) {
-			return Result{}, errors.New("机器人插件只能从 Git release 分支安装；连接和模块请使用各自的 npm 安装入口")
+			return Result{}, errors.New("机器人插件只能从 Git 仓库安装；连接和模块请使用各自的 npm 安装入口")
 		}
 		return m.syncLocalPackageOperation(root, func() (Result, error) {
 			return installLocalPackage(root, packageName)
@@ -1970,7 +1979,7 @@ func (m Manager) Run(root, action, message, packageName, version, tag, token str
 		})
 	case "remove-local-package":
 		return m.syncLocalPackageOperation(root, func() (Result, error) {
-			return removeLocalPackageByName(root, packageName)
+			return m.RemoveLocalPackageAndDisable(root, packageName)
 		})
 	case "replace-local-package":
 		return m.syncLocalPackageOperation(root, func() (Result, error) {
@@ -1987,6 +1996,16 @@ func (m Manager) Run(root, action, message, packageName, version, tag, token str
 		return m.syncLocalPackageOperation(root, func() (Result, error) {
 			return switchLocalPackageVersion(root, packageName, version, true)
 		})
+	case "stash-sync-local-package-release":
+		return m.syncLocalPackageOperation(root, func() (Result, error) {
+			return m.StashAndSyncLocalPackage(root, packageName, version)
+		})
+	case "refresh-local-package-history":
+		return m.RefreshLocalPackageHistory(root, packageName)
+	case "restore-local-package-stash":
+		return m.ApplyLocalPackageStash(root, packageName, message, true)
+	case "drop-local-package-stash":
+		return m.DropLocalPackageStash(root, packageName, message)
 	case "enable-backpack-workspace":
 		return setBackpackWorkspace(root, true)
 	case "disable-backpack-workspace":

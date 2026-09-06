@@ -29,15 +29,15 @@ func TestHTTPSAuthorizationOnlyAllowsOfficialHTTPSClone(t *testing.T) {
 	}
 }
 
-func TestReleaseBranchPatternAllowsOnlyPublishedBranchNames(t *testing.T) {
-	for _, branch := range []string{"release", "release/v2", "release-2026.09", "Release_candidate", "feature/release", "my-release"} {
-		if !isReleaseBranch(branch) {
-			t.Fatalf("expected release branch %q to be allowed", branch)
+func TestGitBranchPatternAcceptsTrackedBranches(t *testing.T) {
+	for _, branch := range []string{"release", "main", "master", "feature/login", "production"} {
+		if !isGitBranch(branch) {
+			t.Fatalf("expected branch %q to be allowed", branch)
 		}
 	}
-	for _, branch := range []string{"main", "feature/login", "production"} {
-		if isReleaseBranch(branch) {
-			t.Fatalf("expected non-release branch %q to be rejected", branch)
+	for _, branch := range []string{"", "../secret", "-option"} {
+		if isGitBranch(branch) {
+			t.Fatalf("expected invalid branch %q to be rejected", branch)
 		}
 	}
 }

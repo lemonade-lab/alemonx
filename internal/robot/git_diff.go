@@ -32,6 +32,12 @@ func GitDiff(root, changePath string) (GitDiffResult, error) {
 	if err != nil {
 		return GitDiffResult{}, err
 	}
+	return gitDiffAtRepository(repo, changePath)
+}
+
+// gitDiffAtRepository is shared by the robot workspace and a discovered
+// backpack package. Its caller must resolve repo from a trusted root.
+func gitDiffAtRepository(repo, changePath string) (GitDiffResult, error) {
 	cleanPath, err := cleanGitChangePath(changePath)
 	if err != nil {
 		return GitDiffResult{}, err

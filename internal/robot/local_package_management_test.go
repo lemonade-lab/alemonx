@@ -51,6 +51,64 @@ func TestBackpackWorkspaceSwitchRemovesEmptyWorkspace(t *testing.T) {
 	}
 }
 
+func TestRefreshLocalPackageHistoryUnshallowsCurrentBranch(t *testing.T) {
+	root := t.TempDir()
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
+	seed := filepath.Join(t.TempDir(), "seed")
+	writeAppPageFixture(t, filepath.Join(seed, "package.json"), `{"name":"local-plugin","version":"1.0.0"}`)
+	for _, command := range [][]string{
+		{"init", "-b", "release"},
+		{"config", "user.name", "Test User"},
+		{"config", "user.email", "test@example.com"},
+		{"add", "."},
+		{"commit", "-m", "first"},
+	} {
+		if _, err := gitRun(seed, command...); err != nil {
+			t.Skipf("git is unavailable for shallow history test: %v", err)
+		}
+	}
+	writeAppPageFixture(t, filepath.Join(seed, "history.txt"), "second\n")
+	if _, err := gitRun(seed, "add", "."); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gitRun(seed, "commit", "-m", "second"); err != nil {
+		t.Fatal(err)
+	}
+	remote := filepath.Join(t.TempDir(), "plugin.git")
+	if _, err := gitRun(root, "init", "--bare", remote); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gitRun(seed, "remote", "add", "origin", remote); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gitRun(seed, "push", "-u", "origin", "release"); err != nil {
+		t.Fatal(err)
+	}
+	plugin := filepath.Join(root, "packages", "local-plugin")
+	if err := os.MkdirAll(filepath.Dir(plugin), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gitRun(root, "clone", "--depth", "1", "--branch", "release", "file://"+remote, plugin); err != nil {
+		t.Skipf("git does not support shallow local clone: %v", err)
+	}
+	if shallow, err := gitRun(plugin, "rev-parse", "--is-shallow-repository"); err != nil || strings.TrimSpace(shallow) != "true" {
+		t.Fatalf("expected shallow plugin clone, got %q err=%v", shallow, err)
+	}
+	if _, err := (Manager{}).RefreshLocalPackageHistory(root, "local-plugin"); err != nil {
+		t.Fatalf("refresh local package history: %v", err)
+	}
+	if shallow, err := gitRun(plugin, "rev-parse", "--is-shallow-repository"); err != nil || strings.TrimSpace(shallow) != "false" {
+		t.Fatalf("plugin should no longer be shallow, got %q err=%v", shallow, err)
+	}
+	versions, err := (Manager{}).LocalPackageVersions(root, "local-plugin", 1)
+	if err != nil {
+		t.Fatalf("load package versions: %v", err)
+	}
+	if len(versions.Versions) != 2 {
+		t.Fatalf("versions = %#v, want complete two-commit history", versions.Versions)
+	}
+}
+
 func readWorkspaceManifest(t *testing.T, root string) map[string]any {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join(root, "package.json"))
@@ -167,6 +225,12 @@ func TestSwitchLocalPackageVersionRequiresConfirmationBeforeDiscardingGitChanges
 	if _, err := switchLocalPackageVersion(root, "local-plugin", "release", false); err == nil || !strings.Contains(err.Error(), "存在未提交修改") {
 		t.Fatalf("ordinary switch should preserve local changes, err=%v", err)
 	}
+	if _, err := (Manager{}).SetAppEnabled(root, "local-plugin", true); err != nil {
+		t.Fatalf("a release plugin with local changes should be enabled, err=%v", err)
+	}
+	if err := (Manager{}).ValidateEnabledBackpackRelease(root); err != nil {
+		t.Fatalf("a release plugin with local changes should be runnable, err=%v", err)
+	}
 	if _, err := (Manager{}).Run(root, "force-sync-local-package-release", "", "local-plugin", "release", "", "", false); err == nil || !strings.Contains(err.Error(), "确认") {
 		t.Fatalf("force switch without confirmation should be rejected, err=%v", err)
 	}
@@ -194,11 +258,90 @@ func TestSwitchLocalPackageVersionRequiresConfirmationBeforeDiscardingGitChanges
 	if _, err := switchLocalPackageVersion(root, "local-plugin", "release", false); err == nil || !strings.Contains(err.Error(), "领先远程") {
 		t.Fatalf("ordinary sync must preserve a clean local commit, err=%v", err)
 	}
-	if _, err := (Manager{}).SetAppEnabled(root, "local-plugin", true); err == nil || !strings.Contains(err.Error(), "领先远程") {
-		t.Fatalf("a release branch ahead of origin must not be enabled, err=%v", err)
+	if _, err := (Manager{}).SetAppEnabled(root, "local-plugin", true); err != nil {
+		t.Fatalf("a release branch ahead of origin should be enabled, err=%v", err)
 	}
 	writeAppPageFixture(t, filepath.Join(root, "alemon.config.yaml"), "apps:\n  local-plugin: true\n")
-	if err := (Manager{}).ValidateEnabledBackpackRelease(root); err == nil || !strings.Contains(err.Error(), "领先远程") {
-		t.Fatalf("runtime release preflight must reject a branch ahead of origin, err=%v", err)
+	if err := (Manager{}).ValidateEnabledBackpackRelease(root); err != nil {
+		t.Fatalf("a release branch ahead of origin should be runnable, err=%v", err)
+	}
+	if _, err := gitRun(plugin, "checkout", "-b", "feature"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (Manager{}).SetAppEnabled(root, "local-plugin", true); err != nil {
+		t.Fatalf("a checked-out feature branch should be enabled, err=%v", err)
+	}
+	if err := (Manager{}).ValidateEnabledBackpackRelease(root); err != nil {
+		t.Fatalf("runtime preflight should accept a checked-out feature branch, err=%v", err)
+	}
+}
+
+func TestRemoveLocalPackageAndDisableRemovesRuntimeEntry(t *testing.T) {
+	root := t.TempDir()
+	plugin := filepath.Join(root, "packages", "local-plugin")
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
+	writeAppPageFixture(t, filepath.Join(plugin, "package.json"), `{"name":"local-plugin","version":"1.0.0"}`)
+	writeAppPageFixture(t, filepath.Join(root, "alemon.config.yaml"), "apps:\n  local-plugin: true\n  retained: true\n")
+	result, err := (Manager{}).RemoveLocalPackageAndDisable(root, "local-plugin")
+	if err != nil {
+		t.Fatalf("RemoveLocalPackageAndDisable: %v", err)
+	}
+	if !strings.Contains(result.Output, "取消启用") {
+		t.Fatalf("unexpected output: %q", result.Output)
+	}
+	if _, err := os.Stat(plugin); !os.IsNotExist(err) {
+		t.Fatalf("plugin directory should be removed, stat err = %v", err)
+	}
+	apps, err := (Manager{}).EnabledApps(root)
+	if err != nil || containsString(apps, "local-plugin") || !containsString(apps, "retained") {
+		t.Fatalf("apps after removal = %#v, %v", apps, err)
+	}
+}
+
+func TestEnsurePackagesWorkspaceMakesClonedPackageLoadable(t *testing.T) {
+	root := t.TempDir()
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
+	if err := ensurePackagesWorkspace(root); err != nil {
+		t.Fatalf("ensurePackagesWorkspace: %v", err)
+	}
+	manifest := readWorkspaceManifest(t, root)
+	if manifest["private"] != true {
+		t.Fatalf("private = %#v, want true", manifest["private"])
+	}
+	workspaces, ok := manifest["workspaces"].([]any)
+	if !ok || !workspaceContains(workspaces, "packages/*") {
+		t.Fatalf("workspaces = %#v, want packages/*", manifest["workspaces"])
+	}
+}
+
+func TestBackpackStatusIgnoresUntrackedNodeModules(t *testing.T) {
+	root := t.TempDir()
+	plugin := filepath.Join(root, "packages", "local-plugin")
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
+	writeAppPageFixture(t, filepath.Join(plugin, "package.json"), `{"name":"local-plugin"}`)
+	for _, command := range [][]string{
+		{"init", "-b", "release"},
+		{"config", "user.name", "Test User"},
+		{"config", "user.email", "test@example.com"},
+		{"add", "package.json"},
+		{"commit", "-m", "initial"},
+	} {
+		if _, err := gitRun(plugin, command...); err != nil {
+			t.Skipf("git is unavailable for backpack status test: %v", err)
+		}
+	}
+	writeAppPageFixture(t, filepath.Join(plugin, "node_modules", "sample", "index.js"), "module.exports = {}\n")
+	changes, err := (Manager{}).LocalPackageChanges(root, "local-plugin")
+	if err != nil || len(changes) != 0 {
+		t.Fatalf("node_modules should not be a plugin change: %#v, %v", changes, err)
+	}
+	status, err := (Manager{}).LocalPackageStatus(root, "local-plugin")
+	if err != nil || status.Dirty {
+		t.Fatalf("node_modules should not make the plugin dirty: %#v, %v", status, err)
+	}
+	writeAppPageFixture(t, filepath.Join(plugin, "local-change.txt"), "actual edit\n")
+	changes, err = (Manager{}).LocalPackageChanges(root, "local-plugin")
+	if err != nil || len(changes) != 1 || changes[0].Path != "local-change.txt" {
+		t.Fatalf("real local change should remain visible: %#v, %v", changes, err)
 	}
 }

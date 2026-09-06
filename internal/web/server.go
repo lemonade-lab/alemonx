@@ -1149,6 +1149,10 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	mux.HandleFunc("/api/v1/robot/tasks", s.robotTasksHandler)
 	mux.HandleFunc("/api/v1/robot/events", s.robotEventsHandler)
 	mux.HandleFunc("/api/v1/robot/packages", s.robotPackagesHandler)
+	mux.HandleFunc("/api/v1/robot/packages/status", s.robotPackageStatusHandler)
+	mux.HandleFunc("/api/v1/robot/packages/changes", s.robotPackageChangesHandler)
+	mux.HandleFunc("/api/v1/robot/packages/diff", s.robotPackageDiffHandler)
+	mux.HandleFunc("/api/v1/robot/packages/stashes", s.robotPackageStashesHandler)
 	mux.HandleFunc("/api/v1/robot/packages/upload", s.robotPackageUploadHandler)
 	mux.HandleFunc("/api/v1/robot/packages/git-clone", s.robotPackageGitCloneHandler)
 	mux.HandleFunc("/api/v1/robot/packages/git-clone/check", s.robotPackageGitCloneCheckHandler)
@@ -6430,6 +6434,68 @@ func (s *server) robotPackagesHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
+func (s *server) robotPackageStatusHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
+		return
+	}
+	root, name := r.URL.Query().Get("root"), r.URL.Query().Get("package")
+	if name == "" {
+		statuses, err := s.robots.LocalPackageStatuses(root)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"items": statuses})
+		return
+	}
+	status, err := s.robots.LocalPackageStatus(root, name)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, status)
+}
+
+func (s *server) robotPackageChangesHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
+		return
+	}
+	changes, err := s.robots.LocalPackageChanges(r.URL.Query().Get("root"), r.URL.Query().Get("package"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": changes})
+}
+
+func (s *server) robotPackageDiffHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
+		return
+	}
+	result, err := s.robots.LocalPackageDiff(r.URL.Query().Get("root"), r.URL.Query().Get("package"), r.URL.Query().Get("path"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *server) robotPackageStashesHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
+		return
+	}
+	stashes, err := s.robots.LocalPackageStashes(r.URL.Query().Get("root"), r.URL.Query().Get("package"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": stashes})
+}
+
 // robotPackageUploadHandler rejects archives because backpack plugins must be
 // Git worktrees tracking release; archives cannot provide that provenance.
 func (s *server) robotPackageUploadHandler(w http.ResponseWriter, r *http.Request) {
@@ -6437,7 +6503,7 @@ func (s *server) robotPackageUploadHandler(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
 		return
 	}
-	writeError(w, http.StatusGone, "背包插件仅支持通过 Git 克隆 release 分支，不支持上传压缩包。")
+	writeError(w, http.StatusGone, "背包插件仅支持通过 Git 克隆分支，不支持上传压缩包。")
 }
 
 func (s *server) robotPackageVersionsHandler(w http.ResponseWriter, r *http.Request) {
@@ -6445,7 +6511,12 @@ func (s *server) robotPackageVersionsHandler(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
 		return
 	}
-	versions, err := s.robots.LocalPackageVersions(r.URL.Query().Get("root"), r.URL.Query().Get("package"))
+	page, err := strconv.Atoi(r.URL.Query().Get("page"))
+	if err != nil && r.URL.Query().Get("page") != "" {
+		writeError(w, http.StatusBadRequest, "提交页码无效")
+		return
+	}
+	versions, err := s.robots.LocalPackageVersions(r.URL.Query().Get("root"), r.URL.Query().Get("package"), page)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return

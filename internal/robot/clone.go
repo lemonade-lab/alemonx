@@ -24,7 +24,6 @@ var gitBranchPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]*$`)
 
 // releaseBranchPattern accepts any explicitly named release channel. Git's
 // own branch-name validation still applies before a clone is started.
-var releaseBranchPattern = regexp.MustCompile(`(?i)release`)
 var cloneDirectoryPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 var gitCloneProgressPattern = regexp.MustCompile(`(?i)(compressing objects|receiving objects|resolving deltas):\s*(\d+)%`)
 
@@ -46,8 +45,9 @@ type HTTPSAuthorization struct {
 	Token    string
 }
 
-func isReleaseBranch(branch string) bool {
-	return releaseBranchPattern.MatchString(strings.TrimSpace(branch))
+func isGitBranch(branch string) bool {
+	branch = strings.TrimSpace(branch)
+	return branch != "" && gitBranchPattern.MatchString(branch) && !strings.Contains(branch, "..") && !strings.HasPrefix(branch, "-")
 }
 
 func (authorization HTTPSAuthorization) validFor(repository *url.URL, mirror string) error {
@@ -205,8 +205,8 @@ func CloneLocalPackageWithProgress(root, repository, branch, name, mirror string
 // credentials when the repository is private.
 func CloneLocalPackageWithAuthorization(root, repository, branch, name, mirror string, depth int, authorization HTTPSAuthorization, onProgress func(CloneProgress)) (Result, error) {
 	branch = strings.TrimSpace(branch)
-	if !isReleaseBranch(branch) {
-		return Result{}, errors.New("背包插件只能选择 release 发布分支")
+	if !isGitBranch(branch) {
+		return Result{}, errors.New("请选择有效的 Git 分支")
 	}
 	project, err := projectPath(root)
 	if err != nil {
@@ -231,7 +231,24 @@ func CloneLocalPackageWithAuthorization(root, repository, branch, name, mirror s
 		}
 		return Result{}, errors.New("packages 必须是普通目录")
 	}
-	return CloneRepositoryWithAuthorization(destination, repository, branch, name, mirror, depth, authorization, onProgress)
+	// A local package is resolved through the robot's packages workspace. Git
+	// cloning used to bypass this preparation, producing a directory that was
+	// visible in the backpack but could not be loaded by the package manager.
+	// Prepare it before cloning so a preparation failure never leaves a partial
+	// plugin checkout behind.
+	if err := ensurePackagesWorkspace(project); err != nil {
+		return Result{}, err
+	}
+	result, err := CloneRepositoryWithAuthorization(destination, repository, branch, name, mirror, depth, authorization, onProgress)
+	if err != nil {
+		return result, err
+	}
+	if note := defaultEnableLocalPackage(root, result.Path); note != "" {
+		result.Output += note
+	} else {
+		result.Output += "\n插件已克隆，但未能自动启用；可在背包中手动启用。"
+	}
+	return result, nil
 }
 
 // CloneRepository clones a remote robot repository into an existing parent

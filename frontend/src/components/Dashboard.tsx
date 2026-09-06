@@ -174,6 +174,11 @@ import {
   useLocalPackagesQuery,
   useLocalPackageVersionsQuery,
   useLocalPackageReadmeQuery,
+  useLocalPackageStatusQuery,
+  useLocalPackageStatusesQuery,
+  useLocalPackageChangesQuery,
+  useLocalPackageDiffQuery,
+  useLocalPackageStashesQuery,
   usePackageManifestQuery,
   usePackageConfigQuery,
   usePackageConfigsQuery,
@@ -2006,7 +2011,10 @@ export function Dashboard({
         setAppPortDialog(true)
       }
     } catch (reason) {
-      showOperationNotice(operationErrorMessage(reason, '无法读取应用端口。'), 'error')
+      showOperationNotice(
+        operationErrorMessage(reason, '无法读取应用端口。'),
+        'error'
+      )
     } finally {
       setAppLaunching(false)
     }
@@ -2039,7 +2047,10 @@ export function Dashboard({
         setPendingAppPageID('')
       }
     } catch (reason) {
-      showOperationNotice(operationErrorMessage(reason, '应用端口保存失败。'), 'error')
+      showOperationNotice(
+        operationErrorMessage(reason, '应用端口保存失败。'),
+        'error'
+      )
     } finally {
       setAppPortBusy(false)
       setAppLaunching(false)
@@ -2072,7 +2083,10 @@ export function Dashboard({
         )
       openWorkbenchBrowserPage(`/api/v1/robot/app/${robotAppToken(root)}/`)
     } catch (reason) {
-      showOperationNotice(operationErrorMessage(reason, '应用启动失败。'), 'error')
+      showOperationNotice(
+        operationErrorMessage(reason, '应用启动失败。'),
+        'error'
+      )
     }
   }
   const checkAppReachable = async () => {
@@ -2101,7 +2115,10 @@ export function Dashboard({
         setTestPortDialog(true)
       }
     } catch (reason) {
-      showOperationNotice(operationErrorMessage(reason, '测试台启动失败。'), 'error')
+      showOperationNotice(
+        operationErrorMessage(reason, '测试台启动失败。'),
+        'error'
+      )
     } finally {
       setTestLaunching(false)
     }
@@ -2122,7 +2139,10 @@ export function Dashboard({
       setTestLaunching(true)
       await launchTest()
     } catch (reason) {
-      showOperationNotice(operationErrorMessage(reason, '服务端口保存失败。'), 'error')
+      showOperationNotice(
+        operationErrorMessage(reason, '服务端口保存失败。'),
+        'error'
+      )
     } finally {
       setTestPortBusy(false)
       setTestLaunching(false)
@@ -2156,7 +2176,10 @@ export function Dashboard({
       setTestMinimized(false)
       activateFloatingWindow('test')
     } catch (reason) {
-      showOperationNotice(operationErrorMessage(reason, '测试服务启动失败。'), 'error')
+      showOperationNotice(
+        operationErrorMessage(reason, '测试服务启动失败。'),
+        'error'
+      )
     }
   }
   const checkTestReachable = async () => {
@@ -2194,7 +2217,10 @@ export function Dashboard({
       setLiveMinimized(false)
       activateFloatingWindow('live')
     } catch (reason) {
-      showOperationNotice(operationErrorMessage(reason, '在线聊天不可用。'), 'error')
+      showOperationNotice(
+        operationErrorMessage(reason, '在线聊天不可用。'),
+        'error'
+      )
     }
   }
   openLiveRef.current = () => void openLive()
@@ -2212,7 +2238,10 @@ export function Dashboard({
       setLivePortDialog(false)
       requestLiveLogin()
     } catch (reason) {
-      showOperationNotice(operationErrorMessage(reason, 'CBP 服务端口保存失败。'), 'error')
+      showOperationNotice(
+        operationErrorMessage(reason, 'CBP 服务端口保存失败。'),
+        'error'
+      )
     } finally {
       setLivePortBusy(false)
     }
@@ -2845,6 +2874,9 @@ export function Dashboard({
           'replace-local-package',
           'sync-local-package-release',
           'force-sync-local-package-release',
+          'stash-sync-local-package-release',
+          'restore-local-package-stash',
+          'drop-local-package-stash',
           'enable-backpack-workspace',
           'disable-backpack-workspace'
         ].includes(data.action)
@@ -3358,6 +3390,21 @@ export function Dashboard({
               ...(force ? { confirm: 'true' } : {})
             })
           }
+          onPackageAction={(action, packageName, value = '') =>
+            api('POST', {
+              root,
+              action,
+              package: packageName,
+              ...(action === 'stash-sync-local-package-release'
+                ? { version: value }
+                : { message: value })
+            })
+          }
+          onOpenLogs={() => {
+            setForegroundLogsOpen(true)
+            setForegroundLogsMinimized(false)
+            activateFloatingWindow('foregroundLogs')
+          }}
         />
       )}
       {developerMode && section === 'npmrc' && (
@@ -5019,7 +5066,7 @@ function GitCloneDialog({
   useEffect(() => {
     if (open) {
       setRepository('')
-      setBranch(mode === 'package' ? 'release' : '')
+      setBranch('')
       setBranches([])
       setBranchesLoading(false)
       setName('')
@@ -5166,20 +5213,13 @@ function GitCloneDialog({
           return data
         })
         .then(data => {
-          const availableBranches =
-            mode === 'package'
-              ? (data.branches ?? []).filter(item =>
-                  /release/i.test(item)
-                )
-              : (data.branches ?? [])
+          const availableBranches = data.branches ?? []
           setBranches(availableBranches)
           setBranch(current => {
             if (mode === 'package')
               return availableBranches.includes(current)
                 ? current
-                : (availableBranches.includes('release')
-                    ? 'release'
-                    : (availableBranches[0] ?? ''))
+                : (data.defaultBranch ?? availableBranches[0] ?? '')
             return availableBranches.includes(current)
               ? current
               : (data.defaultBranch ?? availableBranches[0] ?? '')
@@ -5368,7 +5408,7 @@ function GitCloneDialog({
                     : connection === 'ssh' && !sshKeys.length
                       ? 'SSH 未配置'
                       : connection === 'https'
-                        ? 'HTTPS 已选择'
+                        ? ''
                         : ''}
                 </small>
               </header>
@@ -5441,7 +5481,7 @@ function GitCloneDialog({
                 {mode === 'package' ? (
                   <label className="grid gap-1 text-xs font-semibold text-slate-600">
                     <span className="flex items-center gap-1.5">
-                      发布分支
+                      克隆分支
                       {branchesLoading && (
                         <span className="inline-flex items-center gap-1 font-normal text-slate-500">
                           <Loader2 className="size-3 animate-spin" /> 正在读取…
@@ -5457,14 +5497,16 @@ function GitCloneDialog({
                       {branchesLoading ? (
                         <option value="">正在读取发布分支…</option>
                       ) : !branches.length ? (
-                        <option value="">未找到发布分支</option>
+                        <option value="">未找到可用分支</option>
                       ) : null}
                       {branches.map(item => (
-                        <option key={item} value={item}>{formatBranchLabel(item)}</option>
+                        <option key={item} value={item}>
+                          {formatBranchLabel(item)}
+                        </option>
                       ))}
                     </select>
                     <small className="font-normal leading-5 text-slate-500">
-                      仅显示分支名中包含 release 的发布分支。
+                      选择此插件要跟踪和运行的分支；后续版本列表只显示该分支的提交。
                     </small>
                   </label>
                 ) : (
@@ -6418,9 +6460,9 @@ function EnvironmentPage({
   onFix: (check: Check) => void
   sidebarLayout?: boolean
 }) {
-  const [environmentView, setEnvironmentView] = useState<'general' | 'nodejs' | 'python'>(
-    'general'
-  )
+  const [environmentView, setEnvironmentView] = useState<
+    'general' | 'nodejs' | 'python'
+  >('general')
   // NodeJS has its own version-management page. Keeping it out of the
   // general checklist avoids showing two competing “current” versions.
   const checks = (report?.checks ?? []).filter(check => check.id !== 'node')
@@ -6467,7 +6509,11 @@ function EnvironmentPage({
           >
             <Terminal className="size-4" /> NodeJS
           </button>
-          <button type="button" aria-current={environmentView === 'python' ? 'page' : undefined} onClick={() => setEnvironmentView('python')}>
+          <button
+            type="button"
+            aria-current={environmentView === 'python' ? 'page' : undefined}
+            onClick={() => setEnvironmentView('python')}
+          >
             <Code2 className="size-4" /> Python
           </button>
         </SidebarWindowSectionNav>
@@ -8557,7 +8603,9 @@ function BackpackPanel({
   onConfigChanged,
   onSetAppEnabled,
   onRemove,
-  onReplace
+  onReplace,
+  onPackageAction,
+  onOpenLogs
 }: {
   root: string
   items: Array<{
@@ -8586,8 +8634,19 @@ function BackpackPanel({
     version: string,
     force?: boolean
   ) => Promise<boolean>
+  onPackageAction: (
+    action: string,
+    packageName: string,
+    value?: string
+  ) => Promise<boolean>
+  onOpenLogs: () => void
 }) {
   const [selectedName, setSelectedName] = useStoreState('')
+  const [selectedNames, setSelectedNames] = useStoreState<string[]>([])
+  const [query, setQuery] = useState('')
+  const [filter, setFilter] = useState<
+    'all' | 'enabled' | 'attention' | 'dirty'
+  >('all')
   const [appToggleBusy, setAppToggleBusy] = useStoreState('')
   const [privacyToggleBusy, setPrivacyToggleBusy] = useStoreState(false)
   const { data: appsData, refetch: refetchApps } = useRobotAppsQuery(root, {
@@ -8598,7 +8657,37 @@ function BackpackPanel({
     isFetching: manifestLoading,
     refetch: refetchManifest
   } = usePackageManifestQuery(root, { skip: !root })
+  const { data: statuses } = useLocalPackageStatusesQuery(root, { skip: !root })
   const enabledApps = new Set(appsData?.items ?? [])
+  const statusByName = new Map(
+    (statuses?.items ?? []).map(status => [status.name, status])
+  )
+  const visibleItems = [...items]
+    .filter(item => {
+      const status = statusByName.get(item.name)
+      const needle = query.trim().toLowerCase()
+      if (
+        needle &&
+        !`${item.name} ${item.description ?? ''}`.toLowerCase().includes(needle)
+      )
+        return false
+      // The apps query is available before the richer status diagnostic, so
+      // this filter must remain useful while diagnostics are still loading.
+      if (filter === 'enabled') return enabledApps.has(item.name)
+      if (filter === 'attention') return Boolean(status?.issues.length)
+      if (filter === 'dirty') return Boolean(status?.dirty)
+      return true
+    })
+    .sort((left, right) => {
+      const leftStatus = statusByName.get(left.name)
+      const rightStatus = statusByName.get(right.name)
+      const priority = (status?: { issues: string[]; enabled: boolean }) =>
+        (status?.issues.length ? 2 : 0) + (status?.enabled ? 1 : 0)
+      return (
+        priority(rightStatus) - priority(leftStatus) ||
+        left.name.localeCompare(right.name)
+      )
+    })
   const isPrivateBackpack = Boolean(
     manifest?.private &&
     manifest.workspacesEnabled &&
@@ -8608,6 +8697,11 @@ function BackpackPanel({
     if (selectedName && !items.some(item => item.name === selectedName))
       setSelectedName('')
   }, [items, selectedName, setSelectedName])
+  useEffect(() => {
+    setSelectedNames(current =>
+      current.filter(name => items.some(item => item.name === name))
+    )
+  }, [items, setSelectedNames])
   const selected = items.find(item => item.name === selectedName)
   const toggleApp = async (packageName: string, enabled: boolean) => {
     if (!root) return
@@ -8628,6 +8722,34 @@ function BackpackPanel({
       setPrivacyToggleBusy(false)
     }
   }
+  const setSelectedApps = async (enabled: boolean) => {
+    for (const name of selectedNames) await toggleApp(name, enabled)
+    setSelectedNames([])
+  }
+  const syncSelectedSafely = async () => {
+    for (const name of selectedNames) {
+      const response = await fetch(
+        `/api/v1/robot/package-versions?${new URLSearchParams({ root, package: name })}`
+      )
+      if (!response.ok) continue
+      const version = (await response.json()) as {
+        latest?: string
+        current?: string
+        dirty?: boolean
+        ahead?: number
+      }
+      if (
+        !version.latest ||
+        version.latest === version.current ||
+        version.dirty ||
+        version.ahead
+      )
+        continue
+      await onReplace(name, version.latest)
+    }
+    setSelectedNames([])
+    onRefresh()
+  }
   if (selected)
     return (
       <BackpackPackageManager
@@ -8637,6 +8759,8 @@ function BackpackPanel({
         onSave={onSaveConfig}
         onRemove={onRemove}
         onReplace={onReplace}
+        onPackageAction={onPackageAction}
+        onOpenLogs={onOpenLogs}
         onBack={() => setSelectedName('')}
         onRefresh={onRefresh}
       />
@@ -8725,7 +8849,76 @@ function BackpackPanel({
           </p>
         ) : items.length ? (
           <div className="grid gap-2">
-            {items.map(item => (
+            <div className="flex flex-wrap gap-2 rounded-lg border border-slate-200 bg-slate-50 p-2">
+              <label className="flex min-w-48 flex-1 items-center gap-2 rounded-md border border-slate-200 bg-white px-2">
+                <Search className="size-3.5 text-slate-400" />
+                <input
+                  className="h-8 min-w-0 flex-1 bg-transparent text-xs outline-none"
+                  value={query}
+                  onChange={event => setQuery(event.target.value)}
+                  placeholder="搜索插件"
+                />
+              </label>
+              {(
+                [
+                  ['all', '全部'],
+                  ['enabled', '已启用'],
+                  ['attention', '需处理'],
+                  ['dirty', '本地改动']
+                ] as const
+              ).map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  aria-pressed={filter === value}
+                  className={cn(
+                    'rounded-md px-2.5 text-xs',
+                    filter === value
+                      ? 'bg-brand-600 text-white'
+                      : 'bg-white text-slate-600 border border-slate-200'
+                  )}
+                  onClick={() => setFilter(value)}
+                >
+                  {label}
+                </button>
+              ))}
+              <span className="self-center px-1 text-[11px] text-slate-500">
+                {visibleItems.length}/{items.length}
+              </span>
+            </div>
+            {selectedNames.length > 0 && (
+              <div className="flex flex-wrap items-center gap-2 rounded-lg border border-brand-200 bg-brand-50 p-2 text-xs text-brand-800">
+                已选择 {selectedNames.length} 个插件
+                <button
+                  className="secondary-button text-xs"
+                  disabled={Boolean(appToggleBusy)}
+                  onClick={() => void setSelectedApps(true)}
+                >
+                  批量启用
+                </button>
+                <button
+                  className="secondary-button text-xs"
+                  disabled={Boolean(appToggleBusy)}
+                  onClick={() => void setSelectedApps(false)}
+                >
+                  批量停用
+                </button>
+                <button
+                  className="secondary-button text-xs"
+                  disabled={busy}
+                  onClick={() => void syncSelectedSafely()}
+                >
+                  检查并安全同步
+                </button>
+                <button
+                  className="text-button text-xs"
+                  onClick={() => setSelectedNames([])}
+                >
+                  取消选择
+                </button>
+              </div>
+            )}
+            {visibleItems.map(item => (
               <article
                 className={cn(
                   'rounded-lg border bg-white transition hover:border-slate-300',
@@ -8760,10 +8953,32 @@ function BackpackPanel({
                     >
                       {item.path}
                     </small>
+                    {statusByName.get(item.name)?.issues.length ? (
+                      <small
+                        className="mt-1 block truncate text-[11px] text-amber-700"
+                        title={statusByName.get(item.name)?.issues.join('；')}
+                      >
+                        {statusByName.get(item.name)?.issues.join('；')}
+                      </small>
+                    ) : null}
                   </div>
                   <ChevronRight className="size-4 shrink-0 text-slate-400" />
                 </button>
                 <div className="flex justify-end shrink-0 items-center gap-2 border-t border-slate-100 px-3 py-2">
+                  <label className="mr-auto flex items-center gap-1 text-[11px] text-slate-500">
+                    <input
+                      type="checkbox"
+                      checked={selectedNames.includes(item.name)}
+                      onChange={event =>
+                        setSelectedNames(current =>
+                          event.target.checked
+                            ? [...current, item.name]
+                            : current.filter(name => name !== item.name)
+                        )
+                      }
+                    />
+                    选择
+                  </label>
                   <span className="text-[11px] text-slate-400">
                     {enabledApps.has(item.name)
                       ? '已启用,机器人启动时会加载'
@@ -8840,6 +9055,8 @@ function BackpackPackageManager({
   onSave,
   onRemove,
   onReplace,
+  onPackageAction,
+  onOpenLogs,
   onBack,
   onRefresh
 }: {
@@ -8862,12 +9079,26 @@ function BackpackPackageManager({
     version: string,
     force?: boolean
   ) => Promise<boolean>
+  onPackageAction: (
+    action: string,
+    packageName: string,
+    value?: string
+  ) => Promise<boolean>
+  onOpenLogs: () => void
   onBack: () => void
   onRefresh: () => void
 }) {
-  const [tab, setTab] = useStoreState<'readme' | 'config' | 'version'>('readme')
+  const [tab, setTab] = useStoreState<
+    'overview' | 'readme' | 'config' | 'version' | 'changes' | 'recovery'
+  >('overview')
   const [version, setVersion] = useStoreState('')
+  const [commitPage, setCommitPage] = useState(1)
   const [forceSwitchOpen, setForceSwitchOpen] = useStoreState(false)
+  const [selectedChange, setSelectedChange] = useStoreState('')
+  const [saveState, setSaveState] = useStoreState<
+    'saved' | 'pending' | 'saving' | 'failed'
+  >('saved')
+  const [saveError, setSaveError] = useStoreState('')
   const {
     data,
     isLoading: isConfigLoading,
@@ -8884,20 +9115,43 @@ function BackpackPackageManager({
   const {
     data: versions,
     isFetching: versionsFetching,
-    error: versionsError
+    error: versionsError,
+    refetch: refetchVersions
   } = useLocalPackageVersionsQuery(
-    { root, package: item.name },
+    { root, package: item.name, page: commitPage },
     {
       skip: !item.valid || tab !== 'version'
     }
   )
-  const [values, setValues] = useStoreState<Record<string, unknown>>({})
-  const scheduleSave = useAutoSave<Record<string, unknown>>(next =>
-    onSave(item.name, next)
+  const { data: status, refetch: refetchStatus } = useLocalPackageStatusQuery(
+    { root, package: item.name },
+    { skip: !item.valid }
   )
+  const { data: changes, refetch: refetchChanges } =
+    useLocalPackageChangesQuery(
+      { root, package: item.name },
+      { skip: !item.valid || tab !== 'changes' }
+    )
+  const { data: diff } = useLocalPackageDiffQuery(
+    { root, package: item.name, path: selectedChange },
+    { skip: !item.valid || tab !== 'changes' || !selectedChange }
+  )
+  const { data: stashes, refetch: refetchStashes } =
+    useLocalPackageStashesQuery(
+      { root, package: item.name },
+      { skip: !item.valid || tab !== 'recovery' }
+    )
+  const [values, setValues] = useStoreState<Record<string, unknown>>({})
+  const scheduleSave = useAutoSave<Record<string, unknown>>(async next => {
+    setSaveState('saving')
+    const saved = await onSave(item.name, next)
+    setSaveState(saved ? 'saved' : 'failed')
+    setSaveError(saved ? '' : '配置未保存，请检查字段或重试。')
+  })
   const updateValue = (name: string, value: unknown) => {
     const next = { ...values, [name]: value }
     setValues(next)
+    setSaveState('pending')
     scheduleSave(next)
   }
   useEffect(() => {
@@ -8913,8 +9167,18 @@ function BackpackPackageManager({
     setValues(current => (sameConfigValues(current, next) ? current : next))
   }, [data, setValues])
   useEffect(() => {
-    if (versions?.latest) setVersion(versions.latest)
-  }, [versions, setVersion])
+    if (versions?.latest && !version) setVersion(versions.latest)
+  }, [versions, setVersion, version])
+  const refreshCommitHistory = async () => {
+    const refreshed = await onPackageAction(
+      'refresh-local-package-history',
+      item.name
+    )
+    if (!refreshed) return
+    setCommitPage(1)
+    await refetchVersions()
+    void refetchStatus()
+  }
   return (
     <RobotPanel
       className="backpack-manager"
@@ -8958,6 +9222,11 @@ function BackpackPackageManager({
         ariaLabel="插件详情"
         items={[
           {
+            id: 'overview',
+            label: '概览',
+            icon: <Activity className="size-3.5" />
+          },
+          {
             id: 'readme',
             label: '文档',
             icon: <FileText className="size-3.5" />
@@ -8971,6 +9240,16 @@ function BackpackPackageManager({
             id: 'version',
             label: '版本',
             icon: <GitBranch className="size-3.5" />
+          },
+          {
+            id: 'changes',
+            label: '改动',
+            icon: <FileText className="size-3.5" />
+          },
+          {
+            id: 'recovery',
+            label: '恢复',
+            icon: <Archive className="size-3.5" />
           }
         ]}
         onChange={setTab}
@@ -8981,6 +9260,41 @@ function BackpackPackageManager({
           <p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-800">
             这个目录没有有效的 package.json，因此只能从文件系统修复或移除。
           </p>
+        ) : tab === 'overview' ? (
+          <section className="grid gap-3 rounded-xl border border-slate-200 bg-white p-4 text-sm">
+            <div className="grid gap-2 text-xs text-slate-600 sm:grid-cols-2">
+              <span>启用状态：{status?.enabled ? '已启用' : '未启用'}</span>
+              <span>
+                来源：
+                {status?.source === 'git'
+                  ? `Git ${status.branch || ''}`
+                  : '本地目录'}
+              </span>
+              <span>
+                工作区：{status?.workspaceEnabled ? '已启用' : '未启用'}
+              </span>
+              <span>配置：{status?.configComplete ? '完整' : '需补充'}</span>
+            </div>
+            {status?.issues.length ? (
+              <div className="rounded-md border border-amber-200 bg-amber-50 p-2 text-xs leading-5 text-amber-800">
+                {status.issues.map(issue => (
+                  <div key={issue}>{issue}</div>
+                ))}
+              </div>
+            ) : null}
+            <div className="flex gap-2 justify-end">
+              <button
+                className="secondary-button text-xs"
+                onClick={() => void refetchStatus()}
+              >
+                <RefreshCw className="size-3.5" />
+                重新检查
+              </button>
+              <button className="secondary-button text-xs" onClick={onOpenLogs}>
+                日志
+              </button>
+            </div>
+          </section>
         ) : tab === 'readme' ? (
           isReadmeFetching ? (
             <p className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-500">
@@ -9016,6 +9330,20 @@ function BackpackPackageManager({
                   </span>
                 </div>
                 <div className="flex items-center gap-3">
+                  <span
+                    className={cn(
+                      'text-xs',
+                      saveState === 'failed' ? 'text-red-700' : 'text-slate-500'
+                    )}
+                  >
+                    {saveState === 'pending'
+                      ? '等待保存…'
+                      : saveState === 'saving'
+                        ? '保存中…'
+                        : saveState === 'failed'
+                          ? saveError
+                          : '已保存'}
+                  </span>
                   <ConfigSourceLinks source={data.configSource} />
                 </div>
               </header>
@@ -9026,6 +9354,92 @@ function BackpackPackageManager({
               />
             </div>
           )
+        ) : tab === 'changes' ? (
+          <section className="grid gap-3 rounded-xl border border-slate-200 bg-white p-4 text-sm">
+            <div className="flex items-center justify-between">
+              <strong>本地改动</strong>
+              <button
+                className="secondary-button text-xs"
+                onClick={() => void refetchChanges()}
+              >
+                刷新
+              </button>
+            </div>
+            {!changes?.items.length ? (
+              <span className="text-xs text-slate-500">
+                当前没有可查看的 Git 改动。
+              </span>
+            ) : (
+              <div className="grid gap-2">
+                {changes.items.map(change => (
+                  <button
+                    key={change.path}
+                    type="button"
+                    className={cn(
+                      'rounded-md border p-2 text-left text-xs',
+                      selectedChange === change.path
+                        ? 'border-brand-500 bg-brand-50'
+                        : 'border-slate-200'
+                    )}
+                    onClick={() => setSelectedChange(change.path)}
+                  >
+                    <code>{change.status}</code> {change.path}
+                  </button>
+                ))}
+              </div>
+            )}
+            {selectedChange && diff && (
+              <pre className="max-h-80 overflow-auto rounded-md bg-slate-950 p-3 text-[11px] leading-5 text-slate-100">
+                {diff.diff || '没有可显示的差异。'}
+              </pre>
+            )}
+          </section>
+        ) : tab === 'recovery' ? (
+          <section className="grid gap-3 rounded-xl border border-slate-200 bg-white p-4 text-sm">
+            <strong>Git stash 恢复点</strong>
+            {!stashes?.items.length ? (
+              <span className="text-xs text-slate-500">
+                没有可恢复的本地修改。
+              </span>
+            ) : (
+              stashes.items.map(stash => (
+                <div
+                  key={stash.ref}
+                  className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-slate-200 p-2 text-xs"
+                >
+                  <span>
+                    {stash.ref} · {stash.message}
+                  </span>
+                  <span className="flex gap-2">
+                    <button
+                      className="secondary-button text-xs"
+                      onClick={() =>
+                        void onPackageAction(
+                          'restore-local-package-stash',
+                          item.name,
+                          stash.ref
+                        ).then(refetchStashes)
+                      }
+                    >
+                      恢复
+                    </button>
+                    <button
+                      className="text-button text-xs text-red-700"
+                      onClick={() =>
+                        void onPackageAction(
+                          'drop-local-package-stash',
+                          item.name,
+                          stash.ref
+                        ).then(refetchStashes)
+                      }
+                    >
+                      删除
+                    </button>
+                  </span>
+                </div>
+              ))
+            )}
+          </section>
         ) : versionsFetching ? (
           <p className="backpack-manager-note">正在读取可安装版本…</p>
         ) : versionsError || !versions?.versions.length ? (
@@ -9034,62 +9448,185 @@ function BackpackPackageManager({
           </p>
         ) : (
           <section className="grid gap-4 rounded-xl border border-slate-200 bg-white p-4">
-            <div className="grid gap-1">
-              <strong className="text-sm font-semibold text-slate-800">
-                {versions.source === 'git' ? 'release 分支' : 'npm 版本'}
-              </strong>
-              <span className="text-xs leading-5 text-slate-500">
-                当前使用 {versions.current || item.version || '未知'}；
-                {versions.source === 'git'
-                  ? `当前分支为 ${versions.branch || 'detached'}；${versions.dirty ? '存在未提交修改；' : ''}${versions.ahead ? `本地领先远程 ${versions.ahead} 个提交；` : ''}同步会通过 Git 拉取并重置到 origin/release，以上风险需强制确认。`
-                  : '未检测到 Git，使用 npm 已发布版本。'}
-              </span>
+            <div className="grid gap-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <strong className="text-sm font-semibold text-slate-800">
+                  {versions.source === 'git' ? '当前分支提交' : 'npm 版本'}
+                </strong>
+                {versions.source === 'git' && (
+                  <span className="flex items-center gap-2">
+                    <span className="rounded-full bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700">
+                      正在使用
+                    </span>
+                    <button
+                      className="secondary-button gap-1.5 text-xs"
+                      disabled={busy || versionsFetching}
+                      onClick={() => void refreshCommitHistory()}
+                      title="解除浅克隆限制并拉取当前分支完整提交记录"
+                    >
+                      <RefreshCw
+                        className={cn(
+                          'size-3.5',
+                          versionsFetching && 'animate-spin'
+                        )}
+                      />
+                      刷新
+                    </button>
+                  </span>
+                )}
+              </div>
+              {versions.source === 'git' ? (
+                <>
+                  <dl className="grid gap-2 sm:grid-cols-2">
+                    <div className="rounded-lg bg-slate-50 px-3 py-2">
+                      <dt className="text-[11px] font-medium text-slate-500">
+                        当前分支
+                      </dt>
+                      <dd className="mt-0.5 truncate font-mono text-xs font-semibold text-slate-800">
+                        {versions.branch || 'detached'}
+                      </dd>
+                    </div>
+                    <div className="rounded-lg bg-slate-50 px-3 py-2">
+                      <dt className="text-[11px] font-medium text-slate-500">
+                        当前 commit
+                      </dt>
+                      <dd className="mt-0.5 truncate font-mono text-xs font-semibold text-slate-800">
+                        {versions.current || item.version || '未知'}
+                      </dd>
+                    </div>
+                  </dl>
+                  {(versions.dirty || versions.ahead) && (
+                    <div className="flex flex-wrap gap-2 text-xs">
+                      {versions.dirty && (
+                        <span className="rounded-full bg-amber-50 px-2 py-1 text-amber-800">
+                          有未提交修改
+                        </span>
+                      )}
+                      {!!versions.ahead && (
+                        <span className="rounded-full bg-amber-50 px-2 py-1 text-amber-800">
+                          本地领先远程 {versions.ahead} 个提交
+                        </span>
+                      )}
+                    </div>
+                  )}
+                  <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs leading-5 text-slate-600">
+                    选择任意 commit 即可切换。强制切换会永久覆盖此插件的本地 Git
+                    修改。
+                  </p>
+                </>
+              ) : (
+                <p className="text-xs leading-5 text-slate-500">
+                  当前使用 {versions.current || item.version || '未知'}
+                  。未检测到 Git，使用 npm 已发布版本。
+                </p>
+              )}
             </div>
-            <div className="flex flex-wrap items-center justify-end gap-2 border-t border-slate-200 pt-3">
-              <select
-                className="h-9 min-w-40 rounded-md border border-slate-300 bg-white px-2.5 text-xs font-medium text-slate-700 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
-                value={version}
-                onChange={event => setVersion(event.target.value)}
-              >
+            <div className="grid gap-2 border-t border-slate-200 pt-3">
+              <div className="grid max-h-56 gap-1 overflow-auto">
                 {versions.versions.map(candidate => (
-                  <option key={candidate} value={candidate}>
-                    {versions.source === 'npm'
-                      ? `v${candidate}`
-                      : (versions.labels?.[candidate] ?? candidate)}
-                  </option>
+                  <div
+                    key={candidate}
+                    className={cn(
+                      'flex flex-wrap items-center justify-between gap-2 rounded-md border px-2.5 py-2 text-left text-xs',
+                      version === candidate
+                        ? 'border-brand-500 bg-brand-50 text-brand-800'
+                        : 'border-slate-200 text-slate-600'
+                    )}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setVersion(candidate)}
+                      className="min-w-0 flex-1 truncate text-left"
+                    >
+                      {versions.source === 'npm'
+                        ? `v${candidate}`
+                        : (versions.labels?.[candidate] ?? candidate)}
+                      {versions.source === 'git' &&
+                      candidate.startsWith(versions.current)
+                        ? ' · 当前'
+                        : ''}
+                    </button>
+                    {versions.source === 'git' &&
+                      !candidate.startsWith(versions.current) && (
+                        <span className="flex shrink-0 gap-2">
+                          <button
+                            className="secondary-button text-xs"
+                            disabled={busy}
+                            onClick={() => void onReplace(item.name, candidate)}
+                          >
+                            切换
+                          </button>
+                          <button
+                            className="text-button text-xs text-orange-700"
+                            disabled={busy}
+                            onClick={() => {
+                              setVersion(candidate)
+                              setForceSwitchOpen(true)
+                            }}
+                          >
+                            强制切换
+                          </button>
+                        </span>
+                      )}
+                  </div>
                 ))}
-              </select>
-              <button
-                className="primary-button gap-1.5"
-                disabled={
-                  busy ||
-                  !version ||
-                  version === versions.current ||
-                  (versions.source === 'git' &&
-                    version.startsWith(versions.current)) ||
-                  version.replace(/^v/, '') === item.version
-                }
-                onClick={() => void onReplace(item.name, version)}
-              >
-                <GitBranch className="size-4" />
-                同步 release
-              </button>
+              </div>
               {versions.source === 'git' && (
-                <button
-                  className="inline-flex min-h-9 items-center justify-center gap-1.5 rounded-md border border-orange-200 px-3 text-xs font-semibold text-orange-700 transition hover:bg-orange-50 disabled:cursor-not-allowed disabled:opacity-60"
-                  disabled={
-                    busy ||
-                    !version ||
-                    version === versions.current ||
-                    (versions.source === 'git' &&
-                      version.startsWith(versions.current)) ||
-                    version.replace(/^v/, '') === item.version
-                  }
-                  onClick={() => setForceSwitchOpen(true)}
-                >
-                  <AlertTriangle className="size-4" />
-                  强制同步
-                </button>
+                <div className="flex items-center justify-between text-xs text-slate-500">
+                  <button
+                    className="text-button"
+                    disabled={commitPage <= 1}
+                    onClick={() => setCommitPage(page => Math.max(1, page - 1))}
+                  >
+                    较新提交
+                  </button>
+                  <span>
+                    第 {versions.page || commitPage} 页 · 已静默拉取远程提交
+                  </span>
+                  <button
+                    className="text-button"
+                    disabled={!versions.hasMore}
+                    onClick={() => setCommitPage(page => page + 1)}
+                  >
+                    更早提交
+                  </button>
+                </div>
+              )}
+              {versions.source === 'git' &&
+                (versions.dirty || versions.ahead) &&
+                version && (
+                  <button
+                    className="secondary-button w-fit gap-1.5"
+                    disabled={busy}
+                    onClick={() =>
+                      void onPackageAction(
+                        'stash-sync-local-package-release',
+                        item.name,
+                        version
+                      )
+                    }
+                    title="将本地修改和未跟踪文件保存到 Git stash 后切换"
+                  >
+                    <Archive className="size-4" />
+                    保存改动并切换到所选 commit
+                  </button>
+                )}
+              {versions.source === 'npm' && (
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                  <button
+                    className="primary-button gap-1.5"
+                    disabled={
+                      busy ||
+                      !version ||
+                      version === versions.current ||
+                      version.replace(/^v/, '') === item.version
+                    }
+                    onClick={() => void onReplace(item.name, version)}
+                  >
+                    <GitBranch className="size-4" />
+                    切换版本
+                  </button>
+                </div>
               )}
             </div>
           </section>
@@ -9097,10 +9634,10 @@ function BackpackPackageManager({
       </div>
       <ConfirmDialog
         open={forceSwitchOpen}
-        title="强制同步 release 分支"
+        title="强制切换 commit"
         subtitle="此操作只影响当前背包插件的 Git 工作区"
-        message={`将把“${item.name}”同步到 origin/release，并永久丢弃该插件目录中所有未提交及未跟踪的 Git 文件。\n\n机器人主项目和其他插件不会受到影响。`}
-        confirmLabel="丢弃修改并同步"
+        message={`将把“${item.name}”切换到所选 commit，并永久丢弃该插件目录中所有未提交及未跟踪的 Git 文件。\n\n机器人主项目和其他插件不会受到影响。`}
+        confirmLabel="丢弃修改并切换"
         destructive
         busy={busy}
         onCancel={() => setForceSwitchOpen(false)}
@@ -9133,6 +9670,9 @@ function CatalogDetail({
     values: Record<string, unknown>
   ) => Promise<boolean>
 }) {
+  const [tab, setTab] = useStoreState<
+    'overview' | 'config' | 'version' | 'document'
+  >('overview')
   const [version, setVersion] = useStoreState('')
   const packageName =
     item.install ||
@@ -9180,6 +9720,24 @@ function CatalogDetail({
       : kind === 'module'
         ? 'uninstall-module'
         : 'uninstall-package'
+  const kindLabel =
+    kind === 'connection' ? '连接' : kind === 'module' ? '模块' : '插件'
+  const sourceLabel = repositoryInstall
+    ? 'Git 仓库'
+    : npmPackage
+      ? 'npm 仓库'
+      : '目录条目'
+  const versionLabel = releaseBranchInstall
+    ? '固定 release 分支'
+    : versionsLoading
+      ? '正在读取'
+      : versionsError
+        ? '读取失败'
+        : noRepositoryTag
+          ? '暂无可用版本'
+          : packageVersions?.latest
+            ? `最新 ${packageVersions.latest}`
+            : '按默认版本安装'
   return (
     <RobotPanel
       className="catalog-detail max-w-190"
@@ -9199,109 +9757,182 @@ function CatalogDetail({
         </>
       }
     >
-      <section className="catalog-control flex flex-wrap items-start justify-between gap-4 rounded-xl border border-slate-200 bg-white p-4">
-        <div className="grid min-w-0 gap-1">
-          <h1 className="m-0 break-all text-lg font-semibold text-ink-950">
-            {item.name}
-          </h1>
-          <p className="m-0 text-sm text-slate-500">
-            {item.description || '在线生态目录条目'}
-          </p>
-        </div>
-        <div className="flex flex-wrap items-end justify-end gap-2">
-          {releaseBranchInstall ? (
-            <span className="rounded-md bg-slate-100 px-2.5 py-2 text-xs font-semibold text-slate-600">
-              release
+      <Tabs
+        ariaLabel={`${kindLabel}详情`}
+        items={[
+          {
+            id: 'overview',
+            label: '概览',
+            icon: <Activity className="size-3.5" />
+          },
+          {
+            id: 'config',
+            label: '配置',
+            icon: <Settings className="size-3.5" />
+          },
+          {
+            id: 'version',
+            label: '版本',
+            icon: <GitBranch className="size-3.5" />
+          },
+          {
+            id: 'document',
+            label: '文档',
+            icon: <FileText className="size-3.5" />
+          }
+        ]}
+        onChange={value => setTab(value as typeof tab)}
+        value={tab}
+      />
+      {tab === 'overview' && (
+        <section className="catalog-overview grid gap-4 rounded-xl border border-slate-200 bg-white p-4 text-sm">
+          <div className="grid gap-1">
+            <strong className="text-slate-800">{kindLabel}信息概览</strong>
+            <p className="m-0 text-xs leading-5 text-slate-500">
+              {item.description || '在线生态目录条目'}
+            </p>
+          </div>
+          <div className="grid gap-2 text-xs text-slate-600 sm:grid-cols-2">
+            <span className="min-w-0 truncate" title={item.name}>
+              名称：{item.name}
             </span>
-          ) : packageName ? (
-            <label className="grid gap-1 text-[11px] font-semibold text-slate-500">
-              <select
-                className="h-9 min-w-32 rounded-md border border-slate-300 bg-white px-2 text-xs font-medium text-slate-700 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
-                value={version}
-                onChange={event => setVersion(event.target.value)}
-                disabled={
-                  versionsLoading || Boolean(versionsError) || noRepositoryTag
-                }
-              >
-                {versionsLoading && <option value="">读取版本…</option>}
-                {versionsError && <option value="">版本读取失败</option>}
-                {noRepositoryTag && (
-                  <option value="">该插件没有可用的 Release</option>
-                )}
-                {packageVersions?.versions.map(itemVersion => (
-                  <option key={itemVersion} value={itemVersion}>
-                    {itemVersion}
-                    {itemVersion === packageVersions.latest ? ' · 最新版' : ''}
-                  </option>
-                ))}
-              </select>
-            </label>
-          ) : (
-            <span className="rounded-md bg-slate-100 px-2.5 py-2 text-xs font-semibold text-slate-600">
-              {repositoryInstall ? 'Git' : '拒绝'}
-            </span>
-          )}
-          <button
-            className="primary-button"
-            disabled={
-              busy ||
-              !packageName ||
-              versionsLoading ||
-              Boolean(versionsError) ||
-              noRepositoryTag ||
-              (!releaseBranchInstall && repositoryInstall && !version.trim())
-            }
-            onClick={() => onRun(installAction, installTarget)}
-          >
-            {busy ? (
-              <Loader2 className="size-4 animate-spin" />
-            ) : (
-              <Package className="size-4" />
-            )}
-            {busy ? '处理中…' : kind === 'connection' ? '安装' : '安装'}
-          </button>
-          <button
-            className="secondary-button gap-1.5"
-            disabled={
-              busy || !packageName || (kind === 'plugin' && repositoryInstall)
-            }
-            title={
-              repositoryInstall && kind === 'plugin'
-                ? '仓库插件请按文档卸载'
-                : '卸载当前包'
-            }
-            onClick={() => onRun(uninstallAction, packageName)}
-          >
-            <Trash2 className="size-4" />
-            卸载
-          </button>
-          {item.url && (
-            <a
-              className="inline-flex min-h-9 items-center justify-center rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 transition hover:border-slate-400 hover:bg-slate-50"
-              href={item.url}
-              target="_blank"
-              rel="noreferrer"
+            <span>类型：{kindLabel}</span>
+            <span>来源：{sourceLabel}</span>
+            <span>版本：{versionLabel}</span>
+          </div>
+          <div className="flex flex-wrap items-end justify-end gap-2 border-t border-slate-200 pt-3">
+            <button
+              className="primary-button"
+              disabled={
+                busy ||
+                !packageName ||
+                versionsLoading ||
+                Boolean(versionsError) ||
+                noRepositoryTag ||
+                (!releaseBranchInstall && repositoryInstall && !version.trim())
+              }
+              onClick={() => onRun(installAction, installTarget)}
             >
-              ↗
-            </a>
-          )}
-        </div>
-      </section>
-      {repositoryInstall && noRepositoryTag && (
+              {busy ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <Package className="size-4" />
+              )}
+              {busy ? '处理中…' : '安装'}
+            </button>
+            <button
+              className="secondary-button gap-1.5"
+              disabled={
+                busy || !packageName || (kind === 'plugin' && repositoryInstall)
+              }
+              title={
+                repositoryInstall && kind === 'plugin'
+                  ? '仓库插件请按文档卸载'
+                  : '卸载当前包'
+              }
+              onClick={() => onRun(uninstallAction, packageName)}
+            >
+              <Trash2 className="size-4" />
+              卸载
+            </button>
+            {item.url && (
+              <a
+                className="inline-flex min-h-9 items-center justify-center rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 transition hover:border-slate-400 hover:bg-slate-50"
+                href={item.url}
+                target="_blank"
+                rel="noreferrer"
+              >
+                ↗
+              </a>
+            )}
+          </div>
+        </section>
+      )}
+      {tab === 'version' && (
+        <section className="grid gap-4 rounded-xl border border-slate-200 bg-white p-4 text-sm">
+          <div className="flex flex-wrap items-end justify-between gap-3 border-slate-200 pt-3">
+            {releaseBranchInstall ? (
+              <span className="rounded-md bg-slate-100 px-2.5 py-2 text-xs font-semibold text-slate-600">
+                release
+              </span>
+            ) : packageName ? (
+              <label className="grid gap-1 text-[11px] font-semibold text-slate-500">
+                <span>安装版本</span>
+                <select
+                  className="h-9 min-w-48 rounded-md border border-slate-300 bg-white px-2 text-xs font-medium text-slate-700 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
+                  value={version}
+                  onChange={event => setVersion(event.target.value)}
+                  disabled={
+                    versionsLoading || Boolean(versionsError) || noRepositoryTag
+                  }
+                >
+                  {versionsLoading && <option value="">读取版本…</option>}
+                  {versionsError && <option value="">版本读取失败</option>}
+                  {noRepositoryTag && (
+                    <option value="">该插件没有可用的 Release</option>
+                  )}
+                  {packageVersions?.versions.map(itemVersion => (
+                    <option key={itemVersion} value={itemVersion}>
+                      {itemVersion}
+                      {itemVersion === packageVersions.latest
+                        ? ' · 最新版'
+                        : ''}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : (
+              <span className="text-xs text-slate-500">
+                该条目没有可用的安装来源。
+              </span>
+            )}
+            <button
+              className="primary-button"
+              disabled={
+                busy ||
+                !packageName ||
+                versionsLoading ||
+                Boolean(versionsError) ||
+                noRepositoryTag ||
+                (!releaseBranchInstall && repositoryInstall && !version.trim())
+              }
+              onClick={() => onRun(installAction, installTarget)}
+            >
+              {busy ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <Package className="size-4" />
+              )}
+              {busy ? '处理中…' : '安装所选版本'}
+            </button>
+          </div>
+        </section>
+      )}
+      {tab === 'version' && repositoryInstall && noRepositoryTag && (
         <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
           该插件仓库没有可用的 Release，不能作为可复现的版本安装。
         </p>
       )}
-      {repositoryInstall && versionsError && (
+      {tab === 'version' && repositoryInstall && versionsError && (
         <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
           无法读取插件 Release，请检查网络后重试。
         </p>
       )}
-      <PackageConfigPanel
-        source={item.url}
-        readmeURL={item.url}
-        onSave={onSaveConfig}
-      />
+      {tab === 'config' && (
+        <PackageConfigPanel
+          source={item.url}
+          readmeURL={item.url}
+          onSave={onSaveConfig}
+          showDocument={false}
+        />
+      )}
+      {tab === 'document' && (
+        <PackageDocumentationPanel
+          source={item.url}
+          fallbackURL={item.url}
+          kindLabel={kindLabel}
+        />
+      )}
     </RobotPanel>
   )
 }
@@ -9350,10 +9981,12 @@ function ConfigReadmeCard({
 function PackageConfigPanel({
   source,
   readmeURL,
-  onSave
+  onSave,
+  showDocument = true
 }: {
   source: string
   readmeURL?: string
+  showDocument?: boolean
   onSave: (
     packageName: string,
     values: Record<string, unknown>
@@ -9369,7 +10002,7 @@ function PackageConfigPanel({
     data: document,
     isFetching: isDocumentFetching,
     error: documentError
-  } = useCatalogDocumentQuery(docURL ?? '', { skip: !docURL })
+  } = useCatalogDocumentQuery(docURL ?? '', { skip: !showDocument || !docURL })
   const [values, setValues] = useStoreState<Record<string, unknown>>({})
   const scheduleSave = useAutoSave<Record<string, unknown>>(next =>
     onSave(data?.package ?? '', next)
@@ -9422,12 +10055,14 @@ function PackageConfigPanel({
             />
           </div>
         </section>
-        <ConfigReadmeCard
-          docURL={docURL}
-          document={document}
-          loading={isDocumentFetching}
-          error={Boolean(documentError)}
-        />
+        {showDocument && (
+          <ConfigReadmeCard
+            docURL={docURL}
+            document={document}
+            loading={isDocumentFetching}
+            error={Boolean(documentError)}
+          />
+        )}
       </div>
     )
   return (
@@ -9454,13 +10089,48 @@ function PackageConfigPanel({
           onChange={updateValue}
         />
       </section>
-      <ConfigReadmeCard
-        docURL={docURL}
-        document={document}
-        loading={isDocumentFetching}
-        error={Boolean(documentError)}
-      />
+      {showDocument && (
+        <ConfigReadmeCard
+          docURL={docURL}
+          document={document}
+          loading={isDocumentFetching}
+          error={Boolean(documentError)}
+        />
+      )}
     </div>
+  )
+}
+function PackageDocumentationPanel({
+  source,
+  fallbackURL,
+  kindLabel
+}: {
+  source: string
+  fallbackURL?: string
+  kindLabel: string
+}) {
+  const { data: config } = useCatalogPackageConfigQuery(source, {
+    skip: !source
+  })
+  const docURL = config?.configSource?.readme || fallbackURL
+  const {
+    data: document,
+    isFetching,
+    error
+  } = useCatalogDocumentQuery(docURL ?? '', { skip: !docURL })
+  return (
+    <section >
+      {docURL ? (
+        <ConfigReadmeCard
+          docURL={docURL}
+          document={document}
+          loading={isFetching}
+          error={Boolean(error)}
+        />
+      ) : (
+        <span className="text-xs text-slate-500">该条目暂未提供文档链接。</span>
+      )}
+    </section>
   )
 }
 function ProjectExtensionConfigsPanel({
@@ -13927,13 +14597,14 @@ function ReadonlyConsoleContent({
                             )}
                           </span>
                           <span className="smart-log-line-actions">
-                            {item.action && item.action !== 'install-dependencies' && (
-                              <button
-                                onClick={() => runForegroundLogAction(item)}
-                              >
-                                {foregroundLogActionLabel(item)}
-                              </button>
-                            )}
+                            {item.action &&
+                              item.action !== 'install-dependencies' && (
+                                <button
+                                  onClick={() => runForegroundLogAction(item)}
+                                >
+                                  {foregroundLogActionLabel(item)}
+                                </button>
+                              )}
                             {item.count > 1 && (
                               <button
                                 onClick={() =>

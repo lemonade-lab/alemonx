@@ -28,14 +28,13 @@ func installLocalPackage(root, source string) (Result, error) {
 		return Result{}, fmt.Errorf("本地插件包 %s 已存在，工具不会覆盖它", name)
 	}
 	if strings.HasPrefix(source, "git+") {
-		repository, _, err := splitGitPackageSource(source)
+		repository, ref, err := splitGitPackageSource(source)
 		if err != nil {
 			return Result{}, err
 		}
-		// Backpack plugins are always checked out from the distributable branch.
-		// Do not let a catalog URL, API caller, or stale UI select a tag or a
-		// development branch here.
-		ref := "release"
+		if ref != "" && !isGitBranch(ref) {
+			return Result{}, errors.New("背包插件引用必须是有效的 Git 分支")
+		}
 		cloneRepository, mirrored := githubPackageMirror(repository)
 		args := []string{"clone", "--depth", "1"}
 		if ref != "" {
@@ -498,8 +497,8 @@ func switchLocalPackageVersion(root, packageName, version string, force bool) (R
 			if statusErr != nil {
 				return Result{}, statusErr
 			}
-			if !isReleaseBranch(status.Branch) {
-				return Result{}, errors.New("当前插件不在 release 发布分支")
+			if !isGitBranch(status.Branch) {
+				return Result{}, errors.New("当前插件未检出有效 Git 分支")
 			}
 			if output, fetchErr := gitRun(item.Path, "fetch", "origin", status.Branch); fetchErr != nil {
 				return Result{Path: item.Path, Output: output}, errors.New("无法获取插件发布分支")
@@ -514,7 +513,7 @@ func switchLocalPackageVersion(root, packageName, version string, force bool) (R
 			target := "origin/" + status.Branch
 			if version != "" && version != status.Branch {
 				if !regexp.MustCompile(`^[0-9a-f]{7,40}$`).MatchString(version) {
-					return Result{}, errors.New("请选择 release 分支中的有效提交")
+					return Result{}, errors.New("请选择当前分支中的有效提交")
 				}
 				resolved, resolveErr := gitRun(item.Path, "rev-parse", "--verify", version+"^{commit}")
 				if resolveErr != nil {
@@ -522,7 +521,7 @@ func switchLocalPackageVersion(root, packageName, version string, force bool) (R
 				}
 				resolved = strings.TrimSpace(resolved)
 				if _, ancestorErr := gitRun(item.Path, "merge-base", "--is-ancestor", resolved, target); ancestorErr != nil {
-					return Result{}, errors.New("所选提交不属于 release 分支")
+					return Result{}, errors.New("所选提交不属于当前分支")
 				}
 				target = resolved
 			}
@@ -568,34 +567,67 @@ func releaseGitStatus(path string) (releaseStatus, error) {
 	if headErr != nil {
 		return releaseStatus{}, errors.New("无法读取插件 Git 提交")
 	}
-	dirty, dirtyErr := gitRun(path, "status", "--porcelain")
+	dirty, dirtyErr := backpackGitStatus(path)
 	if dirtyErr != nil {
 		return releaseStatus{}, errors.New("无法确认 Git 工作区状态")
 	}
 	status := releaseStatus{Branch: strings.TrimSpace(branch), Head: strings.TrimSpace(head), Dirty: strings.TrimSpace(dirty) != ""}
-	if isReleaseBranch(status.Branch) {
+	if isGitBranch(status.Branch) {
 		counts, err := gitRun(path, "rev-list", "--left-right", "--count", "origin/"+status.Branch+"..."+status.Branch)
 		if err != nil {
-			return releaseStatus{}, errors.New("无法比较本地与远程 release 分支")
+			return releaseStatus{}, errors.New("无法比较本地与远程分支")
 		}
 		var behind int
 		if _, err := fmt.Sscanf(strings.TrimSpace(counts), "%d %d", &behind, &status.Ahead); err != nil {
-			return releaseStatus{}, errors.New("无法识别 release 分支状态")
+			return releaseStatus{}, errors.New("无法识别远程分支状态")
 		}
 	}
 	return status, nil
 }
 
+// backpackGitStatus ignores dependency trees that package managers materialize
+// locally. A repository may omit node_modules from .gitignore, but those
+// untracked files are not a user plugin edit and must not block normal sync.
+// Tracked node_modules changes are intentionally retained as real changes.
+func backpackGitStatus(path string) (string, error) {
+	output, err := gitRun(path, "status", "--porcelain=v1")
+	if err != nil {
+		return "", err
+	}
+	lines := make([]string, 0)
+	for _, line := range strings.Split(output, "\n") {
+		if isUntrackedNodeModulesStatus(line) {
+			continue
+		}
+		if strings.TrimSpace(line) != "" {
+			lines = append(lines, line)
+		}
+	}
+	return strings.Join(lines, "\n"), nil
+}
+
+func isUntrackedNodeModulesStatus(line string) bool {
+	if !strings.HasPrefix(line, "?? ") {
+		return false
+	}
+	for _, segment := range strings.Split(filepath.ToSlash(strings.TrimSpace(line[3:])), "/") {
+		if segment == "node_modules" {
+			return true
+		}
+	}
+	return false
+}
+
 func releaseSyncConfirmationError(status releaseStatus) error {
 	reasons := make([]string, 0, 3)
-	if !isReleaseBranch(status.Branch) {
-		reasons = append(reasons, "当前不在 release 分支")
+	if !isGitBranch(status.Branch) {
+		reasons = append(reasons, "当前未检出有效 Git 分支")
 	}
 	if status.Dirty {
 		reasons = append(reasons, "存在未提交修改")
 	}
 	if status.Ahead > 0 {
-		reasons = append(reasons, fmt.Sprintf("本地 release 分支领先远程 %d 个提交", status.Ahead))
+		reasons = append(reasons, fmt.Sprintf("本地分支领先远程 %d 个提交", status.Ahead))
 	}
 	return errors.New(strings.Join(reasons, "；") + "，请确认后强制同步")
 }

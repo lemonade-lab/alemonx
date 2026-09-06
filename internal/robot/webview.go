@@ -374,15 +374,8 @@ func (m Manager) SetAppEnabled(root, packageName string, enabled bool) (Result, 
 			if item.Name != packageName {
 				continue
 			}
-			if output, gitErr := gitRun(item.Path, "rev-parse", "--is-inside-work-tree"); gitErr != nil || strings.TrimSpace(output) != "true" {
-				return Result{}, errors.New("背包插件必须从 Git release 分支安装后才能启用")
-			}
-			status, statusErr := releaseGitStatus(item.Path)
-			if statusErr != nil {
-				return Result{}, statusErr
-			}
-			if !isReleaseBranch(status.Branch) || status.Dirty || status.Ahead > 0 {
-				return Result{}, releaseSyncConfirmationError(status)
+			if !isGitBackpackPackage(item.Path) {
+				return Result{}, errors.New("背包插件必须位于已检出的 Git 分支才能启用")
 			}
 			break
 		}
@@ -435,8 +428,10 @@ func appsFromConfig(existing any) map[string]bool {
 	return apps
 }
 
-// ValidateEnabledBackpackRelease prevents an already-enabled legacy package
-// from bypassing the release-branch rule when a robot is started.
+// ValidateEnabledBackpackRelease prevents an already-enabled package from
+// bypassing the checked-out Git branch rule when a robot is started. Local
+// changes and commits ahead of origin are runnable; only a sync may overwrite
+// them and therefore needs the stricter releaseGitStatus check.
 func (m Manager) ValidateEnabledBackpackRelease(root string) error {
 	enabled, err := m.EnabledApps(root)
 	if err != nil {
@@ -450,18 +445,23 @@ func (m Manager) ValidateEnabledBackpackRelease(root string) error {
 		if !item.Valid || !containsString(enabled, item.Name) {
 			continue
 		}
-		if output, gitErr := gitRun(item.Path, "rev-parse", "--is-inside-work-tree"); gitErr != nil || strings.TrimSpace(output) != "true" {
-			return fmt.Errorf("背包插件 %s 必须从 Git release 分支安装后才能运行", item.Name)
-		}
-		status, statusErr := releaseGitStatus(item.Path)
-		if statusErr != nil {
-			return statusErr
-		}
-		if !isReleaseBranch(status.Branch) || status.Dirty || status.Ahead > 0 {
-			return fmt.Errorf("背包插件 %s：%w", item.Name, releaseSyncConfirmationError(status))
+		if !isGitBackpackPackage(item.Path) {
+			return fmt.Errorf("背包插件 %s 必须位于已检出的 Git 分支才能运行", item.Name)
 		}
 	}
 	return nil
+}
+
+// isGitBackpackPackage is deliberately narrower than releaseGitStatus: a
+// package's local working tree is the code that will run, so only its Git
+// checkout and branch determine whether it is eligible to run.
+func isGitBackpackPackage(path string) bool {
+	inside, err := gitRun(path, "rev-parse", "--is-inside-work-tree")
+	if err != nil || strings.TrimSpace(inside) != "true" {
+		return false
+	}
+	branch, err := gitRun(path, "symbolic-ref", "--quiet", "--short", "HEAD")
+	return err == nil && isGitBranch(branch)
 }
 
 func containsString(items []string, target string) bool {
