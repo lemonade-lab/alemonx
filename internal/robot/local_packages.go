@@ -134,6 +134,9 @@ func installProjectDependency(root, source, kind string) (Result, error) {
 	if err != nil {
 		return Result{Path: root, Output: output}, fmt.Errorf("安装%s包失败：%w", kind, err)
 	}
+	if _, ensureErr := (Manager{}).EnsureRuntimeDependencies(root); ensureErr != nil {
+		return Result{Path: root, Output: output}, ensureErr
+	}
 	return Result{Path: root, Output: "已添加" + kind + "依赖 " + source + "。\n" + output}, nil
 }
 
@@ -145,6 +148,9 @@ func removeProjectDependency(root, source, kind string) (Result, error) {
 	output, err := runNamedPackageManager(root, manager, args...)
 	if err != nil {
 		return Result{Path: root, Output: output}, fmt.Errorf("卸载%s包失败：%w", kind, err)
+	}
+	if _, ensureErr := (Manager{}).EnsureRuntimeDependencies(root); ensureErr != nil {
+		return Result{Path: root, Output: output}, ensureErr
 	}
 	return Result{Path: root, Output: "已移除" + kind + "依赖 " + source + "。\n" + output}, nil
 }

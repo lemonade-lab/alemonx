@@ -223,6 +223,7 @@ export type SystemRedisStatus = {
   mode: 'private-running' | 'fallback-running' | 'preparing-runtime' | 'migrating' | 'external-reused' | 'stopped' | 'disabled' | 'failed'
   phase?: string
   ownership: 'alemonx' | 'external' | 'none'
+  implementation?: 'MiniRedis' | 'Redis'
   running: boolean
   managed: boolean
   external: boolean

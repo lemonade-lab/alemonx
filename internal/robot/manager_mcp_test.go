@@ -309,7 +309,7 @@ func TestDependencyStatusReportsMissingDirectPackage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, expected := range []string{"依赖不完整", "missing 未安装", "重新安装依赖"} {
+	for _, expected := range []string{"依赖需要同步", "missing 未安装", "会自动同步"} {
 		if !strings.Contains(result.Output, expected) {
 			t.Fatalf("dependency status = %q, missing %q", result.Output, expected)
 		}

@@ -258,7 +258,7 @@ func (Manager) AutoPortEnabled(root string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	data, err := os.ReadFile(filepath.Join(project, "alemon.config.yaml"))
+	data, err := readRuntimeConfigFile(filepath.Join(project, "alemon.config.yaml"))
 	if errors.Is(err, os.ErrNotExist) {
 		return false, nil
 	}
@@ -287,7 +287,7 @@ func (Manager) AppPort(root string) (AppPortInfo, error) {
 	if err != nil {
 		return AppPortInfo{}, err
 	}
-	data, err := os.ReadFile(filepath.Join(project, "alemon.config.yaml"))
+	data, err := readRuntimeConfigFile(filepath.Join(project, "alemon.config.yaml"))
 	if err != nil {
 		return AppPortInfo{Port: defaultAppPort}, nil
 	}
@@ -322,7 +322,8 @@ func (Manager) EnabledApps(root string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	content, err := os.ReadFile(filepath.Join(project, "alemon.config.yaml"))
+	path := filepath.Join(project, "alemon.config.yaml")
+	content, err := readRuntimeConfigFile(path)
 	if err != nil {
 		return []string{}, nil
 	}
@@ -387,6 +388,7 @@ func (m Manager) SetAppEnabled(root, packageName string, enabled bool) (Result, 
 		}
 	}
 	result, err := m.UpdateRuntimeConfig(root, "", func(content string) (string, error) {
+		content = normalizeRuntimeConfigYAML(content)
 		var config map[string]any
 		if len(strings.TrimSpace(content)) > 0 {
 			if err := yaml.Unmarshal([]byte(content), &config); err != nil {
@@ -474,6 +476,7 @@ func containsString(items []string, target string) bool {
 // setTopLevelBooleanMap replaces exactly one top-level YAML map while leaving
 // every unrelated section, comment, and ordering decision untouched.
 func setTopLevelBooleanMap(content, key string, values map[string]bool) string {
+	content = normalizeRuntimeConfigYAML(content)
 	lines := strings.Split(strings.TrimRight(content, "\n"), "\n")
 	start, end := -1, len(lines)
 	pattern := regexp.MustCompile(`^` + regexp.QuoteMeta(key) + `\s*:`)
@@ -512,6 +515,55 @@ func setTopLevelBooleanMap(content, key string, values map[string]bool) string {
 	updated := append(append([]string{}, lines[:start]...), section...)
 	updated = append(updated, lines[end:]...)
 	return strings.Join(updated, "\n") + "\n"
+}
+
+// normalizeEmptyYAMLRoot repairs the invalid shape produced by older writers
+// when an empty YAML document (`{}`) was followed by a top-level section.
+// `{}` is a complete YAML document, so it must never precede `apps:` or any
+// other root key. Keeping this narrow repair lets existing broken projects
+// recover on their next normal configuration update.
+func normalizeEmptyYAMLRoot(content string) string {
+	lines := strings.Split(content, "\n")
+	for index, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if trimmed == "{}" {
+			return strings.Join(append(lines[:index], lines[index+1:]...), "\n")
+		}
+		break
+	}
+	return content
+}
+
+// normalizeRuntimeConfigYAML repairs narrowly-scoped legacy shapes before the
+// generic YAML parser sees them. In particular, old app toggles were sometimes
+// written without indentation directly below `apps:`, which turns a map into
+// an invalid scalar sequence.
+func normalizeRuntimeConfigYAML(content string) string {
+	content = normalizeEmptyYAMLRoot(content)
+	lines := strings.Split(content, "\n")
+	inApps := false
+	appEntry := regexp.MustCompile(`^[A-Za-z0-9@._/-]+\s*:\s*(?:true|false)\s*(?:#.*)?$`)
+	for index, line := range lines {
+		if strings.TrimSpace(line) == "apps:" && len(line) == len(strings.TrimLeft(line, " \t")) {
+			inApps = true
+			continue
+		}
+		if !inApps || strings.TrimSpace(line) == "" || strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue
+		}
+		if len(line) != len(strings.TrimLeft(line, " \t")) {
+			continue
+		}
+		if appEntry.MatchString(line) {
+			lines[index] = "  " + line
+			continue
+		}
+		inApps = false
+	}
+	return strings.Join(lines, "\n")
 }
 
 // AppPortReachable probes whether the robot's application is actually serving

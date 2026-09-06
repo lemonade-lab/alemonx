@@ -711,6 +711,9 @@ func NewServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *access.Manager, startBackground bool, options ServerOptions, templateFiles ...fs.FS) *ServerRuntime {
 	// Rehydrate command paths on every service start so a managed Node remains
 	// usable after restart without writing to the machine-wide PATH.
+	if startBackground {
+		system.ActivateNVMDefaultForProcess()
+	}
 	system.RefreshCommandEnvironment("git", "docker")
 	assets, err := fs.Sub(staticFiles, "dist")
 	if err != nil {

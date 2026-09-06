@@ -676,6 +676,19 @@ func NVMNodeBin() string {
 	return ""
 }
 
+// ActivateNVMDefaultForProcess restores the Node version selected in the
+// version manager when the workbench service starts. The selected directory
+// becomes the real process PATH, so checks, terminals and child package
+// managers all observe the same `node --version`.
+func ActivateNVMDefaultForProcess() string {
+	bin := NVMNodeBin()
+	if bin == "" {
+		return ""
+	}
+	prependCommandPath(bin)
+	return bin
+}
+
 func nvmNodeCommand(name string) string {
 	if name != "node" && name != "npm" && name != "npx" {
 		return ""

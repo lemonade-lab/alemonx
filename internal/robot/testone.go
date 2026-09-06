@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -34,7 +33,7 @@ func (Manager) TestPort(root string) (TestPortInfo, error) {
 	if err != nil {
 		return TestPortInfo{}, err
 	}
-	data, err := os.ReadFile(filepath.Join(project, "alemon.config.yaml"))
+	data, err := readRuntimeConfigFile(filepath.Join(project, "alemon.config.yaml"))
 	if err != nil {
 		return TestPortInfo{Port: defaultTestPort, ConfiguredPort: defaultTestPort, ActualPort: defaultTestPort, Source: "default"}, nil
 	}
@@ -72,7 +71,7 @@ func (Manager) TestSandboxAvailable(root string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	data, err := os.ReadFile(filepath.Join(project, "alemon.config.yaml"))
+	data, err := readRuntimeConfigFile(filepath.Join(project, "alemon.config.yaml"))
 	if err != nil {
 		// 没有配置时框架默认进入沙盒模式。
 		return true, nil

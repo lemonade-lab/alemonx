@@ -202,6 +202,60 @@ func TestSetAppEnabledTogglesLocalPackageInApps(t *testing.T) {
 	}
 }
 
+func TestSetAppEnabledRepairsEmptyObjectBeforeApps(t *testing.T) {
+	root := t.TempDir()
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"bot"}`)
+	writeAppPageFixture(t, filepath.Join(root, "alemon.config.yaml"), "{}\n\napps:\n  stale: true\n")
+	if _, err := (Manager{}).SetAppEnabled(root, "alemonjs-load-yunzai", true); err != nil {
+		t.Fatalf("SetAppEnabled repair: %v", err)
+	}
+	content, err := os.ReadFile(filepath.Join(root, "alemon.config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(content), "{}") {
+		t.Fatalf("empty object was not removed:\n%s", content)
+	}
+	apps, err := (Manager{}).EnabledApps(root)
+	if err != nil || !containsString(apps, "alemonjs-load-yunzai") {
+		t.Fatalf("apps after repair = %v, %v", apps, err)
+	}
+}
+
+func TestRuntimeConfigSaveCanonicalizesEmptyObject(t *testing.T) {
+	root := t.TempDir()
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"bot"}`)
+	if _, err := (Manager{}).UpdateRuntimeConfig(root, "", func(string) (string, error) {
+		return "{}\n", nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(filepath.Join(root, "alemon.config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(content)) != "" {
+		t.Fatalf("empty config = %q, want empty document", content)
+	}
+}
+
+func TestEnabledAppsRepairsUnindentedBooleanMap(t *testing.T) {
+	root := t.TempDir()
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"bot"}`)
+	writeAppPageFixture(t, filepath.Join(root, "alemon.config.yaml"), "apps:\nalemonjs-cheese: true\nalemonjs-openai: true\nqg-bot:\n  app_id: \"102864648\"\n")
+	apps, err := (Manager{}).EnabledApps(root)
+	if err != nil || !containsString(apps, "alemonjs-cheese") || !containsString(apps, "alemonjs-openai") {
+		t.Fatalf("EnabledApps repair = %v, %v", apps, err)
+	}
+	content, err := os.ReadFile(filepath.Join(root, "alemon.config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(content), "  alemonjs-cheese: true") || !strings.Contains(string(content), "qg-bot:\n  app_id") {
+		t.Fatalf("invalid apps indentation repair:\n%s", content)
+	}
+}
+
 func TestSetAppEnabledPreservesMappedAppsWithoutRewritingOtherConfig(t *testing.T) {
 	root := t.TempDir()
 	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"bot"}`)

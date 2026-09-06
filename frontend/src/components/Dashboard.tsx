@@ -1128,6 +1128,7 @@ export function Dashboard({
   const [output, setOutput] = useStoreState('')
   const [outputFailed, setOutputFailed] = useStoreState(false)
   const [operationLogMinimized, setOperationLogMinimized] = useStoreState(false)
+  const [operationNotices, setOperationNotices] = useState<HostToast[]>([])
   const [consoleOpen, setConsoleOpen] = useStoreState(false)
   const [consoleMinimized, setConsoleMinimized] = useStoreState(false)
   const [foregroundLogsOpen, setForegroundLogsOpen] = useStoreState(false)
@@ -1724,10 +1725,42 @@ export function Dashboard({
     []
   )
   const catalogError = catalogQueryError ? '在线目录暂时无法读取。' : ''
-  const showOutput = (message: string, failed = false) => {
+  // Details are reserved for operations whose command output is useful for
+  // diagnosis. Form validation and ordinary save/status feedback belongs in a
+  // transient notification, never in a draggable log window.
+  const showOperationDetail = (message: string, failed = false) => {
     setOutput(message)
     setOutputFailed(failed)
     setOperationLogMinimized(false)
+  }
+  const showOutput = showOperationDetail
+  const showOperationNotice = (
+    message: string,
+    type: HostToast['type'] = 'info',
+    title?: string
+  ) => {
+    const trimmedMessage = message.trim()
+    const conciseMessage =
+      trimmedMessage.length > 480
+        ? `${trimmedMessage.slice(0, 480).trimEnd()}…\n请在任务记录中查看详情。`
+        : trimmedMessage
+    setOperationNotices(items => [
+      ...items.slice(-4),
+      {
+        id: createRandomID(),
+        kind: 'notification',
+        type,
+        title:
+          title ||
+          (type === 'error'
+            ? '操作未完成'
+            : type === 'success'
+              ? '操作完成'
+              : '提示'),
+        message: conciseMessage,
+        duration: type === 'error' ? 8000 : 4500
+      }
+    ])
   }
   const queueFileSave = <T,>(key: string, operation: () => Promise<T>) => {
     const previous = fileSaveChains.current.get(key) ?? Promise.resolve()
@@ -1928,9 +1961,10 @@ export function Dashboard({
           // The original conflict notification below remains useful offline.
         }
       }
-      showOutput(
+      showOperationNotice(
         operationErrorMessage(reason, `${targetFile} 自动保存失败。`),
-        true
+        'error',
+        '自动保存失败'
       )
     }
   }
@@ -1972,7 +2006,7 @@ export function Dashboard({
         setAppPortDialog(true)
       }
     } catch (reason) {
-      showOutput(operationErrorMessage(reason, '无法读取应用端口。'), true)
+      showOperationNotice(operationErrorMessage(reason, '无法读取应用端口。'), 'error')
     } finally {
       setAppLaunching(false)
     }
@@ -1982,7 +2016,7 @@ export function Dashboard({
     if (!root) return
     const port = Number(appPortValue.trim())
     if (!Number.isInteger(port) || port < 1 || port > 65535) {
-      showOutput('应用端口应为 1-65535 之间的整数。', true)
+      showOperationNotice('应用端口应为 1-65535 之间的整数。', 'warning')
       return
     }
     setAppPortBusy(true)
@@ -2005,7 +2039,7 @@ export function Dashboard({
         setPendingAppPageID('')
       }
     } catch (reason) {
-      showOutput(operationErrorMessage(reason, '应用端口保存失败。'), true)
+      showOperationNotice(operationErrorMessage(reason, '应用端口保存失败。'), 'error')
     } finally {
       setAppPortBusy(false)
       setAppLaunching(false)
@@ -2031,12 +2065,14 @@ export function Dashboard({
       })
       const portInfo = await loadAppPort(root, true).unwrap()
       if (portInfo.drifted)
-        showOutput(
-          `应用端口已从 ${portInfo.configuredPort} 自动漂移至 ${portInfo.actualPort}。`
+        showOperationNotice(
+          `应用端口已从 ${portInfo.configuredPort} 自动调整为 ${portInfo.actualPort}。`,
+          'warning',
+          '端口已调整'
         )
       openWorkbenchBrowserPage(`/api/v1/robot/app/${robotAppToken(root)}/`)
     } catch (reason) {
-      showOutput(operationErrorMessage(reason, '应用启动失败。'), true)
+      showOperationNotice(operationErrorMessage(reason, '应用启动失败。'), 'error')
     }
   }
   const checkAppReachable = async () => {
@@ -2065,7 +2101,7 @@ export function Dashboard({
         setTestPortDialog(true)
       }
     } catch (reason) {
-      showOutput(operationErrorMessage(reason, '测试台启动失败。'), true)
+      showOperationNotice(operationErrorMessage(reason, '测试台启动失败。'), 'error')
     } finally {
       setTestLaunching(false)
     }
@@ -2075,7 +2111,7 @@ export function Dashboard({
     if (!root) return
     const port = Number(testPortValue.trim())
     if (!Number.isInteger(port) || port < 1 || port > 65535) {
-      showOutput('服务端口应为 1-65535 之间的整数。', true)
+      showOperationNotice('服务端口应为 1-65535 之间的整数。', 'warning')
       return
     }
     setTestPortBusy(true)
@@ -2086,7 +2122,7 @@ export function Dashboard({
       setTestLaunching(true)
       await launchTest()
     } catch (reason) {
-      showOutput(operationErrorMessage(reason, '服务端口保存失败。'), true)
+      showOperationNotice(operationErrorMessage(reason, '服务端口保存失败。'), 'error')
     } finally {
       setTestPortBusy(false)
       setTestLaunching(false)
@@ -2111,14 +2147,16 @@ export function Dashboard({
       await waitForRobotTask(task.id, { testReady: true })
       const portInfo = await loadTestPort(root, true).unwrap()
       if (portInfo.drifted)
-        showOutput(
-          `服务端口已从 ${portInfo.configuredPort} 自动漂移至 ${portInfo.actualPort}。`
+        showOperationNotice(
+          `服务端口已从 ${portInfo.configuredPort} 自动调整为 ${portInfo.actualPort}。`,
+          'warning',
+          '端口已调整'
         )
       setTestContentOpen(true)
       setTestMinimized(false)
       activateFloatingWindow('test')
     } catch (reason) {
-      showOutput(operationErrorMessage(reason, '测试服务启动失败。'), true)
+      showOperationNotice(operationErrorMessage(reason, '测试服务启动失败。'), 'error')
     }
   }
   const checkTestReachable = async () => {
@@ -2156,7 +2194,7 @@ export function Dashboard({
       setLiveMinimized(false)
       activateFloatingWindow('live')
     } catch (reason) {
-      showOutput(operationErrorMessage(reason, '在线聊天不可用。'), true)
+      showOperationNotice(operationErrorMessage(reason, '在线聊天不可用。'), 'error')
     }
   }
   openLiveRef.current = () => void openLive()
@@ -2164,7 +2202,7 @@ export function Dashboard({
     if (!root) return
     const port = Number(livePortValue.trim())
     if (!Number.isInteger(port) || port < 1 || port > 65535) {
-      showOutput('CBP 服务端口应为 1-65535 之间的整数。', true)
+      showOperationNotice('CBP 服务端口应为 1-65535 之间的整数。', 'warning')
       return
     }
     setLivePortBusy(true)
@@ -2174,7 +2212,7 @@ export function Dashboard({
       setLivePortDialog(false)
       requestLiveLogin()
     } catch (reason) {
-      showOutput(operationErrorMessage(reason, 'CBP 服务端口保存失败。'), true)
+      showOperationNotice(operationErrorMessage(reason, 'CBP 服务端口保存失败。'), 'error')
     } finally {
       setLivePortBusy(false)
     }
@@ -2719,7 +2757,7 @@ export function Dashboard({
     data: Record<string, string>
   ): Promise<boolean> {
     if (!root) {
-      showOutput('请先在左侧添加机器人目录。', true)
+      showOperationNotice('请先在左侧添加机器人目录。', 'warning')
       return false
     }
     setBusy(true)
@@ -2755,7 +2793,7 @@ export function Dashboard({
             : await write()
         if (data.file === 'alemon.config.yaml')
           dispatch(setRobotConfig({ root: data.root, content: data.content }))
-        showOutput(result.output ?? '操作完成。')
+        showOperationNotice(result.output ?? '已保存。', 'success')
         return true
       }
       const task = await startRobotTask(data).unwrap()
@@ -2858,9 +2896,10 @@ export function Dashboard({
       await refreshConfigDraft()
       return true
     } catch (reason) {
-      showOutput(
+      showOperationNotice(
         operationErrorMessage(reason, '配置未保存，请检查所选机器人目录。'),
-        true
+        'error',
+        '配置未保存'
       )
       return false
     }
@@ -2882,7 +2921,11 @@ export function Dashboard({
       await refreshConfigDraft()
       return true
     } catch (reason) {
-      showOutput(operationErrorMessage(reason, '登录连接设置未保存。'), true)
+      showOperationNotice(
+        operationErrorMessage(reason, '登录连接设置未保存。'),
+        'error',
+        '登录连接未保存'
+      )
       return false
     }
   }
@@ -2912,12 +2955,17 @@ export function Dashboard({
         return result
       })
       dispatch(setRobotConfig({ root, content: result.content ?? '' }))
-      showOutput(
+      showOperationNotice(
         result.output ||
-          (currentlyAuthorized ? '已取消主人授权。' : '已授权为主人。')
+          (currentlyAuthorized ? '已取消主人授权。' : '已授权为主人。'),
+        'success'
       )
     } catch (reason) {
-      showOutput(operationErrorMessage(reason, '主人权限更新失败。'), true)
+      showOperationNotice(
+        operationErrorMessage(reason, '主人权限更新失败。'),
+        'error',
+        '主人权限未更新'
+      )
     }
   }
 
@@ -3002,7 +3050,7 @@ export function Dashboard({
       })
       const targetPath = task.path
       if (!targetPath) throw new Error('克隆完成，但无法识别机器人目录。')
-      showOutput(task.output || '仓库已克隆。')
+      showOperationNotice(task.output || '仓库已克隆。', 'success')
       setGitCloneOpen(false)
       await addSelectedDirectories([targetPath])
       return 'completed'
@@ -3012,7 +3060,7 @@ export function Dashboard({
         '克隆仓库失败，请检查 Git 地址和网络。'
       )
       if (needsGitHTTPSAuthorization(message)) return 'authorization-required'
-      showOutput(message, true)
+      showOperationNotice(message, 'error', '克隆仓库失败')
       return 'failed'
     } finally {
       setBusy(false)
@@ -3062,7 +3110,7 @@ export function Dashboard({
         }
       })
       await refetchPackages()
-      showOutput(task.output || '插件包已克隆到背包。')
+      showOperationNotice(task.output || '插件包已克隆到背包。', 'success')
       setGitCloneOpen(false)
       return 'completed'
     } catch (reason) {
@@ -3071,7 +3119,7 @@ export function Dashboard({
         '克隆插件包失败，请检查 Git 地址和网络。'
       )
       if (needsGitHTTPSAuthorization(message)) return 'authorization-required'
-      showOutput(message, true)
+      showOperationNotice(message, 'error', '克隆插件包失败')
       return 'failed'
     } finally {
       setBusy(false)
@@ -3669,7 +3717,9 @@ export function Dashboard({
             {buildMode === 'manifest' ? (
               <PackageManifestPanel
                 root={root}
-                onSaveError={message => showOutput(message)}
+                onSaveError={message =>
+                  showOperationNotice(message, 'error', '配置未保存')
+                }
               />
             ) : buildMode === 'npm' ? (
               <NpmPublishPanel
@@ -3729,6 +3779,12 @@ export function Dashboard({
 
   return (
     <>
+      <HostUiToasts
+        toasts={operationNotices}
+        onDismiss={id =>
+          setOperationNotices(items => items.filter(item => item.id !== id))
+        }
+      />
       <Modal
         open={Boolean(loginDialog)}
         ariaLabel="机器人扫码登录"
@@ -4270,9 +4326,6 @@ export function Dashboard({
             foregroundLogTask ? `${foregroundLogTask.name} 日志` : undefined
           }
           zIndex={windowLayers.foregroundLogs}
-          onInstallDependencies={() =>
-            void api('POST', { root, action: 'install' })
-          }
           onOpenRuntime={() => {
             markUserNavigation()
             closeTemporaryContentPage()
@@ -9149,17 +9202,11 @@ function CatalogDetail({
           <p className="m-0 text-sm text-slate-500">
             {item.description || '在线生态目录条目'}
           </p>
-          {repositoryInstall &&
-            packageName.startsWith('git+https://github.com/') && (
-              <p className="m-0 text-xs text-slate-500">
-                已识别 GitHub 仓库，安装时会自动使用 GHFast 镜像。
-              </p>
-            )}
         </div>
         <div className="flex flex-wrap items-end justify-end gap-2">
           {releaseBranchInstall ? (
             <span className="rounded-md bg-slate-100 px-2.5 py-2 text-xs font-semibold text-slate-600">
-              release 分支
+              release
             </span>
           ) : packageName ? (
             <label className="grid gap-1 text-[11px] font-semibold text-slate-500">
@@ -9387,16 +9434,13 @@ function PackageConfigPanel({
               <PlatformLogo logo={data.logo} className="size-4" />
               运行配置
             </strong>
-            <span className="text-xs text-slate-500">
-              保存至 alemon.config.yaml · {data.namespace}.*
-            </span>
           </div>
           <div className="flex items-center gap-3">
+            <small className="text-xs text-slate-400">自动保存</small>
             <ConfigSourceLinks
               source={data.configSource}
               readmeURL={readmeURL}
             />
-            <small className="text-xs text-slate-400">修改后自动保存</small>
           </div>
         </header>
         <ConfigFieldsEditor
@@ -11178,8 +11222,8 @@ function RuntimePanel({
                 </strong>
                 <span className="block text-xs text-slate-500">
                   {overview?.dependenciesComplete
-                    ? '依赖完整；遇到模块/依赖异常时,多尝试点点'
-                    : '依赖未安装或缺失；启动、构建和后台运行时会自动同步。'}
+                    ? '已就绪；运行、构建和升级会自动确认。'
+                    : '等待自动同步；直接运行、构建或升级即可。'}
                 </span>
               </div>
               <div className="ml-auto flex shrink-0 flex-wrap justify-end gap-2">
@@ -11200,12 +11244,7 @@ function RuntimePanel({
                 </button>
                 <button
                   className="secondary-button gap-1.5"
-                  disabled={busy || !overview?.dependenciesComplete}
-                  title={
-                    !overview?.dependenciesComplete
-                      ? '启动、构建或后台运行时会自动同步依赖。'
-                      : ''
-                  }
+                  disabled={busy}
                   onClick={() =>
                     ask(
                       '升级 AlemonJS',
@@ -11216,28 +11255,6 @@ function RuntimePanel({
                 >
                   <RefreshCw className="size-4" />
                   一键升级
-                </button>
-                <button
-                  className={
-                    overview?.dependenciesComplete
-                      ? 'secondary-button gap-1.5'
-                      : 'danger-button gap-1.5'
-                  }
-                  disabled={busy}
-                  onClick={() =>
-                    ask(
-                      overview?.dependenciesComplete
-                        ? '重新安装依赖'
-                        : '安装依赖',
-                      overview?.dependenciesComplete
-                        ? '会根据 package.json 重新安装当前机器人的全部依赖。'
-                        : '会安装 package.json 声明的全部依赖。',
-                      () => onRun('install')
-                    )
-                  }
-                >
-                  <Package className="size-4" />
-                  {overview?.dependenciesComplete ? '重新安装' : '安装'}
                 </button>
               </div>
             </section>
@@ -13128,7 +13145,6 @@ function ReadonlyConsoleContent({
   root,
   onClose,
   onMinimize,
-  onInstallDependencies,
   onOpenRuntime,
   onOpenConfig,
   onOpenEnvironment,
@@ -13147,7 +13163,6 @@ function ReadonlyConsoleContent({
   root: string
   onClose: () => void
   onMinimize: () => void
-  onInstallDependencies?: () => void
   onOpenRuntime?: () => void
   onOpenConfig?: () => void
   onOpenEnvironment?: () => void
@@ -13531,7 +13546,7 @@ function ReadonlyConsoleContent({
   const foregroundLogActionLabel = (item: ForegroundLogItem) => {
     if (!item.action) return ''
     const labels: Record<NonNullable<ForegroundLogAction>, string> = {
-      'install-dependencies': '安装依赖',
+      'install-dependencies': '自动同步依赖',
       'open-runtime': '查看运行',
       'open-config': '查看配置',
       'open-environment': '环境检查',
@@ -13547,7 +13562,7 @@ function ReadonlyConsoleContent({
   const runForegroundLogAction = (item: ForegroundLogItem) => {
     switch (item.action) {
       case 'install-dependencies':
-        onInstallDependencies?.()
+        onOpenRuntime?.()
         return
       case 'open-runtime':
         onOpenRuntime?.()
@@ -13907,7 +13922,7 @@ function ReadonlyConsoleContent({
                             )}
                           </span>
                           <span className="smart-log-line-actions">
-                            {item.action && (
+                            {item.action && item.action !== 'install-dependencies' && (
                               <button
                                 onClick={() => runForegroundLogAction(item)}
                               >

@@ -291,15 +291,15 @@ export function ServiceControlCard() {
               : '安装 AlemonX 后台服务'
             : serviceAction === 'uninstall'
               ? '卸载 AlemonX 后台服务'
-            : serviceAction === 'enable-startup'
-              ? '开启开机自启'
-              : serviceAction === 'disable-startup'
-                ? '关闭开机自启'
-                : serviceAction === 'enable-linger'
-                  ? '启用 Linux 无登录运行'
-                  : serviceAction === 'stop'
-                    ? '停止 AlemonX 服务'
-                    : '重启 AlemonX 服务'
+              : serviceAction === 'enable-startup'
+                ? '开启开机自启'
+                : serviceAction === 'disable-startup'
+                  ? '关闭开机自启'
+                  : serviceAction === 'enable-linger'
+                    ? '启用 Linux 无登录运行'
+                    : serviceAction === 'stop'
+                      ? '停止 AlemonX 服务'
+                      : '重启 AlemonX 服务'
         }
         subtitle={
           serviceAction === 'install'
@@ -308,15 +308,15 @@ export function ServiceControlCard() {
               : ''
             : serviceAction === 'uninstall'
               ? '移除后台服务注册与开机自启，不删除工作台数据与机器人项目。'
-            : serviceAction === 'enable-startup'
-              ? '登录后自动启动 AlemonX 服务，异常退出仍会由系统拉起。'
-              : serviceAction === 'disable-startup'
-                ? '下次登录时不会自动启动；当前运行中的服务不受影响。'
-                : serviceAction === 'enable-linger'
-                  ? '此操作可能需要系统管理员授权。'
-                  : serviceAction === 'stop' && serviceInstalled === false
-                    ? '未安装后台守护服务；这会关闭当前前台运行的工作台服务。'
-                    : '仅影响工作台后台服务，不会停止机器人项目。'
+              : serviceAction === 'enable-startup'
+                ? '登录后自动启动 AlemonX 服务，异常退出仍会由系统拉起。'
+                : serviceAction === 'disable-startup'
+                  ? '下次登录时不会自动启动；当前运行中的服务不受影响。'
+                  : serviceAction === 'enable-linger'
+                    ? '此操作可能需要系统管理员授权。'
+                    : serviceAction === 'stop' && serviceInstalled === false
+                      ? '未安装后台守护服务；这会关闭当前前台运行的工作台服务。'
+                      : '仅影响工作台后台服务，不会停止机器人项目。'
         }
         message={
           serviceAction === 'install'
@@ -325,13 +325,13 @@ export function ServiceControlCard() {
               : '当前前台工作台会关闭，并切换为系统后台服务；页面恢复连接后会自动刷新。'
             : serviceAction === 'uninstall'
               ? '卸载后需要手动运行 alx 才能再次打开工作台；页面会断开连接。'
-            : serviceAction === 'enable-linger'
-              ? '启用后，Linux 重启或用户退出登录时，已安装的 ALemonX systemd 用户服务仍可自动运行。'
-              : serviceAction === 'stop'
-                ? serviceInstalled === false
-                  ? '当前页面会断开连接；之后可从启动应用的位置重新打开工作台。'
-                  : '服务停止后，工作台页面将无法继续连接，直到你从系统服务或命令行重新启动它。'
-                : '工作台会短暂断开，服务恢复后可重新打开页面。'
+              : serviceAction === 'enable-linger'
+                ? '启用后，Linux 重启或用户退出登录时，已安装的 ALemonX systemd 用户服务仍可自动运行。'
+                : serviceAction === 'stop'
+                  ? serviceInstalled === false
+                    ? '当前页面会断开连接；之后可从启动应用的位置重新打开工作台。'
+                    : '服务停止后，工作台页面将无法继续连接，直到你从系统服务或命令行重新启动它。'
+                  : '工作台会短暂断开，服务恢复后可重新打开页面。'
         }
         confirmLabel={
           serviceAction === 'install'
@@ -340,11 +340,11 @@ export function ServiceControlCard() {
               : '安装并启动'
             : serviceAction === 'uninstall'
               ? '确认卸载'
-            : serviceAction === 'enable-linger'
-              ? '确认启用'
-              : serviceAction === 'stop'
-                ? '确认停止'
-                : '确认重启'
+              : serviceAction === 'enable-linger'
+                ? '确认启用'
+                : serviceAction === 'stop'
+                  ? '确认停止'
+                  : '确认重启'
         }
         busy={busy}
         onCancel={() => setServiceAction(null)}

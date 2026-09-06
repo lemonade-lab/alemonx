@@ -175,7 +175,7 @@ var pm2DiagnosticRules = []pm2DiagnosticRule{
 		severity:   "error",
 		title:      "插件运行模块缺失",
 		summary:    "插件引用的运行模块不存在，相关功能可能加载或执行失败。",
-		suggestion: "检查报错插件的依赖声明和安装状态，重新安装依赖或升级产生该引用的插件。",
+		suggestion: "检查报错插件的依赖声明和版本；下次运行会自动同步依赖，必要时升级产生该引用的插件。",
 		match: func(text string) bool {
 			return strings.Contains(strings.ToLower(text), "cannot find module")
 		},

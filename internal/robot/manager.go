@@ -43,6 +43,30 @@ func (ConfigRevisionConflict) Error() string {
 
 var runtimeConfigLocks sync.Map // map[string]*sync.Mutex, keyed by project path
 
+// readRuntimeConfigFile returns a runtime configuration after applying the
+// small, unambiguous migrations that make legacy incremental writes valid
+// YAML again. Keeping this at the file boundary means every reader sees the
+// same document that the runtime will receive, rather than only the editor
+// save path repairing it.
+func readRuntimeConfigFile(path string) ([]byte, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	normalized := normalizeRuntimeConfigYAML(string(data))
+	if normalized == string(data) {
+		return data, nil
+	}
+	mode := os.FileMode(0o600)
+	if info, statErr := os.Stat(path); statErr == nil {
+		mode = info.Mode().Perm()
+	}
+	if err := writeFileAtomically(path, []byte(normalized), mode); err != nil {
+		return nil, fmt.Errorf("修复运行配置失败：%w", err)
+	}
+	return []byte(normalized), nil
+}
+
 func runtimeConfigRevision(content string) string {
 	sum := sha256.Sum256([]byte(content))
 	return fmt.Sprintf("%x", sum[:])
@@ -73,6 +97,10 @@ func (m Manager) UpdateRuntimeConfig(root, expectedRevision string, update func(
 	if err != nil {
 		return Result{}, err
 	}
+	// Keep an empty runtime configuration as an empty document. `{}` is valid
+	// YAML, but it is a complete root value and cannot safely be followed by
+	// incremental top-level settings such as `apps:` or `serverPort:`.
+	next = normalizeRuntimeConfigYAML(next)
 	if err := writeFileAtomically(path, []byte(next), 0o600); err != nil {
 		return Result{}, fmt.Errorf("保存 alemon.config.yaml 失败：%w", err)
 	}
@@ -676,11 +704,11 @@ func (m Manager) RuntimePreflight(root string) (RuntimePreflight, error) {
 	if err != nil {
 		return RuntimePreflight{}, err
 	}
-	content, err := os.ReadFile(filepath.Join(path, "alemon.config.yaml"))
+	content, err := readRuntimeConfigFile(filepath.Join(path, "alemon.config.yaml"))
 	if err != nil && !os.IsNotExist(err) {
 		return RuntimePreflight{}, fmt.Errorf("无法读取机器人运行配置：%w", err)
 	}
-	content = []byte(stripYAMLBOM(string(content)))
+	content = []byte(normalizeRuntimeConfigYAML(string(content)))
 	preflight := RuntimePreflight{Missing: []string{}, Summary: []string{}}
 	dependencies, dependencyErr := m.RuntimeDependencies(root)
 	if dependencyErr != nil {
@@ -755,18 +783,21 @@ func (Manager) RuntimeDependencies(root string) ([]string, error) {
 	if err != nil || json.Unmarshal(data, &manifest) != nil {
 		return nil, errors.New("无法读取 package.json")
 	}
-	if _, err := os.Stat(filepath.Join(path, "node_modules")); err != nil {
-		if os.IsNotExist(err) {
-			return []string{"未发现 node_modules，请先重载依赖"}, nil
-		}
-		return nil, fmt.Errorf("无法检查 node_modules：%w", err)
-	}
 	packages := map[string]bool{}
 	for name := range manifest.Dependencies {
 		packages[name] = true
 	}
 	for name := range manifest.DevDependencies {
 		packages[name] = true
+	}
+	if len(packages) == 0 {
+		return nil, nil
+	}
+	if _, err := os.Stat(filepath.Join(path, "node_modules")); err != nil {
+		if os.IsNotExist(err) {
+			return []string{"未发现 node_modules，等待自动同步"}, nil
+		}
+		return nil, fmt.Errorf("无法检查 node_modules：%w", err)
 	}
 	missing := []string{}
 	for name := range packages {
@@ -793,9 +824,13 @@ func (m Manager) EnsureRuntimeDependencies(root string) (string, error) {
 	if len(missing) == 0 {
 		return "", nil
 	}
-	prefix := "检测到依赖不完整（" + strings.Join(missing, "、") + "），正在自动同步依赖。"
 	output, installErr := m.installRuntimeDependencies(root, "自动同步依赖")
-	return prefix + "\n" + output, installErr
+	if installErr != nil {
+		return output, installErr
+	}
+	// Successful preparation is deliberately silent: it is only a prerequisite
+	// of the runtime action the user actually requested.
+	return "", nil
 }
 
 // installRuntimeDependencies verifies the package manager's result on disk so
@@ -1550,6 +1585,9 @@ func (Manager) scriptCommand(root, script string) (*exec.Cmd, error) {
 	if err := project(root); err != nil {
 		return nil, err
 	}
+	if _, err := (Manager{}).EnsureRuntimeDependencies(root); err != nil {
+		return nil, err
+	}
 	if !(Manager{}).HasScript(root, script) {
 		return nil, fmt.Errorf("package.json 未配置 %q 启动脚本", script)
 	}
@@ -1617,6 +1655,7 @@ func (m Manager) Write(root, name, content string) (Result, error) {
 	}
 	mode := os.FileMode(0o644)
 	if filepath.Base(path) == "alemon.config.yaml" {
+		content = normalizeRuntimeConfigYAML(content)
 		// Runtime configuration can include bot and master keys. Keep it private
 		// even when it was first created through the workbench.
 		mode = 0o600
@@ -1706,8 +1745,9 @@ func (m Manager) Run(root, action, message, packageName, version, tag, token str
 	}
 	dependencyOutput := ""
 	if map[string]bool{
-		"build": true, "dev": true, "app": true, "pm2": true,
+		"build": true, "dev": true, "app": true, "pm2": true, "upgrade-alemon": true,
 		"pm2-restart": true, "pm2-reload": true,
+		"pm2-process-start": true, "pm2-process-restart": true, "pm2-process-reload": true,
 	}[action] {
 		var dependencyErr error
 		dependencyOutput, dependencyErr = m.EnsureRuntimeDependencies(root)
@@ -1740,7 +1780,7 @@ func (m Manager) Run(root, action, message, packageName, version, tag, token str
 		if len(missing) == 0 {
 			checks = append(checks, "已检查全部直接依赖，当前安装完整。")
 		} else {
-			checks = append(checks, "依赖不完整："+strings.Join(missing, "、"), "请执行“重新安装依赖”后再运行。")
+			checks = append(checks, "依赖需要同步："+strings.Join(missing, "、"), "启动、构建和升级时会自动同步。")
 		}
 		return Result{Path: root, Output: strings.Join(checks, "\n")}, nil
 	case "install":
@@ -2003,8 +2043,11 @@ func (m Manager) syncLocalPackageOperation(root string, operation func() (Result
 		return result, operationErr
 	}
 	output, dependencyErr := m.SyncWorkspaceDependencies(root)
-	result.Output = strings.TrimSpace(result.Output + "\n" + output)
-	return result, dependencyErr
+	if dependencyErr != nil {
+		result.Output = strings.TrimSpace(result.Output + "\n" + output)
+		return result, dependencyErr
+	}
+	return result, nil
 }
 
 func allowedInstallPackage(name string) bool {
@@ -2174,10 +2217,11 @@ func nodeToolPath(name string) string {
 }
 
 func applyManagedNodeEnvironment(command *exec.Cmd) {
-	bin := system.ManagedNodeBin()
-	if bin == "" {
+	node, err := system.ResolveCommand("node")
+	if err != nil || !filepath.IsAbs(node) {
 		return
 	}
+	bin := filepath.Dir(node)
 	if command.Env == nil {
 		command.Env = os.Environ()
 	}
@@ -2274,16 +2318,13 @@ func runNamedPackageManager(root, manager string, args ...string) (string, error
 	return output, err
 }
 
-// packageManagerEnvironment makes GUI-launched setup processes honour the
-// user's Node version manager. On macOS a process launched before nvm is
-// loaded often keeps Homebrew's non-LTS Node in PATH, while the terminal has
-// the intended LTS version. Prefer .nvmrc, then nvm's default alias.
+// packageManagerEnvironment places the same Node binary resolved for this
+// process ahead of package-manager scripts. It must never select NVM's
+// `default` alias independently: all surfaces follow `node --version`.
 func packageManagerEnvironment(root string) map[string]string {
 	values := map[string]string{}
-	if bin := system.NVMNodeBin(); bin != "" {
-		values["PATH"] = bin + string(os.PathListSeparator) + os.Getenv("PATH")
-	} else if bin := system.ManagedNodeBin(); bin != "" {
-		values["PATH"] = bin + string(os.PathListSeparator) + os.Getenv("PATH")
+	if node, err := system.ResolveCommand("node"); err == nil && filepath.IsAbs(node) {
+		values["PATH"] = filepath.Dir(node) + string(os.PathListSeparator) + os.Getenv("PATH")
 	}
 	return values
 }

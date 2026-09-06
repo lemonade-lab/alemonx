@@ -21,7 +21,7 @@ func (m Manager) SetMasterAuthorization(root, userID string, enabled bool) (Resu
 		return Result{}, errors.New("主人用户 ID 无效")
 	}
 	return m.UpdateRuntimeConfig(root, "", func(content string) (string, error) {
-		content = stripYAMLBOM(content)
+		content = normalizeRuntimeConfigYAML(content)
 		parsed := map[string]any{}
 		if strings.TrimSpace(content) != "" {
 			if err := yaml.Unmarshal([]byte(content), &parsed); err != nil {

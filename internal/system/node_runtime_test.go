@@ -2,6 +2,7 @@ package system
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -109,7 +110,7 @@ func TestManagedNodeCommandResolvesBundledRuntime(t *testing.T) {
 	t.Fatalf("PATH = %q, want managed Node bin %q", os.Getenv("PATH"), bin)
 }
 
-func TestNVMNodeCommandTakesPriorityOverSystemNode(t *testing.T) {
+func TestResolveCommandNodeFollowsCurrentPath(t *testing.T) {
 	isolateUserNVM(t)
 	cache := t.TempDir()
 	previousCache := userCacheDir
@@ -128,8 +129,19 @@ func TestNVMNodeCommandTakesPriorityOverSystemNode(t *testing.T) {
 		if got := nvmNodeCommand(name); got != path {
 			t.Fatalf("nvmNodeCommand(%q) = %q, want %q", name, got, path)
 		}
-		if got, err := ResolveCommand(name); err != nil || got != path {
-			t.Fatalf("ResolveCommand(%q) = %q, %v; want %q", name, got, err, path)
+	}
+	current := t.TempDir()
+	for _, name := range []string{"node", "npm", "npx"} {
+		path := filepath.Join(current, name)
+		if err := os.WriteFile(path, []byte("#!/bin/sh\necho v22.22.3\n"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", current)
+	for _, name := range []string{"node", "npm", "npx"} {
+		want := filepath.Join(current, name)
+		if got, err := ResolveCommand(name); err != nil || got != want {
+			t.Fatalf("ResolveCommand(%q) = %q, %v; want current PATH command %q", name, got, err, want)
 		}
 	}
 }
@@ -163,6 +175,35 @@ func TestNVMStatusDoesNotTreatManagedDefaultAsCurrentNode(t *testing.T) {
 	}
 	if got := NVMNodeBin(); got != filepath.Join(directory, "versions", "node", "v22.22.3", "bin") {
 		t.Fatalf("NVMNodeBin() = %q, want default version bin", got)
+	}
+}
+
+func TestActivateNVMDefaultForProcessMakesDefaultNodeCurrent(t *testing.T) {
+	isolateUserNVM(t)
+	cache := t.TempDir()
+	previousCache := userCacheDir
+	userCacheDir = func() (string, error) { return cache, nil }
+	t.Cleanup(func() { userCacheDir = previousCache })
+	directory := filepath.Join(cache, "alemonx", "environments", "nvm", nvmVersion)
+	bin := filepath.Join(directory, "versions", "node", "v22.22.3", "bin")
+	if err := os.MkdirAll(filepath.Join(directory, "alias"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(bin, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bin, "node"), []byte("#!/bin/sh\necho v22.22.3\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "alias", "default"), []byte("v22.22.3\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", t.TempDir())
+	if got := ActivateNVMDefaultForProcess(); got != bin {
+		t.Fatalf("ActivateNVMDefaultForProcess() = %q, want %q", got, bin)
+	}
+	if path, err := exec.LookPath("node"); err != nil || path != filepath.Join(bin, "node") {
+		t.Fatalf("node after activation = %q, %v", path, err)
 	}
 }
 

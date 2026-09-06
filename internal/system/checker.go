@@ -564,10 +564,15 @@ func parseNodeVersion(value string) ([3]int, bool) {
 }
 
 // ResolveCommand resolves a prerequisite without relying solely on the PATH
-// captured when AlemonX started. An NVM-selected Node runtime deliberately
-// wins over an older system Node so installs immediately use the LTS chosen
-// through the workbench.
+// captured when AlemonX started. Node tools always respect the actual PATH
+// first: nvm changes must take effect through `node --version`, rather than a
+// separate default-version fallback inside the workbench.
 func ResolveCommand(name string) (string, error) {
+	if name == "node" || name == "npm" || name == "npx" {
+		if path, err := exec.LookPath(name); err == nil {
+			return path, nil
+		}
+	}
 	if path := nvmNodeCommand(name); path != "" {
 		return path, nil
 	}

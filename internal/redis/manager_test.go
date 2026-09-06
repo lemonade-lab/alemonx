@@ -53,6 +53,9 @@ func TestManagerStartsAndStopsTemporaryRedis(t *testing.T) {
 	if !status.Running || !status.Managed || status.External {
 		t.Fatalf("running status = %+v", status)
 	}
+	if status.Implementation != "MiniRedis" {
+		t.Fatalf("temporary implementation = %q, want MiniRedis", status.Implementation)
+	}
 	if status.Port != manager.config.Port {
 		t.Fatalf("port mismatch: config %d, status %d", manager.config.Port, status.Port)
 	}
@@ -259,6 +262,9 @@ func TestManagerSkipsStartWhenExternalRedisOccupiesPort(t *testing.T) {
 	status := manager.Status()
 	if !status.Running || !status.External || status.Managed || !status.Skipped {
 		t.Fatalf("external status = %+v", status)
+	}
+	if status.Implementation != "Redis" {
+		t.Fatalf("external implementation = %q, want Redis", status.Implementation)
 	}
 	if !strings.Contains(status.Message, "已跳过启动") {
 		t.Fatalf("external message = %q", status.Message)

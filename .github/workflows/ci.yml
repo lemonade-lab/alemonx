@@ -110,6 +110,21 @@ jobs:
           merge-multiple: true
       - run: |
           release_base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}"
+          # Publish the Windows Redis runtime separately from the ALemonX
+          # application package. The application downloads this index after
+          # first launch to upgrade from miniredis.
+          redis_url="https://github.com/tporadowski/redis/releases/download/v5.0.14.1/Redis-x64-5.0.14.1.zip"
+          redis_archive="release/redis-runtime-v5.0.14.1-windows-amd64.zip"
+          curl --fail --location --retry 3 --retry-delay 2 "$redis_url" --output "$redis_archive"
+          unzip -l "$redis_archive" | grep -E '(^|/)redis-server\.exe$' >/dev/null || {
+            echo "Windows Redis runtime archive does not contain redis-server.exe" >&2
+            exit 1
+          }
+          redis_sha256="$(sha256sum "$redis_archive" | awk '{print $1}')"
+          redis_size="$(stat -c '%s' "$redis_archive")"
+          cat > release/redis-runtime-index.json <<EOF
+          {"version":"v5.0.14.1","assets":[{"os":"windows","arch":"amd64","url":"${release_base}/redis-runtime-v5.0.14.1-windows-amd64.zip","sha256":"${redis_sha256}","size":${redis_size},"archive":"zip","binary":"redis-server.exe"}]}
+          EOF
           checksum() { awk -v name="$1" '$2 == name { print $1 }' release/SHA256SUMS; }
           cat release/*.sha256 > release/SHA256SUMS
           printf '{"tag":"%s","name":"AlemonX %s","url":"https://github.com/%s/releases/tag/%s","assets":[' "${GITHUB_REF_NAME}" "${GITHUB_REF_NAME}" "${GITHUB_REPOSITORY}" "${GITHUB_REF_NAME}" > release/alx-update-index.json

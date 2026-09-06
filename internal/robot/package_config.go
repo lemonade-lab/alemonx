@@ -167,7 +167,7 @@ func packageConfigFromManifest(path string, data []byte, subject string) (Packag
 	if len(declaration.Config) == 0 {
 		return config, nil
 	}
-	content, err := os.ReadFile(filepath.Join(path, "alemon.config.yaml"))
+	content, err := readRuntimeConfigFile(filepath.Join(path, "alemon.config.yaml"))
 	if err != nil && !os.IsNotExist(err) {
 		return PackageConfig{}, fmt.Errorf("无法读取机器人运行配置：%w", err)
 	}
@@ -317,6 +317,7 @@ func (m Manager) ClearLogin(root string) (Result, error) {
 
 // setTopLevelScalar replaces or appends a quoted top-level YAML scalar.
 func setTopLevelScalar(content, key, value string) string {
+	content = normalizeRuntimeConfigYAML(content)
 	pattern := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(key) + `:\s*([^#\r\n]*)(\s+#.*)?$`)
 	line := key + ": " + value
 	if pattern.MatchString(content) {
@@ -341,8 +342,7 @@ func removeTopLevelScalar(content, key string) string {
 }
 
 func readConfigValues(content string, namespaces []string, fields []packageschema.Field) (map[string]any, error) {
-	content = stripYAMLBOM(content)
-	content = dedupeYAMLSections(content)
+	content = dedupeYAMLSections(normalizeRuntimeConfigYAML(content))
 	root := map[string]any{}
 	if strings.TrimSpace(content) != "" {
 		if err := yaml.Unmarshal([]byte(content), &root); err != nil {
@@ -383,7 +383,7 @@ func readConfigValues(content string, namespaces []string, fields []packageschem
 // section is regenerated in schema order; other sections and their comments
 // are preserved verbatim.
 func mergeConfigValuesWithLegacy(content, namespace, legacyNamespace string, fields []packageschema.Field, values map[string]any) (string, error) {
-	content = stripYAMLBOM(content)
+	content = dedupeYAMLSections(normalizeRuntimeConfigYAML(content))
 	lines := strings.Split(strings.TrimRight(content, "\n"), "\n")
 	if len(lines) == 1 && lines[0] == "" {
 		lines = nil

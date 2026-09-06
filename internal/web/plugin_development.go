@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"alemonx/internal/robot"
 	"alemonx/internal/setupplugin"
 	"alemonx/internal/system"
 )
@@ -433,6 +434,15 @@ func (m *pluginDevelopmentManager) build(id string) (pluginDevelopmentView, erro
 	log := &pluginDevelopmentLog{}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
+	if err := ensurePluginDevelopmentDependencies(source); err != nil {
+		m.mu.Lock()
+		if m.sessions[id] == session && session.operation == "构建" {
+			session.operation, session.state, session.lastError, session.updatedAt = "", previousState, err.Error(), time.Now()
+		}
+		view := m.viewLocked(session)
+		m.mu.Unlock()
+		return view, err
+	}
 	program, args, environment, notice := system.PrepareDevelopmentCommand(command.Program, expandDevelopmentArgs(command.Args, 0))
 	run := exec.CommandContext(ctx, program, args...)
 	run.Dir, run.Stdout, run.Stderr = source, log, log
@@ -573,6 +583,9 @@ func startPluginDevelopmentCommand(source string, command *setupplugin.CommandSp
 	if command == nil {
 		return nil, errors.New("缺少开发命令")
 	}
+	if err := ensurePluginDevelopmentDependencies(source); err != nil {
+		return nil, err
+	}
 	log := &pluginDevelopmentLog{}
 	program, args, environment, notice := system.PrepareDevelopmentCommand(command.Program, expandDevelopmentArgs(command.Args, port))
 	run := exec.Command(program, args...)
@@ -588,6 +601,19 @@ func startPluginDevelopmentCommand(source string, command *setupplugin.CommandSp
 	process := &pluginDevelopmentProcess{command: run, done: make(chan struct{}), port: port, log: log}
 	go func() { _ = run.Wait(); close(process.done) }()
 	return process, nil
+}
+
+// ensurePluginDevelopmentDependencies applies the same quiet Node dependency
+// preparation to source plugins. Non-Node plugins have no package manifest and
+// deliberately bypass this step.
+func ensurePluginDevelopmentDependencies(source string) error {
+	if _, err := os.Stat(filepath.Join(source, "package.json")); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	_, err := (robot.Manager{}).EnsureRuntimeDependencies(source)
+	return err
 }
 
 func expandDevelopmentArgs(args []string, port int) []string {

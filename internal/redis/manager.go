@@ -52,9 +52,13 @@ type Config struct {
 
 // Status is the manager state returned to the workbench.
 type Status struct {
-	Mode             string `json:"mode"`
-	Phase            string `json:"phase,omitempty"`
-	Ownership        string `json:"ownership"`
+	Mode      string `json:"mode"`
+	Phase     string `json:"phase,omitempty"`
+	Ownership string `json:"ownership"`
+	// Implementation identifies the actual Redis implementation behind the
+	// stable public endpoint. MiniRedis is the temporary Go fallback; Redis is
+	// either the application-private runtime or an external Redis service.
+	Implementation   string `json:"implementation,omitempty"`
 	Running          bool   `json:"running"`
 	Managed          bool   `json:"managed"`
 	External         bool   `json:"external"`
@@ -453,6 +457,12 @@ func (m *Manager) statusLocked() Status {
 	port := m.config.Port
 	managed := m.server != nil || m.private
 	external := m.external
+	implementation := ""
+	if m.server != nil {
+		implementation = "MiniRedis"
+	} else if m.private || m.external {
+		implementation = "Redis"
+	}
 	message := m.message
 	if m.config.Disabled {
 		message = "内置 Redis 已禁用；可在设置中重新启用。"
@@ -476,6 +486,7 @@ func (m *Manager) statusLocked() Status {
 		Mode:             m.modeForStatusLocked(managed, external),
 		Phase:            m.phase,
 		Ownership:        ownershipFor(managed, external),
+		Implementation:   implementation,
 		Running:          managed || external,
 		Managed:          managed,
 		External:         external,

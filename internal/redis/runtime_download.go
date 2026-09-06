@@ -26,7 +26,7 @@ const (
 
 // runtimeIndexURL is deliberately a variable so release smoke tests can use a
 // local signed-off fixture without changing production behaviour.
-var runtimeIndexURL = "https://github.com/lemonade-lab/alemonjs-setup/releases/latest/download/redis-runtime-index.json"
+var runtimeIndexURL = "https://github.com/lemonade-lab/alemonx/releases/latest/download/redis-runtime-index.json"
 
 type runtimeIndex struct {
 	Version string         `json:"version"`
@@ -76,7 +76,11 @@ func (m *Manager) activatePreparedRuntime() {
 }
 
 func downloadAndActivateRuntime(ctx context.Context, base string) (string, error) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, runtimeIndexURL, nil)
+	indexURL := strings.TrimSpace(os.Getenv("ALX_REDIS_RUNTIME_INDEX_URL"))
+	if indexURL == "" {
+		indexURL = runtimeIndexURL
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, indexURL, nil)
 	if err != nil {
 		return "", err
 	}

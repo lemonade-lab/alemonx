@@ -29,7 +29,7 @@ func (Manager) SandboxConfig(root string) (string, func(), error) {
 		return "", noop, err
 	}
 	configFile := filepath.Join(project, "alemon.config.yaml")
-	data, err := os.ReadFile(configFile)
+	data, err := readRuntimeConfigFile(configFile)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return "", noop, nil
