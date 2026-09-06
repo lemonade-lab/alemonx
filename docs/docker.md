@@ -88,7 +88,7 @@ make docker-build
 ALX_IMAGE=alemonx:local docker compose up -d
 ```
 
-构建使用多阶段镜像：Node 阶段生成嵌入式前端，Go 阶段交叉编译静态 `alx`，最终镜像继承腾讯云 `ccr.ccs.tencentyun.com/ningmengchongshui/alemonbase:latest`。基础镜像负责 Node、Git、SSH、Chromium 和系统库；应用镜像只复制工作台二进制，因此代码构建不会重复安装系统包。`latest` 内的 Node 版本由 `Dockerfile.base` 的 `FROM node:22` 决定。
+前端会在启动 Docker 构建的设备上先生成仓库根目录的 `dist/`，随后作为静态资源复制进 Go 构建阶段；因此 Vite 不会运行在 Docker/Buildx 的虚拟化或跨架构模拟环境中。本地使用 `make docker-build`，多架构使用 `make docker-buildx`，两者都会自动完成该步骤。应用镜像随后由 Go 阶段交叉编译静态 `alx`，最终继承腾讯云 `ccr.ccs.tencentyun.com/ningmengchongshui/alemonbase:latest`。基础镜像负责 Node、Git、SSH、Chromium 和系统库；应用镜像不会重复安装系统包。`latest` 内的 Node 版本由 `Dockerfile.base` 的 `FROM node:22` 决定。
 
 镜像内置 Noto CJK 与 Emoji 字体以及 **Chromium 浏览器**：机器人图片消息（jsxp 渲染）中文与表情显示正常，Puppeteer/Playwright 等浏览器自动化开箱可用（无需自行下载）。容器以 root 运行，浏览器或 QQ/NapCat 的 Electron 运行时必须使用 `--no-sandbox`；QQ 插件会自动添加该参数。镜像体积会因此明显增大（Chromium 约 500MB）。
 

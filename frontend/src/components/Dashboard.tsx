@@ -277,7 +277,7 @@ type FloatingWindowID =
   | 'ops'
   | `system:${string}`
 type Props = {
-  report: { checks: Check[] } | null
+  report: { checks: Check[]; container?: boolean } | null
   checking: boolean
   error: string
   defaultPage: string
@@ -6412,7 +6412,7 @@ function EnvironmentPage({
   onFix,
   sidebarLayout = false
 }: {
-  report: { checks: Check[] } | null
+  report: { checks: Check[]; container?: boolean } | null
   checking: boolean
   onRefresh: () => void
   onFix: (check: Check) => void
@@ -6515,6 +6515,11 @@ function EnvironmentPage({
 
       {showGeneral && !checking && checks.length > 0 && (
         <div className="grid gap-1.5 py-3">
+          {report?.container && (
+            <p className="m-0 text-xs leading-5 text-slate-500 dark:text-slate-400">
+              Docker 环境的运行库由镜像提供；这里仅展示检查结果。
+            </p>
+          )}
           {orderedChecks.map(check => {
             const ready = check.status === 'ready'
             return (
@@ -6559,7 +6564,7 @@ function EnvironmentPage({
                     </small>
                   )}
                 </div>
-                {!ready && (
+                {!ready && !report?.container && (
                   <button
                     className="shrink-0 self-center rounded-md px-2 py-1 text-xs font-semibold text-brand-600 transition-colors hover:bg-white dark:text-brand-200 dark:hover:bg-slate-900"
                     onClick={() => onFix(check)}

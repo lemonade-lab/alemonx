@@ -73,6 +73,8 @@ var (
 	workspaceRoot   string
 	materialized    = map[string]string{}
 	provisionErrors = map[string]string{}
+	nodeProgram     = "node"
+	nodeEnvironment []string
 
 	// provisionRunner executes an install command inside a directory. It is a
 	// variable so tests can substitute a stub that never touches the network.
@@ -81,6 +83,9 @@ var (
 		defer cancel()
 		cmd := exec.CommandContext(ctx, command, args...)
 		cmd.Dir = directory
+		if len(nodeEnvironment) > 0 && command == nodeProgram {
+			cmd.Env = append([]string(nil), nodeEnvironment...)
+		}
 		output, err := cmd.CombinedOutput()
 		if err != nil {
 			message := strings.TrimSpace(string(output))
@@ -104,6 +109,15 @@ func Init(root fs.FS, layout workspace.Layout) {
 	workspaceRoot = layout.Root
 	materialized = map[string]string{}
 	provisionErrors = map[string]string{}
+}
+
+// SetNodeRuntime configures embedded JavaScript tools to use ALemonX's current
+// Node runtime instead of resolving a second bare `node` command.
+func SetNodeRuntime(program string, environment []string) {
+	mu.Lock()
+	defer mu.Unlock()
+	nodeProgram = program
+	nodeEnvironment = append([]string(nil), environment...)
 }
 
 // ToolCommand returns the command line used to run a tool:
@@ -130,7 +144,7 @@ func ToolCommand(name string) (string, []string, bool) {
 	if info, err := os.Stat(entry); err != nil || info.IsDir() {
 		return "", nil, false
 	}
-	return "node", []string{entry}, true
+	return nodeProgram, []string{entry}, true
 }
 
 // MaterializeNVM writes the reviewed, embedded NVM bundle to target. The

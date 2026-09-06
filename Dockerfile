@@ -1,16 +1,12 @@
 # Runtime system dependencies are maintained in a separately released image.
 ARG ALX_RUNTIME_BASE=ccr.ccs.tencentyun.com/ningmengchongshui/alemonbase:latest
 
-# 前端构建阶段 - 构建 React 工作台
-FROM node:22.22.3 AS frontend
-WORKDIR /src/frontend
-COPY frontend/package.json frontend/yarn.lock ./
-RUN corepack enable && yarn install --frozen-lockfile --non-interactive
-COPY frontend/ ./
-RUN yarn build
+# Keep the application image independent from an accidentally stale runtime
+# base tag. The exact Node runtime is copied into the final stage below.
+FROM node:22.22.3 AS node-runtime
 
 # 资源准备阶段 - 安装 Yarn 依赖
-FROM node:22.22.3 AS resources
+FROM node-runtime AS resources
 WORKDIR /out
 COPY resources/packages/yarn/package.json resources/packages/yarn/package-lock.json ./yarn/
 RUN (cd yarn && npm ci --no-bin-links --ignore-scripts --no-audit --no-fund)
@@ -36,7 +32,10 @@ RUN go mod download
 
 # 复制源代码和其他资源
 COPY . ./
-COPY --from=frontend /src/dist ./dist
+# The workbench is compiled by the machine that invokes Docker (or the CI
+# runner) before this build starts. Keeping Vite out of BuildKit avoids the
+# virtualized/emulated CPU bottleneck, especially during multi-platform builds.
+COPY dist ./dist
 COPY --from=resources /out ./resources/packages
 
 # 打包 go 支持多架构
@@ -56,8 +55,10 @@ RUN set -eu; \
 # 最终运行阶段
 FROM ${ALX_RUNTIME_BASE} AS runtime
 
-# `latest` is retained as the existing release channel, but it must have been
-# published from Dockerfile.base with the pinned Node release below.
+# The base image supplies system libraries; Node itself is owned by this
+# application image so a stale `latest` base cannot change `node --version`.
+COPY --from=node-runtime /usr/local/bin/ /usr/local/bin/
+COPY --from=node-runtime /usr/local/lib/node_modules/ /usr/local/lib/node_modules/
 RUN test "$(node --version)" = "v22.22.3" \
     && mkdir -p /app /app/plugins /app/workspace /data /root/.ssh
 
@@ -72,7 +73,8 @@ RUN chmod 755 /usr/local/bin/alx-entrypoint
 
 # 设置环境变量
 ENV HOME=/root \
-    XDG_CONFIG_HOME=/root/config \
+	PATH="/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+	XDG_CONFIG_HOME=/root/config \
     XDG_CACHE_HOME=/root/cache \
     ALX_WORKSPACE=/app/workspace \
     ALEMONJS_SETUP_ROOTS=/app/workspace \

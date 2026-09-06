@@ -809,6 +809,32 @@ func TestEnvironmentInstallRequiresConfirmationAndUsesFixedCheckID(t *testing.T)
 	}
 }
 
+func TestContainerRejectsEnvironmentRuntimeAndServiceManagement(t *testing.T) {
+	t.Setenv("ALX_CONTAINER", "1")
+	s := &server{installEnvironment: func(_ context.Context, _ string) (string, error) {
+		t.Fatal("container request must not invoke installer")
+		return "", nil
+	}}
+	for _, request := range []*http.Request{
+		httptest.NewRequest(http.MethodPost, "/api/v1/system/environment/install", strings.NewReader(`{"checkId":"git","confirm":true}`)),
+		httptest.NewRequest(http.MethodPost, "/api/v1/system/python", strings.NewReader(`{"action":"install","version":"3.12.10"}`)),
+		httptest.NewRequest(http.MethodPost, "/api/v1/system/service", strings.NewReader(`{"action":"install","confirm":true}`)),
+	} {
+		response := httptest.NewRecorder()
+		switch request.URL.Path {
+		case "/api/v1/system/environment/install":
+			s.environmentInstallHandler(response, request)
+		case "/api/v1/system/python":
+			s.pythonRuntimeHandler(response, request)
+		default:
+			s.systemServiceHandler(response, request)
+		}
+		if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "Docker") {
+			t.Fatalf("%s response=%d %s, want Docker rejection", request.URL.Path, response.Code, response.Body.String())
+		}
+	}
+}
+
 func TestPluginContextCapabilityIsBuiltInAndSanitized(t *testing.T) {
 	root := t.TempDir()
 	pluginRoot := filepath.Join(root, "context-plugin")

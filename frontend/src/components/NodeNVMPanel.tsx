@@ -51,7 +51,7 @@ export function NodeNVMPanel({ onChanged }: { onChanged: () => void }) {
         </div>
         <div className="h-px bg-slate-200 dark:bg-slate-800" />
         <div className="flex items-center justify-between gap-2">
-          <span className="text-xs font-medium text-slate-500">最新 LTS（仅供参考）</span>
+          <span className="text-xs font-medium text-slate-500">最新 LTS</span>
           {status?.latestVersion ? (
             <div className="flex items-center gap-1.5">
               <code className="text-xs font-semibold text-slate-700 dark:text-slate-200">{status.latestVersion}</code>
@@ -63,6 +63,11 @@ export function NodeNVMPanel({ onChanged }: { onChanged: () => void }) {
         </div>
       </div>
 
+      {status?.fixed ? (
+        <p className="m-0 rounded-lg bg-sky-50 px-3 py-2 text-xs leading-5 text-sky-700 dark:bg-sky-950/35 dark:text-sky-200">
+          使用内置的 NodeJS。终端、构建和运行任务都使用上方“当前使用”的版本；如需变更，请进行系统更新。
+        </p>
+      ) : <>
       <div className="grid gap-2">
         <label className="text-xs font-medium text-slate-700 dark:text-slate-200" htmlFor="nvm-node-version">安装指定版本</label>
         <div className="flex gap-2">
@@ -106,6 +111,7 @@ export function NodeNVMPanel({ onChanged }: { onChanged: () => void }) {
           </div>
         ) : <p className="m-0 text-xs leading-5 text-slate-500">暂无已下载版本。</p>}
       </div>
+      </>}
       {message && <p className="m-0 rounded-lg bg-slate-100 px-3 py-2 text-xs leading-5 text-slate-600 dark:bg-slate-800 dark:text-slate-300">{message}</p>}
     </section>
   )

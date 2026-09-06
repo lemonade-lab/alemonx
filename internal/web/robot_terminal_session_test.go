@@ -7,8 +7,32 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
+
+func TestContainerTerminalUsesCurrentNodePathWithoutBashProfile(t *testing.T) {
+	t.Setenv("ALX_CONTAINER", "1")
+	args := terminalShellArgs("/bin/bash")
+	if got := strings.Join(args, " "); got != "--noprofile --norc -i" {
+		t.Fatalf("container bash arguments = %q", got)
+	}
+	if got := strings.Join(terminalShellArgs("/bin/zsh"), " "); got != "-f -i" {
+		t.Fatalf("container zsh arguments = %q", got)
+	}
+	environment := terminalEnvironment([]string{
+		"PATH=/root/.nvm/versions/node/v18.20.4/bin:/usr/bin",
+		"NVM_DIR=/root/.nvm",
+		"NODE_PATH=/root/.nvm/lib/node_modules",
+		"LANG=C.UTF-8",
+	})
+	joined := strings.Join(environment, "\n")
+	for _, want := range []string{"PATH=/root/.nvm/versions/node/v18.20.4/bin:/usr/bin", "NVM_DIR=/root/.nvm", "NODE_PATH=/root/.nvm/lib/node_modules", "LANG=C.UTF-8"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("container terminal environment = %q, want %q", joined, want)
+		}
+	}
+}
 
 func TestTerminalSessionsRequireTheirLocalKey(t *testing.T) {
 	s := &server{terminalSessions: newTerminalSessionStore()}

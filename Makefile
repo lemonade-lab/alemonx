@@ -1,4 +1,4 @@
-.PHONY: help dev bundle-resources build test test-agent test-all test-sqlite test-space format lint dev-fe build-frontend test-sse verify-sse release-check docker-build docker-buildx docker-buildx-push docker-base-build docker-base-buildx docker-base-buildx-push docker-up docker-down docker-logs
+.PHONY: help dev bundle-resources build test test-agent test-all test-sqlite test-space format lint dev-fe build-frontend test-sse verify-sse release-check docker-build docker-buildx docker-buildx-push docker-base-build docker-base-buildx docker-base-buildx-push docker-up docker-down docker-logs docker-local-dev
 
 .DEFAULT_GOAL := help
 
@@ -111,7 +111,7 @@ docker-base-buildx: ## Validate the multi-architecture alemonbase image
 docker-base-buildx-push: ## Build and publish the multi-architecture alemonbase image
 	ALX_BASE_PUSH=1 ./scripts/docker-base-buildx.sh
 
-docker-build: ## Build the local Docker image
+docker-build: build-fe ## Build the frontend locally, then build the local Docker image
 	docker build --build-arg ALX_RUNTIME_BASE=$(ALX_RUNTIME_BASE) --build-arg VERSION=$$(git describe --tags --always --dirty 2>/dev/null || echo dev) -t alemonx:local .
 
 docker-buildx: ## Manually validate or publish the multi-architecture Docker image
@@ -119,3 +119,6 @@ docker-buildx: ## Manually validate or publish the multi-architecture Docker ima
 
 docker-buildx-push: ## Manually validate or publish the multi-architecture Docker image
 	ALX_PUSH=1 ./scripts/docker-buildx.sh
+
+docker-local-dev: ## Start a local Docker development environment
+	./scripts/docker-local-dev.sh

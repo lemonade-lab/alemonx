@@ -80,21 +80,24 @@ func (commandRunner) Run(ctx context.Context, root, command string, args []strin
 	timeoutCtx, cancel := context.WithTimeout(ctx, commandTimeout)
 	defer cancel()
 	program := command
-	if command == "node" || command == "npm" {
-		if command == "npm" {
-			if _, err := system.ResolveCommand("node"); err != nil {
-				return "", errors.New("未检测到 Node.js 环境")
-			}
-		}
-		path, err := system.ResolveCommand(command)
+	var environment []string
+	if command == "node" || command == "npm" || command == "yarn" || command == "pnpm" {
+		runtime, err := system.CurrentNodeRuntime()
 		if err != nil {
-			return "", fmt.Errorf("未检测到 %s 环境", command)
+			return "", errors.New("未检测到 Node.js 环境")
 		}
-		system.RefreshCommandEnvironment("node", "npm", "npx")
-		program = path
+		environment = runtime.Environment
+		if command == "node" || command == "npm" {
+			path, pathErr := runtime.CommandPath(command)
+			if pathErr != nil {
+				return "", fmt.Errorf("未检测到 %s 环境", command)
+			}
+			program = path
+		}
 	}
 	cmd := exec.CommandContext(timeoutCtx, program, args...)
 	cmd.Dir = root
+	cmd.Env = environment
 	cmd.Stdin = nil
 	var buffer bytes.Buffer
 	cmd.Stdout = &buffer

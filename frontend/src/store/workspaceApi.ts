@@ -425,6 +425,7 @@ export type PluginDownloadCacheSummary = {
 }
 export type NVMNodeStatus = {
   available: boolean
+  fixed?: boolean
   versions: string[]
   activeVersion?: string
   recommendedVersion: string
@@ -432,7 +433,7 @@ export type NVMNodeStatus = {
   latestVersion?: string
   latestInstalled: boolean
 }
-export type PythonRuntimeStatus = { available: boolean; versions: string[]; activeVersion?: string }
+export type PythonRuntimeStatus = { available: boolean; fixed?: boolean; versions: string[]; activeVersion?: string }
 
 export const workspaceApi = createApi({
   reducerPath: 'workspaceApi',

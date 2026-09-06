@@ -1598,10 +1598,8 @@ func (Manager) scriptCommand(root, script string) (*exec.Cmd, error) {
 	}
 	command, _ := PackageManagerCommand(root, "run", script)
 	if filepath.Base(command.Path) == "npx" {
-		if system.ManagedNodeCommand("npx") == "" {
-			if _, err := exec.LookPath("npx"); err != nil {
-				return nil, missingCommandAdvice("npx")
-			}
+		if _, err := system.ResolveCommand("npx"); err != nil {
+			return nil, missingCommandAdvice("npx")
 		}
 	}
 	return command, nil
@@ -2206,34 +2204,22 @@ func nodeToolPath(name string) string {
 	if filepath.Base(name) != name || (name != "node" && name != "npm" && name != "npx") {
 		return name
 	}
-	if _, err := system.ResolveCommand("node"); err != nil {
+	runtime, err := system.CurrentNodeRuntime()
+	if err != nil {
 		return name
 	}
-	system.RefreshCommandEnvironment("node", "npm", "npx")
-	if path, err := system.ResolveCommand(name); err == nil {
+	if path, err := runtime.CommandPath(name); err == nil {
 		return path
 	}
 	return name
 }
 
 func applyManagedNodeEnvironment(command *exec.Cmd) {
-	node, err := system.ResolveCommand("node")
-	if err != nil || !filepath.IsAbs(node) {
+	runtime, err := system.CurrentNodeRuntime()
+	if err != nil {
 		return
 	}
-	bin := filepath.Dir(node)
-	if command.Env == nil {
-		command.Env = os.Environ()
-	}
-	prefix := "PATH="
-	value := bin + string(os.PathListSeparator) + os.Getenv("PATH")
-	for index := len(command.Env) - 1; index >= 0; index-- {
-		if strings.HasPrefix(command.Env[index], prefix) {
-			command.Env[index] = prefix + value
-			return
-		}
-	}
-	command.Env = append(command.Env, prefix+value)
+	command.Env = runtime.Environment
 }
 
 // PackageManagerCommand keeps a robot usable when package.json requests a

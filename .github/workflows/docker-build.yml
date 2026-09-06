@@ -54,6 +54,20 @@ jobs:
           version="$(git describe --tags --abbrev=0 2>/dev/null || git rev-parse --short HEAD)"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
+      - name: 在 Runner 上构建前端
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.3
+          cache: yarn
+          cache-dependency-path: frontend/yarn.lock
+
+      - name: 安装并构建前端
+        working-directory: frontend
+        run: |
+          corepack enable
+          yarn install --frozen-lockfile --non-interactive
+          yarn build
+
       - name: 配置 QEMU
         uses: docker/setup-qemu-action@v3
 

@@ -24,6 +24,11 @@ var (
 // the user's shell configuration.
 func PrepareDevelopmentCommand(program string, args []string) (string, []string, []string, string) {
 	environment := DevelopmentCommandEnvironment()
+	if runtime, err := CurrentNodeRuntime(); err == nil && (program == "node" || program == "npm" || program == "npx" || program == "corepack") {
+		if path, pathErr := runtime.CommandPath(program); pathErr == nil {
+			return path, append([]string(nil), args...), runtime.Environment, ""
+		}
+	}
 	if path, err := ResolveDevelopmentCommand(program); err == nil {
 		return path, append([]string(nil), args...), environment, ""
 	}
@@ -54,7 +59,11 @@ func PrepareDevelopmentCommand(program string, args []string) (string, []string,
 // source plugin. It never changes the machine-wide PATH.
 func DevelopmentCommandEnvironment() []string {
 	directories := developmentCommandDirectories()
-	entries := filepath.SplitList(os.Getenv("PATH"))
+	base := os.Environ()
+	if runtime, err := CurrentNodeRuntime(); err == nil {
+		base = runtime.Environment
+	}
+	entries := filepath.SplitList(environmentPath(base))
 	merged := make([]string, 0, len(directories)+len(entries))
 	seen := map[string]bool{}
 	for _, directory := range append(entries, directories...) {
@@ -71,8 +80,8 @@ func DevelopmentCommandEnvironment() []string {
 		}
 	}
 	path := "PATH=" + strings.Join(merged, string(os.PathListSeparator))
-	environment := make([]string, 0, len(os.Environ())+1)
-	for _, value := range os.Environ() {
+	environment := make([]string, 0, len(base)+1)
+	for _, value := range base {
 		if !strings.HasPrefix(value, "PATH=") {
 			environment = append(environment, value)
 		}

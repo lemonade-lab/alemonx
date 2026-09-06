@@ -37,6 +37,7 @@ export function ServiceControlCard() {
   const [serviceStatus, setServiceStatus] = useState('')
   const [serviceInstalled, setServiceInstalled] = useState<boolean | null>(null)
   const [resilience, setResilience] = useState<ServiceResilience | null>(null)
+  const [container, setContainer] = useState(false)
   const serviceStatusTone =
     serviceInstalled === false
       ? 'is-offline'
@@ -52,11 +53,13 @@ export function ServiceControlCard() {
         status?: string
         installed?: boolean
         resilience?: ServiceResilience
+        container?: boolean
       }
       if (!response.ok) throw new Error()
       setServiceStatus(result.status || '')
       setServiceInstalled(result.installed ?? null)
       setResilience(result.resilience ?? null)
+      setContainer(result.container === true)
     } catch {
       setServiceStatus('无法读取 AlemonX 服务状态。')
     }
@@ -140,6 +143,14 @@ export function ServiceControlCard() {
     } finally {
       setBusy(false)
     }
+  }
+
+  if (container) {
+    return (
+      <SettingsPage title="服务" description="Docker 容器由外部编排负责启动、重启与开机恢复。">
+        <SettingsCard icon={<Server className="size-4" />} title="容器运行方式" description="不在容器内注册 systemd、launchd 或开机自启服务。" />
+      </SettingsPage>
+    )
   }
 
   return (

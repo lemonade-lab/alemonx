@@ -437,6 +437,9 @@ func hostPackageManager() (string, error) {
 // InstallEnvironment performs a reviewed package installation on a supported
 // host without opening an external browser.
 func InstallEnvironment(ctx context.Context, checkID string) (string, error) {
+	if InContainer() {
+		return "", errors.New("Docker 环境的运行库由镜像提供，不能在容器内安装。请更新镜像后重新创建容器。")
+	}
 	if strings.TrimSpace(checkID) == "node" {
 		return InstallNodeWithNVM(ctx)
 	}

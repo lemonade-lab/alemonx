@@ -21,6 +21,8 @@ import (
 	"time"
 
 	"github.com/creack/pty"
+
+	"alemonx/internal/system"
 )
 
 const terminalOutputLimit = 1024 * 1024
@@ -82,6 +84,28 @@ func terminalShell(requested string) (string, error) {
 		return "", fmt.Errorf("Shell 不可执行：%s", shell)
 	}
 	return shell, nil
+}
+
+func terminalShellArgs(shell string) []string {
+	// A Docker terminal must not source a persisted /root/.bashrc: that file is
+	// mounted user data and can put an obsolete system or NVM Node ahead of the
+	// runtime embedded in the image.
+	if system.InContainer() {
+		switch filepath.Base(shell) {
+		case "bash":
+			return []string{"--noprofile", "--norc", "-i"}
+		case "zsh":
+			return []string{"-f", "-i"}
+		}
+	}
+	return []string{"-i"}
+}
+
+func terminalEnvironment(environment []string) []string {
+	// The caller supplies the backend process environment. In a container it
+	// already contains the image-selected Node path; preserve it exactly while
+	// terminalShellArgs prevents persisted shell profiles from overriding it.
+	return environment
 }
 
 func terminalDirectory(cwd string) (string, error) {
@@ -168,8 +192,8 @@ func (s *server) terminalSessionsHandler(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusTooManyRequests, fmt.Sprintf("每个账户最多同时打开 %d 个终端。", terminalSessionLimit))
 		return
 	}
-	cmd := exec.CommandContext(context.Background(), shell, "-i")
-	cmd.Dir, cmd.Env = cwd, append(os.Environ(), "TERM=xterm-256color", "PS1=$ ")
+	cmd := exec.CommandContext(context.Background(), shell, terminalShellArgs(shell)...)
+	cmd.Dir, cmd.Env = cwd, append(terminalEnvironment(os.Environ()), "TERM=xterm-256color", "PS1=$ ")
 	terminal, err := pty.Start(cmd)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "交互式终端启动失败："+err.Error())

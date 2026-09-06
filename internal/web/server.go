@@ -712,7 +712,12 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	// Rehydrate command paths on every service start so a managed Node remains
 	// usable after restart without writing to the machine-wide PATH.
 	if startBackground {
-		system.ActivateNVMDefaultForProcess()
+		if _, err := system.ActivateNVMDefaultForProcess(); err != nil {
+			log.Printf("Node.js 已选版本恢复失败：%v", err)
+		}
+	}
+	if _, err := system.ConfigureNodeRuntime(); err != nil {
+		log.Printf("Node.js 运行环境不可用：%v", err)
 	}
 	system.RefreshCommandEnvironment("git", "docker")
 	assets, err := fs.Sub(staticFiles, "dist")
@@ -3685,11 +3690,15 @@ func (s *server) systemServiceHandler(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"status": status, "runtime": system.UpdateRuntime(), "installed": system.ServiceInstalled(), "resilience": system.ServiceResilienceStatus()})
+		writeJSON(w, http.StatusOK, map[string]any{"status": status, "runtime": system.UpdateRuntime(), "installed": system.ServiceInstalled(), "resilience": system.ServiceResilienceStatus(), "container": system.InContainer()})
 		return
 	}
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
+		return
+	}
+	if system.InContainer() {
+		writeError(w, http.StatusBadRequest, "Docker 环境由容器编排负责启动与保活，不能在容器内管理系统服务或开机自启。")
 		return
 	}
 	var input struct {
@@ -8071,15 +8080,13 @@ func (s *server) ensureBotAppPageRuntime(root string) (*botAppPageRuntime, error
 	} else if err != nil {
 		return nil, err
 	}
-	node, lookupErr := system.ResolveCommand("node")
+	nodeRuntime, lookupErr := system.CurrentNodeRuntime()
 	if lookupErr != nil {
 		return nil, fmt.Errorf("机器人应用页通信需要 Node.js，请先在环境管理中安装")
 	}
-	command := exec.Command(node, scriptPath)
+	command := exec.Command(nodeRuntime.Path, scriptPath)
 	command.Dir = project
-	if bin := system.ManagedNodeBin(); bin != "" {
-		command.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	}
+	command.Env = nodeRuntime.Environment
 	robot.HideWindow(command)
 	stdin, err := command.StdinPipe()
 	if err != nil {
@@ -8893,6 +8900,10 @@ func (s *server) environmentInstallHandler(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
 		return
 	}
+	if system.InContainer() {
+		writeError(w, http.StatusBadRequest, "Docker 环境的运行库由镜像提供，不能在容器内安装。请更新镜像后重新创建容器。")
+		return
+	}
 	var input struct {
 		CheckID string `json:"checkId"`
 		Confirm bool   `json:"confirm"`
@@ -9011,6 +9022,10 @@ func (s *server) pythonRuntimeHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if runtime.GOOS == "windows" {
 		writeError(w, http.StatusBadRequest, "Python 版本管理暂不支持 Windows。")
+		return
+	}
+	if system.InContainer() {
+		writeError(w, http.StatusBadRequest, "Docker 环境中的 Python 由镜像固定，不能在容器内安装或切换版本。")
 		return
 	}
 	if s.auth != nil {

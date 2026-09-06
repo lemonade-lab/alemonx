@@ -1,6 +1,10 @@
 .git
 .env
 dist
+# The workbench build writes to the repository-root dist/. Docker images embed
+# it after it has been built on the invoking machine.
+!dist/
+!dist/**
 frontend/node_modules
 frontend/.vite
 app

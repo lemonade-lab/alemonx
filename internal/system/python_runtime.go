@@ -22,12 +22,17 @@ import (
 // command currently used by the service.
 type PythonRuntimeStatus struct {
 	Available     bool     `json:"available"`
+	Fixed         bool     `json:"fixed,omitempty"`
 	Versions      []string `json:"versions"`
 	ActiveVersion string   `json:"activeVersion,omitempty"`
 }
 
 func PythonRuntimeStatusForHost() PythonRuntimeStatus {
 	status := PythonRuntimeStatus{Versions: []string{}, ActiveVersion: pythonCommandVersion()}
+	if InContainer() {
+		status.Fixed = true
+		return status
+	}
 	root := pythonRoot()
 	if root == "" {
 		return status
@@ -207,6 +212,9 @@ func runPyenv(ctx context.Context, root string, args ...string) error {
 }
 
 func InstallPythonVersion(ctx context.Context, version string) (string, error) {
+	if InContainer() {
+		return "", errors.New("Docker 环境中的 Python 由镜像固定，不能在容器内安装版本。请更新镜像后重新创建容器。")
+	}
 	if !pythonVersion(version) || strings.Count(version, ".") != 2 {
 		return "", errors.New("Python 版本格式无效，请使用例如 3.12.10")
 	}
@@ -221,6 +229,9 @@ func InstallPythonVersion(ctx context.Context, version string) (string, error) {
 }
 
 func UsePythonVersion(ctx context.Context, version string) (string, error) {
+	if InContainer() {
+		return "", errors.New("Docker 环境中的 Python 由镜像固定，不能在容器内切换版本。请更新镜像后重新创建容器。")
+	}
 	if !pythonVersion(version) {
 		return "", errors.New("Python 版本格式无效")
 	}

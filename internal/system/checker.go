@@ -36,6 +36,7 @@ type Report struct {
 	GoalID    string  `json:"goalId"`
 	Ready     bool    `json:"ready"`
 	Platform  string  `json:"platform"`
+	Container bool    `json:"container,omitempty"`
 	Checks    []Check `json:"checks"`
 	CheckedAt string  `json:"checkedAt"`
 }
@@ -83,7 +84,7 @@ func (c *Checker) CheckGoal(goalID, variant string) Report {
 	checks[0].Optional = !nodeRequired
 	checks[1].Optional = !gitRequired
 	ready := platformSupported() && checksAreUsable(checks)
-	return Report{goalID, ready, runtime.GOOS + "/" + runtime.GOARCH, checks, time.Now().Format(time.RFC3339)}
+	return Report{goalID, ready, runtime.GOOS + "/" + runtime.GOARCH, InContainer(), checks, time.Now().Format(time.RFC3339)}
 }
 
 // fonts is a fully optional check: CJK/Emoji fonts only affect text rendering
@@ -569,15 +570,10 @@ func parseNodeVersion(value string) ([3]int, bool) {
 // separate default-version fallback inside the workbench.
 func ResolveCommand(name string) (string, error) {
 	if name == "node" || name == "npm" || name == "npx" {
-		if path, err := exec.LookPath(name); err == nil {
-			return path, nil
-		}
-	}
-	if path := nvmNodeCommand(name); path != "" {
-		return path, nil
-	}
-	if path := ManagedNodeCommand(name); path != "" {
-		return path, nil
+		// Node's one source of truth is the current process PATH. NVM switching
+		// updates that PATH explicitly; falling back to another downloaded copy
+		// here would make task execution disagree with `node --version`.
+		return exec.LookPath(name)
 	}
 	if path, err := exec.LookPath(name); err == nil {
 		return path, nil
@@ -607,6 +603,9 @@ func RefreshCommandEnvironment(names ...string) []string {
 	directories := []string{}
 	seen := map[string]bool{}
 	for _, name := range names {
+		if name == "node" || name == "npm" || name == "npx" {
+			continue
+		}
 		// Node selection is explicit. Do not let a status refresh silently put a
 		// cached or managed Node ahead of the current process PATH.
 		var path string

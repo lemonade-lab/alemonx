@@ -8,6 +8,13 @@ platforms="${ALX_PLATFORMS:-linux/amd64,linux/arm64}"
 push="${ALX_PUSH:-0}"
 builder="${ALX_BUILDER:-alx-builder}"
 runtime_base="${ALX_RUNTIME_BASE:-ccr.ccs.tencentyun.com/ningmengchongshui/alemonbase:latest}"
+docker pull "$runtime_base" >/dev/null 2>&1 || { echo "❌ 无法拉取运行基础镜像: $runtime_base" >&2; exit 1; }
+
+# Compile once on the host. The static workbench assets are identical for every
+# target image architecture, so running Vite in each BuildKit platform is slow
+# and unnecessary.
+echo "🔨 在当前设备上构建前端..."
+(cd frontend && corepack enable && yarn install --frozen-lockfile --non-interactive && yarn build)
 
 # ========== 检查环境 ==========
 command -v docker >/dev/null 2>&1 || { echo '❌ 未检测到 Docker。' >&2; exit 1; }

@@ -30,10 +30,17 @@ type ServiceResilience struct {
 	Summary         string `json:"summary"`
 }
 
+func containerServiceManagementError() error {
+	return errors.New("Docker 环境由容器编排负责启动与保活，不能在容器内管理系统服务或开机自启")
+}
+
 // ServiceResilienceStatus exposes only supervisor configuration, never the
 // service command line. On Linux, linger keeps the user systemd manager alive
 // after logout so a headless deployment truly survives a reboot.
 func ServiceResilienceStatus() ServiceResilience {
+	if InContainer() {
+		return ServiceResilience{Summary: "Docker 环境由容器编排负责启动与保活。"}
+	}
 	if !ServiceInstalled() {
 		return ServiceResilience{Summary: "尚未安装工作台后台服务。"}
 	}
@@ -116,6 +123,9 @@ func windowsScheduledTaskEnabled() bool {
 // automatically at login (macOS/Windows) or at login/boot (Linux). It never
 // stops or starts the currently running service.
 func SetStartupEnabled(enabled bool) (string, error) {
+	if InContainer() {
+		return "", containerServiceManagementError()
+	}
 	switch runtime.GOOS {
 	case "darwin":
 		path, err := launchAgentPath()
@@ -185,6 +195,9 @@ func SetStartupEnabled(enabled bool) (string, error) {
 // EnableUserLinger is an explicit Linux-only action. It can require host
 // authorization, so callers must obtain confirmation before invoking it.
 func EnableUserLinger() (string, error) {
+	if InContainer() {
+		return "", containerServiceManagementError()
+	}
 	if runtime.GOOS != "linux" {
 		return "", errors.New("无登录运行仅适用于 Linux systemd")
 	}
@@ -205,6 +218,9 @@ func EnableUserLinger() (string, error) {
 
 // ServiceStatus reports whether the user-level service is registered and running.
 func ServiceStatus() (string, error) {
+	if InContainer() {
+		return "当前运行在 Docker 容器中。", nil
+	}
 	switch runtime.GOOS {
 	case "darwin":
 		path, err := launchAgentPath()
@@ -239,6 +255,9 @@ func ServiceStatus() (string, error) {
 // ServiceInstalled reports whether a user-level background-service definition
 // exists, regardless of whether it is currently running.
 func ServiceInstalled() bool {
+	if InContainer() {
+		return false
+	}
 	switch runtime.GOOS {
 	case "darwin":
 		return userLaunchAgentInstalled()
@@ -257,6 +276,9 @@ func ServiceInstalled() bool {
 }
 
 func StartService() (string, error) {
+	if InContainer() {
+		return "", containerServiceManagementError()
+	}
 	if err := reconcileServiceRegistration(); err != nil {
 		return "", err
 	}
@@ -295,6 +317,9 @@ func StartService() (string, error) {
 }
 
 func StopService() (string, error) {
+	if InContainer() {
+		return "", containerServiceManagementError()
+	}
 	switch runtime.GOOS {
 	case "darwin":
 		uid := strconv.Itoa(os.Getuid())
@@ -328,6 +353,9 @@ func StopService() (string, error) {
 // the original command line so explicit bind, port, and development options
 // survive the restart.
 func RestartForeground(port string) error {
+	if InContainer() {
+		return containerServiceManagementError()
+	}
 	executable, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("无法定位当前 alx：%w", err)
@@ -358,6 +386,9 @@ func RestartForeground(port string) error {
 // it. It is used when the current foreground instance owns the listening port:
 // the caller can close that instance first and then schedule StartService.
 func PrepareService(port string) (string, error) {
+	if InContainer() {
+		return "", containerServiceManagementError()
+	}
 	workspaceRoot, err := workspace.ResolveRoot("")
 	if err != nil {
 		workspaceRoot = ""
@@ -368,6 +399,9 @@ func PrepareService(port string) (string, error) {
 // ScheduleServiceStart starts a previously registered service after a short
 // delay, allowing the foreground process to release its HTTP port first.
 func ScheduleServiceStart() error {
+	if InContainer() {
+		return containerServiceManagementError()
+	}
 	switch runtime.GOOS {
 	case "darwin":
 		path, err := launchAgentPath()
@@ -407,6 +441,9 @@ func RestartService() (string, error) {
 }
 
 func UninstallService() (string, error) {
+	if InContainer() {
+		return "", containerServiceManagementError()
+	}
 	switch runtime.GOOS {
 	case "darwin":
 		uid := strconv.Itoa(os.Getuid())

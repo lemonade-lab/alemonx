@@ -1,6 +1,7 @@
 package system
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -121,15 +122,6 @@ func TestResolveCommandNodeFollowsCurrentPath(t *testing.T) {
 	if err := os.MkdirAll(bin, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"node", "npm", "npx"} {
-		path := filepath.Join(bin, name)
-		if err := os.WriteFile(path, []byte("#!/bin/sh\necho v24.0.0\n"), 0o700); err != nil {
-			t.Fatal(err)
-		}
-		if got := nvmNodeCommand(name); got != path {
-			t.Fatalf("nvmNodeCommand(%q) = %q, want %q", name, got, path)
-		}
-	}
 	current := t.TempDir()
 	for _, name := range []string{"node", "npm", "npx"} {
 		path := filepath.Join(current, name)
@@ -143,6 +135,25 @@ func TestResolveCommandNodeFollowsCurrentPath(t *testing.T) {
 		if got, err := ResolveCommand(name); err != nil || got != want {
 			t.Fatalf("ResolveCommand(%q) = %q, %v; want current PATH command %q", name, got, err, want)
 		}
+	}
+}
+
+func TestResolveCommandDoesNotFallBackToHiddenManagedNode(t *testing.T) {
+	isolateUserNVM(t)
+	cache := t.TempDir()
+	previousCache := userCacheDir
+	userCacheDir = func() (string, error) { return cache, nil }
+	t.Cleanup(func() { userCacheDir = previousCache })
+	bin := filepath.Join(cache, "alemonx", "environments", "node", "installed", "node-v22.22.3-linux-arm64", "bin")
+	if err := os.MkdirAll(bin, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bin, "node"), []byte("node"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", t.TempDir())
+	if _, err := ResolveCommand("node"); err == nil {
+		t.Fatal("ResolveCommand(node) must not select a hidden managed runtime")
 	}
 }
 
@@ -199,11 +210,53 @@ func TestActivateNVMDefaultForProcessMakesDefaultNodeCurrent(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", t.TempDir())
-	if got := ActivateNVMDefaultForProcess(); got != bin {
+	got, err := ActivateNVMDefaultForProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != bin {
 		t.Fatalf("ActivateNVMDefaultForProcess() = %q, want %q", got, bin)
 	}
 	if path, err := exec.LookPath("node"); err != nil || path != filepath.Join(bin, "node") {
 		t.Fatalf("node after activation = %q, %v", path, err)
+	}
+}
+
+func TestContainerListsPersistedNVMVersionsAlongsideCurrentNode(t *testing.T) {
+	t.Setenv("ALX_CONTAINER", "1")
+	userNVM := t.TempDir()
+	t.Setenv("NVM_DIR", userNVM)
+	if err := os.WriteFile(filepath.Join(userNVM, "nvm.sh"), []byte("# nvm"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	nvmBin := filepath.Join(userNVM, "versions", "node", "v18.20.4", "bin")
+	if err := os.MkdirAll(nvmBin, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(nvmBin, "node"), []byte("node"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	imageNode := filepath.Join(t.TempDir(), "node")
+	if err := os.WriteFile(imageNode, []byte("#!/bin/sh\necho v22.22.3\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	previousNodeLookup := nodeLookPath
+	nodeLookPath = func(string) (string, error) { return imageNode, nil }
+	t.Cleanup(func() { nodeLookPath = previousNodeLookup })
+
+	status := NVMStatus()
+	if status.Fixed || !status.Available || status.ActiveVersion != "v22.22.3" || len(status.Versions) != 1 || status.Versions[0] != "v18.20.4" {
+		t.Fatalf("container NVMStatus() = %#v, want image Node plus persisted NVM versions", status)
+	}
+}
+
+func TestContainerDoesNotRejectNodeRuntimeMutation(t *testing.T) {
+	t.Setenv("ALX_CONTAINER", "1")
+	if _, err := InstallNVMNodeVersion(context.Background(), "invalid"); err == nil || strings.Contains(err.Error(), "镜像固定") {
+		t.Fatalf("InstallNVMNodeVersion container error = %v, want normal validation", err)
+	}
+	if _, err := UseNVMNodeVersion(context.Background(), "invalid"); err == nil || strings.Contains(err.Error(), "镜像固定") {
+		t.Fatalf("UseNVMNodeVersion container error = %v, want normal validation", err)
 	}
 }
 
@@ -250,6 +303,32 @@ func TestNVMStatusReturnsEmptyVersionsInsteadOfNil(t *testing.T) {
 	}
 }
 
+func TestApplyNodeRuntimeMakesNodeVersionAndChildEnvironmentAgree(t *testing.T) {
+	root := t.TempDir()
+	first := filepath.Join(root, "v18", "bin")
+	second := filepath.Join(root, "v22", "bin")
+	for bin, version := range map[string]string{first: "v18.20.4", second: "v22.22.3"} {
+		if err := os.MkdirAll(bin, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(bin, "node"), []byte("#!/bin/sh\necho "+version+"\n"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", first+string(os.PathListSeparator)+os.Getenv("PATH"))
+	runtime, err := CurrentNodeRuntime()
+	if err != nil || runtime.Version != "v18.20.4" || runtime.Bin != first {
+		t.Fatalf("initial runtime = %#v, %v", runtime, err)
+	}
+	runtime, err = ApplyNodeRuntime(second)
+	if err != nil || runtime.Version != "v22.22.3" || runtime.Bin != second {
+		t.Fatalf("applied runtime = %#v, %v", runtime, err)
+	}
+	if got := environmentPath(runtime.Environment); filepath.SplitList(got)[0] != second {
+		t.Fatalf("child PATH = %q, want %q first", got, second)
+	}
+}
+
 func TestNVMStatusShowsSystemNodeWithoutManagedVersions(t *testing.T) {
 	isolateUserNVM(t)
 	cache := t.TempDir()
@@ -268,7 +347,7 @@ func TestNVMStatusShowsSystemNodeWithoutManagedVersions(t *testing.T) {
 	}
 }
 
-func TestNVMStatusUsesExistingUserNVMDirectory(t *testing.T) {
+func TestNVMNodeBinDoesNotChooseUserRuntimeWithoutDefault(t *testing.T) {
 	cache := t.TempDir()
 	previousCache := userCacheDir
 	userCacheDir = func() (string, error) { return cache, nil }
@@ -292,8 +371,8 @@ func TestNVMStatusUsesExistingUserNVMDirectory(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(managedBin, "node"), []byte("node"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if got := NVMNodeBin(); got != userBin {
-		t.Fatalf("NVMNodeBin() = %q, want user runtime %q", got, userBin)
+	if got := NVMNodeBin(); got != "" {
+		t.Fatalf("NVMNodeBin() = %q, want no implicit user runtime", got)
 	}
 }
 

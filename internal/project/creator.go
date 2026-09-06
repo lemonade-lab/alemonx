@@ -546,8 +546,8 @@ func run(directory string, logs *[]string, name string, args ...string) error {
 	commandName := projectCommandPath(name)
 	command := exec.CommandContext(ctx, commandName, args...)
 	command.Dir = directory
-	if bin := system.ManagedNodeBin(); bin != "" {
-		command.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if runtime, err := system.CurrentNodeRuntime(); err == nil {
+		command.Env = runtime.Environment
 	}
 	output, err := command.CombinedOutput()
 	line := strings.TrimSpace(string(output))
@@ -575,15 +575,15 @@ func run(directory string, logs *[]string, name string, args ...string) error {
 func projectCommandPath(name string) string {
 	base := filepath.Base(name)
 	if base == "node" {
-		if path, err := system.ResolveCommand(base); err == nil {
-			system.RefreshCommandEnvironment("node", "npm", "npx")
-			return path
+		if runtime, err := system.CurrentNodeRuntime(); err == nil {
+			if path, pathErr := runtime.CommandPath(base); pathErr == nil {
+				return path
+			}
 		}
 	}
 	if base == "npm" || base == "npx" {
-		if _, err := system.ResolveCommand("node"); err == nil {
-			system.RefreshCommandEnvironment("node", "npm", "npx")
-			if path, resolveErr := system.ResolveCommand(base); resolveErr == nil {
+		if runtime, err := system.CurrentNodeRuntime(); err == nil {
+			if path, resolveErr := runtime.CommandPath(base); resolveErr == nil {
 				return path
 			}
 		}

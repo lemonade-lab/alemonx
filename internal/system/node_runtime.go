@@ -43,6 +43,7 @@ type nodeRelease struct {
 // is available, otherwise by ALemonX's isolated fallback installation.
 type NVMNodeStatus struct {
 	Available            bool     `json:"available"`
+	Fixed                bool     `json:"fixed,omitempty"`
 	Versions             []string `json:"versions"`
 	ActiveVersion        string   `json:"activeVersion,omitempty"`
 	RecommendedVersion   string   `json:"recommendedVersion"`
@@ -77,21 +78,11 @@ func NVMStatus() NVMNodeStatus {
 }
 
 func systemNodeVersion() string {
-	path, err := nodeLookPath("node")
+	runtime, err := CurrentNodeRuntime()
 	if err != nil {
 		return ""
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	output, err := exec.CommandContext(ctx, path, "--version").Output()
-	if err != nil || ctx.Err() != nil {
-		return ""
-	}
-	version := normalizeNodeVersion(strings.TrimSpace(string(output)))
-	if version == "" {
-		return ""
-	}
-	return "v" + version
+	return runtime.Version
 }
 
 // InstallNVMNodeVersion installs an explicit semver through NVM and makes it
@@ -140,8 +131,9 @@ func useNVMNodeVersion(ctx context.Context, directory, version string) (string, 
 	if info, err := os.Stat(filepath.Join(bin, "node")); err != nil || info.IsDir() {
 		return "", errors.New("NVM 未返回可用的 Node.js 运行时")
 	}
-	prependCommandPath(bin)
-	RefreshCommandEnvironment("node", "npm", "npx")
+	if _, err := ApplyNodeRuntime(bin); err != nil {
+		return "", err
+	}
 	return "已切换工作台 Node.js 至 v" + version + "。", nil
 }
 
@@ -224,8 +216,9 @@ func InstallNodeWithNVM(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	prependCommandPath(bin)
-	RefreshCommandEnvironment("node", "npm", "npx")
+	if _, err := ApplyNodeRuntime(bin); err != nil {
+		return "", err
+	}
 	prefix := "已通过 NVM 安装并启用 Node.js 22 LTS " + version + "。"
 	if installedNVM {
 		prefix = "已安装 NVM，并通过 NVM 安装并启用 Node.js 22 LTS " + version + "。"
@@ -386,7 +379,9 @@ func installNodeWithNVMWindows(ctx context.Context) (string, error) {
 			return "", fmt.Errorf("NVM 执行 %s 失败：%s", strings.Join(args, " "), limitedNodeOutput(output, runErr))
 		}
 	}
-	RefreshCommandEnvironment("node", "npm", "npx")
+	if _, runtimeErr := CurrentNodeRuntime(); runtimeErr != nil {
+		return "", runtimeErr
+	}
 	return "已通过 NVM for Windows 安装并启用 Node.js 22 LTS " + version + "。请重新检查环境确认版本。", nil
 }
 
@@ -416,14 +411,12 @@ func InstallManagedNode(ctx context.Context) (string, error) {
 		if runErr != nil {
 			return "", fmt.Errorf("Node.js 安装程序执行失败：%s", limitedNodeOutput(output, runErr))
 		}
-		RefreshCommandEnvironment("node", "npm", "npx")
 		return "已通过工作台镜像下载并安装 Node.js LTS。请重新检查环境确认版本。", nil
 	}
 	bin, err := installNodeArchive(ctx, archive, version)
 	if err != nil {
 		return "", err
 	}
-	RefreshCommandEnvironment("node", "npm", "npx")
 	return "已通过工作台镜像下载并安装 Node.js LTS（" + bin + "）。请重新检查环境确认版本。", nil
 }
 
@@ -655,24 +648,6 @@ func NVMNodeBin() string {
 			return bin
 		}
 	}
-	sort.Slice(entries, func(i, j int) bool {
-		left, leftOK := parseNodeVersion(entries[i].Name())
-		right, rightOK := parseNodeVersion(entries[j].Name())
-		if leftOK && rightOK {
-			for index := range left {
-				if left[index] != right[index] {
-					return left[index] > right[index]
-				}
-			}
-		}
-		return entries[i].Name() > entries[j].Name()
-	})
-	for _, entry := range entries {
-		bin := filepath.Join(directory, "versions", "node", entry.Name(), "bin")
-		if info, err := os.Stat(filepath.Join(bin, "node")); err == nil && !info.IsDir() {
-			return bin
-		}
-	}
 	return ""
 }
 
@@ -680,13 +655,15 @@ func NVMNodeBin() string {
 // version manager when the workbench service starts. The selected directory
 // becomes the real process PATH, so checks, terminals and child package
 // managers all observe the same `node --version`.
-func ActivateNVMDefaultForProcess() string {
+func ActivateNVMDefaultForProcess() (string, error) {
 	bin := NVMNodeBin()
 	if bin == "" {
-		return ""
+		return "", nil
 	}
-	prependCommandPath(bin)
-	return bin
+	if _, err := ApplyNodeRuntime(bin); err != nil {
+		return "", fmt.Errorf("无法恢复已选择的 Node.js 运行环境：%w", err)
+	}
+	return bin, nil
 }
 
 func nvmNodeCommand(name string) string {
@@ -708,28 +685,10 @@ func prependCommandPath(directory string) {
 	if directory == "" {
 		return
 	}
-	entries := filepath.SplitList(os.Getenv("PATH"))
-	merged := make([]string, 0, len(entries)+1)
-	seen := map[string]bool{}
-	for _, entry := range append([]string{directory}, entries...) {
-		if entry == "" {
-			continue
-		}
-		// A previous Node runtime directory must not keep winning after the
-		// user switches versions. Preserve unrelated PATH entries unchanged.
-		if entry != directory && isNodeRuntimeBin(entry) {
-			continue
-		}
-		key := filepath.Clean(entry)
-		if runtime.GOOS == "windows" {
-			key = strings.ToLower(key)
-		}
-		if !seen[key] {
-			seen[key] = true
-			merged = append(merged, entry)
-		}
-	}
-	_ = os.Setenv("PATH", strings.Join(merged, string(os.PathListSeparator)))
+	// A Node runtime must be unique in PATH. Leaving an old NVM bin later in
+	// the list makes tools that rewrite PATH (or invoke a login shell) capable
+	// of selecting a different Node than the workbench selected.
+	_ = os.Setenv("PATH", nodeRuntimePath(directory, os.Getenv("PATH")))
 }
 
 func isNodeRuntimeBin(directory string) bool {
