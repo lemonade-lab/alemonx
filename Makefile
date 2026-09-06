@@ -77,7 +77,7 @@ dev-fe: ## Start the Vite development server
 	cd frontend && yarn dev
 
 build-fe: ## Build the frontend into dist/
-	cd frontend && yarn build
+	./scripts/build-frontend.sh
 
 build-frontend: build-fe ## Alias for the release gate
 

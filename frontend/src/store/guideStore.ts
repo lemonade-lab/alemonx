@@ -44,7 +44,9 @@ type UIState = { values: Record<string, unknown> }
 type UIValue = { key: string; value: unknown }
 const uiSlice = createSlice({
   name: 'ui',
-  initialState: { values: {} } as UIState,
+  initialState: {
+    values: {}
+  } as UIState,
   reducers: {
     initializeUIValue(state, action: PayloadAction<UIValue>) {
       if (!(action.payload.key in state.values))
@@ -74,7 +76,7 @@ const initialState: GuideState = {
     skills: 'yes',
     capabilities: []
   },
-  project: { name: '', destinationMode: 'current', destination: '' }
+  project: { name: 'alemonb', destinationMode: 'current', destination: '' }
 }
 
 const guideSlice = createSlice({

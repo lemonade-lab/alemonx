@@ -793,7 +793,8 @@ func (Manager) RuntimeDependencies(root string) ([]string, error) {
 	if len(packages) == 0 {
 		return nil, nil
 	}
-	if _, err := os.Stat(filepath.Join(path, "node_modules")); err != nil {
+	manager := projectPackageManager(path)
+	if _, err := os.Stat(filepath.Join(path, "node_modules")); err != nil && !usesYarnPnP(path, manager) {
 		if os.IsNotExist(err) {
 			return []string{"未发现 node_modules，等待自动同步"}, nil
 		}
@@ -801,35 +802,65 @@ func (Manager) RuntimeDependencies(root string) ([]string, error) {
 	}
 	missing := []string{}
 	for name := range packages {
-		if _, err := os.Stat(filepath.Join(path, "node_modules", filepath.FromSlash(name), "package.json")); err != nil {
-			if os.IsNotExist(err) {
-				missing = append(missing, name+" 未安装")
-				continue
-			}
-			return nil, fmt.Errorf("无法检查依赖 %s：%w", name, err)
+		installed, installErr := runtimeDependencyInstalled(path, manager, name)
+		if installErr != nil {
+			return nil, installErr
+		}
+		if !installed {
+			missing = append(missing, name+" 未安装")
 		}
 	}
 	sort.Strings(missing)
 	return missing, nil
 }
 
+// runtimeDependencyInstalled supports both node_modules layouts and Yarn PnP.
+// PnP deliberately omits node_modules, so requiring that directory turns a
+// successful Yarn install into a false "package missing" error.
+func runtimeDependencyInstalled(root, manager, name string) (bool, error) {
+	if _, err := os.Stat(filepath.Join(root, "node_modules", filepath.FromSlash(name), "package.json")); err == nil {
+		return true, nil
+	} else if !os.IsNotExist(err) {
+		return false, fmt.Errorf("无法检查依赖 %s：%w", name, err)
+	}
+	if !usesYarnPnP(root, manager) {
+		return false, nil
+	}
+	for _, file := range []string{".pnp.cjs", ".pnp.js"} {
+		data, err := os.ReadFile(filepath.Join(root, file))
+		if err == nil {
+			return strings.Contains(string(data), name), nil
+		}
+		if !os.IsNotExist(err) {
+			return false, fmt.Errorf("无法读取 Yarn PnP 安装索引：%w", err)
+		}
+	}
+	return false, nil
+}
+
+func usesYarnPnP(root, manager string) bool {
+	if manager != "yarn" {
+		return false
+	}
+	for _, file := range []string{".pnp.cjs", ".pnp.js"} {
+		if info, err := os.Stat(filepath.Join(root, file)); err == nil && !info.IsDir() {
+			return true
+		}
+	}
+	return false
+}
+
 // EnsureRuntimeDependencies makes a robot runnable without asking its user to
 // understand node_modules or lock files. It only invokes the project's own
 // package manager when the on-disk dependency check finds something missing.
 func (m Manager) EnsureRuntimeDependencies(root string) (string, error) {
-	missing, err := m.RuntimeDependencies(root)
+	output, err := runPackageManager(root, "install")
 	if err != nil {
-		return "", err
+		return output, buildDependencyError("自动同步依赖失败", output, err)
 	}
-	if len(missing) == 0 {
-		return "", nil
-	}
-	output, installErr := m.installRuntimeDependencies(root, "自动同步依赖")
-	if installErr != nil {
-		return output, installErr
-	}
-	// Successful preparation is deliberately silent: it is only a prerequisite
-	// of the runtime action the user actually requested.
+	// npm, Yarn and pnpm own their respective caches and lock-file semantics.
+	// A successful install is sufficient preparation; do not second-guess it
+	// by probing individual node_modules paths.
 	return "", nil
 }
 

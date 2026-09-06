@@ -14,7 +14,7 @@ docker pull "$runtime_base" >/dev/null 2>&1 || { echo "❌ 无法拉取运行基
 # target image architecture, so running Vite in each BuildKit platform is slow
 # and unnecessary.
 echo "🔨 在当前设备上构建前端..."
-(cd frontend && corepack enable && yarn install --frozen-lockfile --non-interactive && yarn build)
+./scripts/build-frontend.sh
 
 # ========== 检查环境 ==========
 command -v docker >/dev/null 2>&1 || { echo '❌ 未检测到 Docker。' >&2; exit 1; }

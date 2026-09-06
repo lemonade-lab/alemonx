@@ -30,7 +30,7 @@ echo '==> Building the local runtime base for this machine'
 docker build -f Dockerfile.base -t "$base_image" .
 
 echo '==> Building the latest local ALemonX image'
-(cd frontend && corepack enable && yarn install --frozen-lockfile --non-interactive && yarn build)
+./scripts/build-frontend.sh
 docker build \
   --build-arg "ALX_RUNTIME_BASE=$base_image" \
   --build-arg "VERSION=$app_version" \

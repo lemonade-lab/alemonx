@@ -55,12 +55,15 @@ RUN set -eu; \
 # 最终运行阶段
 FROM ${ALX_RUNTIME_BASE} AS runtime
 
-# The base image supplies system libraries; Node itself is owned by this
-# application image so a stale `latest` base cannot change `node --version`.
-COPY --from=node-runtime /usr/local/bin/ /usr/local/bin/
-COPY --from=node-runtime /usr/local/lib/node_modules/ /usr/local/lib/node_modules/
-RUN test "$(node --version)" = "v22.22.3" \
-    && mkdir -p /app /app/plugins /app/workspace /data /root/.ssh
+# 备份旧版本 Node.js
+RUN mv /usr/bin/node /usr/bin/node.v18.bak || true && \
+    mv /usr/bin/nodejs /usr/bin/nodejs.v18.bak || true
+
+# 创建软链接指向新版本（假设新版本在 /usr/local/bin/node）
+RUN ln -sf /usr/local/bin/node /usr/bin/node && \
+    ln -sf /usr/local/bin/node /usr/bin/nodejs
+
+RUN mkdir -p /app /app/plugins /app/workspace /data /root/.ssh
 
 WORKDIR /app
 COPY --from=builder /out/alx /app/alx

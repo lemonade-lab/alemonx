@@ -1,0 +1,184 @@
+# alemonbase - ALemonX runtime base image
+# Build: docker build --progress=plain -t alemonbase:1.0.1 .
+# Interactive shell: docker run --rm -it --shm-size=1g alemonbase:1.0.1
+# Single-stage image: compilers are intentionally retained for downstream builds.
+
+FROM debian:bookworm-slim
+
+ARG NODE_VERSION=22.22.3
+ARG PYTHON_VERSION=3.12.11
+# This hash is for Python-3.12.11.tgz. Override it when changing PYTHON_VERSION.
+ARG PYTHON_SHA256=7b8d59af8216044d2313de8120bfc2cc00a9bd2e542f15795e1d616c51faf3d6
+ARG BUILD_JOBS=2
+ARG DEBIAN_MIRROR=http://deb.debian.org/debian
+ARG DEBIAN_SECURITY_MIRROR=http://deb.debian.org/debian-security
+ARG ALX_NODE_MIRROR=https://mirrors.aliyun.com/nodejs-release
+ARG ALX_PYTHON_MIRROR=https://mirrors.aliyun.com/python-release/source
+ARG ALX_PIP_MIRROR=https://mirrors.aliyun.com/pypi/simple/
+
+LABEL maintainer="ALemonX Team" \
+      org.opencontainers.image.title="alemonbase" \
+      org.opencontainers.image.description="ALemonX runtime base with Node.js ${NODE_VERSION} and Python ${PYTHON_VERSION}" \
+      org.opencontainers.image.version="1.0.1"
+
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+# 1. Install download tools, build dependencies and runtime tools together.
+# Keep signed APT metadata verification enabled; do not ignore update failures.
+# Chromium's Debian package supplies its transitive runtime libraries.
+RUN set -eux; \
+    rm -f /etc/apt/sources.list.d/debian.sources; \
+    printf 'deb %s bookworm main\ndeb %s bookworm-updates main\ndeb %s bookworm-security main\n' \
+        "${DEBIAN_MIRROR}" "${DEBIAN_MIRROR}" "${DEBIAN_SECURITY_MIRROR}" \
+        > /etc/apt/sources.list; \
+    apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o APT::Update::Error-Mode=any; \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        ca-certificates curl xz-utils tar gzip \
+        build-essential pkg-config \
+        libbz2-dev libexpat1-dev libffi-dev libgdbm-dev libgdbm-compat-dev \
+        liblzma-dev libncurses-dev libreadline-dev libsqlite3-dev libssl-dev \
+        uuid-dev zlib1g-dev \
+        git lsof openssh-client tini unzip procps \
+        fonts-noto-cjk fonts-noto-color-emoji \
+        chromium chromium-sandbox \
+        xvfb x11-utils x11-xkb-utils xkb-data xauth \
+        x11vnc novnc websockify \
+        libnss3 libgbm1 libglib2.0-0 libatk1.0-0 libatk-bridge2.0-0 \
+        libatspi2.0-0 libgtk-3-0 libasound2 libcups2 \
+        libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libxkbcommon0; \
+    gcc --version; \
+    g++ --version; \
+    make --version; \
+    apt-get clean; \
+    rm -rf /var/lib/apt/lists/*
+
+# 2. Node.js: mirror download with official fallback and SHA256 verification.
+# Limit the advertised target architectures to common prebuilt AI package targets.
+RUN set -eux; \
+    case "$(dpkg --print-architecture)" in \
+        amd64) node_arch=x64 ;; \
+        arm64) node_arch=arm64 ;; \
+        *) echo "Supported architectures: amd64, arm64" >&2; exit 1 ;; \
+    esac; \
+    node_archive="node-v${NODE_VERSION}-linux-${node_arch}.tar.xz"; \
+    node_base="https://nodejs.org/dist/v${NODE_VERSION}"; \
+    if ! curl -fSL --retry 3 --connect-timeout 20 --max-time 600 \
+        "${ALX_NODE_MIRROR%/}/v${NODE_VERSION}/${node_archive}" \
+        -o "/tmp/${node_archive}"; then \
+        curl -fSL --retry 3 --connect-timeout 20 --max-time 600 \
+            "${node_base}/${node_archive}" -o "/tmp/${node_archive}"; \
+    fi; \
+    curl -fSL --retry 3 --connect-timeout 20 --max-time 120 \
+        "${node_base}/SHASUMS256.txt" -o /tmp/node-shasums.txt; \
+    awk -v file="${node_archive}" '$2 == file {print; found=1} END {if (!found) exit 1}' \
+        /tmp/node-shasums.txt > /tmp/node-selected-shasum.txt; \
+    (cd /tmp && sha256sum -c node-selected-shasum.txt); \
+    tar -xJf "/tmp/${node_archive}" -C /usr/local --strip-components=1; \
+    rm -f "/tmp/${node_archive}" /tmp/node-shasums.txt /tmp/node-selected-shasum.txt; \
+    test "$(node --version)" = "v${NODE_VERSION}"; \
+    npm --version; \
+    corepack enable
+
+# 3. Build the requested Python version without changing Debian's /usr/bin/python3.
+# The default preserves the original application's Python version.
+RUN set -eux; \
+    python_archive="Python-${PYTHON_VERSION}.tgz"; \
+    if ! curl -fSL --retry 3 --connect-timeout 20 --max-time 600 \
+        "${ALX_PYTHON_MIRROR%/}/${python_archive}" -o "/tmp/${python_archive}"; then \
+        curl -fSL --retry 3 --connect-timeout 20 --max-time 600 \
+            "https://www.python.org/ftp/python/${PYTHON_VERSION}/${python_archive}" \
+            -o "/tmp/${python_archive}"; \
+    fi; \
+    printf '%s  %s\n' "${PYTHON_SHA256}" "/tmp/${python_archive}" | sha256sum -c -; \
+    tar -xzf "/tmp/${python_archive}" -C /tmp; \
+    cd "/tmp/Python-${PYTHON_VERSION}"; \
+    ./configure \
+        --prefix=/usr/local \
+        --with-ensurepip=install \
+        --enable-shared \
+        LDFLAGS="-Wl,-rpath=/usr/local/lib"; \
+    make -j"${BUILD_JOBS}"; \
+    make altinstall; \
+    ldconfig; \
+    python_minor="${PYTHON_VERSION%.*}"; \
+    ln -sf "/usr/local/bin/python${python_minor}" /usr/local/bin/python3; \
+    ln -sf "/usr/local/bin/python${python_minor}" /usr/local/bin/python; \
+    test "$(python3 -c 'import platform; print(platform.python_version())')" = "${PYTHON_VERSION}"; \
+    python3 -c 'import ssl, sqlite3, bz2, lzma, ctypes, readline, uuid, dbm.gnu'; \
+    cd /; \
+    rm -rf "/tmp/${python_archive}" "/tmp/Python-${PYTHON_VERSION}"
+
+# 4. Isolated application environment; Debian GUI scripts keep their system Python.
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_INDEX_URL=${ALX_PIP_MIRROR} \
+    VIRTUAL_ENV=/opt/venv \
+    PATH="/opt/venv/bin:${PATH}" \
+    NODE_ENV=production
+
+RUN set -eux; \
+    /usr/local/bin/python3 -m venv /opt/venv; \
+    python -m pip install --no-cache-dir --timeout 60 --retries 5 \
+        pip==24.3.1 setuptools==75.6.0 wheel==0.45.1
+
+# 5. Preserve application package versions, fixing the OpenAI constraint conflict.
+# Pin shared LangChain components to avoid resolving against later 0.3 releases.
+# This is a compatible top-level set, not a complete hash-locked dependency file.
+RUN set -eux; \
+    python -m pip install --no-cache-dir --timeout 60 --retries 5 \
+        langchain==0.3.0 \
+        langchain-community==0.3.0 \
+        langchain-openai==0.3.0 \
+        langchain-anthropic==0.3.0 \
+        langchain-core==0.3.29 \
+        langchain-text-splitters==0.3.0 \
+        langsmith==0.1.147 \
+        openai==1.58.1 \
+        anthropic==0.39.0 \
+        requests==2.32.3 \
+        httpx==0.27.2 \
+        aiohttp==3.10.0 \
+        aiofiles==24.1.0 \
+        python-dotenv==1.0.1 \
+        pyyaml==6.0.2 \
+        click==8.1.7 \
+        rich==13.9.4 \
+        tqdm==4.66.5 \
+        jieba==0.42.1 \
+        pydantic==2.9.2 \
+        pydantic-settings==2.6.1 \
+        sqlalchemy==2.0.35 \
+        websockets==13.1 \
+        loguru==0.7.2 \
+        pytest==8.3.3 \
+        pytest-asyncio==0.24.0; \
+    python -m pip check; \
+    mkdir -p /usr/local/share/alemonbase; \
+    python -m pip freeze > /usr/local/share/alemonbase/installed-requirements.txt
+
+# 6. Build-time smoke checks. Xvfb is stopped automatically by xvfb-run.
+# These checks do not require API keys or start persistent desktop services.
+RUN set -eux; \
+    python -m pip check; \
+    python -c 'import ssl, sqlite3, bz2, lzma, ctypes; import langchain, langchain_community, langchain_openai, langchain_anthropic, openai, anthropic'; \
+    command -v Xvfb; \
+    command -v xkbcomp; \
+    command -v x11vnc; \
+    command -v websockify; \
+    test -d /usr/share/X11/xkb; \
+    test -f /usr/share/novnc/vnc.html; \
+    xvfb-run -a -s '-screen 0 1280x720x24 -nolisten tcp' xdpyinfo > /dev/null; \
+    chromium --version; \
+    python --version; \
+    python -m pip --version; \
+    node --version; \
+    npm --version; \
+    gcc --version
+
+WORKDIR /app
+
+# A base image shell: application/desktop startup belongs to the derived image.
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["/bin/bash"]
