@@ -25,6 +25,8 @@ jobs:
         working-directory: frontend
       - run: yarn lint && yarn build
         working-directory: frontend
+      - name: Verify bundled DSH runtime
+        run: cd dsh && npm ci --ignore-scripts --no-audit --no-fund && npm run check
       - name: Bundle embedded Yarn
         run: |
           for dir in resources/packages/*; do
@@ -78,6 +80,8 @@ jobs:
           go-version: '1.23.x'
       - run: yarn install --frozen-lockfile --non-interactive && VITE_ALX_BUILD_ID=${GITHUB_REF_NAME} yarn build
         working-directory: frontend
+      - name: Bundle DSH runtime
+        run: cd dsh && npm ci --ignore-scripts --no-audit --no-fund && npm run check
       - name: Bundle embedded Yarn
         run: |
           for dir in resources/packages/*; do
@@ -89,6 +93,8 @@ jobs:
           mkdir -p bundle release
           GOARM=${{ matrix.goarm }} CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -trimpath -ldflags "-s -w -X main.Version=${GITHUB_REF_NAME} -X main.FrontendBuild=${GITHUB_REF_NAME}" -o "bundle/${{ matrix.binary }}" .
           printf '{"version":"%s","platform":"%s","architecture":"%s"}\n' "${GITHUB_REF_NAME}" "${{ matrix.goos }}" "${{ matrix.goarch }}" > bundle/alx-update.json
+          cp -R dsh bundle/dsh
+          test -x bundle/dsh/node_modules/.bin/dsh
           (cd bundle && zip -r "../release/${{ matrix.bundle }}" .)
           (cd release && sha256sum "${{ matrix.bundle }}" > "${{ matrix.bundle }}.sha256")
       - uses: actions/upload-artifact@v4

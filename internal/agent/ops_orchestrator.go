@@ -12,8 +12,13 @@ import (
 // web layer supplies guarded PM2/task callbacks, keeping this package safe to
 // test without spawning processes or calling an AI provider.
 type OpsOrchestrator struct {
-	Store    OpsRepository
-	Policy   func(string) (OpsPolicy, error)
+	Store  OpsRepository
+	Policy func(string) (OpsPolicy, error)
+	// StartDiagnostic creates a DSH session which may inspect the project and
+	// propose a repair. It must never make a write or PM2 change by itself.
+	StartDiagnostic func(Incident, AutoFixDecision) (string, error)
+	// StartFix is retained only for source compatibility with embedders. The
+	// automatic-maintenance path never calls it.
 	StartFix func(Incident, AutoFixDecision) (string, error)
 	// PM2 is retained for source compatibility with embedders. Production
 	// callers must provide PM2Guarded; the unguarded callback is never used by
@@ -71,50 +76,38 @@ func (o *OpsOrchestrator) Analyze(id string) (Incident, AutoFixDecision, error) 
 		if existing, ok := o.activeRunForIncident(incident.ID); ok {
 			return incident, decision, fmt.Errorf("事件已有进行中的维护任务：%s", existing.ID)
 		}
-		run := MaintenanceRun{ID: fmt.Sprintf("maint-%d", o.now().UnixNano()), IncidentID: incident.ID, Decision: decision, Status: "running", Created: o.now()}
-		if o.PM2Guarded == nil {
-			run.Status, run.Error = "failed", "PM2 围栏执行器未配置"
-		} else {
-			var output string
-			var actionErr error
-			output, actionErr = o.PM2Guarded(incident.ProjectRoot, "pm2-restart", incident.ID)
-			run.PM2Actions = []string{"pm2-restart"}
-			run.PM2ActionCount = 1
-			if actionErr != nil {
-				run.Status, run.Error = "failed", actionErr.Error()
-				recordMetric(o.Store, "maintenance_failure_total", incident.ProjectRoot, incident.Fingerprint, 1)
-			} else {
-				run.Status, run.VerificationOutput = "observing", output
-				recordMetric(o.Store, "maintenance_success_total", incident.ProjectRoot, incident.Fingerprint, 1)
-				run.ObservationStarted = o.now()
-				run.ObservationUntil = run.ObservationStarted.Add(time.Duration(policy.ObservationMinutes) * time.Minute)
-				incident.Status = IncidentObserving
-			}
-		}
+		decision.RequiresHuman = true
+		decision.Reason = strings.TrimSpace(decision.Reason + "；PM2 操作须在 DSH 会话中逐次审批")
+		run := MaintenanceRun{ID: fmt.Sprintf("maint-%d", o.now().UnixNano()), IncidentID: incident.ID, Decision: decision, PM2Actions: []string{"pm2-restart"}, Status: "pending_approval", ApprovalSource: "automatic", Created: o.now()}
+		incident.Status, incident.Decision, incident.DecisionReason = IncidentTodo, decision.Action, decision.Reason
+		_ = o.createTodo(incident, decision)
 		_ = o.Store.SaveMaintenance(run)
 		_ = o.Store.SaveIncident(incident)
 		return incident, decision, nil
 	}
-	if decision.Action == "auto_fix" && o.StartFix != nil {
+	if decision.Action == "auto_fix" {
 		if existing, ok := o.activeRunForIncident(incident.ID); ok {
 			return incident, decision, fmt.Errorf("事件已有进行中的维护任务：%s", existing.ID)
 		}
-		run := MaintenanceRun{ID: fmt.Sprintf("maint-%d", o.now().UnixNano()), IncidentID: incident.ID, Decision: decision, Status: "queued", Created: o.now()}
-		if _, budgetErr := o.Store.ConsumeBudget(incident.ProjectRoot, 1000, 0, 0); budgetErr != nil {
-			run.Status, run.Error = "failed", budgetErr.Error()
+		decision.RequiresHuman = true
+		decision.Reason = strings.TrimSpace(decision.Reason + "；仅创建 DSH 诊断与待审批修复计划")
+		run := MaintenanceRun{ID: fmt.Sprintf("maint-%d", o.now().UnixNano()), IncidentID: incident.ID, Decision: decision, Status: "pending_approval", ApprovalSource: "automatic", Created: o.now()}
+		if o.StartDiagnostic == nil {
+			run.Status, run.Error = "failed", "DSH 诊断执行器未配置"
 			_ = o.createTodo(incident, decision)
 			incident.Status = IncidentTodo
 			_ = o.Store.SaveMaintenance(run)
 			_ = o.Store.SaveIncident(incident)
 			return incident, decision, nil
 		}
-		taskID, startErr := o.StartFix(incident, decision)
+		sessionID, startErr := o.StartDiagnostic(incident, decision)
 		if startErr != nil {
 			run.Status, run.Error = "failed", startErr.Error()
 			_ = o.createTodo(incident, decision)
 		} else {
-			run.TaskID, run.Status = taskID, "fixing"
-			incident.LastTaskID, incident.Status = taskID, IncidentFixing
+			run.DSHSessionID = sessionID
+			incident.LastDSHSessionID, incident.Status = sessionID, IncidentTodo
+			_ = o.createTodo(incident, decision)
 		}
 		_ = o.Store.SaveMaintenance(run)
 		_ = o.Store.SaveIncident(incident)
@@ -132,7 +125,7 @@ func (o *OpsOrchestrator) activeRunForIncident(incidentID string) (MaintenanceRu
 	}
 	for _, run := range runs {
 		switch run.Status {
-		case "queued", "running", "fixing", "verifying", "observing":
+		case "queued", "running", "fixing", "verifying", "observing", "pending_approval", "human_review":
 			if run.IncidentID == incidentID {
 				return run, true
 			}
@@ -235,17 +228,17 @@ func (o *OpsOrchestrator) Approve(id string) (Incident, error) {
 	if decision.Action == "create_todo" {
 		return incident, errors.New("该事件仍被安全策略阻止")
 	}
-	if o.StartFix == nil {
-		return incident, errors.New("自动修复执行器未配置")
+	// This only transfers the suggestion to a human review. The actual DSH
+	// tool call creates its own one-time approval and this endpoint must not
+	// resurrect the legacy automatic executor.
+	runs, _ := o.Store.ListMaintenance()
+	for _, run := range runs {
+		if run.IncidentID == incident.ID && run.Status == "pending_approval" {
+			run.Status, run.ApprovalSource = "human_review", "human"
+			_ = o.Store.SaveMaintenance(run)
+		}
 	}
-	if existing, ok := o.activeRunForIncident(incident.ID); ok {
-		return incident, fmt.Errorf("事件已有进行中的维护任务：%s", existing.ID)
-	}
-	taskID, err := o.StartFix(incident, decision)
-	if err != nil {
-		return incident, err
-	}
-	incident.Status, incident.Decision, incident.LastTaskID, incident.Updated = IncidentFixing, "auto_fix_approved", taskID, o.now()
+	incident.Status, incident.Decision, incident.Updated = IncidentTodo, "human_review", o.now()
 	if err := o.Store.SaveIncident(incident); err != nil {
 		return incident, err
 	}

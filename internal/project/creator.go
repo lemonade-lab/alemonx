@@ -549,6 +549,7 @@ func run(directory string, logs *[]string, name string, args ...string) error {
 	if runtime, err := system.CurrentNodeRuntime(); err == nil {
 		command.Env = runtime.Environment
 	}
+	system.HideWindow(command)
 	output, err := command.CombinedOutput()
 	line := strings.TrimSpace(string(output))
 	if line != "" {

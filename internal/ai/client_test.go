@@ -72,14 +72,14 @@ func TestSaveFallsBackOnFetchFailure(t *testing.T) {
 	defer func() { httpClient.Transport = original }()
 
 	m := &Manager{path: t.TempDir() + "/alx-ai.json"}
-	if err := m.Save("deepseek", "https://api.deepseek.com/v1", "deepseek-chat", "secret"); err != nil {
+	if err := m.Save("deepseek", "https://api.deepseek.com/v1", "deepseek-flash", "secret"); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := m.Resolve("deepseek", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Model != "deepseek-chat" {
+	if cfg.Model != "deepseek-flash" {
 		t.Errorf("拉取失败时应用调用方传入的模型，实际 %q", cfg.Model)
 	}
 }
@@ -92,11 +92,11 @@ func TestForeignModel(t *testing.T) {
 		{"deepseek", "gpt-5.4", true},       // 错存了 OpenAI 模型
 		{"deepseek", "claude-sonnet-4-5", true},
 		{"deepseek", "deepseek-v4-flash", false},
-		{"deepseek", "deepseek-chat", false},
+		{"deepseek", "deepseek-flash", false},
 		{"openai", "gpt-5.4", false},
 		{"openai", "claude-opus-4-5", true},
 		{"claude", "claude-sonnet-4-5", false},
-		{"claude", "deepseek-chat", true},
+		{"claude", "deepseek-flash", true},
 	}
 	for _, c := range cases {
 		if got := foreignModel(c.id, c.model); got != c.want {

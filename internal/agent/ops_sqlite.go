@@ -746,6 +746,9 @@ func (s *SQLiteOpsRepository) ReconcileMaintenance(tasks []AgentTask) error {
 		return err
 	}
 	for _, run := range runs {
+		if run.DSHSessionID != "" || run.Status == "pending_approval" || run.Status == "human_review" {
+			continue
+		}
 		if _, ok := byID[run.TaskID]; !ok && run.Status != "completed" && run.Status != "failed" {
 			run.Status, run.Error = "recovery_required", "关联任务不存在"
 			_ = s.SaveMaintenance(run)

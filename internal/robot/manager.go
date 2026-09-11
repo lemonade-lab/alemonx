@@ -137,6 +137,7 @@ func (Manager) StreamPM2Logs(ctx context.Context, root string, onLine func(strin
 	command := exec.CommandContext(ctx, name, append(args, "logs", "--raw", "--lines", "0")...)
 	command.Dir = path
 	applyManagedNodeEnvironment(command)
+	HideWindow(command)
 	stdout, err := command.StdoutPipe()
 	if err != nil {
 		return err
@@ -1304,7 +1305,12 @@ func pm2JList(root string) (string, error) {
 // and downloads only when nothing else is available.
 func pm2Launcher(root string) (string, []string) {
 	if localPM2(root) {
-		return nodeToolPath("npx"), []string{"--no-install", "pm2"}
+		// Do not route a local PM2 through `npx --no-install pm2`. Newer npm
+		// implements npx as `npm exec`, which can briefly create a console on
+		// Windows for each status poll (notably `pm2 jlist`). Running PM2's
+		// JavaScript entry with Node directly keeps the process in the same
+		// hidden child process as the rest of the workbench commands.
+		return nodeToolPath("node"), []string{filepath.Join(root, "node_modules", "pm2", "bin", "pm2")}
 	}
 	if command, args, ok := resources.ToolCommand("pm2"); ok {
 		return command, args

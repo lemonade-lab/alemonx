@@ -10,8 +10,11 @@ require (
 
 require (
 	github.com/creack/pty v1.1.24 // indirect
+	github.com/danieljoos/wincred v1.2.3 // indirect
+	github.com/godbus/dbus/v5 v5.2.2 // indirect
 	github.com/ncruces/go-strftime v0.1.9 // indirect
 	github.com/yuin/gopher-lua v1.1.1 // indirect
+	github.com/zalando/go-keyring v0.2.7 // indirect
 	golang.org/x/exp v0.0.0-20230315142452-642cacee5cc0 // indirect
 )
 

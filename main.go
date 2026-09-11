@@ -504,10 +504,23 @@ func serve(host, port, redisPort string, redisOff bool, workspaceRoot string) {
 		log.Fatal(err)
 	}
 	runtime.SetPluginDownloadBrokerEndpoint("http://" + brokerListener.Addr().String())
+	bridgeListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		_ = brokerListener.Close()
+		_ = listener.Close()
+		log.Fatal(err)
+	}
+	runtime.SetDSHBridgeEndpoint("http://" + bridgeListener.Addr().String() + "/approval")
 	brokerServer := &http.Server{Handler: runtime.PluginDownloadBrokerHandler(), ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		if brokerErr := brokerServer.Serve(brokerListener); brokerErr != nil && brokerErr != http.ErrServerClosed {
 			log.Printf("插件官方下载 Broker 已停止：%v", brokerErr)
+		}
+	}()
+	bridgeServer := &http.Server{Handler: runtime.DSHBridgeHandler(), ReadHeaderTimeout: 10 * time.Second}
+	go func() {
+		if bridgeErr := bridgeServer.Serve(bridgeListener); bridgeErr != nil && bridgeErr != http.ErrServerClosed {
+			log.Printf("DSH loopback bridge 已停止：%v", bridgeErr)
 		}
 	}()
 	server := &http.Server{
@@ -525,6 +538,7 @@ func serve(host, port, redisPort string, redisOff bool, workspaceRoot string) {
 		defer cancel()
 		_ = runtime.Shutdown(shutdownCtx)
 		_ = brokerServer.Shutdown(shutdownCtx)
+		_ = bridgeServer.Shutdown(shutdownCtx)
 		_ = server.Shutdown(shutdownCtx)
 	}()
 

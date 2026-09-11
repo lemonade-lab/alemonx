@@ -17,6 +17,8 @@ import (
 	"strings"
 	"time"
 
+	"alemonx/internal/system"
+
 	"github.com/alicebob/miniredis/v2"
 )
 
@@ -81,6 +83,7 @@ func (m *Manager) startPrivateLocked(address string) error {
 	}
 	command := exec.Command(binary, config)
 	command.Dir = m.privateDataDir()
+	system.HideWindow(command)
 	if err := command.Start(); err != nil {
 		return fmt.Errorf("启动私有 Redis 失败：%w", err)
 	}

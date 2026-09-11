@@ -73,7 +73,7 @@ func TestLiveDeepSeekRoundTrip(t *testing.T) {
 	}
 	cfg := ai.Resolved{
 		BaseURL:   "https://api.deepseek.com",
-		Model:     "deepseek-chat",
+		Model:     "deepseek-flash",
 		APIKey:    key,
 		Anthropic: false,
 	}
@@ -127,7 +127,7 @@ func TestLiveDeepSeekToolEcho(t *testing.T) {
 	if key == "" {
 		t.Skip("未设置 ALX_LIVE_DEEPSEEK_KEY，跳过真实 API 测试")
 	}
-	cfg := ai.Resolved{BaseURL: "https://api.deepseek.com", Model: "deepseek-chat", APIKey: key}
+	cfg := ai.Resolved{BaseURL: "https://api.deepseek.com", Model: "deepseek-flash", APIKey: key}
 	registry := NewRegistry()
 	registry.Add(Tool{Name: "echo", Description: "回显一段文字", Parameters: map[string]any{
 		"type": "object", "properties": map[string]any{"text": map[string]any{"type": "string"}}, "required": []string{"text"},

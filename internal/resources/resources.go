@@ -30,6 +30,7 @@ import (
 	"sync"
 	"time"
 
+	"alemonx/internal/processutil"
 	"alemonx/internal/workspace"
 )
 
@@ -83,6 +84,7 @@ var (
 		defer cancel()
 		cmd := exec.CommandContext(ctx, command, args...)
 		cmd.Dir = directory
+		processutil.HideWindow(cmd)
 		if len(nodeEnvironment) > 0 && command == nodeProgram {
 			cmd.Env = append([]string(nil), nodeEnvironment...)
 		}

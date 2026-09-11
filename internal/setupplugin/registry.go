@@ -1132,6 +1132,7 @@ func (r *Registry) RunResultWithProgress(id, actionID string, params map[string]
 	} else {
 		command.Env = environment
 	}
+	system.HideWindow(command)
 	command.Stdin = strings.NewReader(string(payload))
 	stdout, err := command.StdoutPipe()
 	if err != nil {

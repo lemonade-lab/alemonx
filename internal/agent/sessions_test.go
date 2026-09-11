@@ -13,7 +13,7 @@ func newTestStore(t *testing.T) *SessionStore {
 
 func TestSessionStoreCreateAndList(t *testing.T) {
 	store := newTestStore(t)
-	session, err := store.Create("/path/to/robot", "deepseek", "deepseek-chat", "")
+	session, err := store.Create("/path/to/robot", "deepseek", "deepseek-flash", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,7 +31,7 @@ func TestSessionStoreCreateAndList(t *testing.T) {
 
 func TestSessionStoreLoadEmptyTranscriptReturnsEmptySlice(t *testing.T) {
 	store := newTestStore(t)
-	session, err := store.Create("/path/to/robot", "deepseek", "deepseek-chat", "")
+	session, err := store.Create("/path/to/robot", "deepseek", "deepseek-flash", "")
 	if err != nil {
 		t.Fatal(err)
 	}

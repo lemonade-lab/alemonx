@@ -38,6 +38,7 @@ import (
 	"alemonx/internal/agent"
 	"alemonx/internal/ai"
 	"alemonx/internal/catalog"
+	"alemonx/internal/dsh"
 	"alemonx/internal/githubauth"
 	"alemonx/internal/logging"
 	"alemonx/internal/project"
@@ -341,6 +342,10 @@ type server struct {
 	pluginDevelopment  *pluginDevelopmentManager
 	auth               *access.Manager
 	ai                 *ai.Manager
+	dshRuntimes        *dsh.RuntimeRegistry
+	dshSecrets         dsh.SecretStore
+	dshApprovals       *dshApprovalManager
+	dshEvents          *dshEventStore
 	agentSessions      *agent.SessionStore
 	agentTasks         *agent.TaskManager
 	taskService        *agent.TaskService
@@ -491,6 +496,7 @@ type ServerRuntime struct {
 	server          *server
 	once            sync.Once
 	updateOnce      sync.Once
+	dshRestoreOnce  sync.Once
 	updateRequested chan struct{}
 }
 
@@ -502,6 +508,17 @@ func (r *ServerRuntime) SetPluginDownloadBrokerEndpoint(endpoint string) {
 		return
 	}
 	r.server.pluginDownloadBroker.setEndpoint(endpoint)
+}
+
+// SetDSHBridgeEndpoint binds DSH approval requests to the private loopback
+// listener created by the executable. Runtime recovery waits for this endpoint
+// so a restored sidecar never starts without its fail-closed answerer.
+func (r *ServerRuntime) SetDSHBridgeEndpoint(endpoint string) {
+	if r == nil || r.server == nil || r.server.dshRuntimes == nil {
+		return
+	}
+	r.server.dshRuntimes.SetBridgeEndpoint(endpoint)
+	r.dshRestoreOnce.Do(func() { go r.server.restoreDSHRuntimes() })
 }
 
 // PluginDownloadBrokerHandler is intentionally narrower than the main HTTP
@@ -537,6 +554,14 @@ func (r *ServerRuntime) Shutdown(ctx context.Context) error {
 	var shutdownErr error
 	r.once.Do(func() {
 		s := r.server
+		// Legacy maintenance records can still exist while the read-only archive
+		// migration is in progress. Preserve their checkpoints on shutdown rather
+		// than leaving an in-flight task marked running.
+		if s.agentTasks != nil {
+			if err := s.agentTasks.PauseRunning(); err != nil && shutdownErr == nil {
+				shutdownErr = err
+			}
+		}
 		if s.opsMonitor != nil {
 			_ = s.opsMonitor.Stop()
 		}
@@ -571,8 +596,13 @@ func (r *ServerRuntime) Shutdown(ctx context.Context) error {
 				close(s.updateMonitorStop)
 			}
 		}
-		if err := s.agentTasks.PauseRunning(); err != nil {
-			shutdownErr = err
+		if s.dshRuntimes != nil {
+			if err := s.dshRuntimes.StopAll(ctx); err != nil && shutdownErr == nil {
+				shutdownErr = err
+			}
+		}
+		if s.dshApprovals != nil {
+			s.dshApprovals.cancelAll()
 		}
 		if s.opsStore != nil {
 			if err := s.opsStore.Close(); err != nil && shutdownErr == nil {
@@ -777,7 +807,8 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	downloadBroker := newPluginDownloadBroker(networkManager)
 	downloadBroker.setRegistry(plugins)
 	plugins.SetRunnerEnvironmentProvider(downloadBroker.environment)
-	s := &server{version: version, frontendBuild: options.FrontendBuild, assets: assets, static: http.FileServer(http.FS(assets)), checker: system.NewChecker(), network: networkManager, plugins: plugins, auth: identity, ai: aiManager, agentSessions: sessionStore, agentTaskStore: taskStore, agentTasks: tasks, taskService: &agent.TaskService{Manager: tasks}, goalStore: goalStore, opsStore: opsStore, chatHistory: chatHistory, testoneRecords: testoneRecords, opsProjects: opsProjects, opsBackground: startBackground, opsPaused: opsStartupErr != nil, goalSchedulerStop: make(chan struct{}), goalRunning: map[string]bool{}, agentConfirms: newAgentConfirmManager(), development: map[string]developmentProcess{}, scriptProcesses: map[string]scriptProcess{}, botAppPageRuntimes: map[string]*botAppPageRuntime{}, stopping: map[string]bool{}, consoleCache: map[string]consoleSnapshot{}, outputBuffers: map[string]*operationOutputBuffer{}, directoryRoots: managedDirectoryRoots(), events: newRobotEventHub(), eventGateway: newEventGateway(), operationEvents: operationEvents, operations: operationEvents.snapshot(), opsEvents: newOpsEventHub(), mcpEvents: newMCPEventHub(), mcpMonitorStop: make(chan struct{}), pluginEventsStop: make(chan struct{}), updateMonitorStop: make(chan struct{}), updateState: updateStatusState{Update: releases.Update{Current: version}}, nodeID: fmt.Sprintf("%s-%d", hostname(), os.Getpid()), pluginStatusCache: map[string]*pluginStatusSnapshot{}, hostContexts: map[string]pluginHostContext{}, privilegeStore: privileges, pluginDownloadBroker: downloadBroker, sudoAttempts: map[string]sudoAttempt{}, runPrivilegedCommand: system.RunSudoCommand, installEnvironment: system.InstallEnvironment, liveUploads: map[string]liveUpload{}, terminalSessions: newTerminalSessionStore()}
+	s := &server{version: version, frontendBuild: options.FrontendBuild, assets: assets, static: http.FileServer(http.FS(assets)), checker: system.NewChecker(), network: networkManager, plugins: plugins, auth: identity, ai: aiManager, dshRuntimes: newDSHRegistry(), dshSecrets: dsh.KeyringSecretStore{}, dshApprovals: newDSHApprovalManager(), dshEvents: newDSHEventStore(filepath.Join(filepath.Dir(taskStore.TasksDir()), "dsh-events")), agentSessions: sessionStore, agentTaskStore: taskStore, agentTasks: tasks, taskService: &agent.TaskService{Manager: tasks}, goalStore: goalStore, opsStore: opsStore, chatHistory: chatHistory, testoneRecords: testoneRecords, opsProjects: opsProjects, opsBackground: startBackground, opsPaused: opsStartupErr != nil, goalSchedulerStop: make(chan struct{}), goalRunning: map[string]bool{}, agentConfirms: newAgentConfirmManager(), development: map[string]developmentProcess{}, scriptProcesses: map[string]scriptProcess{}, botAppPageRuntimes: map[string]*botAppPageRuntime{}, stopping: map[string]bool{}, consoleCache: map[string]consoleSnapshot{}, outputBuffers: map[string]*operationOutputBuffer{}, directoryRoots: managedDirectoryRoots(), events: newRobotEventHub(), eventGateway: newEventGateway(), operationEvents: operationEvents, operations: operationEvents.snapshot(), opsEvents: newOpsEventHub(), mcpEvents: newMCPEventHub(), mcpMonitorStop: make(chan struct{}), pluginEventsStop: make(chan struct{}), updateMonitorStop: make(chan struct{}), updateState: updateStatusState{Update: releases.Update{Current: version}}, nodeID: fmt.Sprintf("%s-%d", hostname(), os.Getpid()), pluginStatusCache: map[string]*pluginStatusSnapshot{}, hostContexts: map[string]pluginHostContext{}, privilegeStore: privileges, pluginDownloadBroker: downloadBroker, sudoAttempts: map[string]sudoAttempt{}, runPrivilegedCommand: system.RunSudoCommand, installEnvironment: system.InstallEnvironment, liveUploads: map[string]liveUpload{}, terminalSessions: newTerminalSessionStore()}
+	_ = startBackground // DSH restoration starts after the loopback bridge binds.
 	go s.reapTerminalSessions()
 	s.redisManager = redis.NewManager(filepath.Join(filepath.Dir(taskStore.TasksDir()), "alx-redis.json"))
 	if options.RedisPort > 0 || options.RedisDisabled {
@@ -854,40 +885,34 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 			}
 			return agent.AutoFixDecision{}, errors.New("没有可用的 AI Provider")
 		},
-		PM2Guarded: func(root, action, owner string) (string, error) {
-			if !s.opsEnabled(root) {
-				return "", errors.New("该项目未启用高级运维")
-			}
-			return pm2Guard.Run(context.Background(), root, action, owner)
-		},
-		StartFix: func(incident agent.Incident, _ agent.AutoFixDecision) (string, error) {
+		StartDiagnostic: func(incident agent.Incident, _ agent.AutoFixDecision) (string, error) {
 			if !s.opsEnabled(incident.ProjectRoot) {
 				return "", errors.New("该项目未启用高级运维")
 			}
 			if s.opsPaused {
 				return "", errors.New("全局 AI 运维已暂停")
 			}
-			policy, policyErr := s.opsStore.GetPolicy(incident.ProjectRoot)
-			if policyErr != nil || !policy.AllowCodeChanges {
-				return "", errors.New("当前策略不允许自动代码修改")
-			}
-			if _, verifyErr := agent.ParsePolicyVerificationCommand(policy.VerificationCommand); verifyErr != nil {
-				return "", errors.New("策略验证命令不可执行：" + verifyErr.Error())
-			}
-			providers, err := s.ai.List()
+			runtime, err := s.dshRuntimes.Runtime(incident.ProjectRoot)
 			if err != nil {
 				return "", err
 			}
-			for _, provider := range providers {
-				if !provider.HasKey {
-					continue
-				}
-				created, createErr := s.createAgentTask(agentTaskInput{Provider: provider.ID, Model: provider.Model, Root: incident.ProjectRoot, Access: "auto", Messages: []map[string]string{{"role": "user", "content": "生产错误自动维护：" + incident.Sample + "\n请先定位根因，仅修改必要文件，并运行策略验证命令。"}}, Isolation: "workspace", AutoMaintenance: true, VerificationCommand: policy.VerificationCommand}, false)
-				if createErr == nil {
-					return created.ID, nil
-				}
+			if !runtime.Status().Ready {
+				return "", errors.New("DSH runtime 未配置或尚未就绪")
 			}
-			return "", errors.New("没有已配置的 AI Provider")
+			sessionID, err := runtime.CreateSession(context.Background())
+			if err != nil {
+				return "", err
+			}
+			if s.dshEvents != nil {
+				s.dshEvents.ensureRelay(robotAppToken(incident.ProjectRoot), runtime)
+			}
+			prompt := "生产事件诊断（只读）：\n" + incident.Sample + "\n请仅使用项目内只读工具定位可能根因并给出修复与验证计划。禁止写入文件、执行 shell、修改 PM2、访问网络或输出任何凭据。所有后续写入、验证命令和 PM2 操作必须等用户逐次审批。"
+			promptCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			if _, err := runtime.Prompt(promptCtx, sessionID, truncateBridgeText(prompt, 12<<10)); err != nil {
+				return "", err
+			}
+			return sessionID, nil
 		},
 	}
 	if webhook := strings.TrimSpace(os.Getenv("ALX_OPS_WEBHOOK_URL")); webhook != "" {
@@ -897,7 +922,8 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	_ = s.goalStore.ReconcileRuns(s.agentTasks.List())
 	if len(s.monitorableRoots()) > 0 {
 		s.opsMonitor = s.newOpsMonitor()
-		_ = s.opsStore.ReconcileMaintenance(s.agentTasks.List())
+		// DSH maintenance records carry their own session identity; legacy task
+		// reconciliation remains for archived records only.
 	}
 	s.agentTasks.SetObserver(func(previous, current agent.AgentTask) {
 		if previous.Status != current.Status && s.opsStore != nil {
@@ -1054,15 +1080,13 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	mux.HandleFunc("/api/v1/ai/providers", s.aiProvidersHandler)
 	mux.HandleFunc("/api/v1/ai/models", s.aiModelsHandler)
 	mux.HandleFunc("/api/v1/ai/chat", s.aiChatHandler)
-	mux.HandleFunc("/api/v1/agent/chat", s.agentChatHandler)
-	mux.HandleFunc("/api/v1/agent/sessions", s.agentSessionsHandler)
-	mux.HandleFunc("/api/v1/agent/sessions/", s.agentSessionHandler)
-	mux.HandleFunc("/api/v1/agent/approve", s.agentConfirmHandler)
-	mux.HandleFunc("/api/v1/agent/tasks", s.agentTasksHandler)
-	mux.HandleFunc("/api/v1/agent/tasks/", s.agentTaskHandler)
-	mux.HandleFunc("/api/v1/agent/diagnostics", s.agentDiagnosticsHandler)
-	mux.HandleFunc("/api/v1/agent/goals", s.agentGoalsHandler)
-	mux.HandleFunc("/api/v1/agent/goals/", s.agentGoalHandler)
+	mux.HandleFunc("/api/v1/dsh/", s.dshHandler)
+	mux.HandleFunc("/api/v1/agent-archive/", s.agentArchiveHandler)
+	// The legacy Agent API is intentionally gone. Keep it outside the SPA
+	// fallback so stale clients receive an unambiguous API error, never HTML.
+	mux.HandleFunc("/api/v1/agent/", func(w http.ResponseWriter, r *http.Request) {
+		writeError(w, http.StatusNotFound, "旧 Agent API 已移除；请使用 /api/v1/dsh/。")
+	})
 	mux.HandleFunc("/api/v1/ops/", s.opsHandler)
 	mux.HandleFunc("/api/v1/ops", s.opsHandler)
 	mux.HandleFunc("/api/v1/ops/events", s.opsEventsHandler)
@@ -2849,7 +2873,6 @@ func (s *server) handleManifestSudoAction(w http.ResponseWriter, r *http.Request
 	}
 	s.mu.Unlock()
 	go func() {
-		defer clearSudoPassword(password)
 		s.updateOperation(created.ID, 5, "正在验证管理员授权…", "", false)
 		ctx, cancel := context.WithTimeout(context.Background(), system.PrivilegedCommandTimeout)
 		defer cancel()
@@ -2859,6 +2882,11 @@ func (s *server) handleManifestSudoAction(w http.ResponseWriter, r *http.Request
 		}
 		s.updateOperation(created.ID, 35, "正在执行系统操作…", "", false)
 		output, runErr := runCommand(ctx, password, command.Program, command.Args)
+		// Do this before publishing the terminal operation state. Besides
+		// shortening the credential lifetime, callers observing completion can
+		// never race the zeroing of the transient buffer.
+		clearSudoPassword(password)
+		password = nil
 		if errors.Is(runErr, system.ErrSudoPasswordInvalid) {
 			s.recordSudoPasswordFailure(key)
 		} else if runErr == nil {
@@ -4419,6 +4447,7 @@ func (s *server) robotTerminalHandler(w http.ResponseWriter, r *http.Request) {
 		cmd = exec.CommandContext(ctx, "/bin/sh", "-lc", command)
 	}
 	cmd.Dir = workingDirectory
+	robot.HideWindow(cmd)
 	output, runErr := cmd.CombinedOutput()
 	text := string(output)
 	if runErr != nil {
@@ -5964,6 +5993,7 @@ func (s *server) runCommandForPort(name string, args ...string) (string, error) 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, name, args...)
+	robot.HideWindow(cmd)
 	output, err := cmd.Output()
 	return string(output), err
 }

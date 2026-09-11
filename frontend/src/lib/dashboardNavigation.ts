@@ -14,8 +14,7 @@ export type DashboardNavigation = {
   section: DashboardSection
   buildMode: DashboardBuildMode
   configEditor: DashboardConfigEditor
-  agentOpen: boolean
-  sessionID: string
+  dshOpen: boolean
   hasPage: boolean
 }
 
@@ -54,8 +53,8 @@ export function readDashboardNavigation(search: string): DashboardNavigation {
   const requestedSection = parameters.get('section')
   const requestedBuildMode = parameters.get('build')
   const requestedConfigEditor = parameters.get('editor')
-  const agentOpen = parameters.get('agent') === '1'
-  const page = agentOpen
+  const dshOpen = parameters.get('dsh') === '1'
+  const page = dshOpen
     ? 'robot'
     : dashboardPages.has(requestedPage as DashboardPage)
       ? (requestedPage as DashboardPage)
@@ -79,8 +78,7 @@ export function readDashboardNavigation(search: string): DashboardNavigation {
       dashboardConfigEditors.has(requestedConfigEditor as DashboardConfigEditor)
         ? (requestedConfigEditor as DashboardConfigEditor)
         : 'visual',
-    agentOpen,
-    sessionID: agentOpen ? parameters.get('session') ?? '' : '',
+    dshOpen,
     hasPage: requestedPage !== null
   }
 }
@@ -90,7 +88,7 @@ export function writeDashboardNavigation(
   navigation: Omit<DashboardNavigation, 'hasPage'>
 ) {
   const parameters = new URLSearchParams(search)
-  const page = navigation.agentOpen ? 'robot' : navigation.page
+  const page = navigation.dshOpen ? 'robot' : navigation.page
 
   parameters.set('page', page)
   if (navigation.root) parameters.set('root', navigation.root)
@@ -106,14 +104,13 @@ export function writeDashboardNavigation(
     parameters.set('editor', navigation.configEditor)
   else parameters.delete('editor')
 
-  if (page === 'robot' && navigation.agentOpen) {
-    parameters.set('agent', '1')
-    if (navigation.sessionID) parameters.set('session', navigation.sessionID)
-    else parameters.delete('session')
+  if (page === 'robot' && navigation.dshOpen) {
+    parameters.set('dsh', '1')
   } else {
-    parameters.delete('agent')
-    parameters.delete('session')
+    parameters.delete('dsh')
   }
+  parameters.delete('agent')
+  parameters.delete('session')
 
   const value = parameters.toString()
   return value ? `?${value}` : ''

@@ -87,24 +87,28 @@ type LogCursor struct {
 }
 
 type Incident struct {
-	ID             string         `json:"id"`
-	ProjectRoot    string         `json:"projectRoot"`
-	ProcessName    string         `json:"processName"`
-	Fingerprint    string         `json:"fingerprint"`
-	Status         IncidentStatus `json:"status"`
-	Severity       string         `json:"severity"`
-	Occurrences    int            `json:"occurrences"`
-	FirstSeen      time.Time      `json:"firstSeen"`
-	LastSeen       time.Time      `json:"lastSeen"`
-	LastTaskID     string         `json:"lastTaskId,omitempty"`
-	TodoID         string         `json:"todoId,omitempty"`
-	Decision       string         `json:"decision,omitempty"`
-	DecisionReason string         `json:"decisionReason,omitempty"`
-	Sample         string         `json:"sample,omitempty"`
-	File           string         `json:"file,omitempty"`
-	Line           int            `json:"line,omitempty"`
-	Stack          string         `json:"stack,omitempty"`
-	Updated        time.Time      `json:"updated"`
+	ID          string         `json:"id"`
+	ProjectRoot string         `json:"projectRoot"`
+	ProcessName string         `json:"processName"`
+	Fingerprint string         `json:"fingerprint"`
+	Status      IncidentStatus `json:"status"`
+	Severity    string         `json:"severity"`
+	Occurrences int            `json:"occurrences"`
+	FirstSeen   time.Time      `json:"firstSeen"`
+	LastSeen    time.Time      `json:"lastSeen"`
+	LastTaskID  string         `json:"lastTaskId,omitempty"`
+	// LastDSHSessionID identifies the DSH diagnostic session associated with an
+	// automated maintenance suggestion. It is distinct from the retired legacy
+	// Agent task identifier.
+	LastDSHSessionID string    `json:"lastDshSessionId,omitempty"`
+	TodoID           string    `json:"todoId,omitempty"`
+	Decision         string    `json:"decision,omitempty"`
+	DecisionReason   string    `json:"decisionReason,omitempty"`
+	Sample           string    `json:"sample,omitempty"`
+	File             string    `json:"file,omitempty"`
+	Line             int       `json:"line,omitempty"`
+	Stack            string    `json:"stack,omitempty"`
+	Updated          time.Time `json:"updated"`
 }
 
 type OpsPolicy struct {
@@ -168,6 +172,7 @@ type MaintenanceRun struct {
 	ID                 string           `json:"id"`
 	IncidentID         string           `json:"incidentId"`
 	TaskID             string           `json:"taskId,omitempty"`
+	DSHSessionID       string           `json:"dshSessionId,omitempty"`
 	Decision           AutoFixDecision  `json:"decision"`
 	PM2Actions         []string         `json:"pm2Actions,omitempty"`
 	ModifiedFiles      []string         `json:"modifiedFiles,omitempty"`
@@ -618,6 +623,9 @@ func (s *OpsStore) ReconcileMaintenance(tasks []AgentTask) error {
 		return err
 	}
 	for _, run := range runs {
+		if run.DSHSessionID != "" || run.Status == "pending_approval" || run.Status == "human_review" {
+			continue
+		}
 		if run.Status != "fixing" && run.Status != "verifying" && run.Status != "observing" && run.Status != "queued" {
 			continue
 		}

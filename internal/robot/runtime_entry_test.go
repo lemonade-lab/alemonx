@@ -126,6 +126,24 @@ func TestParsePM2ProcessesMapsJListFields(t *testing.T) {
 	}
 }
 
+// TestPM2LauncherRunsProjectLocalPM2WithNodeDirectly prevents Windows status
+// polling from taking the npx -> npm exec route, which flashes a console.
+func TestPM2LauncherRunsProjectLocalPM2WithNodeDirectly(t *testing.T) {
+	root := t.TempDir()
+	entry := filepath.Join(root, "node_modules", "pm2", "bin", "pm2")
+	if err := os.MkdirAll(filepath.Dir(entry), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(entry, []byte("#!/usr/bin/env node\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	name, args := pm2Launcher(root)
+	if filepath.Base(name) == "npx" || len(args) != 1 || args[0] != entry {
+		t.Fatalf("local PM2 launcher = %q %#v, want node and %q", name, args, entry)
+	}
+}
+
 // TestAppPortReadsAndSavesServerPort covers the "应用" flow: reading the
 // configured port from alemon.config.yaml, the default fallback, and writing a
 // new port (replacing an existing serverPort or appending one).

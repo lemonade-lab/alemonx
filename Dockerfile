@@ -11,6 +11,14 @@ WORKDIR /out
 COPY resources/packages/yarn/package.json resources/packages/yarn/package-lock.json ./yarn/
 RUN (cd yarn && npm ci --no-bin-links --ignore-scripts --no-audit --no-fund)
 
+# DSH is an application-owned sidecar, never a user-global installation. The
+# lockfile is copied separately so changes to Go or the frontend do not bust
+# the expensive Harness dependency layer.
+FROM node-runtime AS dsh-runtime
+WORKDIR /out/dsh
+COPY dsh/package.json dsh/package-lock.json ./
+RUN npm ci --ignore-scripts --no-audit --no-fund && npm run check
+
 # 后端构建阶段
 FROM golang:1.24 AS builder
 WORKDIR /src
@@ -67,6 +75,7 @@ RUN mkdir -p /app /app/plugins /app/workspace /data /root/.ssh
 
 WORKDIR /app
 COPY --from=builder /out/alx /app/alx
+COPY --from=dsh-runtime /out/dsh /app/dsh
 
 # 授权
 # docker-compose 会将持久数据挂载到 /root；启动脚本会在挂载完成后写入
@@ -81,7 +90,9 @@ ENV HOME=/root \
     XDG_CACHE_HOME=/root/cache \
     ALX_WORKSPACE=/app/workspace \
     ALEMONJS_SETUP_ROOTS=/app/workspace \
-    YARN_CACHE_FOLDER=/app/.yarn_cache
+    YARN_CACHE_FOLDER=/app/.yarn_cache \
+    ALX_DSH_BIN=/app/dsh/node_modules/.bin/dsh \
+    ALX_DSH_SECRET_FILE=/run/secrets/deepseek_api_key
 
 EXPOSE 17390
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/alx-entrypoint", "/app/alx"]

@@ -447,6 +447,7 @@ func (m *pluginDevelopmentManager) build(id string) (pluginDevelopmentView, erro
 	run := exec.CommandContext(ctx, program, args...)
 	run.Dir, run.Stdout, run.Stderr = source, log, log
 	run.Env = append(environment, "ALX_PLUGIN_STORE="+store)
+	system.HideWindow(run)
 	if notice != "" {
 		_, _ = log.Write([]byte(notice + "\n"))
 	}
@@ -591,6 +592,7 @@ func startPluginDevelopmentCommand(source string, command *setupplugin.CommandSp
 	run := exec.Command(program, args...)
 	run.Dir, run.Stdout, run.Stderr = source, log, log
 	run.Env = append(environment, "ALX_PLUGIN_DEV_PORT="+strconv.Itoa(port), "ALX_PLUGIN_SOURCE="+source, "ALX_PLUGIN_STORE="+store)
+	system.HideWindow(run)
 	if notice != "" {
 		_, _ = log.Write([]byte(notice + "\n"))
 	}

@@ -126,6 +126,61 @@ func TestOpsOrchestratorDoesNotDuplicateActiveMaintenance(t *testing.T) {
 	}
 }
 
+func TestOpsOrchestratorQueuesPM2RestartForOneTimeApproval(t *testing.T) {
+	store := NewOpsStoreAt(t.TempDir())
+	incident := Incident{ID: "inc-pm2", ProjectRoot: "/tmp/project", ProcessName: "app", Sample: "fatal crash", Status: IncidentDetected, Severity: "high", Updated: time.Now()}
+	if err := store.SaveIncident(incident); err != nil {
+		t.Fatal(err)
+	}
+	pm2Calls := 0
+	o := &OpsOrchestrator{Store: store, Policy: func(string) (OpsPolicy, error) {
+		return OpsPolicy{Mode: "auto", AutoAllowed: true, AllowPM2Control: true}, nil
+	}, PM2Guarded: func(string, string, string) (string, error) { pm2Calls++; return "", nil }}
+	updated, decision, err := o.Analyze(incident.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Action != "restart_process" || !decision.RequiresHuman || updated.Status != IncidentTodo {
+		t.Fatalf("restart must become a pending human action: %+v %+v", updated, decision)
+	}
+	if pm2Calls != 0 {
+		t.Fatal("automatic analysis must never execute PM2")
+	}
+	runs, err := store.ListMaintenance()
+	if err != nil || len(runs) != 1 || runs[0].Status != "pending_approval" || len(runs[0].PM2Actions) != 1 {
+		t.Fatalf("unexpected maintenance run: %+v err=%v", runs, err)
+	}
+}
+
+func TestOpsOrchestratorCreatesDSHDiagnosticInsteadOfLegacyTask(t *testing.T) {
+	store := NewOpsStoreAt(t.TempDir())
+	incident := Incident{ID: "inc-dsh", ProjectRoot: "/tmp/project", ProcessName: "app", Sample: "TypeError", File: "src/app.ts", Line: 7, Status: IncidentDetected, Severity: "medium", Updated: time.Now()}
+	if err := store.SaveIncident(incident); err != nil {
+		t.Fatal(err)
+	}
+	legacyCalls, diagnosticCalls := 0, 0
+	o := &OpsOrchestrator{Store: store, Policy: func(string) (OpsPolicy, error) {
+		return OpsPolicy{Mode: "auto", AutoAllowed: true, AllowCodeChanges: true, VerificationCommand: "go test ./..."}, nil
+	}, StartFix: func(Incident, AutoFixDecision) (string, error) { legacyCalls++; return "legacy-task", nil }, StartDiagnostic: func(Incident, AutoFixDecision) (string, error) {
+		diagnosticCalls++
+		return "alx-diagnostic", nil
+	}}
+	updated, decision, err := o.Analyze(incident.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Action != "auto_fix" || !decision.RequiresHuman || updated.LastDSHSessionID != "alx-diagnostic" || updated.Status != IncidentTodo {
+		t.Fatalf("unexpected DSH transition: %+v %+v", updated, decision)
+	}
+	if diagnosticCalls != 1 || legacyCalls != 0 {
+		t.Fatalf("diagnostic=%d legacy=%d", diagnosticCalls, legacyCalls)
+	}
+	runs, err := store.ListMaintenance()
+	if err != nil || len(runs) != 1 || runs[0].DSHSessionID != "alx-diagnostic" || runs[0].Status != "pending_approval" || runs[0].TaskID != "" {
+		t.Fatalf("unexpected DSH maintenance record: %+v err=%v", runs, err)
+	}
+}
+
 func TestOpsMonitorPersistsEventDeduplication(t *testing.T) {
 	dir := t.TempDir()
 	store := NewOpsStoreAt(dir)

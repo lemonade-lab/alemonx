@@ -61,3 +61,5 @@ pnpm-lock.yaml
 
 /alemonx
 /data
+/dsh/node_modules
+!/dsh/package-lock.json

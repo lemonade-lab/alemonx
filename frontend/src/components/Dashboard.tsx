@@ -122,7 +122,7 @@ import { OpsCenter } from './OpsCenter'
 import { OpsOverview } from './OpsOverview'
 import { NpmPublishPanel } from './NpmPublishPanel'
 import { PackageManifestPanel } from './PackageManifestPanel'
-import { AgentChatPage } from './AgentChat'
+import { DSHWorkspace } from './DSHWorkspace'
 import { ErrorNotice } from './ErrorNotice'
 import { EmptyState } from './EmptyState'
 import { ConfirmDialog } from './ConfirmDialog'
@@ -1229,18 +1229,7 @@ export function Dashboard({
   const [pendingProjectRemoval, setPendingProjectRemoval] = useStoreState<
     string | null
   >(null)
-  const [aiOpen, setAIOpen] = useStoreState(() => navigationFromURL.agentOpen)
-  const [agentSessions, setAgentSessions] = useStoreState<
-    Array<{ id: string; title: string; root: string; updated: string }>
-  >([])
-  const [agentSessionId, setAgentSessionId] = useStoreState(
-    () => navigationFromURL.sessionID
-  )
-  const [renameTarget, setRenameTarget] = useStoreState<{
-    id: string
-    title: string
-  } | null>(null)
-  const [renameTitle, setRenameTitle] = useStoreState('')
+  const [aiOpen, setAIOpen] = useStoreState(() => navigationFromURL.dshOpen)
   const activateFloatingWindow = useCallback(
     (id: FloatingWindowID) => {
       const layer = ++nextWindowLayer.current
@@ -1355,38 +1344,6 @@ export function Dashboard({
     return () =>
       window.removeEventListener('alx:desktop-terminal-toggle', toggleTerminal)
   }, [activateFloatingWindow, consoleOpen, setConsoleMinimized, setConsoleOpen])
-  const loadAgentSessions = useCallback(async () => {
-    try {
-      const response = await fetch('/api/v1/agent/sessions')
-      if (!response.ok) return
-      const data = (await response.json()) as Array<{
-        id: string
-        title: string
-        root: string
-        updated: string
-      }>
-      setAgentSessions(data)
-    } catch {
-      // 会话列表加载失败不阻塞
-    }
-  }, [setAgentSessions])
-  useEffect(() => {
-    void loadAgentSessions()
-  }, [loadAgentSessions, setAgentSessionId])
-  useEffect(() => {
-    const refresh = () => {
-      void loadAgentSessions()
-    }
-    const clearSession = () => {
-      setAgentSessionId('')
-    }
-    window.addEventListener('alx:agent-session-created', refresh)
-    window.addEventListener('alx:agent-new-session', clearSession)
-    return () => {
-      window.removeEventListener('alx:agent-session-created', refresh)
-      window.removeEventListener('alx:agent-new-session', clearSession)
-    }
-  }, [loadAgentSessions, setAgentSessionId])
   const environmentChecked = useRef(false)
   const pendingRootValidation = useRef<string | null>(null)
   const removedProjectRoots = useRef<Set<string>>(new Set())
@@ -1501,8 +1458,7 @@ export function Dashboard({
         section: 'runtime',
         buildMode,
         configEditor,
-        agentOpen: false,
-        sessionID: ''
+        dshOpen: false
       })
       if (search === location.search) {
         dispatch(selectProject(id))
@@ -1549,17 +1505,12 @@ export function Dashboard({
       setConfigEditor(navigationFromURL.configEditor)
       changed = true
     }
-    if (aiOpen !== navigationFromURL.agentOpen) {
-      setAIOpen(navigationFromURL.agentOpen)
-      changed = true
-    }
-    if (agentSessionId !== navigationFromURL.sessionID) {
-      setAgentSessionId(navigationFromURL.sessionID)
+    if (aiOpen !== navigationFromURL.dshOpen) {
+      setAIOpen(navigationFromURL.dshOpen)
       changed = true
     }
     if (changed) applyingURLNavigation.current = true
   }, [
-    agentSessionId,
     aiOpen,
     buildMode,
     configEditor,
@@ -1567,7 +1518,6 @@ export function Dashboard({
     navigationFromURL,
     page,
     section,
-    setAgentSessionId,
     setAIOpen,
     setBuildMode,
     setConfigEditor,
@@ -1589,8 +1539,7 @@ export function Dashboard({
       section,
       buildMode,
       configEditor,
-      agentOpen: aiOpen,
-      sessionID: agentSessionId
+      dshOpen: aiOpen
     })
     if (search === location.search) {
       pendingHistoryNavigation.current = false
@@ -1602,7 +1551,6 @@ export function Dashboard({
     )
     pendingHistoryNavigation.current = false
   }, [
-    agentSessionId,
     aiOpen,
     buildMode,
     configEditor,
@@ -3223,53 +3171,13 @@ export function Dashboard({
     setCatalogItem(null)
     setOutput('')
   }
-  function openAI(sessionID?: string) {
+  function openAI() {
     markUserNavigation()
     closeTemporaryContentPage()
     setSystemFeature(null)
     setPage('robot')
-    if (typeof sessionID === 'object' && sessionID !== null) {
-      console.warn('openAI 收到对象参数，已忽略：', sessionID)
-      sessionID = ''
-    }
-    setAgentSessionId(sessionID ?? '')
     setAIOpen(true)
     setOutput('')
-    // 每次进入 Agent 都刷新会话列表，确保"记录"能看到新建的对话。
-    void loadAgentSessions()
-  }
-  function requestRename(id: string, title: string) {
-    setRenameTarget({ id, title })
-    setRenameTitle(title)
-  }
-  async function archiveSession(id: string) {
-    try {
-      const response = await fetch(`/api/v1/agent/sessions/${id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ archived: true })
-      })
-      if (!response.ok) return
-      if (id === agentSessionId) openAI()
-      await loadAgentSessions()
-    } catch {
-      // 归档失败不阻塞
-    }
-  }
-  async function renameSession(id: string) {
-    if (!renameTarget || renameTitle.trim().length < 2) return
-    try {
-      const response = await fetch(`/api/v1/agent/sessions/${id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: renameTitle.trim() })
-      })
-      if (!response.ok) return
-      setRenameTarget(null)
-      await loadAgentSessions()
-    } catch {
-      // 重命名失败不阻塞
-    }
   }
   function closeSystemWindow(feature: SystemFeature) {
     setSystemWindows(current => {
@@ -3350,7 +3258,7 @@ export function Dashboard({
   const currentCatalog =
     catalog.find(group => group.title === catalogTitle) ?? catalog[0]
   const robotContent = aiOpen ? (
-    <AgentChatPage root={root} initialSessionId={agentSessionId} />
+    <DSHWorkspace root={root} />
   ) : (
     <>
       {section === 'backpack' && (
@@ -4190,48 +4098,6 @@ export function Dashboard({
                 : cloneRobotRepository
             }
           />
-          {renameTarget && (
-            <Modal open className="bg-slate-900/40">
-              <div className="grid w-full max-w-sm gap-4 rounded-xl bg-white p-5 shadow-2xl">
-                <h3 className="text-base font-semibold text-slate-900">
-                  重命名对话
-                </h3>
-                <label className="grid gap-1.5 text-xs font-medium text-slate-600">
-                  名称（2-8 个字）
-                  <input
-                    className="h-10 rounded-md border border-slate-300 px-3 text-sm outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
-                    value={renameTitle}
-                    onChange={event => setRenameTitle(event.target.value)}
-                    maxLength={8}
-                    autoFocus
-                    onKeyDown={event => {
-                      if (event.key === 'Enter') {
-                        event.preventDefault()
-                        if (renameTarget) void renameSession(renameTarget.id)
-                      }
-                    }}
-                  />
-                </label>
-                <footer className="flex justify-end gap-2">
-                  <button
-                    className="secondary-button"
-                    onClick={() => setRenameTarget(null)}
-                  >
-                    取消
-                  </button>
-                  <button
-                    className="primary-button"
-                    disabled={renameTitle.trim().length < 2}
-                    onClick={() => {
-                      if (renameTarget) void renameSession(renameTarget.id)
-                    }}
-                  >
-                    确定
-                  </button>
-                </footer>
-              </div>
-            </Modal>
-          )}
           <section
             className={cn('console-layout', {
               'sidebar-collapsed': sidebarCollapsed
@@ -4242,18 +4108,14 @@ export function Dashboard({
               setupPlugins={setupPlugins}
               projects={projects}
               activeID={activeProjectID}
-              agentSessions={agentSessions}
               checking={checking}
               environmentWarning={environmentWarning}
               onFeature={feature => {
                 selectSystemFeature(feature)
                 if (feature === 'environment') onCheck()
               }}
-              onOpenAgent={openAI}
               onPinProject={pinProject}
               onReorderProject={reorderProject}
-              onRenameSession={requestRename}
-              onArchiveSession={archiveSession}
               onAdd={chooseDirectories}
               onClone={openRobotClone}
               onSelect={id => {
@@ -4279,7 +4141,7 @@ export function Dashboard({
                     catalogTitle={catalogTitle}
                     catalogLoading={catalogLoading}
                     developerMode={developerMode}
-                    agentOpen={aiOpen}
+                    dshOpen={aiOpen}
                     onOpenConsole={() => {
                       setConsoleOpen(true)
                       setConsoleMinimized(false)
@@ -4621,7 +4483,6 @@ function ProjectRail({
   setupPlugins,
   projects,
   activeID,
-  agentSessions,
   checking,
   environmentWarning,
   onFeature,
@@ -4629,22 +4490,13 @@ function ProjectRail({
   onClone,
   onSelect,
   onRemove,
-  onOpenAgent,
   onPinProject,
-  onReorderProject,
-  onRenameSession,
-  onArchiveSession
+  onReorderProject
 }: {
   feature: SystemFeature | null
   setupPlugins: SetupPlugin[]
   projects: Project[]
   activeID: string
-  agentSessions: Array<{
-    id: string
-    title: string
-    root: string
-    updated: string
-  }>
   checking: boolean
   environmentWarning: boolean
   onFeature: (feature: SystemFeature) => void
@@ -4652,11 +4504,8 @@ function ProjectRail({
   onClone: () => void
   onSelect: (id: string) => void
   onRemove: (id: string) => void
-  onOpenAgent: (sessionID?: string) => void
   onPinProject: (id: string) => void
   onReorderProject: (sourceID: string, targetID: string) => void
-  onRenameSession: (id: string, title: string) => void
-  onArchiveSession: (id: string) => void
 }) {
   const [draggingProjectID, setDraggingProjectID] = useStoreState<
     string | null
@@ -4766,15 +4615,11 @@ function ProjectRail({
           }
           key={project.id}
           project={project}
-          agentSessions={agentSessions}
           onSelect={id => {
             if (!ignoreProjectSelect.current) onSelect(id)
           }}
           onRemove={onRemove}
-          onOpenAgent={onOpenAgent}
           onPin={onPinProject}
-          onRename={onRenameSession}
-          onArchive={onArchiveSession}
           onDragStart={startProjectDrag}
           onDragTarget={id => {
             if (draggingProjectID && id !== draggingProjectID)
@@ -5698,13 +5543,9 @@ function ProjectItem({
   active,
   dragging,
   dragTarget,
-  agentSessions,
   onSelect,
   onRemove,
-  onOpenAgent,
   onPin,
-  onRename,
-  onArchive,
   onDragStart,
   onDragTarget
 }: {
@@ -5712,18 +5553,9 @@ function ProjectItem({
   active: boolean
   dragging: boolean
   dragTarget: boolean
-  agentSessions: Array<{
-    id: string
-    title: string
-    root: string
-    updated: string
-  }>
   onSelect: (id: string) => void
   onRemove: (id: string) => void
-  onOpenAgent: (sessionID?: string) => void
   onPin: (id: string) => void
-  onRename: (id: string, title: string) => void
-  onArchive: (id: string) => void
   onDragStart: (
     event: ReactPointerEvent<HTMLButtonElement>,
     projectID: string
@@ -5731,26 +5563,13 @@ function ProjectItem({
   onDragTarget: (projectID: string) => void
 }) {
   const [validate, { data }] = useLazyRobotProjectQuery()
-  const [recordsOpen, setRecordsOpen] = useStoreState(false)
   const [moreOpen, setMoreOpen] = useStoreState(false)
-  const [ctxMenu, setCtxMenu] = useStoreState<{
-    id: string
-    title: string
-    x: number
-    y: number
-  } | null>(null)
   const [projectMenu, setProjectMenu] = useStoreState<{
     x: number
     y: number
   } | null>(null)
   const moreRef = useRef<HTMLDivElement | null>(null)
-  const ctxRef = useRef<HTMLDivElement | null>(null)
   const projectMenuRef = useRef<HTMLDivElement | null>(null)
-  const ctxMenuStyle = useViewportPopoverPosition({
-    anchor: ctxMenu ? new DOMRect(ctxMenu.x, ctxMenu.y, 0, 0) : null,
-    open: Boolean(ctxMenu),
-    popoverRef: ctxRef
-  })
   const projectMenuStyle = useViewportPopoverPosition({
     anchor: projectMenu
       ? new DOMRect(projectMenu.x, projectMenu.y, 0, 0)
@@ -5766,9 +5585,6 @@ function ProjectItem({
       if (moreRef.current && !moreRef.current.contains(event.target as Node)) {
         setMoreOpen(false)
       }
-      if (ctxRef.current && !ctxRef.current.contains(event.target as Node)) {
-        setCtxMenu(null)
-      }
       if (
         projectMenuRef.current &&
         !projectMenuRef.current.contains(event.target as Node)
@@ -5778,9 +5594,8 @@ function ProjectItem({
     }
     document.addEventListener('mousedown', close)
     return () => document.removeEventListener('mousedown', close)
-  }, [setCtxMenu, setMoreOpen, setProjectMenu])
+  }, [setMoreOpen, setProjectMenu])
   const invalid = data?.valid === false
-  const ownSessions = agentSessions.filter(item => item.root === project.path)
   return (
     <article
       className={cn(
@@ -5827,19 +5642,6 @@ function ProjectItem({
         </span>
       </button>
       <div className="absolute right-1.5 top-2 flex items-center gap-0.5">
-        <button
-          className={cn(
-            'inline-flex size-7 items-center justify-center rounded text-slate-400 transition-colors hover:bg-slate-200/60 hover:text-slate-600 dark:text-slate-500 dark:hover:bg-slate-700 dark:hover:text-slate-300',
-            recordsOpen &&
-              'bg-slate-200/60 text-slate-600 dark:bg-slate-700 dark:text-slate-300'
-          )}
-          onClick={() => setRecordsOpen(value => !value)}
-          aria-expanded={recordsOpen}
-          aria-label={`${project.name} 的 Agent 对话记录`}
-          title="Agent 对话记录"
-        >
-          <MessageSquare className="size-3.5" />
-        </button>
         <div ref={moreRef} className="relative">
           <button
             className={cn(
@@ -5883,84 +5685,6 @@ function ProjectItem({
           )}
         </div>
       </div>
-      {recordsOpen && (
-        <div className="workspace-project-records mt-1 grid gap-0.5 pt-1">
-          {ownSessions.length === 0 ? (
-            <p className="px-1 py-0.5 text-[0.72rem] text-slate-400 dark:text-slate-500">
-              还没有对话记录
-            </p>
-          ) : (
-            ownSessions.map(item => (
-              <div
-                className="workspace-session-row flex min-w-0 items-center gap-0.5"
-                key={item.id}
-              >
-                <button
-                  className="flex min-h-7 min-w-0 flex-1 items-center gap-1.5 rounded px-1.5 text-left text-xs text-slate-600 transition-colors hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-700/60"
-                  onClick={() => onOpenAgent(item.id)}
-                  onContextMenu={event => {
-                    event.preventDefault()
-                    setCtxMenu({
-                      id: item.id,
-                      title: item.title,
-                      x: event.clientX,
-                      y: event.clientY
-                    })
-                  }}
-                  title={item.title}
-                >
-                  <MessageSquare className="size-3.5 shrink-0 text-slate-300 dark:text-slate-600" />
-                  <span className="min-w-0 flex-1 truncate">{item.title}</span>
-                </button>
-                <button
-                  className="inline-flex size-7 shrink-0 items-center justify-center rounded text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 dark:text-slate-500 dark:hover:bg-slate-700 dark:hover:text-slate-300"
-                  onClick={event => {
-                    const rect = event.currentTarget.getBoundingClientRect()
-                    setCtxMenu({
-                      id: item.id,
-                      title: item.title,
-                      x: rect.right,
-                      y: rect.bottom
-                    })
-                  }}
-                  aria-label={`${item.title} 的更多操作`}
-                  title="更多操作"
-                >
-                  <MoreVertical className="size-3.5" />
-                </button>
-              </div>
-            ))
-          )}
-        </div>
-      )}
-      {ctxMenu && (
-        <div
-          ref={ctxRef}
-          className="workspace-context-menu fixed z-200"
-          style={ctxMenuStyle}
-        >
-          <button
-            className="flex min-h-8 items-center gap-2 rounded px-2 text-left text-xs text-slate-600 transition hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700"
-            onClick={() => {
-              onRename(ctxMenu.id, ctxMenu.title)
-              setCtxMenu(null)
-            }}
-          >
-            <Pencil className="size-3.5 text-slate-400" />
-            重命名
-          </button>
-          <button
-            className="flex min-h-8 items-center gap-2 rounded px-2 text-left text-xs text-slate-600 transition hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700"
-            onClick={() => {
-              onArchive(ctxMenu.id)
-              setCtxMenu(null)
-            }}
-          >
-            <Archive className="size-3.5 text-slate-400" />
-            归档
-          </button>
-        </div>
-      )}
       {projectMenu && (
         <div
           ref={projectMenuRef}
@@ -13433,7 +13157,7 @@ function ControlCard({
   catalogTitle,
   catalogLoading,
   developerMode,
-  agentOpen,
+  dshOpen,
   appLaunching,
   testLaunching,
   onOpenConsole,
@@ -13456,7 +13180,7 @@ function ControlCard({
   catalogTitle: string
   catalogLoading: boolean
   developerMode: boolean
-  agentOpen: boolean
+  dshOpen: boolean
   appLaunching: boolean
   testLaunching: boolean
   onOpenConsole: () => void
@@ -13490,7 +13214,7 @@ function ControlCard({
     gitBranches && gitChanges
       ? { ...gitBranches, changes: gitChanges.changes }
       : (gitBranches ?? gitChanges ?? undefined)
-  const activePrimary = agentOpen
+  const activePrimary = dshOpen
     ? null
     : page === 'robot'
       ? section === 'backpack'
@@ -13500,7 +13224,7 @@ function ControlCard({
           : 'config'
       : page
   function subitemsFor(primary: Section | Page | null) {
-    return agentOpen
+    return dshOpen
       ? []
       : primary === 'config'
         ? developerMode
@@ -13726,7 +13450,7 @@ function ControlCard({
               <button
                 className={cn(
                   'flex min-h-8 items-center gap-2 rounded-md px-2 text-left text-xs font-medium transition-colors',
-                  agentOpen
+                  dshOpen
                     ? 'workspace-nav-active'
                     : 'text-slate-600 hover:bg-slate-200/40 dark:text-slate-400 dark:hover:bg-slate-700/40'
                 )}

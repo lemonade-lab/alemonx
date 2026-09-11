@@ -1,4 +1,4 @@
-.PHONY: help dev bundle-resources build test test-agent test-all test-sqlite test-space format lint dev-fe build-frontend test-sse verify-sse release-check docker-build docker-buildx docker-buildx-push docker-yunzai-build docker-yunzai-buildx docker-yunzai-buildx-push docker-base-build docker-base-buildx docker-base-buildx-push docker-up docker-down docker-logs docker-local-dev
+.PHONY: help dev bundle-resources dsh-runtime build test test-agent test-all test-sqlite test-space format lint dev-fe build-frontend test-sse verify-sse release-check docker-build docker-buildx docker-buildx-push docker-yunzai-build docker-yunzai-buildx docker-base-build docker-base-buildx docker-base-buildx-push docker-up docker-down docker-logs docker-local-dev
 
 .DEFAULT_GOAL := help
 
@@ -7,7 +7,7 @@ ALX_RUNTIME_BASE ?= ccr.ccs.tencentyun.com/ningmengchongshui/alemonbase:latest
 help: ## Show available commands
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
-dev: ## Start the setup guide (replaces an older local ALemonX backend)
+dev: dsh-runtime ## Start the setup guide (replaces an older local ALemonX backend)
 	@set -e; \
 	port=17390; \
 	pids="$$(lsof -tiTCP:$$port -sTCP:LISTEN 2>/dev/null || true)"; \
@@ -28,7 +28,7 @@ dev: ## Start the setup guide (replaces an older local ALemonX backend)
 		echo "旧 ALemonX 后端未能在预期时间内退出，取消启动。"; \
 		exit 1; \
 	fi; \
-	go run .
+	ALX_DSH_BIN="$(CURDIR)/dsh/node_modules/.bin/dsh" go run .
 
 bundle-resources: ## Install the embedded Yarn package before building
 	@set -e; \
@@ -37,9 +37,14 @@ bundle-resources: ## Install the embedded Yarn package before building
 		[ -f "$$dir/package-lock.json" ] || { echo "缺少 $$dir/package-lock.json：请先执行 npm install --package-lock-only 并提交锁文件" >&2; exit 1; }; \
 		echo "Bundling Yarn in $$dir"; \
 		(cd "$$dir" && npm ci --no-bin-links --ignore-scripts --no-audit --no-fund); \
-	done
+		done
 
-build: bundle-resources build-fe ## Build the production binary
+dsh-runtime: ## Install and verify the pinned application-owned DSH runtime
+	@set -e; \
+	[ -f dsh/package-lock.json ] || { echo "缺少 dsh/package-lock.json" >&2; exit 1; }; \
+	(cd dsh && npm ci --ignore-scripts --no-audit --no-fund && npm run check)
+
+build: bundle-resources dsh-runtime build-fe ## Build the production binary
 	go build -o app .
 
 test: ## Run Go tests

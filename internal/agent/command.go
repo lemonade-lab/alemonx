@@ -98,6 +98,7 @@ func (commandRunner) Run(ctx context.Context, root, command string, args []strin
 	cmd := exec.CommandContext(timeoutCtx, program, args...)
 	cmd.Dir = root
 	cmd.Env = environment
+	system.HideWindow(cmd)
 	cmd.Stdin = nil
 	var buffer bytes.Buffer
 	cmd.Stdout = &buffer
