@@ -103,7 +103,7 @@ func InstallNVMNodeVersion(ctx context.Context, version string) (string, error) 
 	return "已下载 Node.js v" + version + "。", nil
 }
 
-// UseNVMNodeVersion changes the NVM default and updates this process PATH so
+// UseNVMNodeVersion saves ALemonX's selection and updates this process PATH so
 // subsequent workbench commands use the selected runtime immediately.
 func UseNVMNodeVersion(ctx context.Context, version string) (string, error) {
 	version = normalizeNodeVersion(version)
@@ -121,9 +121,6 @@ func UseNVMNodeVersion(ctx context.Context, version string) (string, error) {
 }
 
 func useNVMNodeVersion(ctx context.Context, directory, version string) (string, error) {
-	if err := runNVM(ctx, directory, "alias", "default", version); err != nil {
-		return "", err
-	}
 	if err := runNVM(ctx, directory, "use", version); err != nil {
 		return "", err
 	}
@@ -131,7 +128,7 @@ func useNVMNodeVersion(ctx context.Context, directory, version string) (string, 
 	if info, err := os.Stat(filepath.Join(bin, "node")); err != nil || info.IsDir() {
 		return "", errors.New("NVM 未返回可用的 Node.js 运行时")
 	}
-	if _, err := ApplyNodeRuntime(bin); err != nil {
+	if err := selectRuntime("node", bin); err != nil {
 		return "", err
 	}
 	return "已切换工作台 Node.js 至 v" + version + "。", nil
@@ -208,7 +205,7 @@ func InstallNodeWithNVM(ctx context.Context) (string, error) {
 	if runtime.GOOS == "windows" {
 		return installNodeWithNVMWindows(ctx)
 	}
-	directory, installedNVM, err := ensureNVM()
+	directory, installedNVM, err := preferredOrEnsureNVM()
 	if err != nil {
 		return "", err
 	}
@@ -216,7 +213,7 @@ func InstallNodeWithNVM(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if _, err := ApplyNodeRuntime(bin); err != nil {
+	if err := selectRuntime("node", bin); err != nil {
 		return "", err
 	}
 	prefix := "已通过 NVM 安装并启用 Node.js 22 LTS " + version + "。"
@@ -307,8 +304,7 @@ const nvmInstallNode22Script = `set -eu
 export NVM_DIR="$1"
 . "$NVM_DIR/nvm.sh"
 nvm install 22
-nvm alias default 22 >/dev/null
-nvm use default >/dev/null
+nvm use 22 >/dev/null
 printf '__ALX_NODE_BIN__=%s\n' "$(dirname "$(command -v node)")"
 printf '__ALX_NODE_VERSION__=%s\n' "$(node --version)"`
 
@@ -639,6 +635,7 @@ func NVMNodeBin() string {
 			versions = append(versions, entry.Name())
 		}
 	}
+	sortNodeVersions(versions)
 	// This default controls which NVM binary workbench operations select. It
 	// is deliberately separate from NVMStatus.ActiveVersion, which reports
 	// only the result of the real `node --version` command.
@@ -656,6 +653,14 @@ func NVMNodeBin() string {
 // becomes the real process PATH, so checks, terminals and child package
 // managers all observe the same `node --version`.
 func ActivateNVMDefaultForProcess() (string, error) {
+	selection, err := readRuntimeSelection()
+	if err != nil {
+		return "", err
+	}
+	if selection.Node != "" {
+		_, err := ApplyNodeRuntime(selection.Node)
+		return selection.Node, err
+	}
 	bin := NVMNodeBin()
 	if bin == "" {
 		return "", nil

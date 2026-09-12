@@ -3,6 +3,7 @@ package web
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -16,15 +17,41 @@ const maxPersistedDSHEvents = 1024
 // reach this store, so reconnect replay cannot leak tool arguments or provider
 // responses that were intentionally filtered by publicDSHEvent.
 type dshEventStore struct {
-	mu      sync.Mutex
-	dir     string
-	events  map[string][]dshEventDTO
-	nextID  map[string]int64
-	relayed map[string]bool
+	mu        sync.Mutex
+	dir       string
+	legacyDir string
+	events    map[string][]dshEventDTO
+	nextID    map[string]int64
+	relayed   map[string]bool
+	stopRelay map[string]chan struct{}
 }
 
 func newDSHEventStore(dir string) *dshEventStore {
-	return &dshEventStore{dir: dir, events: map[string][]dshEventDTO{}, nextID: map[string]int64{}, relayed: map[string]bool{}}
+	return &dshEventStore{dir: dir, events: map[string][]dshEventDTO{}, nextID: map[string]int64{}, relayed: map[string]bool{}, stopRelay: map[string]chan struct{}{}}
+}
+
+func (s *dshEventStore) relocateRuntime(oldID, newID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if oldID == newID {
+		return nil
+	}
+	if stop := s.stopRelay[oldID]; stop != nil {
+		close(stop)
+		delete(s.stopRelay, oldID)
+		delete(s.relayed, oldID)
+	}
+	s.loadLocked(oldID)
+	s.loadLocked(newID)
+	if len(s.events[newID]) > 0 {
+		return fmt.Errorf("目标机器人已有 DSH 事件记录，未覆盖")
+	}
+	s.events[newID] = append([]dshEventDTO(nil), s.events[oldID]...)
+	for i := range s.events[newID] {
+		s.events[newID][i].RuntimeID = newID
+	}
+	s.nextID[newID] = s.nextID[oldID]
+	return s.compactLocked(newID)
 }
 
 func (s *dshEventStore) ensureRelay(runtimeID string, runtime *dsh.Runtime) {
@@ -35,17 +62,37 @@ func (s *dshEventStore) ensureRelay(runtimeID string, runtime *dsh.Runtime) {
 	}
 	s.loadLocked(runtimeID)
 	s.relayed[runtimeID] = true
+	stop := make(chan struct{})
+	s.stopRelay[runtimeID] = stop
 	s.mu.Unlock()
-	events, _ := runtime.Subscribe()
+	events, unsubscribe := runtime.Subscribe()
 	go func() {
-		for event := range events {
-			s.append(runtimeID, publicDSHEvent(event, runtimeID))
+		defer unsubscribe()
+		for {
+			select {
+			case <-stop:
+				return
+			case event, ok := <-events:
+				if !ok {
+					return
+				}
+				s.mu.Lock()
+				if s.stopRelay[runtimeID] == stop {
+					s.appendEventLocked(runtimeID, publicDSHEvent(event, runtimeID))
+				}
+				s.mu.Unlock()
+			}
 		}
 	}()
 }
 
 func (s *dshEventStore) append(runtimeID string, event dshEventDTO) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.appendEventLocked(runtimeID, event)
+}
+
+func (s *dshEventStore) appendEventLocked(runtimeID string, event dshEventDTO) {
 	s.loadLocked(runtimeID)
 	s.nextID[runtimeID]++
 	event.ID = s.nextID[runtimeID]
@@ -59,7 +106,6 @@ func (s *dshEventStore) append(runtimeID string, event dshEventDTO) {
 	if trimmed {
 		_ = s.compactLocked(runtimeID)
 	}
-	s.mu.Unlock()
 }
 
 func (s *dshEventStore) after(runtimeID, sessionID string, after int64) []dshEventDTO {
@@ -81,6 +127,11 @@ func (s *dshEventStore) loadLocked(runtimeID string) {
 	}
 	s.events[runtimeID] = []dshEventDTO{}
 	raw, err := os.Open(filepath.Join(s.dir, runtimeID+".jsonl"))
+	migrating := false
+	if os.IsNotExist(err) && s.legacyDir != "" {
+		raw, err = os.Open(filepath.Join(s.legacyDir, runtimeID+".jsonl"))
+		migrating = err == nil
+	}
 	if err != nil {
 		return
 	}
@@ -98,6 +149,9 @@ func (s *dshEventStore) loadLocked(runtimeID string) {
 	}
 	if len(s.events[runtimeID]) > maxPersistedDSHEvents {
 		s.events[runtimeID] = append([]dshEventDTO(nil), s.events[runtimeID][len(s.events[runtimeID])-maxPersistedDSHEvents:]...)
+		_ = s.compactLocked(runtimeID)
+	}
+	if migrating {
 		_ = s.compactLocked(runtimeID)
 	}
 }

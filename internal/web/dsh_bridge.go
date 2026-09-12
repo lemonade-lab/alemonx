@@ -66,7 +66,7 @@ func (s *server) dshBridgeHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "DSH bridge 工具无效。")
 		return
 	}
-	if err := s.awaitDSHApproval(r.Context(), runtime, robotAppToken(root), root, input.SessionID, input.ToolName, safeApprovalSummary(input.ToolName)); err != nil {
+	if err := s.awaitDSHBridgeApproval(r.Context(), runtime, root, input.SessionID, input.ToolName, safeApprovalSummary(input.ToolName)); err != nil {
 		outcome := "rejected"
 		if strings.Contains(err.Error(), "取消") {
 			outcome = "cancelled"
@@ -101,7 +101,7 @@ func (s *server) dshBridgePM2(w http.ResponseWriter, r *http.Request, runtime *d
 		writeJSON(w, http.StatusOK, map[string]string{"summary": truncateBridgeText(page.Output, 12000)})
 		return
 	case "restart", "reload":
-		if err := s.awaitDSHApproval(r.Context(), runtime, robotAppToken(root), root, sessionID, "pm2."+action, "请求"+map[string]string{"restart": "重启", "reload": "热重载"}[action]+"项目 PM2 进程"); err != nil {
+		if err := s.awaitDSHBridgeApproval(r.Context(), runtime, root, sessionID, "pm2."+action, "请求"+map[string]string{"restart": "重启", "reload": "热重载"}[action]+"项目 PM2 进程"); err != nil {
 			writeError(w, http.StatusForbidden, "PM2 操作未获批准。")
 			return
 		}
@@ -114,6 +114,28 @@ func (s *server) dshBridgePM2(w http.ResponseWriter, r *http.Request, runtime *d
 		return
 	default:
 		writeError(w, http.StatusBadRequest, "PM2 bridge 操作不在白名单。")
+	}
+}
+
+// awaitDSHBridgeApproval applies the selected session preference without
+// widening the bridge's capability whitelist. "auto" is deliberately narrow:
+// only project-file edits skip a prompt; commands and PM2 writes still need a
+// user decision. "full" is an explicit session-local override for callers
+// who have selected it in the composer.
+func (s *server) awaitDSHBridgeApproval(ctx context.Context, runtime *dsh.Runtime, root, sessionID, action, summary string) error {
+	access := runtime.SessionAccess(sessionID)
+	if access == "full" || (access == "auto" && isDSHFileEdit(action)) {
+		return nil
+	}
+	return s.awaitDSHApproval(ctx, runtime, robotAppToken(root), root, sessionID, action, summary)
+}
+
+func isDSHFileEdit(action string) bool {
+	switch strings.ToLower(strings.TrimSpace(action)) {
+	case "write", "edit", "str_replace_editor", "file.write", "file.edit":
+		return true
+	default:
+		return false
 	}
 }
 

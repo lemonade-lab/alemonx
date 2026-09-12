@@ -36,9 +36,6 @@ var staticFiles embed.FS
 
 // 前端页面
 
-//go:embed all:resources
-var resourceFiles embed.FS
-
 // 开发模板文件 + 机器人启动目录
 
 var Version = "dev"
@@ -546,6 +543,7 @@ func serve(host, port, redisPort string, redisOff bool, workspaceRoot string) {
 	if !isLoopbackHost(host) {
 		fmt.Printf("\n  注意：已监听 %s，局域网或公网可直接访问。\n  强烈建议先执行 alx auth enable 开启身份认证，并配合防火墙限制访问来源。\n", host)
 	}
+	prepareDevelopmentDSH(stopCtx)
 	if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}

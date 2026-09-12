@@ -1290,7 +1290,14 @@ func pm2JList(root string) (string, error) {
 	}
 	if err != nil && text == "" {
 		if commandNotFound(err, text) {
-			return text, pm2UnavailableHint(missingCommandAdvice("pm2"))
+			// The fallback invokes npx, while local and bundled PM2 invoke Node
+			// directly. Report the missing executable instead of incorrectly
+			// telling users to install PM2 when their Node runtime is missing.
+			missing := filepath.Base(name)
+			if missing != "node" && missing != "npx" && missing != "npm" {
+				missing = "pm2"
+			}
+			return text, pm2UnavailableHint(missingCommandAdvice(missing))
 		}
 		return text, pm2UnavailableHint(fmt.Errorf("pm2 jlist 失败：%w", err))
 	}
@@ -1300,9 +1307,9 @@ func pm2JList(root string) (string, error) {
 }
 
 // pm2Launcher resolves how to run PM2. Project-local installations are
-// preferred because their version matches the project lockfile; otherwise the
-// bundled PM2 keeps the workbench usable offline; npx remains the last resort
-// and downloads only when nothing else is available.
+// preferred because their version matches the project lockfile; an existing
+// system installation preserves upgraded users' daemon; otherwise the bundled
+// PM2 keeps the workbench usable offline. npx remains the last resort.
 func pm2Launcher(root string) (string, []string) {
 	if localPM2(root) {
 		// Do not route a local PM2 through `npx --no-install pm2`. Newer npm
@@ -1312,11 +1319,19 @@ func pm2Launcher(root string) (string, []string) {
 		// hidden child process as the rest of the workbench commands.
 		return nodeToolPath("node"), []string{filepath.Join(root, "node_modules", "pm2", "bin", "pm2")}
 	}
+	// Existing installations predate the workspace-scoped PM2 runtime. Keep
+	// using one before attempting a first on-demand install, so an offline
+	// upgrade can reconnect to its daemon and process list immediately.
+	if command, err := resolvePM2Command("pm2"); err == nil {
+		return command, nil
+	}
 	if command, args, ok := resources.ToolCommand("pm2"); ok {
 		return command, args
 	}
 	return nodeToolPath("npx"), []string{"--yes", "pm2"}
 }
+
+var resolvePM2Command = system.ResolveCommand
 
 // pm2UnavailableHint attaches the recorded reason when the bundled PM2
 // provisioning failed, so offline failures are not reported as a bare npx

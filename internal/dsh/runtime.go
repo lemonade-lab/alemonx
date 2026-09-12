@@ -17,15 +17,18 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"alemonx/internal/resources"
 	"alemonx/internal/system"
 )
 
@@ -97,6 +100,10 @@ type Session struct {
 	ID        string    `json:"id"`
 	CreatedAt time.Time `json:"createdAt"`
 	UpdatedAt time.Time `json:"updatedAt"`
+	// Access is a per-session approval preference owned by ALemonX, rather
+	// than a DSH process environment flag. Empty values from older catalogs
+	// retain the safe ask-on-every-write default.
+	Access    string    `json:"access,omitempty"`
 }
 
 var ErrSessionCancellationUnsupported = errors.New("当前 DSH SDK 不支持逐会话取消")
@@ -126,6 +133,8 @@ type Runtime struct {
 	bridgeURL  string
 	config     Config
 	sessions   map[string]Session
+	lockFile   *os.File
+	managed    bool
 }
 
 type request struct {
@@ -147,10 +156,11 @@ type rpcError struct {
 }
 
 func New(dir string, factory CommandFactory) *Runtime {
+	managed := factory == nil
 	if factory == nil {
 		factory = defaultCommand
 	}
-	return &Runtime{dir: dir, command: factory, pending: map[uint64]chan response{}, events: make(chan Event, 128), subs: map[chan Event]struct{}{}, sessions: map[string]Session{}}
+	return &Runtime{dir: dir, command: factory, managed: managed, pending: map[uint64]chan response{}, events: make(chan Event, 128), subs: map[chan Event]struct{}{}, sessions: map[string]Session{}}
 }
 
 func DefaultHome() (string, error) {
@@ -165,10 +175,26 @@ func (r *Runtime) SaveConfig(cfg Config) error {
 	if err := cfg.Valid(); err != nil {
 		return err
 	}
+	return r.savePersistedConfig(PersistedConfig{Provider: cfg.Provider, Model: cfg.Model, Root: cfg.Root})
+}
+
+func (r *Runtime) savePersistedConfig(cfg PersistedConfig) error {
+	if err := cfg.Valid(); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(r.dir, 0700); err != nil {
 		return err
 	}
-	raw, err := json.Marshal(PersistedConfig{Provider: cfg.Provider, Model: cfg.Model, Root: cfg.Root})
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.lockFile == nil {
+		file, err := acquireRuntimeLock(r.dir)
+		if err != nil {
+			return err
+		}
+		defer unlockRuntime(file)
+	}
+	raw, err := json.Marshal(cfg)
 	if err != nil {
 		return err
 	}
@@ -203,18 +229,17 @@ func defaultCommand(ctx context.Context, home string) *exec.Cmd {
 	// DSH is installed as an application dependency. ALX_DSH_BIN is only for
 	// packaging and tests; it is never an HTTP/user controlled value.
 	bin := os.Getenv("ALX_DSH_BIN")
+	var prefix []string
 	if bin == "" {
-		if executable, err := os.Executable(); err == nil {
-			candidate := filepath.Join(filepath.Dir(executable), "dsh", "node_modules", ".bin", "dsh")
-			// Keep the expected packaged location even when it is missing: Start
-			// will then fail closed instead of resolving a user-global `dsh`.
-			bin = candidate
-		}
-		if bin == "" {
+		entry, packageErr := resources.DSHProgram()
+		node, nodeErr := system.CurrentNodeRuntime()
+		if packageErr == nil && nodeErr == nil {
+			bin, prefix = node.Path, []string{entry}
+		} else {
 			bin = filepath.Join(home, "missing-managed-dsh-runtime")
 		}
 	}
-	args := []string{"--profile", "alemonx"}
+	args := append(prefix, "--profile", "alemonx")
 	if patch := filepath.Join(home, "alemonx.patch.yml"); fileExists(patch) {
 		args = append(args, "--patch", patch)
 	}
@@ -233,6 +258,14 @@ func (r *Runtime) Start(ctx context.Context, cfg Config) error {
 	if err := cfg.Valid(); err != nil {
 		return err
 	}
+	if r.managed && os.Getenv("ALX_DSH_BIN") == "" {
+		if _, err := resources.DSHProgram(); err != nil {
+			return err
+		}
+		if _, err := system.CurrentNodeRuntime(); err != nil {
+			return fmt.Errorf("DSH 需要可用的 Node.js：%w", err)
+		}
+	}
 	r.mu.Lock()
 	if r.cmd != nil {
 		r.mu.Unlock()
@@ -242,6 +275,17 @@ func (r *Runtime) Start(ctx context.Context, cfg Config) error {
 		r.mu.Unlock()
 		return err
 	}
+	lockFile, err := acquireRuntimeLock(r.dir)
+	if err != nil {
+		r.mu.Unlock()
+		return err
+	}
+	started := false
+	defer func() {
+		if !started {
+			unlockRuntime(lockFile)
+		}
+	}()
 	if err := writeRuntimePatch(r.dir); err != nil {
 		r.mu.Unlock()
 		return err
@@ -254,6 +298,7 @@ func (r *Runtime) Start(ctx context.Context, cfg Config) error {
 	// The sidecar must outlive the HTTP request used to configure it. The
 	// caller's context only bounds the initialize RPC below, never the process.
 	cmd := r.command(context.Background(), r.dir)
+	cmd.Dir = cfg.Root
 	cmd.Env = append(managedEnvironment(r.dir, bridge, cfg), "ALX_DSH_BRIDGE_URL="+r.bridgeURL)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -274,6 +319,8 @@ func (r *Runtime) Start(ctx context.Context, cfg Config) error {
 		r.mu.Unlock()
 		return fmt.Errorf("启动 DSH sidecar: %w", err)
 	}
+	r.lockFile = lockFile
+	started = true
 	r.cmd, r.stdin, r.done, r.bridge, r.config, r.lastErr = cmd, stdin, make(chan struct{}), bridge, cfg, nil
 	r.mu.Unlock()
 	go r.read(stdout)
@@ -355,7 +402,7 @@ func (r *Runtime) CreateSession(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	item := Session{ID: "alx-" + token, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
+	item := Session{ID: "alx-" + token, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(), Access: "ask"}
 	r.mu.Lock()
 	if r.sessions == nil {
 		r.sessions = map[string]Session{}
@@ -411,6 +458,42 @@ func (r *Runtime) HasSession(sessionID string) bool {
 	}
 	_, ok := r.sessions[sessionID]
 	return ok
+}
+
+// SessionAccess returns the persisted approval preference for a runtime-owned
+// session. Unknown and historical sessions default to ask, never auto-approve.
+func (r *Runtime) SessionAccess(sessionID string) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := r.loadSessionsLocked(); err != nil {
+		return "ask"
+	}
+	access := r.sessions[sessionID].Access
+	if access != "auto" && access != "full" {
+		return "ask"
+	}
+	return access
+}
+
+// SetSessionAccess persists a user-selected approval preference. It is scoped
+// to one runtime-owned session and cannot create an arbitrary session record.
+func (r *Runtime) SetSessionAccess(sessionID, access string) error {
+	if access != "ask" && access != "auto" && access != "full" {
+		return errors.New("DSH 权限模式无效")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := r.loadSessionsLocked(); err != nil {
+		return err
+	}
+	item, ok := r.sessions[sessionID]
+	if !ok {
+		return errors.New("DSH 会话不存在或不属于当前机器人目录")
+	}
+	item.Access = access
+	item.UpdatedAt = time.Now().UTC()
+	r.sessions[sessionID] = item
+	return r.saveSessionsLocked()
 }
 
 func (r *Runtime) touchSession(sessionID string) bool {
@@ -478,6 +561,8 @@ type RuntimeRegistry struct {
 	factory   CommandFactory
 	runtimes  map[string]*Runtime
 	bridgeURL string
+	legacyDir string
+	initErr   error
 }
 
 func NewRegistry(baseDir string, factory CommandFactory) *RuntimeRegistry {
@@ -485,7 +570,10 @@ func NewRegistry(baseDir string, factory CommandFactory) *RuntimeRegistry {
 }
 
 func (r *RuntimeRegistry) Runtime(root string) (*Runtime, error) {
-	root = filepath.Clean(root)
+	if r.initErr != nil {
+		return nil, r.initErr
+	}
+	root = canonicalRoot(root)
 	if !filepath.IsAbs(root) {
 		return nil, errors.New("请选择有效的机器人目录")
 	}
@@ -493,11 +581,31 @@ func (r *RuntimeRegistry) Runtime(root string) (*Runtime, error) {
 	key := hex.EncodeToString(sum[:16])
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if err := r.MigrateLegacy(); err != nil {
+		return nil, fmt.Errorf("迁移 DSH 数据失败：%w", err)
+	}
 	if runtime := r.runtimes[root]; runtime != nil {
 		return runtime, nil
 	}
 	dir := filepath.Join(r.baseDir, "runtimes", key)
+	// Keep the original storage identity after a project relocation or path
+	// canonicalization change. The persisted root is the authoritative binding.
+	if entries, err := os.ReadDir(filepath.Join(r.baseDir, "runtimes")); err == nil {
+		for _, entry := range entries {
+			if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
+				continue
+			}
+			candidate := filepath.Join(r.baseDir, "runtimes", entry.Name())
+			if cfg, err := New(candidate, r.factory).LoadPersistedConfig(); err == nil && canonicalRoot(cfg.Root) == root {
+				dir = candidate
+				break
+			}
+		}
+	}
 	runtime := New(dir, r.factory)
+	if cfg, err := runtime.LoadPersistedConfig(); err == nil && canonicalRoot(cfg.Root) != root {
+		return nil, errors.New("该 DSH 数据已关联到其他机器人目录，请使用迁移后的目录")
+	}
 	runtime.bridgeURL = r.bridgeURL
 	r.runtimes[root] = runtime
 	return runtime, nil
@@ -553,6 +661,9 @@ func (r *RuntimeRegistry) RuntimeForBridgeToken(token string) (*Runtime, string,
 // Restore starts every previously configured project whose key can be resolved
 // by the caller. Missing or unavailable credentials never create a process.
 func (r *RuntimeRegistry) Restore(ctx context.Context, resolve func(string) (string, error)) []error {
+	if err := r.MigrateLegacy(); err != nil {
+		return []error{err}
+	}
 	entries, err := os.ReadDir(filepath.Join(r.baseDir, "runtimes"))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -562,7 +673,7 @@ func (r *RuntimeRegistry) Restore(ctx context.Context, resolve func(string) (str
 	}
 	var failures []error
 	for _, entry := range entries {
-		if !entry.IsDir() {
+		if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
 			continue
 		}
 		runtime := New(filepath.Join(r.baseDir, "runtimes", entry.Name()), r.factory)
@@ -574,6 +685,16 @@ func (r *RuntimeRegistry) Restore(ctx context.Context, resolve func(string) (str
 			failures = append(failures, err)
 			continue
 		}
+		registered, err := r.Runtime(persisted.Root)
+		if err != nil {
+			failures = append(failures, err)
+			continue
+		}
+		if registered.dir != runtime.dir {
+			failures = append(failures, fmt.Errorf("%s: 存在重复 DSH 目录，未启动 %s", persisted.Root, runtime.dir))
+			continue
+		}
+		runtime = registered
 		key, err := resolve(persisted.Root)
 		if err != nil {
 			failures = append(failures, fmt.Errorf("%s: %w", persisted.Root, err))
@@ -585,7 +706,7 @@ func (r *RuntimeRegistry) Restore(ctx context.Context, resolve func(string) (str
 			continue
 		}
 		r.mu.Lock()
-		r.runtimes[filepath.Clean(persisted.Root)] = runtime
+		r.runtimes[canonicalRoot(persisted.Root)] = runtime
 		r.mu.Unlock()
 	}
 	return failures
@@ -750,6 +871,10 @@ func (r *Runtime) wait(cmd *exec.Cmd) {
 	err := cmd.Wait()
 	r.mu.Lock()
 	if r.cmd == cmd {
+		if r.lockFile != nil {
+			unlockRuntime(r.lockFile)
+			r.lockFile = nil
+		}
 		r.cmd, r.stdin, r.ready = nil, nil, false
 		failure := &rpcError{Code: -32000, Message: "DSH runtime 已停止"}
 		for id, pending := range r.pending {
@@ -856,18 +981,46 @@ func installApprovalBridgeModule(home string) error {
 		return err
 	}
 	if existing, err := os.Lstat(destination); err == nil {
-		if existing.Mode()&os.ModeSymlink == 0 {
-			return errors.New("DSH runtime bridge 目录状态无效")
+		if existing.Mode()&os.ModeSymlink != 0 {
+			// Remove only the old host-owned link, never its destination.
+			if err := os.Remove(destination); err != nil {
+				return err
+			}
+		} else if !fileExists(filepath.Join(destination, ".alx-owned")) {
+			return errors.New("DSH runtime bridge 目录非工作台托管，未覆盖")
+		} else if data, err := os.ReadFile(filepath.Join(destination, ".alx-owned")); err == nil && string(data) == source {
+			return nil
+		} else {
+			if err := os.RemoveAll(destination); err != nil {
+				return err
+			}
 		}
-		linked, readErr := os.Readlink(destination)
-		if readErr != nil || filepath.Clean(linked) != filepath.Clean(source) {
-			return errors.New("DSH runtime bridge 链接状态无效")
-		}
-		return nil
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	return os.Symlink(source, destination)
+	staging, err := os.MkdirTemp(filepath.Dir(destination), ".bridge-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(staging)
+	// A small module forwards to the versioned package so its dependencies
+	// resolve beside the SDK. Copying the plugin alone loses that resolution.
+	modulePath := filepath.ToSlash(filepath.Join(source, "index.js"))
+	if !strings.HasPrefix(modulePath, "/") {
+		modulePath = "/" + modulePath
+	}
+	moduleURL := (&url.URL{Scheme: "file", Path: modulePath}).String()
+	quoted, _ := json.Marshal(moduleURL)
+	if err := os.WriteFile(filepath.Join(staging, "index.js"), []byte("export * from "+string(quoted)+";\n"), 0600); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(staging, "package.json"), []byte(`{"name":"@alemonx/dsh-approval-bridge","type":"module","exports":"./index.js"}`), 0600); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(staging, ".alx-owned"), []byte(source), 0600); err != nil {
+		return err
+	}
+	return os.Rename(staging, destination)
 }
 
 func managedApprovalBridgeModule() string {
@@ -878,13 +1031,29 @@ func managedApprovalBridgeModule() string {
 			return candidate
 		}
 	}
-	if executable, err := os.Executable(); err == nil {
-		candidate := filepath.Join(filepath.Dir(executable), "dsh", "node_modules", "@alemonx", "dsh-approval-bridge")
+	if bin == "" {
+		entry, err := resources.DSHProgram()
+		if err != nil {
+			return ""
+		}
+		packageRoot := filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(entry)))))
+		candidate := filepath.Join(packageRoot, "plugins", "approval-bridge")
 		if info, statErr := os.Stat(candidate); statErr == nil && info.IsDir() {
 			return candidate
 		}
 	}
 	return ""
+}
+
+func canonicalRoot(root string) string {
+	root = filepath.Clean(root)
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
+	if runtime.GOOS == "windows" {
+		root = strings.ToLower(root)
+	}
+	return root
 }
 
 // managedEnvironment prevents a previously exported DSH configuration or

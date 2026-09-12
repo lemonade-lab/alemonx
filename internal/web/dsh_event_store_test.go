@@ -47,3 +47,31 @@ func TestDSHEventStoreCompactsDurableReplayWithoutRenumbering(t *testing.T) {
 		t.Fatalf("durable file count=%d err=%v", count, err)
 	}
 }
+
+func TestDSHEventStoreMigrationAndRelocationPreserveReplay(t *testing.T) {
+	legacyDir, nextDir := t.TempDir(), t.TempDir()
+	legacy := newDSHEventStore(legacyDir)
+	legacy.append("old", dshEventDTO{RuntimeID: "old", SessionID: "session", Text: "retained"})
+	next := newDSHEventStore(nextDir)
+	next.legacyDir = legacyDir
+	if events := next.after("old", "session", 0); len(events) != 1 || events[0].ID != 1 {
+		t.Fatalf("legacy replay = %+v", events)
+	}
+	if err := next.relocateRuntime("old", "new"); err != nil {
+		t.Fatal(err)
+	}
+	restarted := newDSHEventStore(nextDir)
+	restarted.append("new", dshEventDTO{RuntimeID: "new", SessionID: "session", Text: "continued"})
+	events := restarted.after("new", "session", 0)
+	if len(events) != 2 || events[0].RuntimeID != "new" || events[1].ID != 2 {
+		t.Fatalf("relocated replay = %+v", events)
+	}
+	for _, dir := range []string{legacyDir, nextDir} {
+		if _, err := os.Stat(filepath.Join(dir, "old.jsonl")); err != nil {
+			t.Fatalf("original replay removed: %v", err)
+		}
+	}
+	if err := restarted.relocateRuntime("old", "new"); err == nil {
+		t.Fatal("existing target was overwritten")
+	}
+}

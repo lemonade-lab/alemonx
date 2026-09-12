@@ -144,6 +144,27 @@ func TestPM2LauncherRunsProjectLocalPM2WithNodeDirectly(t *testing.T) {
 	}
 }
 
+// TestPM2LauncherReusesLegacySystemPM2 keeps upgrades compatible with users
+// whose daemon was created by a global PM2 before the workspace runtime was
+// introduced. It is especially important while the first on-demand install is
+// unavailable (such as an offline upgrade).
+func TestPM2LauncherReusesLegacySystemPM2(t *testing.T) {
+	original := resolvePM2Command
+	defer func() { resolvePM2Command = original }()
+	legacy := filepath.Join(t.TempDir(), "pm2")
+	resolvePM2Command = func(name string) (string, error) {
+		if name != "pm2" {
+			t.Fatalf("resolved unexpected command %q", name)
+		}
+		return legacy, nil
+	}
+
+	name, args := pm2Launcher(t.TempDir())
+	if name != legacy || len(args) != 0 {
+		t.Fatalf("legacy PM2 launcher = %q %#v, want %q with no arguments", name, args, legacy)
+	}
+}
+
 // TestAppPortReadsAndSavesServerPort covers the "应用" flow: reading the
 // configured port from alemon.config.yaml, the default fallback, and writing a
 // new port (replacing an existing serverPort or appending one).

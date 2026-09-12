@@ -194,7 +194,7 @@ func (c *Checker) command(id, name, argument, suggestion string) Check {
 		if version != "" {
 			version += " · "
 		}
-		version += "已自动修复当前服务 PATH"
+		version += "已定位工具安装路径"
 	}
 	if id == "node" && !nodeVersionAtLeast(rawVersion, MinimumNodeVersion) {
 		return Check{
@@ -215,7 +215,6 @@ func commandPathForCheck(id string) (string, error) {
 	if id == "node" || id == "npm" || id == "npx" {
 		return exec.LookPath(id)
 	}
-	RefreshCommandEnvironment(id)
 	return ResolveCommand(id)
 }
 
@@ -600,6 +599,8 @@ func ResolveCommand(name string) (string, error) {
 // an approved install. It does not alter the machine-wide PATH; it makes the
 // current service and every child process immediately see the new tool.
 func RefreshCommandEnvironment(names ...string) []string {
+	runtimeSelectionMu.Lock()
+	defer runtimeSelectionMu.Unlock()
 	directories := []string{}
 	seen := map[string]bool{}
 	for _, name := range names {
@@ -608,13 +609,7 @@ func RefreshCommandEnvironment(names ...string) []string {
 		}
 		// Node selection is explicit. Do not let a status refresh silently put a
 		// cached or managed Node ahead of the current process PATH.
-		var path string
-		var err error
-		if name == "node" || name == "npm" || name == "npx" {
-			path, err = exec.LookPath(name)
-		} else {
-			path, err = ResolveCommand(name)
-		}
+		path, err := ResolveCommand(name)
 		if err != nil {
 			continue
 		}
@@ -634,7 +629,7 @@ func RefreshCommandEnvironment(names ...string) []string {
 	entries := filepath.SplitList(os.Getenv("PATH"))
 	merged := make([]string, 0, len(directories)+len(entries))
 	seen = map[string]bool{}
-	for _, directory := range append(directories, entries...) {
+	for _, directory := range append(entries, directories...) {
 		key := directory
 		if runtime.GOOS == "windows" {
 			key = strings.ToLower(key)

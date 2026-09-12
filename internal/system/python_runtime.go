@@ -56,7 +56,9 @@ func pythonCommandVersion() string {
 	if err != nil {
 		return ""
 	}
-	output, err := exec.Command(path, "--version").Output()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, path, "--version").Output()
 	if err != nil {
 		return ""
 	}
@@ -242,12 +244,8 @@ func UsePythonVersion(ctx context.Context, version string) (string, error) {
 	if _, err := os.Stat(filepath.Join(root, "versions", version, "bin", "python3")); err != nil {
 		return "", errors.New("该 Python 版本尚未下载")
 	}
-	if err := runPyenv(ctx, root, "global", version); err != nil {
+	if err := selectRuntime("python", filepath.Join(root, "versions", version, "bin")); err != nil {
 		return "", err
 	}
-	if err := runPyenv(ctx, root, "rehash"); err != nil {
-		return "", err
-	}
-	prependCommandPath(filepath.Join(root, "shims"))
 	return "已切换工作台 Python 至 " + version + "。", nil
 }

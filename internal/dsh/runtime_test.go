@@ -104,7 +104,8 @@ func TestRuntimePatchLinksBundledApprovalBridge(t *testing.T) {
 	if err := writeRuntimePatch(home); err != nil {
 		t.Fatal(err)
 	}
-	linked, err := os.Readlink(filepath.Join(home, "node_modules", "@alemonx", "dsh-approval-bridge"))
+	linkedBytes, err := os.ReadFile(filepath.Join(home, "node_modules", "@alemonx", "dsh-approval-bridge", ".alx-owned"))
+	linked := string(linkedBytes)
 	if err != nil || filepath.Clean(linked) != filepath.Clean(bridge) {
 		t.Fatalf("approval bridge link=%q err=%v", linked, err)
 	}
@@ -250,7 +251,7 @@ func TestBridgeTokenIsRuntimeScoped(t *testing.T) {
 		t.Fatal("错误 bridge token 不得通过")
 	}
 	got, gotRoot, ok := registry.RuntimeForBridgeToken("fresh-token")
-	if !ok || got != runtime || gotRoot != root {
+	if !ok || got != runtime || gotRoot != canonicalRoot(root) {
 		t.Fatalf("bridge 路由 = %p %q %t", got, gotRoot, ok)
 	}
 }

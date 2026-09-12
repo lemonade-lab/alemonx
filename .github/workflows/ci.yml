@@ -26,15 +26,18 @@ jobs:
       - run: yarn lint && yarn build
         working-directory: frontend
       - name: Verify bundled DSH runtime
-        run: cd dsh && npm ci --ignore-scripts --no-audit --no-fund && npm run check
+        run: cd resources/packages/dsh && npm ci --ignore-scripts --no-audit --no-fund && npm run check
+      - run: go run ./scripts/pack-dsh.go
       - name: Bundle embedded Yarn
         run: |
           for dir in resources/packages/*; do
+            [ "$dir" = "resources/packages/dsh" ] && continue
             [ -f "$dir/package.json" ] || continue
             [ -f "$dir/package-lock.json" ] || { echo "缺少 $dir/package-lock.json：请提交内置包的锁文件" >&2; exit 1; }
             (cd "$dir" && npm ci --no-bin-links --ignore-scripts --no-audit --no-fund)
           done
       - run: go test ./internal/... && go vet ./internal/... && go build -o /tmp/alemonx .
+      - run: go test -tags alxdev .
       # A release must retain one verified package for each primary desktop
       # system. Extra architectures are best-effort in the packaging matrix.
       - run: CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -o /tmp/alx-windows-amd64.exe .
@@ -81,10 +84,20 @@ jobs:
       - run: yarn install --frozen-lockfile --non-interactive && VITE_ALX_BUILD_ID=${GITHUB_REF_NAME} yarn build
         working-directory: frontend
       - name: Bundle DSH runtime
-        run: cd dsh && npm ci --ignore-scripts --no-audit --no-fund && npm run check
+        run: cd resources/packages/dsh && npm ci --ignore-scripts --no-audit --no-fund && npm run check
+      - name: Prepare target-platform DSH dependencies
+        shell: bash
+        run: |
+          target_os='${{ matrix.goos }}'
+          target_arch='${{ matrix.goarch }}'
+          case "$target_os" in windows) target_os=win32 ;; esac
+          case "$target_arch" in amd64) target_arch=x64 ;; 386) target_arch=ia32 ;; esac
+          (cd resources/packages/dsh && npm ci --ignore-scripts --no-audit --no-fund --os="$target_os" --cpu="$target_arch")
+          ALX_DSH_TARGET_OS='${{ matrix.goos }}' ALX_DSH_TARGET_ARCH='${{ matrix.goarch }}' go run ./scripts/pack-dsh.go
       - name: Bundle embedded Yarn
         run: |
           for dir in resources/packages/*; do
+            [ "$dir" = "resources/packages/dsh" ] && continue
             [ -f "$dir/package.json" ] || continue
             [ -f "$dir/package-lock.json" ] || { echo "缺少 $dir/package-lock.json：请提交内置包的锁文件" >&2; exit 1; }
             (cd "$dir" && npm ci --no-bin-links --ignore-scripts --no-audit --no-fund)
@@ -93,8 +106,7 @@ jobs:
           mkdir -p bundle release
           GOARM=${{ matrix.goarm }} CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -trimpath -ldflags "-s -w -X main.Version=${GITHUB_REF_NAME} -X main.FrontendBuild=${GITHUB_REF_NAME}" -o "bundle/${{ matrix.binary }}" .
           printf '{"version":"%s","platform":"%s","architecture":"%s"}\n' "${GITHUB_REF_NAME}" "${{ matrix.goos }}" "${{ matrix.goarch }}" > bundle/alx-update.json
-          cp -R dsh bundle/dsh
-          test -x bundle/dsh/node_modules/.bin/dsh
+          test -s resources/dsh/runtime.zip
           (cd bundle && zip -r "../release/${{ matrix.bundle }}" .)
           (cd release && sha256sum "${{ matrix.bundle }}" > "${{ matrix.bundle }}.sha256")
       - uses: actions/upload-artifact@v4

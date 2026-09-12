@@ -1,0 +1,8 @@
+{
+  "dependencies": {
+    "pm2": "^5.4.3"
+  },
+  "name": "@alemonx/pm2-runtime",
+  "private": true,
+  "version": "1.0.0"
+}

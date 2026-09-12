@@ -29,11 +29,14 @@ func (KeyringSecretStore) Set(root, value string) error {
 	if strings.TrimSpace(root) == "" || strings.TrimSpace(value) == "" {
 		return errors.New("密钥或机器人目录无效")
 	}
-	return keyring.Set(keyringService, secretAccount(root), value)
+	return keyring.Set(keyringService, secretAccount(canonicalRoot(root)), value)
 }
 
 func (KeyringSecretStore) Get(root string) (string, error) {
-	value, err := keyring.Get(keyringService, secretAccount(root))
+	value, err := keyring.Get(keyringService, secretAccount(canonicalRoot(root)))
+	if err != nil && canonicalRoot(root) != root {
+		value, err = keyring.Get(keyringService, secretAccount(root))
+	}
 	if err != nil {
 		return "", err
 	}

@@ -745,6 +745,9 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 		if _, err := system.ActivateNVMDefaultForProcess(); err != nil {
 			log.Printf("Node.js 已选版本恢复失败：%v", err)
 		}
+		if err := system.RestorePythonRuntime(); err != nil {
+			log.Printf("Python 已选版本恢复失败：%v", err)
+		}
 	}
 	if _, err := system.ConfigureNodeRuntime(); err != nil {
 		log.Printf("Node.js 运行环境不可用：%v", err)
@@ -1057,6 +1060,12 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 		}
 	}
 	s.workspaceRequested = options.WorkspaceRoot
+	s.dshRuntimes = newDSHRegistry(options.WorkspaceRoot)
+	if s.workspace.Root != "" {
+		previousEvents := s.dshEvents.dir
+		s.dshEvents = newDSHEventStore(filepath.Join(s.workspace.Root, "dsh", "events"))
+		s.dshEvents.legacyDir = previousEvents
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.health)
 	mux.HandleFunc("/api/v1/auth/status", s.authStatusHandler)
@@ -9042,8 +9051,8 @@ func (s *server) environmentInstallHandler(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, map[string]string{"output": output})
 }
 
-// nodeNVMHandler exposes only the workbench-owned NVM runtime. It never
-// reads or edits a user's shell profile or a separately installed NVM.
+// nodeNVMHandler uses the same NVM installation as the environment installer.
+// Runtime selection is stored separately from the user's NVM default alias.
 func (s *server) nodeNVMHandler(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:

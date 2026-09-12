@@ -7,7 +7,7 @@ ALX_RUNTIME_BASE ?= ccr.ccs.tencentyun.com/ningmengchongshui/alemonbase:latest
 help: ## Show available commands
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
-dev: dsh-runtime ## Start the setup guide (replaces an older local ALemonX backend)
+dev: ## Start the setup guide; prepare DSH asynchronously after startup
 	@set -e; \
 	port=17390; \
 	pids="$$(lsof -tiTCP:$$port -sTCP:LISTEN 2>/dev/null || true)"; \
@@ -28,11 +28,12 @@ dev: dsh-runtime ## Start the setup guide (replaces an older local ALemonX backe
 		echo "旧 ALemonX 后端未能在预期时间内退出，取消启动。"; \
 		exit 1; \
 	fi; \
-	ALX_DSH_BIN="$(CURDIR)/dsh/node_modules/.bin/dsh" go run .
+	go run -tags alxdev .
 
 bundle-resources: ## Install the embedded Yarn package before building
 	@set -e; \
 	for dir in resources/packages/*; do \
+		[ "$$dir" = "resources/packages/dsh" ] && continue; \
 		[ -f "$$dir/package.json" ] || continue; \
 		[ -f "$$dir/package-lock.json" ] || { echo "缺少 $$dir/package-lock.json：请先执行 npm install --package-lock-only 并提交锁文件" >&2; exit 1; }; \
 		echo "Bundling Yarn in $$dir"; \
@@ -41,8 +42,9 @@ bundle-resources: ## Install the embedded Yarn package before building
 
 dsh-runtime: ## Install and verify the pinned application-owned DSH runtime
 	@set -e; \
-	[ -f dsh/package-lock.json ] || { echo "缺少 dsh/package-lock.json" >&2; exit 1; }; \
-	(cd dsh && npm ci --ignore-scripts --no-audit --no-fund && npm run check)
+	[ -f resources/packages/dsh/package-lock.json ] || { echo "缺少 DSH 锁文件" >&2; exit 1; }; \
+	(cd resources/packages/dsh && npm ci --ignore-scripts --no-audit --no-fund && npm run check)
+	go run ./scripts/pack-dsh.go
 
 build: bundle-resources dsh-runtime build-fe ## Build the production binary
 	go build -o app .

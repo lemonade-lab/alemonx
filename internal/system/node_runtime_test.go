@@ -52,12 +52,12 @@ func TestNodeArchitecture(t *testing.T) {
 }
 
 func TestNVMDefaultInstallTargetsNode22(t *testing.T) {
-	for _, forbidden := range []string{"nvm install --lts", "lts/*"} {
+	for _, forbidden := range []string{"nvm install --lts", "lts/*", "nvm alias default"} {
 		if strings.Contains(nvmInstallNode22Script, forbidden) {
 			t.Fatalf("default NVM script must not select the newest LTS: %q", nvmInstallNode22Script)
 		}
 	}
-	for _, required := range []string{"nvm install 22", "nvm alias default 22"} {
+	for _, required := range []string{"nvm install 22", "nvm use 22"} {
 		if !strings.Contains(nvmInstallNode22Script, required) {
 			t.Fatalf("default NVM script lacks %q: %q", required, nvmInstallNode22Script)
 		}
