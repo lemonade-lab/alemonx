@@ -18,7 +18,7 @@ import (
 
 const dshEntry = "node_modules/@deepseek-ai/dsh/lib/bin.js"
 
-var dshRequiredFiles = []string{dshEntry, "plugins/approval-bridge/package.json", "plugins/approval-bridge/index.js"}
+var dshRequiredFiles = []string{dshEntry, "plugins/approval-bridge/package.json", "plugins/approval-bridge/index.js", "plugins/approval-bridge/session-resume.js"}
 
 func completeDSHPackage(dir string) bool {
 	for _, name := range append([]string{".complete"}, dshRequiredFiles...) {

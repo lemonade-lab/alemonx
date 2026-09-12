@@ -138,6 +138,10 @@ func applyPythonRuntime(bin string) error {
 }
 
 func RestorePythonRuntime() error {
+	// Container Python belongs to the image, including after a /root restore.
+	if InContainer() {
+		return nil
+	}
 	runtimeSelectionMu.Lock()
 	defer runtimeSelectionMu.Unlock()
 	selection, err := readRuntimeSelection()

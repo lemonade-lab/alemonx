@@ -1,4 +1,7 @@
 import { defineTool } from '@deepseek-ai/dsh-tools'
+import { installSessionResume } from './session-resume.js'
+
+installSessionResume()
 
 // Cordis deliberately hides services that a plugin did not declare. The
 // bridge owns tool registration, so this is required before apply() may read

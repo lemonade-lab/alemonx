@@ -121,6 +121,16 @@ func (s *dshEventStore) after(runtimeID, sessionID string, after int64) []dshEve
 	return result
 }
 
+// latestID establishes a live-only subscription cursor. It intentionally
+// loads the durable index first, so opening a historical session does not
+// replay old progress as if it were a newly started browser turn.
+func (s *dshEventStore) latestID(runtimeID string) int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.loadLocked(runtimeID)
+	return s.nextID[runtimeID]
+}
+
 func (s *dshEventStore) loadLocked(runtimeID string) {
 	if _, ok := s.events[runtimeID]; ok {
 		return

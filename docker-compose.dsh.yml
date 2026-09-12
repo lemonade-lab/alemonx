@@ -1,0 +1,11 @@
+# Optional: docker compose -f docker-compose.yml -f docker-compose.dsh.yml up -d
+services:
+  alx:
+    environment:
+      ALX_DSH_SECRET_FILE: /run/secrets/deepseek_api_key
+    secrets:
+      - deepseek_api_key
+
+secrets:
+  deepseek_api_key:
+    file: ${ALX_DSH_SECRET_SOURCE:-./secrets/deepseek_api_key}

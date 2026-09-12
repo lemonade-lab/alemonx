@@ -239,6 +239,35 @@ func TestSessionCatalogPersistsAndRejectsUnknownSession(t *testing.T) {
 	}
 }
 
+func TestSessionArchivePersistsAndBlocksExecution(t *testing.T) {
+	dir := t.TempDir()
+	runtime := New(dir, nil)
+	id, err := runtime.CreateSession(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.SetSessionArchived(id, true); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.HasSession(id) {
+		t.Fatal("归档会话不得再用于 bridge 调用")
+	}
+	if _, err := runtime.Prompt(context.Background(), id, "hello"); err == nil {
+		t.Fatal("归档会话不得继续执行")
+	}
+	restarted := New(dir, nil)
+	raw, err := restarted.ListSessions(context.Background())
+	if err != nil || !strings.Contains(string(raw), `"archived":true`) {
+		t.Fatalf("归档状态未持久化：%s，%v", raw, err)
+	}
+	if err := restarted.SetSessionArchived(id, false); err != nil {
+		t.Fatal(err)
+	}
+	if !restarted.HasSession(id) {
+		t.Fatal("恢复的会话应重新可用")
+	}
+}
+
 func TestBridgeTokenIsRuntimeScoped(t *testing.T) {
 	registry := NewRegistry(t.TempDir(), nil)
 	root := t.TempDir()

@@ -58,6 +58,7 @@ prepare() {
   mkdir -p "$project_dir"
   cd "$project_dir"
   ensure_file docker-compose.yml
+  ensure_file docker-compose.dsh.yml
   if [ ! -f .env ]; then
     ensure_file .env.example
     cp .env.example .env

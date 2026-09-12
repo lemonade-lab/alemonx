@@ -103,7 +103,8 @@ type Session struct {
 	// Access is a per-session approval preference owned by ALemonX, rather
 	// than a DSH process environment flag. Empty values from older catalogs
 	// retain the safe ask-on-every-write default.
-	Access    string    `json:"access,omitempty"`
+	Access   string `json:"access,omitempty"`
+	Archived bool   `json:"archived,omitempty"`
 }
 
 var ErrSessionCancellationUnsupported = errors.New("当前 DSH SDK 不支持逐会话取消")
@@ -113,6 +114,7 @@ type CommandFactory func(context.Context, string) *exec.Cmd
 // Runtime starts one SDK-profile process.  The process has an application
 // owned DSH_HOME and a fresh bridge token; user DSH profiles are never read.
 type Runtime struct {
+	startMu    sync.Mutex
 	mu         sync.Mutex
 	dir        string
 	command    CommandFactory
@@ -254,7 +256,14 @@ func defaultCommand(ctx context.Context, home string) *exec.Cmd {
 	return cmd
 }
 
-func (r *Runtime) Start(ctx context.Context, cfg Config) error {
+func (r *Runtime) Start(ctx context.Context, cfg Config) (startErr error) {
+	r.startMu.Lock()
+	defer r.startMu.Unlock()
+	defer func() {
+		if startErr != nil {
+			r.fail(errors.New("DSH 自动连接失败，将重试；请检查受管运行时与凭据是否可用"))
+		}
+	}()
 	if err := cfg.Valid(); err != nil {
 		return err
 	}
@@ -456,8 +465,8 @@ func (r *Runtime) HasSession(sessionID string) bool {
 	if err := r.loadSessionsLocked(); err != nil {
 		return false
 	}
-	_, ok := r.sessions[sessionID]
-	return ok
+	item, ok := r.sessions[sessionID]
+	return ok && !item.Archived
 }
 
 // SessionAccess returns the persisted approval preference for a runtime-owned
@@ -496,6 +505,25 @@ func (r *Runtime) SetSessionAccess(sessionID, access string) error {
 	return r.saveSessionsLocked()
 }
 
+// SetSessionArchived keeps a session in the durable catalog while making it
+// unavailable for new prompts. Restoring it is explicit and scoped to the
+// same runtime, so an archived conversation can never be resumed elsewhere.
+func (r *Runtime) SetSessionArchived(sessionID string, archived bool) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := r.loadSessionsLocked(); err != nil {
+		return err
+	}
+	item, ok := r.sessions[sessionID]
+	if !ok {
+		return errors.New("DSH 会话不存在或不属于当前机器人目录")
+	}
+	item.Archived = archived
+	item.UpdatedAt = time.Now().UTC()
+	r.sessions[sessionID] = item
+	return r.saveSessionsLocked()
+}
+
 func (r *Runtime) touchSession(sessionID string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -503,7 +531,7 @@ func (r *Runtime) touchSession(sessionID string) bool {
 		return false
 	}
 	item, ok := r.sessions[sessionID]
-	if !ok {
+	if !ok || item.Archived {
 		return false
 	}
 	item.UpdatedAt = time.Now().UTC()
@@ -949,7 +977,13 @@ func writeRuntimePatch(home string) error {
 	if err := installApprovalBridgeModule(home); err != nil {
 		return err
 	}
-	const patch = `- insert:
+	// The packaged runtime must not depend on optional request telemetry
+	// resolving plugin manifests through the user's profile module layout.
+	const patch = `- id: plugin-package-inventory-deepseek
+  disabled: true
+- id: session-log-deepseek
+  disabled: true
+- insert:
     - id: alemonx-approval-bridge
       name: '@alemonx/dsh-approval-bridge'
       config:

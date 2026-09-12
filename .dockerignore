@@ -11,5 +11,8 @@ app
 workspace
 data
 resources/packages/*/node_modules
+resources/dsh/runtime.zip
+resources/dsh/prepare.log
+secrets
 state
 ssh

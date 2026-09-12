@@ -1,8 +1,7 @@
 # Runtime system dependencies are maintained in a separately released image.
 ARG ALX_RUNTIME_BASE=ccr.ccs.tencentyun.com/ningmengchongshui/alemonbase:latest
 
-# Keep the application image independent from an accidentally stale runtime
-# base tag. The exact Node runtime is copied into the final stage below.
+# Build-time Node matches the runtime-base contract, checked in the final image.
 FROM node:22.22.3 AS node-runtime
 
 # 资源准备阶段 - 安装 Yarn 依赖
@@ -64,8 +63,14 @@ RUN set -eu; \
   GOARM=${GOARM_VALUE} \
   go build -trimpath -ldflags "-s -w -X main.Version=${VERSION} -X main.BuildTime=$(date +%s)" -o /out/alx .
 
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    go build -trimpath -o /out/verify-docker-dsh ./scripts/verify-docker-dsh.go
+
 # 最终运行阶段
 FROM ${ALX_RUNTIME_BASE} AS runtime
+
+# Fail early when latest still points to an old or incompatible runtime base.
+RUN test "$(/usr/local/bin/node --version)" = "v22.22.3"
 
 # 备份旧版本 Node.js
 RUN mv /usr/bin/node /usr/bin/node.v18.bak || true && \
@@ -93,9 +98,19 @@ ENV HOME=/root \
     XDG_CACHE_HOME=/root/cache \
     ALX_WORKSPACE=/app/workspace \
     ALEMONJS_SETUP_ROOTS=/app/workspace \
-    YARN_CACHE_FOLDER=/app/.yarn_cache \
-    ALX_DSH_SECRET_FILE=/run/secrets/deepseek_api_key
+    YARN_CACHE_FOLDER=/app/.yarn_cache
 
 EXPOSE 17390
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/alx-entrypoint", "/app/alx"]
 CMD ["--host", "0.0.0.0", "--port", "17390"]
+
+# Verify the actual runtime base on each target architecture. This stage and
+# its temporary SDK state never ship in the final image.
+FROM runtime AS runtime-verification
+COPY --from=builder /out/verify-docker-dsh /opt/alx-verification/check
+COPY --from=builder /src/resources/dsh/runtime.zip /opt/alx-verification/resources/dsh/runtime.zip
+RUN /opt/alx-verification/check
+RUN /opt/alx-verification/check restore && touch /opt/alx-verification/passed
+
+FROM runtime AS final
+COPY --from=runtime-verification /opt/alx-verification/passed /app/.dsh-runtime-verified

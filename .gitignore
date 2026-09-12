@@ -64,4 +64,5 @@ pnpm-lock.yaml
 /dsh/node_modules
 /resources/dsh/runtime.zip
 /resources/dsh/prepare.log
+/secrets/
 !/dsh/package-lock.json

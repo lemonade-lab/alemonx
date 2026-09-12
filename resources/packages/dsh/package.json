@@ -5,7 +5,7 @@
   "description": "Pinned DeepSeek Harness runtime owned by ALemonX.",
   "engines": { "node": ">=22.22.3" },
   "scripts": {
-    "check": "node ./node_modules/@deepseek-ai/dsh/lib/bin.js --version && node ./scripts/verify-bridge.mjs && node ./scripts/verify-sdk-init.mjs"
+    "check": "node ./node_modules/@deepseek-ai/dsh/lib/bin.js --version && node ./scripts/verify-bridge.mjs && node ./scripts/verify-sdk-init.mjs && node ./scripts/verify-sdk-prompt.mjs"
   },
   "dependencies": {
     "@alemonx/dsh-approval-bridge": "file:./plugins/approval-bridge",

@@ -58,6 +58,16 @@ Do not switch the container to privileged for convenience, and do not mount `/va
 
 ## Daily operations
 
+### Optional DSH Secret
+
+The workbench starts without a DSH key. To enable DSH, obtain `docker-compose.dsh.yml` from the same repository version (new installer runs download it automatically). Create a private `secrets/` directory and use an editor to store the key in `secrets/deepseek_api_key`; use directory mode `700` and file mode `600`. Do not put the key in shell commands, `.env`, Git, or the image.
+
+Add `COMPOSE_FILE=docker-compose.yml:docker-compose.dsh.yml` to `.env` on Linux/macOS, then run `docker compose up -d`. Include any other overlays, such as Yunzai, in the same list. `ALX_DSH_SECRET_SOURCE` can override the host file path. The UI shows deployment-managed credentials and does not write the container's keyring. After rotating the file, recreate containers with `docker compose up -d --force-recreate`. Missing or empty credentials disable only DSH. All robots share this Secret by default.
+
+DSH is installed and embedded at image build time, not by npm during container startup. Its versioned programs, sessions and events live under `workspace/dsh/`. Preserve both `data/` and `workspace/`, and back up credentials separately. The image defaults to Node `22.22.3`; explicitly selected persistent NVM versions remain supported. Python is image-managed and ignores native Python selection records on startup.
+
+With the overlay enabled, a missing host Secret file prevents Compose from creating the container. Create the file first or disable the overlay. DSH-only errors apply to empty or unreadable credentials inside an already running container.
+
 ```sh
 sh docker-install.sh status
 sh docker-install.sh logs
@@ -71,6 +81,8 @@ Update the image with `pull` followed by `restart`; do not run `alx update` insi
 For an MCP stdio connection, run `docker compose exec -T alx /app/alx mcp`; to restrict which projects it can manage, set `MCP_ALLOWED_ROOTS=/app/workspace`.
 
 ## Building from source
+
+The final runtime base must supply Node `22.22.3`; the application build fails if an older base is used. Every target architecture runs an SDK initialization and persisted-session recovery check against the final runtime environment, without sending model prompts. Verification tools and temporary state are excluded from the final image.
 
 For the first build, or whenever Debian security updates, Chromium, or the QQ/NapCat system dependencies should be refreshed, manually publish `alemonbase` from the local Builder first:
 

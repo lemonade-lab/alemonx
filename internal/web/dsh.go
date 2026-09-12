@@ -15,6 +15,7 @@ import (
 
 	"alemonx/internal/dsh"
 	"alemonx/internal/robot"
+	"alemonx/internal/system"
 	"alemonx/internal/workspace"
 )
 
@@ -29,6 +30,7 @@ type dshEventDTO struct {
 	Text      string          `json:"text,omitempty"`
 	Tool      string          `json:"tool,omitempty"`
 	Approval  *dshApprovalDTO `json:"approval,omitempty"`
+	Error     string          `json:"error,omitempty"`
 	At        string          `json:"at"`
 }
 
@@ -59,6 +61,16 @@ func (s *server) restoreDSHRuntimes() {
 	}
 }
 
+func dshCredentialSource() string {
+	if strings.TrimSpace(os.Getenv("ALX_DSH_SECRET_FILE")) != "" {
+		return "docker-secret"
+	}
+	if system.InContainer() {
+		return "unavailable"
+	}
+	return "keyring"
+}
+
 func (s *server) dshCredential(root string) (string, error) {
 	if secretFile := strings.TrimSpace(os.Getenv("ALX_DSH_SECRET_FILE")); secretFile != "" {
 		raw, err := os.ReadFile(secretFile)
@@ -69,6 +81,9 @@ func (s *server) dshCredential(root string) (string, error) {
 			return key, nil
 		}
 		return "", fmt.Errorf("DSH Docker Secret 为空")
+	}
+	if dshCredentialSource() == "unavailable" {
+		return "", fmt.Errorf("请挂载 DSH Docker Secret 并配置 ALX_DSH_SECRET_FILE")
 	}
 	if s.dshSecrets == nil {
 		return "", fmt.Errorf("没有可用的 DSH 凭据存储")
@@ -142,6 +157,29 @@ func (s *server) dshHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(rest) == 3 && rest[0] == "sessions" && rest[2] == "access" && r.Method == http.MethodPost {
 		s.setDSHSessionAccess(w, r, runtime, rest[1])
+		return
+	}
+	if len(rest) == 3 && rest[0] == "sessions" && rest[2] == "history" && r.Method == http.MethodGet {
+		if !validDSHSessionID(rest[1]) || !runtime.HasSession(rest[1]) {
+			writeError(w, 404, "会话不存在或已归档。")
+			return
+		}
+		s.ensureDSHRuntime(r.Context(), runtime)
+		var result struct {
+			Messages []struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		if err := runtime.Call(r.Context(), "alemonx/session/history", map[string]string{"sessionId": rest[1]}, &result); err != nil {
+			writeError(w, 503, "无法恢复对话记录，请重试连接。")
+			return
+		}
+		writeJSON(w, 200, result)
+		return
+	}
+	if len(rest) == 3 && rest[0] == "sessions" && rest[2] == "archive" && r.Method == http.MethodPost {
+		s.setDSHSessionArchived(w, r, runtime, rest[1])
 		return
 	}
 	if len(rest) == 2 && rest[0] == "approvals" && r.Method == http.MethodPost {
@@ -257,18 +295,19 @@ func (s *server) relocateDSH(w http.ResponseWriter, r *http.Request) {
 // dshConfiguration intentionally exposes only restart-safe, non-secret
 // fields. The browser can tell that a key exists without ever receiving it.
 func (s *server) dshConfiguration(w http.ResponseWriter, runtime *dsh.Runtime, root string) {
+	credentialConfigured := false
+	if _, err := s.dshCredential(root); err == nil {
+		credentialConfigured = true
+	}
+	source := dshCredentialSource()
 	persisted, err := runtime.LoadPersistedConfig()
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			writeJSON(w, http.StatusOK, map[string]any{"configured": false, "credentialConfigured": false})
+			writeJSON(w, http.StatusOK, map[string]any{"configured": false, "credentialConfigured": credentialConfigured, "credentialSource": source})
 			return
 		}
 		writeError(w, http.StatusInternalServerError, "无法读取 DSH 配置。")
 		return
-	}
-	credentialConfigured := false
-	if _, credentialErr := s.dshCredential(root); credentialErr == nil {
-		credentialConfigured = true
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"configured":           true,
@@ -276,6 +315,7 @@ func (s *server) dshConfiguration(w http.ResponseWriter, runtime *dsh.Runtime, r
 		"model":                persisted.Model,
 		"root":                 persisted.Root,
 		"credentialConfigured": credentialConfigured,
+		"credentialSource":     source,
 	})
 }
 
@@ -305,7 +345,18 @@ func (s *server) configureDSH(w http.ResponseWriter, r *http.Request, runtime *d
 		return
 	}
 	key := strings.TrimSpace(input.APIKey)
-	if key != "" && s.dshSecrets != nil {
+	if dshCredentialSource() != "keyring" {
+		if key != "" {
+			writeError(w, 400, "Docker Secret 由部署配置管理，请勿在网页提交密钥；请挂载或更新 Secret 后重新连接。")
+			return
+		}
+		var err error
+		key, err = s.dshCredential(root)
+		if err != nil {
+			writeError(w, 503, "DSH Secret 不可用，请检查文件挂载和 ALX_DSH_SECRET_FILE；不影响工作台其他功能。")
+			return
+		}
+	} else if key != "" && s.dshSecrets != nil {
 		if err := s.dshSecrets.Set(root, key); err != nil {
 			writeError(w, 503, "无法写入系统钥匙串："+err.Error())
 			return
@@ -339,6 +390,7 @@ func (s *server) configureDSH(w http.ResponseWriter, r *http.Request, runtime *d
 }
 
 func (s *server) createDSHSession(w http.ResponseWriter, r *http.Request, runtime *dsh.Runtime) {
+	s.ensureDSHRuntime(r.Context(), runtime)
 	if !runtime.Status().Ready {
 		writeError(w, 503, "请先配置并启动模型。")
 		return
@@ -384,7 +436,27 @@ func (s *server) setDSHSessionAccess(w http.ResponseWriter, r *http.Request, run
 	writeJSON(w, http.StatusOK, map[string]string{"sessionId": sessionID, "access": runtime.SessionAccess(sessionID)})
 }
 
+func (s *server) setDSHSessionArchived(w http.ResponseWriter, r *http.Request, runtime *dsh.Runtime, sessionID string) {
+	if !validDSHSessionID(sessionID) {
+		writeError(w, http.StatusBadRequest, "会话 ID 无效。")
+		return
+	}
+	var input struct {
+		Archived bool `json:"archived"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 4<<10)).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, "归档状态格式无效。")
+		return
+	}
+	if err := runtime.SetSessionArchived(sessionID, input.Archived); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"sessionId": sessionID, "archived": input.Archived})
+}
+
 func (s *server) promptDSH(w http.ResponseWriter, r *http.Request, runtime *dsh.Runtime, sessionID string) {
+	s.ensureDSHRuntime(r.Context(), runtime)
 	if !validDSHSessionID(sessionID) {
 		writeError(w, 400, "会话 ID 无效。")
 		return
@@ -438,11 +510,20 @@ func dshEvents(w http.ResponseWriter, r *http.Request, runtime *dsh.Runtime, sto
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("X-Accel-Buffering", "no")
 	var after int64
-	_, _ = fmt.Sscan(r.Header.Get("Last-Event-ID"), &after)
+	lastEventID := strings.TrimSpace(r.Header.Get("Last-Event-ID"))
+	_, _ = fmt.Sscan(lastEventID, &after)
 	if store == nil {
 		writeError(w, http.StatusServiceUnavailable, "DSH 事件存储不可用。")
 		return
 	}
+	// A newly opened historical session needs a live stream, not a second
+	// rendering of all persisted progress. Browser reconnects still include
+	// Last-Event-ID and therefore retain ordinary replay semantics.
+	if lastEventID == "" && r.URL.Query().Get("live") == "1" {
+		after = store.latestID(runtimeID)
+	}
+	_, _ = fmt.Fprintf(w, "id: %d\nevent: ready\ndata: {}\n\n", after)
+	flusher.Flush()
 	heartbeat := time.NewTicker(20 * time.Second)
 	defer heartbeat.Stop()
 	send := func(public dshEventDTO) {
@@ -493,6 +574,9 @@ func publicDSHEvent(event dsh.Event, runtimeID string) dshEventDTO {
 		Event struct {
 			Type string `json:"type"`
 			Data struct {
+				Reason struct {
+					Kind string `json:"kind"`
+				} `json:"reason"`
 				Name    string `json:"name"`
 				Text    string `json:"text"`
 				Message struct {
@@ -525,7 +609,31 @@ func publicDSHEvent(event dsh.Event, runtimeID string) dshEventDTO {
 	if len(text) > 12000 {
 		text = text[:12000]
 	}
-	return dshEventDTO{ID: event.Seq, RuntimeID: runtimeID, Type: firstNonEmpty(fields.Event.Type, fields.Type, event.Method), SessionID: fields.SessionID, Status: fields.Status, Text: text, Tool: firstNonEmpty(fields.Event.Data.Name, fields.Name), Approval: fields.Approval, At: time.Now().UTC().Format(time.RFC3339Nano)}
+	kind := firstNonEmpty(fields.Event.Type, fields.Type, event.Method)
+	tool := ""
+	if kind == "tool/call" {
+		tool = fields.Event.Data.Name
+		if tool == "" {
+			tool = fields.Name
+		}
+	}
+	if kind != "assistant/message" {
+		text = ""
+	}
+	failure := ""
+	if kind == "turn/end" {
+		switch fields.Event.Data.Reason.Kind {
+		case "error":
+			failure = "模型请求失败，请检查模型是否可用、凭据或网络后重试。"
+		case "blocked":
+			failure = "任务被阻止，请检查权限后重试。"
+		case "aborted", "interrupted":
+			failure = "任务已中断，可以重新发送。"
+		case "max-tokens":
+			failure = "回答达到长度上限，可以发送消息继续。"
+		}
+	}
+	return dshEventDTO{ID: event.Seq, RuntimeID: runtimeID, Type: kind, SessionID: fields.SessionID, Status: fields.Status, Text: text, Tool: tool, Error: failure, Approval: fields.Approval, At: time.Now().UTC().Format(time.RFC3339Nano)}
 }
 
 func firstNonEmpty(values ...string) string {

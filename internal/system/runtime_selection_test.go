@@ -102,6 +102,20 @@ func TestBrokenPythonSelectionLeavesEnvironmentUnchanged(t *testing.T) {
 	}
 }
 
+func TestContainerPythonRestoreDoesNotReadNativeSelection(t *testing.T) {
+	t.Setenv("ALX_CONTAINER", "1")
+	before := os.Getenv("PATH")
+	previous := userHomeDir
+	userHomeDir = func() (string, error) { t.Fatal("container must not restore native Python selection"); return "", nil }
+	t.Cleanup(func() { userHomeDir = previous })
+	if err := RestorePythonRuntime(); err != nil {
+		t.Fatal(err)
+	}
+	if os.Getenv("PATH") != before {
+		t.Fatal("container PATH changed")
+	}
+}
+
 func TestPythonSwitchDoesNotChangeUserDefault(t *testing.T) {
 	home := t.TempDir()
 	previousHome := userHomeDir

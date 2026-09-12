@@ -60,6 +60,20 @@ macOS（Docker Desktop）上唯一的宿主侧要求是让 Docker Desktop 能访
 
 ## 日常运维
 
+### 可选：启用 DSH
+
+默认不要求 DSH 密钥，工作台可独立启动。DSH 程序在镜像构建时安装、校验并嵌入，容器启动不会执行 npm。首次使用释放到 `workspace/dsh/packages/`；会话与事件位于 `workspace/dsh/runtimes/`、`workspace/dsh/events/`。备份和更新时保留 `data/` 与 `workspace/`；密钥文件单独安全备份，不放进镜像或 Git。
+
+1. 新安装脚本会同时下载 `docker-compose.dsh.yml`。旧部署可从同一仓库版本补齐该文件。
+2. 创建权限受限的 `secrets/` 目录，用编辑器将 Key 写入 `secrets/deepseek_api_key`，建议目录权限 `700`、文件权限 `600`。不要把 Key 填入命令行或 `.env`。
+3. 在 `.env` 中添加 `COMPOSE_FILE=docker-compose.yml:docker-compose.dsh.yml`，然后运行 `docker compose up -d`。如还使用 Yunzai 等覆盖文件，将其一并追加到 `COMPOSE_FILE`。
+
+可用 `ALX_DSH_SECRET_SOURCE` 指定其他宿主机密钥文件路径。界面会显示“由 Docker Secret 管理”，不能通过网页覆盖。只配置模型并连接即可。密钥缺失或为空时只禁用 DSH；更新密钥文件后使用 `docker compose up -d --force-recreate`，避免旧容器仍挂载旧文件。所有机器人默认共用此 Secret。
+
+注意：启用覆盖文件后，若宿主机 Secret 文件不存在，Docker Compose 会拒绝创建容器。应先创建文件，或暂时移除该覆盖文件。上述“只禁用 DSH”指已启动容器中 Secret 为空或无法读取的情形。
+
+Node 的镜像默认版本是 `22.22.3`，仍允许用户显式使用持久化 NVM 版本；Python 则固定由镜像提供，容器启动不会恢复本机 Python 选择记录。
+
 ```sh
 sh docker-install.sh status
 sh docker-install.sh logs
@@ -74,7 +88,7 @@ MCP 的 stdio 连接可通过 `docker compose exec -T alx /app/alx mcp` 启动�
 
 ## 从源码构建
 
-首次构建或需要刷新 Debian 安全更新、Chromium、QQ/NapCat 系统依赖时，先由本机 Builder 手动发布 `alemonbase`。`Dockerfile.base` 当前以 `node:22` 为基础；必须执行带 `push` 的命令，普通的 `make docker-base-buildx` 只验证，不会更新腾讯云镜像：
+首次构建或需要刷新 Debian 安全更新、Chromium、QQ/NapCat 系统依赖时，先由本机 Builder 手动发布 `alemonbase`。`Dockerfile.base` 当前以 `node:22.22.3` 为基础；应用构建会校验最终基础镜像的 Node 版本。必须执行带 `push` 的命令，普通的 `make docker-base-buildx` 只验证，不会更新腾讯云镜像：
 
 ```sh
 docker login ccr.ccs.tencentyun.com
@@ -88,7 +102,7 @@ make docker-build
 ALX_IMAGE=alemonx:local docker compose up -d
 ```
 
-前端会在启动 Docker 构建的设备上先生成仓库根目录的 `dist/`，随后作为静态资源复制进 Go 构建阶段；因此 Vite 不会运行在 Docker/Buildx 的虚拟化或跨架构模拟环境中。本地使用 `make docker-build`，多架构使用 `make docker-buildx`，两者都会自动完成该步骤。应用镜像随后由 Go 阶段交叉编译静态 `alx`，最终继承腾讯云 `ccr.ccs.tencentyun.com/ningmengchongshui/alemonbase:latest`。基础镜像负责 Node、Git、SSH、Chromium 和系统库；应用镜像不会重复安装系统包。`latest` 内的 Node 版本由 `Dockerfile.base` 的 `FROM node:22` 决定。
+前端先在构建设备上生成 `dist/`，再复制进 Go 构建阶段，不在跨架构模拟环境中运行 Vite。`make docker-build` 与 `make docker-buildx` 都会自动完成该步骤。最终镜像继承 `alemonbase:latest`，基础镜像负责 Node、Git、SSH、Chromium 和系统库；应用镜像不重复安装系统包。发布前会在每个目标架构的最终运行环境执行 DSH SDK 初始化及持久会话恢复检查，不发送模型请求。检查工具和临时数据不进入最终镜像。
 
 镜像内置 Noto CJK 与 Emoji 字体以及 **Chromium 浏览器**：机器人图片消息（jsxp 渲染）中文与表情显示正常，Puppeteer/Playwright 等浏览器自动化开箱可用（无需自行下载）。容器以 root 运行，浏览器或 QQ/NapCat 的 Electron 运行时必须使用 `--no-sandbox`；QQ 插件会自动添加该参数。镜像体积会因此明显增大（Chromium 约 500MB）。
 
