@@ -38,10 +38,7 @@ export function ConfirmDialog({
       ariaLabel={title}
     >
       <section
-        className="flex max-h-[min(420px,calc(100dvh-32px))] w-full max-w-md min-h-0 flex-col gap-4 overflow-hidden rounded-xl border border-slate-200 bg-white p-4.5 shadow-[0_20px_58px_rgb(28_26_23/0.22)]"
-        role="dialog"
-        aria-modal="true"
-        aria-label={title}
+        className="flex max-h-[min(420px,calc(100dvh-32px))] w-full max-w-md min-h-0 flex-col gap-4 overflow-hidden rounded-xl border border-(--theme-border-default) bg-(--theme-surface-panel) p-4.5 text-(--theme-text-primary) shadow-xl"
         onMouseDown={event => event.stopPropagation()}
       >
         <header className="grid shrink-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2.5">
@@ -49,14 +46,16 @@ export function ConfirmDialog({
             <AlertTriangle className="size-4.25" />
           </i>
           <div className="grid min-w-0 gap-0.5">
-            <strong className="text-sm text-ink-950">{title}</strong>
-            <small className="text-[11px] text-slate-400">{subtitle}</small>
+            <strong className="text-sm">{title}</strong>
+            <small className="text-[11px] text-(--theme-text-secondary)">
+              {subtitle}
+            </small>
           </div>
           <Button variant="icon" onClick={onCancel} aria-label="关闭确认">
             <X className="size-4" />
           </Button>
         </header>
-        <p className="m-0 min-h-0 overflow-y-auto whitespace-pre-line text-xs leading-5 text-slate-500">
+        <p className="m-0 min-h-0 overflow-y-auto whitespace-pre-line break-words text-xs leading-5 text-(--theme-text-secondary)">
           {message}
         </p>
         <footer className="flex shrink-0 justify-end gap-2">

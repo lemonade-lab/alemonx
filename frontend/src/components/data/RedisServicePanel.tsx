@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect } from 'react'
 import {
   Check,
   Copy,
@@ -13,14 +13,17 @@ import {
   useControlSystemRedisMutation,
   useSaveSystemRedisConfigMutation,
   useSystemRedisQuery
-} from '../store/workspaceApi'
-import { Button } from './Button'
+} from '../../store/workspaceApi'
+import { useStoreState } from '../../store/guideStore'
+import { Button } from '../Button'
+import { useDataConfirmation } from './useDataConfirmation'
+import { DataDialog } from './DataDialog'
 import {
   SettingsCard,
   SettingsMessage,
   SettingsPage,
   SettingsSwitch
-} from './SettingsCard'
+} from '../SettingsCard'
 
 function errorMessage(error: unknown, fallback: string) {
   if (typeof error === 'object' && error && 'data' in error) {
@@ -30,24 +33,25 @@ function errorMessage(error: unknown, fallback: string) {
   return fallback
 }
 
-export function RedisSettingsPanel() {
+export function RedisServicePanel() {
+  const { confirm, dialog } = useDataConfirmation('确认 Redis 服务变更')
   const { data, isLoading, isError, refetch } = useSystemRedisQuery()
   const [control, { isLoading: controlling }] = useControlSystemRedisMutation()
   const [saveConfig, { isLoading: saving }] = useSaveSystemRedisConfigMutation()
-  const [advanced, setAdvanced] = useState(false)
-  const [port, setPort] = useState('6379')
-  const [autoStart, setAutoStart] = useState(true)
-  const [disabled, setDisabled] = useState(false)
-  const [changed, setChanged] = useState(false)
-  const [message, setMessage] = useState('')
-  const [copied, setCopied] = useState(false)
+  const [advanced, setAdvanced] = useStoreState(false)
+  const [port, setPort] = useStoreState('6379')
+  const [autoStart, setAutoStart] = useStoreState(true)
+  const [disabled, setDisabled] = useStoreState(false)
+  const [changed, setChanged] = useStoreState(false)
+  const [message, setMessage] = useStoreState('')
+  const [copied, setCopied] = useStoreState(false)
 
   useEffect(() => {
     if (!data || changed) return
     setPort(String(data.port))
     setAutoStart(data.autoStart)
     setDisabled(data.disabled)
-  }, [data, changed])
+  }, [data, changed, setPort, setAutoStart, setDisabled])
   if (isLoading)
     return <div className="settings-panel-content">正在检查本地数据服务…</div>
   if (isError || !data)
@@ -91,9 +95,9 @@ export function RedisSettingsPanel() {
   ) => {
     if (
       (action === 'stop' || action === 'restart') &&
-      !window.confirm(
+      !(await confirm(
         `${action === 'stop' ? '停止' : '重启'}后，机器人和插件将暂时不可使用。是否继续？`
-      )
+      ))
     )
       return
     setMessage('')
@@ -112,11 +116,11 @@ export function RedisSettingsPanel() {
     }
     if (
       (disabled || nextPort !== data.port) &&
-      !window.confirm(
+      !(await confirm(
         disabled
           ? '关闭后机器人和插件将无法使用 Redis。是否继续？'
           : '修改端口会短暂重启本地 Redis。是否继续？'
-      )
+      ))
     )
       return
     try {
@@ -143,6 +147,7 @@ export function RedisSettingsPanel() {
       title={data.implementation || 'Redis'}
       description="为机器人和插件自动管理的本地数据服务。"
     >
+      {dialog}
       <SettingsCard
         icon={<Database className="size-4" />}
         title={title}
@@ -217,76 +222,84 @@ export function RedisSettingsPanel() {
         {advanced ? '收起高级设置' : '高级设置'}
       </Button>
       {advanced && !data.external && (
-        <SettingsCard
-          icon={<Settings2 className="size-4" />}
-          title="维护与配置"
-          description="通常无需修改；改端口、关闭或重启会影响机器人和插件。"
+        <DataDialog
+          open
+          title="Redis 服务配置"
+          busy={saving || controlling}
+          onClose={() => setAdvanced(false)}
         >
-          <div className="settings-redis-form">
-            <label className="settings-redis-field">
-              <span>端口</span>
-              <input
-                type="number"
-                min={1}
-                max={65535}
-                value={port}
-                onChange={event => {
-                  setPort(event.target.value)
+          <SettingsCard
+            icon={<Settings2 className="size-4" />}
+            title="维护与配置"
+            description="通常无需修改；改端口、关闭或重启会影响机器人和插件。"
+          >
+            <div className="settings-redis-form">
+              <label className="settings-redis-field">
+                <span>端口</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={65535}
+                  value={port}
+                  onChange={event => {
+                    setPort(event.target.value)
+                    setChanged(true)
+                  }}
+                />
+              </label>
+              <SettingsSwitch
+                checked={!disabled}
+                onChange={checked => {
+                  setDisabled(!checked)
                   setChanged(true)
                 }}
+                label="启用 Local Redis"
+                hint="关闭后不会自动启动，也不会停止任何已有外部 Redis。"
               />
-            </label>
-            <SettingsSwitch
-              checked={!disabled}
-              onChange={checked => {
-                setDisabled(!checked)
-                setChanged(true)
-              }}
-              label="启用 Local Redis"
-              hint="关闭后不会自动启动，也不会停止任何已有外部 Redis。"
-            />
-            <SettingsSwitch
-              checked={autoStart}
-              onChange={checked => {
-                setAutoStart(checked)
-                setChanged(true)
-              }}
-              label="启动 X 时自动开启"
-              hint="默认开启。"
-            />
-            <Button
-              variant="secondary"
-              className="gap-1.5"
-              disabled={saving || !changed}
-              onClick={() => void save()}
-            >
-              <Save className="size-3.5" />
-              保存配置
-            </Button>
-            {data.managed && (
-              <div className="settings-card-actions">
-                <Button
-                  variant="secondary"
-                  disabled={controlling}
-                  onClick={() => void run('restart')}
-                >
-                  <RotateCcw className="size-3.5" />
-                  重启
-                </Button>
-                <Button
-                  variant="danger"
-                  disabled={controlling}
-                  onClick={() => void run('stop')}
-                >
-                  <Power className="size-3.5" />
-                  停止
-                </Button>
-              </div>
-            )}
-          </div>
-        </SettingsCard>
+              <SettingsSwitch
+                checked={autoStart}
+                onChange={checked => {
+                  setAutoStart(checked)
+                  setChanged(true)
+                }}
+                label="启动 X 时自动开启"
+                hint="默认开启。"
+              />
+              <Button
+                variant="secondary"
+                className="gap-1.5"
+                disabled={saving || !changed}
+                onClick={() => void save()}
+              >
+                <Save className="size-3.5" />
+                保存配置
+              </Button>
+              {data.managed && (
+                <div className="settings-card-actions">
+                  <Button
+                    variant="secondary"
+                    disabled={controlling}
+                    onClick={() => void run('restart')}
+                  >
+                    <RotateCcw className="size-3.5" />
+                    重启
+                  </Button>
+                  <Button
+                    variant="danger"
+                    disabled={controlling}
+                    onClick={() => void run('stop')}
+                  >
+                    <Power className="size-3.5" />
+                    停止
+                  </Button>
+                </div>
+              )}
+            </div>
+          </SettingsCard>
+          {message && <SettingsMessage>{message}</SettingsMessage>}
+        </DataDialog>
       )}
-      {message && (
+      {message && (!advanced || data.external) && (
         <SettingsMessage
           tone={
             message.includes('失败') || message.includes('无法')

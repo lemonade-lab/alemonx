@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react'
 import {
-  Database,
   KeyRound,
   Network,
   Power,
@@ -17,7 +16,6 @@ import { GithubSettingsPanel } from './GithubSettingsPanel'
 import { GithubMark } from './GithubMark'
 import { ServiceControlCard } from './ServiceControlCard'
 import { ConfirmDialog } from './ConfirmDialog'
-import { RedisSettingsPanel } from './RedisSettingsPanel'
 import { DependencySourcesPanel } from './DependencySourcesPanel'
 import { SidebarWindow, type SidebarWindowItem } from './SidebarWindow'
 import { useDependencySourcesQuery } from '../store/workspaceApi'
@@ -30,7 +28,6 @@ type SettingsSection =
   | 'network'
   | 'update'
   | 'service'
-  | 'redis'
   | 'dependency-sources'
 
 const sections: SidebarWindowItem<SettingsSection>[] = [
@@ -63,11 +60,6 @@ const sections: SidebarWindowItem<SettingsSection>[] = [
     id: 'service',
     label: '服务',
     icon: Server
-  },
-  {
-    id: 'redis',
-    label: 'Redis',
-    icon: Database
   },
   {
     id: 'dependency-sources',
@@ -154,7 +146,6 @@ export function AppSettingsPanel({
       {active === 'auth' && <AuthControl embedded />}
       {active === 'accounts' && <AccountManagementPage />}
       {active === 'service' && <ServiceControlCard />}
-      {active === 'redis' && <RedisSettingsPanel />}
       {active === 'dependency-sources' && <DependencySourcesPanel />}
       <ConfirmDialog
         open={stopConfirm}

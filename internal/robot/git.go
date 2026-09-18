@@ -517,7 +517,9 @@ func copyReleaseFiles(source, destination, version string, artifacts []string) e
 	for _, key := range []string{"devDependencies", "workspaces", "private", "scripts"} {
 		delete(pkg, key)
 	}
-	pkg["version"] = version
+	if version != "" {
+		pkg["version"] = version
+	}
 	data, err := json.MarshalIndent(pkg, "", "  ")
 	if err != nil {
 		return err

@@ -341,16 +341,25 @@ type platformCandidate struct{ id, label, pkg string }
 // builtinPlatforms are the well-known connection packages shown as installable
 // candidates. Discovered desktop.platform declarations always override them.
 var builtinPlatforms = []platformCandidate{
+	{"bubble", "Bubble", "@alemonjs/bubble"},
+	{"discord", "Discord", "@alemonjs/discord"},
+	{"douyin", "Douyin", "@alemonjs/douyin"},
+	{"douyinbot", "Douyin Bot", "@alemonjs/douyinbot"},
+	{"kook", "KOOK", "@alemonjs/kook"},
+	{"milky", "Milky", "@alemonjs/milky"},
 	{"onebot", "OneBot", "@alemonjs/onebot"},
 	{"qq-bot", "QQ Bot", "@alemonjs/qq-bot"},
-	{"discord", "Discord", "@alemonjs/discord"},
-	{"bubble", "Bubble", "@alemonjs/bubble"},
-	{"kook", "KOOK", "@alemonjs/kook"},
 	{"telegram", "Telegram", "@alemonjs/telegram"},
+	{"wechat", "WeChat", "@alemonjs/wechat"},
+	{"wechat-clawbot", "WeChat ClawBot", "@alemonjs/wechat-clawbot"},
+	{"wecom", "WeCom", "@alemonjs/wecom"},
 }
 
-// resolveRuntimePlatforms merges the builtin candidates with platform
-// connections declared by installed dependencies and backpack packages.
+// resolveRuntimePlatforms merges the builtin candidates with connection
+// packages installed through the project dependency flow. The package manager
+// records those installs in package.json, while node_modules provides the
+// installed version and desktop.platform declaration. packages/ is a legacy
+// backpack area for application plugins; it must not add login choices.
 // Dynamic declarations win for the same login identifier.
 func resolveRuntimePlatforms(project string) ([]RuntimePackage, error) {
 	data, err := os.ReadFile(filepath.Join(project, "package.json"))
@@ -394,29 +403,6 @@ func resolveRuntimePlatforms(project string) ([]RuntimePackage, error) {
 		packageFile := filepath.Join(project, "node_modules", filepath.FromSlash(name), "package.json")
 		if data, readErr := os.ReadFile(packageFile); readErr == nil {
 			mergeDeclaredPlatform(merged, data)
-		}
-	}
-	backpack := filepath.Join(project, "packages")
-	if entries, readErr := os.ReadDir(backpack); readErr == nil {
-		for _, entry := range entries {
-			if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
-				continue
-			}
-			packageFile := filepath.Join(backpack, entry.Name(), "package.json")
-			if data, readErr := os.ReadFile(packageFile); readErr == nil {
-				mergeDeclaredPlatform(merged, data)
-			}
-			if strings.HasPrefix(entry.Name(), "@") {
-				if scoped, scopedErr := os.ReadDir(filepath.Join(backpack, entry.Name())); scopedErr == nil {
-					for _, child := range scoped {
-						if child.IsDir() {
-							if data, readErr := os.ReadFile(filepath.Join(backpack, entry.Name(), child.Name(), "package.json")); readErr == nil {
-								mergeDeclaredPlatform(merged, data)
-							}
-						}
-					}
-				}
-			}
 		}
 	}
 	result := make([]RuntimePackage, 0, len(merged))

@@ -28,7 +28,7 @@ export function GuideHeader({
           <Settings className="size-4" />
         </Button>
         <a
-          className="truncate px-1 text-[0.82rem] font-semibold tracking-[-0.01em] text-slate-800 no-underline transition-colors hover:text-brand-600 dark:text-slate-200"
+          className="truncate px-1 text-[0.82rem] font-semibold tracking-[-0.01em] text-slate-800 no-underline transition-colors hover:text-brand-600 max-[700px]:hidden dark:text-slate-200"
           href="https://alemonjs.com/"
           target="_blank"
           rel="noreferrer"

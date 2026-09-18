@@ -336,7 +336,7 @@ func RetryPreparedGitTag(id string) (Result, error) {
 		gitBuildSessions.Unlock()
 		return Result{}, errors.New("该构建会话正在发布，请等待当前操作完成")
 	}
-	if !state.branchPushed || state.releaseCommit == "" || state.releaseVersion == "" {
+	if state.Target != "release" || !state.branchPushed || state.releaseCommit == "" || state.releaseVersion == "" {
 		gitBuildSessions.Unlock()
 		return Result{}, errors.New("当前会话没有可重试的标签推送")
 	}
@@ -361,25 +361,35 @@ func RetryPreparedGitTag(id string) (Result, error) {
 }
 
 // publishRelease is the single implementation of the Git release step: it
-// normalizes the version, verifies the tag is unused, and commits the already
-// built files from sourceWorktree to the target release branch, then pushes
-// the branch and the version tag. It never touches the caller's working tree.
+// commits the already built files to the target branch. Only the exact release
+// target validates a release version and creates and pushes its tag. Other
+// targets retain the source package version. It never touches the caller's working tree.
 // releaseCommit is non-empty once the branch push succeeded, so a failed tag
 // push can be retried without rebuilding.
 func publishRelease(root, sourceWorktree, sourceBranch, sourceCommit, version, suggestedVersion string, artifacts []string, targetBranch string, confirmed bool) (releaseCommit string, result Result, err error) {
-	if version == "" {
-		version = suggestedVersion
+	createTag := targetBranch == "release"
+	if createTag {
+		if version == "" {
+			version = suggestedVersion
+		} else {
+			version = "v" + strings.TrimPrefix(version, "v")
+		}
+		if !gitVersionPattern.MatchString(version) {
+			return "", Result{}, errors.New("版本号应为 v1.2.3 或 1.2.3")
+		}
+		if _, err := gitRun(root, "rev-parse", "-q", "--verify", "refs/tags/"+version); err == nil {
+			return "", Result{}, errors.New("版本标签 " + version + " 已存在，已发布版本不可覆盖")
+		}
 	} else {
-		version = "v" + strings.TrimPrefix(version, "v")
-	}
-	if !gitVersionPattern.MatchString(version) {
-		return "", Result{}, errors.New("版本号应为 v1.2.3 或 1.2.3")
-	}
-	if _, err := gitRun(root, "rev-parse", "-q", "--verify", "refs/tags/"+version); err == nil {
-		return "", Result{}, errors.New("版本标签 " + version + " 已存在，已发布版本不可覆盖")
+		// Branch builds retain the source package version and never consume a release tag.
+		version = ""
 	}
 	if !confirmed {
-		return "", Result{Path: root, Output: "检查通过：将发布 " + version + " 到 " + targetBranch + " 并创建标签"}, errors.New("请确认后再开始 GIT 发布")
+		message := "检查通过：将更新 " + targetBranch + " 的构建产物，不创建标签"
+		if createTag {
+			message = "检查通过：将发布 " + version + " 到 " + targetBranch + " 并创建标签"
+		}
+		return "", Result{Path: root, Output: message}, errors.New("请确认后再开始 GIT 发布")
 	}
 	logs := []string{"使用已完成的构建 " + shortGitSHA(sourceCommit)}
 	worktree, err := os.MkdirTemp("", "alx-release-")
@@ -420,13 +430,20 @@ func publishRelease(root, sourceWorktree, sourceBranch, sourceCommit, version, s
 		return "", Result{}, err
 	}
 	commitMessage := "release: " + version + " (" + sourceBranch + "@" + shortGitSHA(sourceCommit) + ")"
+	if !createTag {
+		commitMessage = "build: " + targetBranch + " (" + sourceBranch + "@" + shortGitSHA(sourceCommit) + ")"
+	}
 	if output, err = gitRun(worktree, "commit", "-m", commitMessage); err != nil {
 		return "", Result{}, errors.New("无法创建 release 提交（请先配置 Git 用户名和邮箱）：" + output)
 	}
-	if output, err = gitRun(worktree, "push", "origin", "HEAD:refs/heads/"+targetBranch); err != nil {
+	if output, err = gitRun(worktree, "push", "--no-follow-tags", "origin", "HEAD:refs/heads/"+targetBranch); err != nil {
 		return "", Result{Path: root, Output: strings.Join(append(logs, output), "\n")}, errors.New(targetBranch + " 分支推送失败：" + output)
 	}
 	releaseCommit, _ = gitRun(worktree, "rev-parse", "HEAD")
+	if !createTag {
+		logs = append(logs, "已更新 "+targetBranch+" 的构建产物及源码映射，未创建或推送标签（"+sourceBranch+"@"+shortGitSHA(sourceCommit)+"）。")
+		return releaseCommit, Result{Path: root, Output: strings.Join(logs, "\n")}, nil
+	}
 	if output, err = gitRun(worktree, "tag", "-a", version, "-m", "Release "+version+"\n\nSource: "+sourceBranch+"@"+sourceCommit); err != nil {
 		return releaseCommit, Result{}, errors.New("release 分支已推送，但无法创建标签：" + output)
 	}
@@ -454,7 +471,7 @@ func publishPreparedWorktree(state *gitBuildState, version string, artifacts []s
 	// A failed tag push still leaves the branch pushed, so record the commit and
 	// version for RetryPreparedGitTag whenever publishRelease got that far.
 	state.releaseCommit = releaseCommit
-	if releaseCommit != "" {
+	if state.Target == "release" && releaseCommit != "" {
 		state.releaseVersion = "v" + strings.TrimPrefix(version, "v")
 		if version == "" {
 			state.releaseVersion = status.SuggestedVersion
@@ -465,6 +482,9 @@ func publishPreparedWorktree(state *gitBuildState, version string, artifacts []s
 }
 
 func retryPreparedGitTag(state gitBuildState) (Result, error) {
+	if state.Target != "release" {
+		return Result{}, errors.New("仅 release 分支允许推送版本标签")
+	}
 	worktree, err := os.MkdirTemp("", "alx-tag-retry-")
 	if err != nil {
 		return Result{}, err

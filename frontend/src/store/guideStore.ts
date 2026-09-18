@@ -8,6 +8,7 @@ import { useCallback, useEffect, useId, useMemo } from 'react'
 import { useDispatch, useSelector } from 'react-redux'
 import { workspaceApi } from './workspaceApi'
 import { persistedWorkspace } from './workspaceStore'
+import { persistedDataPreferences } from './dataStore'
 
 const storage = {
   getItem: (key: string) => Promise.resolve(window.localStorage.getItem(key)),
@@ -106,6 +107,7 @@ export const store = configureStore({
   reducer: {
     guide: persistedGuide,
     workspace: persistedWorkspace,
+    dataPreferences: persistedDataPreferences,
     ui: uiSlice.reducer,
     [workspaceApi.reducerPath]: workspaceApi.reducer
   },

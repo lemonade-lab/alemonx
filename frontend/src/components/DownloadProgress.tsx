@@ -20,7 +20,7 @@ export function DownloadProgress({
   handoff = false,
   className
 }: Props) {
-  const determinate = typeof progress === 'number'
+  const determinate = typeof progress === 'number' && Number.isFinite(progress)
   const safeProgress = determinate
     ? Math.max(0, Math.min(100, Math.round(progress)))
     : null
@@ -28,7 +28,7 @@ export function DownloadProgress({
   return (
     <div
       className={cn(
-        'grid gap-1.5 rounded-lg border border-brand-100 bg-brand-50/60 p-2.5 text-xs text-brand-800',
+        'grid gap-1.5 rounded-lg border border-(--theme-accent-soft-border) bg-(--theme-accent-soft) p-2.5 text-xs text-(--theme-accent-text)',
         className
       )}
       aria-live="polite"
@@ -59,10 +59,14 @@ export function DownloadProgress({
             safeProgress === null && !handoff && 'w-2/5 animate-pulse',
             handoff && 'w-full opacity-70'
           )}
-          style={safeProgress !== null ? { width: `${safeProgress}%` } : undefined}
+          style={
+            safeProgress !== null ? { width: `${safeProgress}%` } : undefined
+          }
         />
       </div>
-      {detail && <small className="leading-4 text-brand-700/80">{detail}</small>}
+      {detail && (
+        <small className="leading-4 text-brand-700/80">{detail}</small>
+      )}
     </div>
   )
 }

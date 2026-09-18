@@ -1,6 +1,8 @@
 import { useStoreState } from '../store/guideStore'
 import { useAutoSave } from '../hooks/useAutoSave'
 import {
+  lazy,
+  Suspense,
   useCallback,
   useEffect,
   useId,
@@ -65,6 +67,7 @@ import {
   ClipboardList,
   Code2,
   Download,
+  Database,
   Eye,
   EyeOff,
   FileText,
@@ -113,6 +116,9 @@ import {
 import { RobotConfigForm } from './RobotConfigForm'
 import { ThemeToggle } from './ThemeToggle'
 import { Button } from './Button'
+import { ErrorBoundary } from './ErrorBoundary'
+import { dataNavigation } from './data/dataNavigation'
+import { setDataTab } from '../store/dataStore'
 import { Tabs } from './Tabs'
 import { NpmrcConfigForm } from './NpmrcConfigForm'
 import { EnvConfigForm } from './EnvConfigForm'
@@ -125,6 +131,9 @@ import { PackageManifestPanel } from './PackageManifestPanel'
 import { DSHWorkspace } from './DSHWorkspace'
 import { ErrorNotice } from './ErrorNotice'
 import { EmptyState } from './EmptyState'
+import { WorkspaceWelcome } from './WorkspaceWelcome'
+import { WorkbenchTools } from './WorkbenchTools'
+import { ProjectNavigation } from './ProjectNavigation'
 import { ConfirmDialog } from './ConfirmDialog'
 import { DownloadProgress } from './DownloadProgress'
 import {
@@ -310,6 +319,8 @@ type Props = {
   onSelect?: (id: string) => void
 }
 
+const DataWorkspace = lazy(() => import('./data/DataWorkspace'))
+
 const coreFeatureCatalog: Array<{
   id: SystemFeature
   label: string
@@ -318,6 +329,7 @@ const coreFeatureCatalog: Array<{
 }> = [
   { id: 'plugins', label: '插件', icon: <Plug /> },
   { id: 'browser', label: '浏览', icon: <Globe2 /> },
+  { id: 'data', label: '数据', icon: <Database /> },
   { id: 'ops-overview', label: '运维', icon: <ShieldCheck /> }
 ]
 
@@ -331,7 +343,7 @@ function systemFeatureLabel(feature: SystemFeature, plugins: SetupPlugin[]) {
 }
 
 function usesSystemFeatureSidebar(feature: SystemFeature) {
-  return ['plugins', 'ops-overview', 'tasks', 'environment'].includes(feature)
+  return ['plugins', 'ops-overview', 'tasks', 'environment', 'data'].includes(feature)
 }
 const directoryActions: Array<{
   id: Section | Page
@@ -1107,6 +1119,7 @@ export function Dashboard({
 }: Props) {
   const dispatch = useDispatch()
   const navigate = useNavigate()
+  const dataTab = useSelector((state: RootState) => state.dataPreferences.tab)
   const location = useLocation()
   const navigationFromURL = useMemo(
     () => readDashboardNavigation(location.search),
@@ -3580,7 +3593,9 @@ export function Dashboard({
     const setupPlugin = setupPlugins.find(
       item => feature === `setup:${item.id}`
     )
-    return feature === 'ops-overview' ? (
+    return feature === 'data' ? (
+      <ErrorBoundary><Suspense fallback={<p className="p-4" role="status">正在加载数据管理…</p>}><DataWorkspace /></Suspense></ErrorBoundary>
+    ) : feature === 'ops-overview' ? (
       <OpsOverview
         projects={projects}
         sidebarLayout={sidebarLayout}
@@ -3725,7 +3740,7 @@ export function Dashboard({
         )}
       </>
     ) : (
-      <EmptyWorkspace onAdd={chooseDirectories} onClone={openRobotClone} />
+      <WorkspaceWelcome onAdd={chooseDirectories} onClone={openRobotClone} />
     )
 
   const environmentWarning = Boolean(
@@ -3802,7 +3817,7 @@ export function Dashboard({
           style={windowStyle}
           data-window-container="workbench"
         >
-          <header className="topbar flex min-h-11 min-w-0 items-center justify-between gap-2 border-b border-slate-200 bg-white/90 px-3 dark:border-slate-700">
+          <header className="topbar flex min-h-11 min-w-0 flex-wrap items-center justify-between gap-x-2 border-b border-(--theme-border-default) bg-(--theme-surface-panel) px-3 py-1">
             <div className="flex min-w-0 flex-1 items-center gap-1.5">
               <Button
                 variant="icon"
@@ -3813,14 +3828,13 @@ export function Dashboard({
                 <Settings className="size-4" />
               </Button>
               <a
-                className="truncate px-1 text-[0.82rem] font-semibold tracking-[-0.01em] text-slate-800 no-underline transition-colors hover:text-brand-600 dark:text-slate-200"
+                className="topbar-brand truncate px-1 text-[0.82rem] font-semibold tracking-[-0.01em] text-slate-800 no-underline transition-colors hover:text-brand-600 max-[700px]:hidden dark:text-slate-200"
                 href="https://alemonjs.com/"
                 target="_blank"
                 rel="noreferrer"
               >
                 ALemonX
               </a>
-              <ThemeToggle />
               <Button
                 variant="icon"
                 onClick={() => setSidebarCollapsed(value => !value)}
@@ -3834,8 +3848,20 @@ export function Dashboard({
                   <PanelLeftClose className="size-4" />
                 )}
               </Button>
+              <span className="min-w-0 truncate text-xs text-(--theme-text-secondary)" title={activeProject?.path}>
+                {activeProject?.name ?? '工作台'}
+                {activeProject && (
+                  <span className="text-(--theme-text-primary)">
+                    {' / '}
+                    {aiOpen ? '代码助手' : page === 'robot'
+                      ? ({ runtime: '运行', config: '机器人配置', npmrc: 'npm 源', env: '环境变量', backpack: '背包' }[section])
+                      : directoryActions.find(item => item.id === page)?.label}
+                  </span>
+                )}
+              </span>
             </div>
-            <div className="ml-auto flex min-w-0 items-center gap-1">
+            <WorkbenchTools>
+              <ThemeToggle />
               {developerMode && <McpControl />}
               {developerMode && <SSHControl />}
               <Button
@@ -3848,6 +3874,7 @@ export function Dashboard({
                 )}
                 onClick={() => dispatch(setDeveloperMode(!developerMode))}
                 aria-pressed={developerMode}
+                aria-label={developerMode ? '关闭开发模式' : '开启开发模式'}
                 title={
                   developerMode
                     ? '关闭开发模式，收起源码与发布工具'
@@ -3855,6 +3882,7 @@ export function Dashboard({
                 }
               >
                 <Code2 className="size-4" />
+                <span>开发模式</span>
               </Button>
               <GitHubAuthControl />
               <Button
@@ -3886,7 +3914,7 @@ export function Dashboard({
               >
                 <CircleQuestionMark className="size-4" />
               </button>
-            </div>
+            </WorkbenchTools>
           </header>
           <ConfirmDialog
             open={Boolean(pendingBackpackRemoval)}
@@ -4404,7 +4432,10 @@ export function Dashboard({
               icon={
                 <Settings className="size-4 shrink-0 text-brand-600 dark:text-brand-200" />
               }
-              sidebarAriaLabel="系统功能"
+              sidebarAriaLabel={feature === 'data' ? '数据导航' : '系统功能'}
+              items={feature === 'data' ? dataNavigation : undefined}
+              activeItem={feature === 'data' ? dataTab : undefined}
+              onActiveItemChange={feature === 'data' ? item => dispatch(setDataTab(item)) : undefined}
               onClose={() => closeSystemWindow(feature)}
               onMinimize={() =>
                 setSystemWindows(current => ({
@@ -4517,6 +4548,7 @@ function ProjectRail({
     item => item.enabled && !item.online
   )
   const [canManageAccounts, setCanManageAccounts] = useStoreState(false)
+  const [canManageData, setCanManageData] = useStoreState(false)
   const [authRevision, setAuthRevision] = useStoreState(0)
   const isMobile = useIsMobileViewport()
   const [mobileOpen, setMobileOpen] = useState<{
@@ -4542,14 +4574,16 @@ function ProjectRail({
         }
       })
       .then(status => {
-        if (active)
+        if (active) {
           setCanManageAccounts(Boolean(status?.enabled && status.superAdmin))
+          setCanManageData(Boolean(status && (!status.enabled || status.superAdmin)))
+        }
       })
-      .catch(() => active && setCanManageAccounts(false))
+      .catch(() => { if (active) { setCanManageAccounts(false); setCanManageData(false) } })
     return () => {
       active = false
     }
-  }, [authRevision, setCanManageAccounts])
+  }, [authRevision, setCanManageAccounts, setCanManageData])
   const clearLongPress = () => {
     if (longPressTimer.current === null) return
     window.clearTimeout(longPressTimer.current)
@@ -4660,7 +4694,7 @@ function ProjectRail({
   const systemNav = (
     <nav className="grid gap-0.5">
       {coreFeatureCatalog
-        .filter(item => item.id !== 'accounts' || canManageAccounts)
+        .filter(item => item.id === 'data' ? canManageData : item.id !== 'accounts' || canManageAccounts)
         .map(item => (
           <button
             className={cn(
@@ -6398,37 +6432,6 @@ function EnvironmentPage({
   )
 }
 
-function EmptyWorkspace({
-  onAdd,
-  onClone
-}: {
-  onAdd: () => void
-  onClone: () => void
-}) {
-  return (
-    <section className="flex flex-col gap-4 justify-center text-center items-center min-h-full content-center ">
-      <span className="inline-flex size-8 items-center justify-center rounded-[10px] bg-(--theme-accent-soft) text-lg text-(--theme-accent-text)">
-        ◈
-      </span>
-      <div className="grid gap-1.5">
-        <strong className="my-2 text-sm text-(--theme-text-primary)">
-          开始管理你的机器人
-        </strong>
-        <p className="m-0 text-xs text-(--theme-text-muted)">
-          选择已有目录，或从 Git 克隆一个新的机器人项目。
-        </p>
-      </div>
-      <footer className="flex flex-wrap justify-center gap-2">
-        <button className="secondary-button" onClick={onClone}>
-          <GitBranch className="size-3.5" />从 Git 克隆
-        </button>
-        <button className="primary-button" onClick={onAdd}>
-          添加本地目录
-        </button>
-      </footer>
-    </section>
-  )
-}
 function InvalidWorkspace({
   project,
   reason,
@@ -9181,221 +9184,246 @@ function BackpackPackageManager({
               ))
             )}
           </section>
-        ) : tab === 'version' && (
-          <section className="grid gap-4 rounded-xl border border-slate-200 bg-white p-4 text-sm">
-            <div className="grid gap-1">
-              <strong className="text-slate-800">Git 版本源</strong>
-              <p className="m-0 text-xs leading-5 text-slate-500">
-                {status?.source === 'git'
-                  ? '修改远程地址后，可刷新当前分支的 commit 列表。'
-                  : '此插件目前不受 Git 管理。配置仓库后不会覆盖现有文件；请自行选择 commit 切换。'}
-              </p>
-            </div>
-            <div className="grid gap-3 border-t border-slate-200 pt-3 sm:grid-cols-[minmax(0,1fr)_10rem_auto] sm:items-end">
-              <label className="grid gap-1 text-xs font-medium text-slate-600">
-                <span>Git 地址</span>
-                <input className="h-9 rounded-md border border-slate-300 bg-white px-2 text-sm text-slate-800 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100" value={gitRepository} onChange={event => setGitRepository(event.target.value)} placeholder="https://git.example.com/owner/repository.git" />
-              </label>
-              <label className="grid gap-1 text-xs font-medium text-slate-600">
-                <span>分支</span>
-                <input className="h-9 rounded-md border border-slate-300 bg-white px-2 text-sm text-slate-800 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100" value={gitBranch} onChange={event => setGitBranch(event.target.value)} placeholder="main" />
-              </label>
-              <button className="secondary-button" disabled={busy || !gitRepository.trim() || !gitBranch.trim()} onClick={() => void configureGit()}>
-                <GitBranch className="size-4" />保存 Git 地址
-              </button>
-            </div>
-          </section>
+        ) : (
+          tab === 'version' && (
+            <section className="grid gap-4 rounded-xl border border-slate-200 bg-white p-4 text-sm">
+              <div className="grid gap-1">
+                <strong className="text-slate-800">Git 版本源</strong>
+                <p className="m-0 text-xs leading-5 text-slate-500">
+                  {status?.source === 'git'
+                    ? '修改远程地址后，可刷新当前分支的 commit 列表。'
+                    : '此插件目前不受 Git 管理。配置仓库后不会覆盖现有文件；请自行选择 commit 切换。'}
+                </p>
+              </div>
+              <div className="grid gap-3 border-t border-slate-200 pt-3 sm:grid-cols-[minmax(0,1fr)_10rem_auto] sm:items-end">
+                <label className="grid gap-1 text-xs font-medium text-slate-600">
+                  <span>Git 地址</span>
+                  <input
+                    className="h-9 rounded-md border border-slate-300 bg-white px-2 text-sm text-slate-800 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
+                    value={gitRepository}
+                    onChange={event => setGitRepository(event.target.value)}
+                    placeholder="https://git.example.com/owner/repository.git"
+                  />
+                </label>
+                <label className="grid gap-1 text-xs font-medium text-slate-600">
+                  <span>分支</span>
+                  <input
+                    className="h-9 rounded-md border border-slate-300 bg-white px-2 text-sm text-slate-800 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
+                    value={gitBranch}
+                    onChange={event => setGitBranch(event.target.value)}
+                    placeholder="main"
+                  />
+                </label>
+                <button
+                  className="secondary-button"
+                  disabled={busy || !gitRepository.trim() || !gitBranch.trim()}
+                  onClick={() => void configureGit()}
+                >
+                  <GitBranch className="size-4" />
+                  保存 Git 地址
+                </button>
+              </div>
+            </section>
+          )
         )}
         {tab === 'version' && versionsFetching ? (
           <p className="backpack-manager-note">正在读取可安装版本…</p>
-        ) : tab === 'version' && (versionsError || !versions?.versions.length) ? (
+        ) : tab === 'version' &&
+          (versionsError || !versions?.versions.length) ? (
           <p className="backpack-manager-note">
             暂时无法读取此插件的版本。当前本地版本为 {item.version || '未知'}。
           </p>
-        ) : tab === 'version' && versions && (
-          <section className="grid gap-4 rounded-xl border border-slate-200 bg-white p-4">
-            <div className="grid gap-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <strong className="text-sm font-semibold text-slate-800">
-                  {versions.source === 'git' ? '当前分支提交' : 'npm 版本'}
-                </strong>
+        ) : (
+          tab === 'version' &&
+          versions && (
+            <section className="grid gap-4 rounded-xl border border-slate-200 bg-white p-4">
+              <div className="grid gap-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <strong className="text-sm font-semibold text-slate-800">
+                    {versions.source === 'git' ? '当前分支提交' : 'npm 版本'}
+                  </strong>
+                  {versions.source === 'git' && (
+                    <span className="flex items-center gap-2">
+                      <span className="rounded-full bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700">
+                        正在使用
+                      </span>
+                      <button
+                        className="secondary-button gap-1.5 text-xs"
+                        disabled={busy || versionsFetching}
+                        onClick={() => void refreshCommitHistory()}
+                        title="解除浅克隆限制并拉取当前分支完整提交记录"
+                      >
+                        <RefreshCw
+                          className={cn(
+                            'size-3.5',
+                            versionsFetching && 'animate-spin'
+                          )}
+                        />
+                        刷新
+                      </button>
+                    </span>
+                  )}
+                </div>
+                {versions.source === 'git' ? (
+                  <>
+                    <dl className="grid gap-2 sm:grid-cols-2">
+                      <div className="rounded-lg bg-slate-50 px-3 py-2">
+                        <dt className="text-[11px] font-medium text-slate-500">
+                          当前分支
+                        </dt>
+                        <dd className="mt-0.5 truncate font-mono text-xs font-semibold text-slate-800">
+                          {versions.branch || 'detached'}
+                        </dd>
+                      </div>
+                      <div className="rounded-lg bg-slate-50 px-3 py-2">
+                        <dt className="text-[11px] font-medium text-slate-500">
+                          当前 commit
+                        </dt>
+                        <dd className="mt-0.5 truncate font-mono text-xs font-semibold text-slate-800">
+                          {versions.current || item.version || '未知'}
+                        </dd>
+                      </div>
+                    </dl>
+                    {(versions.dirty || versions.ahead) && (
+                      <div className="flex flex-wrap gap-2 text-xs">
+                        {versions.dirty && (
+                          <span className="rounded-full bg-amber-50 px-2 py-1 text-amber-800">
+                            有未提交修改
+                          </span>
+                        )}
+                        {!!versions.ahead && (
+                          <span className="rounded-full bg-amber-50 px-2 py-1 text-amber-800">
+                            本地领先远程 {versions.ahead} 个提交
+                          </span>
+                        )}
+                      </div>
+                    )}
+                    <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs leading-5 text-slate-600">
+                      选择任意 commit 即可切换。强制切换会永久覆盖此插件的本地
+                      Git 修改。
+                    </p>
+                  </>
+                ) : (
+                  <p className="text-xs leading-5 text-slate-500">
+                    当前使用 {versions.current || item.version || '未知'}
+                    。未检测到 Git，使用 npm 已发布版本。
+                  </p>
+                )}
+              </div>
+              <div className="grid gap-2 border-t border-slate-200 pt-3">
+                <div className="grid max-h-56 gap-1 overflow-auto">
+                  {versions.versions.map(candidate => (
+                    <div
+                      key={candidate}
+                      className={cn(
+                        'flex flex-wrap items-center justify-between gap-2 rounded-md border px-2.5 py-2 text-left text-xs',
+                        version === candidate
+                          ? 'border-brand-500 bg-brand-50 text-brand-800'
+                          : 'border-slate-200 text-slate-600'
+                      )}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => setVersion(candidate)}
+                        className="min-w-0 flex-1 truncate text-left"
+                      >
+                        {versions.source === 'npm'
+                          ? `v${candidate}`
+                          : (versions.labels?.[candidate] ?? candidate)}
+                        {versions.source === 'git' &&
+                        candidate.startsWith(versions.current)
+                          ? ' · 当前'
+                          : ''}
+                      </button>
+                      {versions.source === 'git' &&
+                        !candidate.startsWith(versions.current) && (
+                          <span className="flex shrink-0 gap-2">
+                            <button
+                              className="secondary-button text-xs"
+                              disabled={busy}
+                              onClick={() =>
+                                void onReplace(item.name, candidate)
+                              }
+                            >
+                              切换
+                            </button>
+                            <button
+                              className="text-button text-xs text-orange-700"
+                              disabled={busy}
+                              onClick={() => {
+                                setVersion(candidate)
+                                setForceSwitchOpen(true)
+                              }}
+                            >
+                              强制切换
+                            </button>
+                          </span>
+                        )}
+                    </div>
+                  ))}
+                </div>
                 {versions.source === 'git' && (
-                  <span className="flex items-center gap-2">
-                    <span className="rounded-full bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700">
-                      正在使用
+                  <div className="flex items-center justify-between text-xs text-slate-500">
+                    <button
+                      className="text-button"
+                      disabled={commitPage <= 1}
+                      onClick={() =>
+                        setCommitPage(page => Math.max(1, page - 1))
+                      }
+                    >
+                      较新提交
+                    </button>
+                    <span>
+                      第 {versions.page || commitPage} 页 · 已静默拉取远程提交
                     </span>
                     <button
-                      className="secondary-button gap-1.5 text-xs"
-                      disabled={busy || versionsFetching}
-                      onClick={() => void refreshCommitHistory()}
-                      title="解除浅克隆限制并拉取当前分支完整提交记录"
+                      className="text-button"
+                      disabled={!versions.hasMore}
+                      onClick={() => setCommitPage(page => page + 1)}
                     >
-                      <RefreshCw
-                        className={cn(
-                          'size-3.5',
-                          versionsFetching && 'animate-spin'
-                        )}
-                      />
-                      刷新
+                      更早提交
                     </button>
-                  </span>
-                )}
-              </div>
-              {versions.source === 'git' ? (
-                <>
-                  <dl className="grid gap-2 sm:grid-cols-2">
-                    <div className="rounded-lg bg-slate-50 px-3 py-2">
-                      <dt className="text-[11px] font-medium text-slate-500">
-                        当前分支
-                      </dt>
-                      <dd className="mt-0.5 truncate font-mono text-xs font-semibold text-slate-800">
-                        {versions.branch || 'detached'}
-                      </dd>
-                    </div>
-                    <div className="rounded-lg bg-slate-50 px-3 py-2">
-                      <dt className="text-[11px] font-medium text-slate-500">
-                        当前 commit
-                      </dt>
-                      <dd className="mt-0.5 truncate font-mono text-xs font-semibold text-slate-800">
-                        {versions.current || item.version || '未知'}
-                      </dd>
-                    </div>
-                  </dl>
-                  {(versions.dirty || versions.ahead) && (
-                    <div className="flex flex-wrap gap-2 text-xs">
-                      {versions.dirty && (
-                        <span className="rounded-full bg-amber-50 px-2 py-1 text-amber-800">
-                          有未提交修改
-                        </span>
-                      )}
-                      {!!versions.ahead && (
-                        <span className="rounded-full bg-amber-50 px-2 py-1 text-amber-800">
-                          本地领先远程 {versions.ahead} 个提交
-                        </span>
-                      )}
-                    </div>
-                  )}
-                  <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs leading-5 text-slate-600">
-                    选择任意 commit 即可切换。强制切换会永久覆盖此插件的本地 Git
-                    修改。
-                  </p>
-                </>
-              ) : (
-                <p className="text-xs leading-5 text-slate-500">
-                  当前使用 {versions.current || item.version || '未知'}
-                  。未检测到 Git，使用 npm 已发布版本。
-                </p>
-              )}
-            </div>
-            <div className="grid gap-2 border-t border-slate-200 pt-3">
-              <div className="grid max-h-56 gap-1 overflow-auto">
-                {versions.versions.map(candidate => (
-                  <div
-                    key={candidate}
-                    className={cn(
-                      'flex flex-wrap items-center justify-between gap-2 rounded-md border px-2.5 py-2 text-left text-xs',
-                      version === candidate
-                        ? 'border-brand-500 bg-brand-50 text-brand-800'
-                        : 'border-slate-200 text-slate-600'
-                    )}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => setVersion(candidate)}
-                      className="min-w-0 flex-1 truncate text-left"
-                    >
-                      {versions.source === 'npm'
-                        ? `v${candidate}`
-                        : (versions.labels?.[candidate] ?? candidate)}
-                      {versions.source === 'git' &&
-                      candidate.startsWith(versions.current)
-                        ? ' · 当前'
-                        : ''}
-                    </button>
-                    {versions.source === 'git' &&
-                      !candidate.startsWith(versions.current) && (
-                        <span className="flex shrink-0 gap-2">
-                          <button
-                            className="secondary-button text-xs"
-                            disabled={busy}
-                            onClick={() => void onReplace(item.name, candidate)}
-                          >
-                            切换
-                          </button>
-                          <button
-                            className="text-button text-xs text-orange-700"
-                            disabled={busy}
-                            onClick={() => {
-                              setVersion(candidate)
-                              setForceSwitchOpen(true)
-                            }}
-                          >
-                            强制切换
-                          </button>
-                        </span>
-                      )}
                   </div>
-                ))}
-              </div>
-              {versions.source === 'git' && (
-                <div className="flex items-center justify-between text-xs text-slate-500">
-                  <button
-                    className="text-button"
-                    disabled={commitPage <= 1}
-                    onClick={() => setCommitPage(page => Math.max(1, page - 1))}
-                  >
-                    较新提交
-                  </button>
-                  <span>
-                    第 {versions.page || commitPage} 页 · 已静默拉取远程提交
-                  </span>
-                  <button
-                    className="text-button"
-                    disabled={!versions.hasMore}
-                    onClick={() => setCommitPage(page => page + 1)}
-                  >
-                    更早提交
-                  </button>
-                </div>
-              )}
-              {versions.source === 'git' &&
-                (versions.dirty || versions.ahead) &&
-                version && (
-                  <button
-                    className="secondary-button w-fit gap-1.5"
-                    disabled={busy}
-                    onClick={() =>
-                      void onPackageAction(
-                        'stash-sync-local-package-release',
-                        item.name,
-                        version
-                      )
-                    }
-                    title="将本地修改和未跟踪文件保存到 Git stash 后切换"
-                  >
-                    <Archive className="size-4" />
-                    保存改动并切换到所选 commit
-                  </button>
                 )}
-              {versions.source === 'npm' && (
-                <div className="flex flex-wrap items-center justify-end gap-2">
-                  <button
-                    className="primary-button gap-1.5"
-                    disabled={
-                      busy ||
-                      !version ||
-                      version === versions.current ||
-                      version.replace(/^v/, '') === item.version
-                    }
-                    onClick={() => void onReplace(item.name, version)}
-                  >
-                    <GitBranch className="size-4" />
-                    切换版本
-                  </button>
-                </div>
-              )}
-            </div>
-          </section>
+                {versions.source === 'git' &&
+                  (versions.dirty || versions.ahead) &&
+                  version && (
+                    <button
+                      className="secondary-button w-fit gap-1.5"
+                      disabled={busy}
+                      onClick={() =>
+                        void onPackageAction(
+                          'stash-sync-local-package-release',
+                          item.name,
+                          version
+                        )
+                      }
+                      title="将本地修改和未跟踪文件保存到 Git stash 后切换"
+                    >
+                      <Archive className="size-4" />
+                      保存改动并切换到所选 commit
+                    </button>
+                  )}
+                {versions.source === 'npm' && (
+                  <div className="flex flex-wrap items-center justify-end gap-2">
+                    <button
+                      className="primary-button gap-1.5"
+                      disabled={
+                        busy ||
+                        !version ||
+                        version === versions.current ||
+                        version.replace(/^v/, '') === item.version
+                      }
+                      onClick={() => void onReplace(item.name, version)}
+                    >
+                      <GitBranch className="size-4" />
+                      切换版本
+                    </button>
+                  </div>
+                )}
+              </div>
+            </section>
+          )
         )}
       </div>
       <ConfirmDialog
@@ -9868,8 +9896,7 @@ function PackageConfigPanel({
 }
 function PackageDocumentationPanel({
   source,
-  fallbackURL,
-  kindLabel
+  fallbackURL
 }: {
   source: string
   fallbackURL?: string
@@ -9885,8 +9912,7 @@ function PackageDocumentationPanel({
     error
   } = useCatalogDocumentQuery(docURL ?? '', { skip: !docURL })
   return (
-    <section className="grid gap-3 rounded-xl border border-slate-200 bg-white p-4 text-sm">
-      <strong className="text-slate-800">{kindLabel}文档</strong>
+    <section>
       {docURL ? (
         <ConfigReadmeCard
           docURL={docURL}
@@ -13246,82 +13272,33 @@ function ControlCard({
             ? catalog.map(item => ({ id: item.title, label: item.title }))
             : []
   }
-  const [navigationPrimary, setNavigationPrimary] = useState<
-    Section | Page | null
-  >(activePrimary)
-  const [rootNavigationVisible, setRootNavigationVisible] = useState(false)
-  const [pendingCatalogPrimary, setPendingCatalogPrimary] = useState<
-    'plugins' | 'connections' | 'modules' | null
-  >(null)
-  const previousPrimaryRef = useRef(activePrimary)
-  useEffect(() => {
-    if (previousPrimaryRef.current === activePrimary) return
-    previousPrimaryRef.current = activePrimary
-    setNavigationPrimary(activePrimary)
-    setRootNavigationVisible(false)
-  }, [activePrimary])
-  useEffect(() => {
-    if (!pendingCatalogPrimary || activePrimary !== pendingCatalogPrimary)
-      return
-    if (catalogLoading) return
-    setPendingCatalogPrimary(null)
-    setRootNavigationVisible(false)
-  }, [activePrimary, catalogLoading, pendingCatalogPrimary])
-  const currentNavigationPrimary = navigationPrimary ?? activePrimary
-  const subitems = subitemsFor(currentNavigationPrimary)
-  const showingSubNavigation =
-    subitems.length > 0 && !rootNavigationVisible && !pendingCatalogPrimary
-  const primaryLabel =
-    directoryActions.find(item => item.id === currentNavigationPrimary)
-      ?.label ?? '机器人'
   const activeSecondary =
-    activePrimary !== currentNavigationPrimary
-      ? ''
-      : currentNavigationPrimary === 'config'
-        ? section
-        : currentNavigationPrimary === 'build'
-          ? buildMode
-          : catalogTitle
+    activePrimary === 'config' ? section : activePrimary === 'build' ? buildMode : catalogTitle
   function selectPrimary(item: (typeof directoryActions)[number]) {
-    setNavigationPrimary(item.id)
-    setRootNavigationVisible(false)
-    if (
-      item.id === 'plugins' ||
-      item.id === 'connections' ||
-      item.id === 'modules'
-    ) {
-      setPendingCatalogPrimary(item.id)
-      setRootNavigationVisible(true)
-      onPage(item.id)
-      return
-    }
-    if (subitemsFor(item.id).length > 0) return
-    if (item.kind === 'section') {
+    if (item.id === 'config') {
+      onPage('robot')
+      onSection('config')
+    } else if (item.id === 'build') {
+      onPage('build')
+      onBuildMode('manifest')
+    } else if (item.kind === 'section') {
       onPage('robot')
       onSection(item.id as Section)
-      return
+    } else {
+      onPage(item.id as Page)
     }
-    onPage(item.id as Page)
   }
-  function selectSecondary(id: string) {
-    if (currentNavigationPrimary === 'config') {
+  function selectSecondary(primary: string, id: string) {
+    if (primary === 'config') {
       onPage('robot')
       onSection(id as Section)
-      return
-    }
-    if (currentNavigationPrimary === 'build') {
+    } else if (primary === 'build') {
       onPage('build')
       onBuildMode(id as 'manifest' | 'npm' | 'git')
-      return
+    } else {
+      onPage(primary as Page)
+      onCatalog(id)
     }
-    if (
-      currentNavigationPrimary === 'plugins' ||
-      currentNavigationPrimary === 'connections' ||
-      currentNavigationPrimary === 'modules'
-    ) {
-      onPage(currentNavigationPrimary)
-    }
-    onCatalog(id)
   }
   return (
     <aside className="control-dock flex min-h-0 flex-col" aria-label="目录操作">
@@ -13370,102 +13347,39 @@ function ControlCard({
             ) : null}
           </div>
         )}
-        {showingSubNavigation ? (
-          <>
-            <div className="control-secondary-nav control-secondary-page grid gap-0.5">
-              <button
-                className={cn(
-                  'flex gap-2 min-h-8 items-center rounded-md px-2 text-left text-xs transition-colors',
-                  'text-slate-500  hover:bg-slate-200/40 dark:text-slate-400 dark:hover:bg-slate-700/40'
-                )}
-                onClick={() => setRootNavigationVisible(true)}
-                aria-label={`返回机器人功能，当前为${primaryLabel}`}
-              >
-                <ArrowLeft className="size-3.5" />
-                <span className="min-w-0 truncate text-xs font-medium text-slate-500 dark:text-slate-400">
-                  {primaryLabel}
-                </span>
-              </button>
-            </div>
-            <div
-              className="control-secondary-nav control-secondary-page grid gap-0.5"
-              aria-label={`${primaryLabel}子菜单`}
+        <ProjectNavigation
+          activeID={activePrimary}
+          items={directoryActions
+            .filter(item => developerMode || item.id !== 'build')
+            .map(item => ({
+              id: item.id,
+              label: item.label,
+              icon: item.icon,
+              onSelect: () => selectPrimary(item),
+              loading: activePrimary === item.id && catalogLoading && ['plugins', 'connections', 'modules'].includes(item.id),
+              children: subitemsFor(item.id).map(child => ({
+                ...child,
+                active: activePrimary === item.id && activeSecondary === child.id,
+                onSelect: () => selectSecondary(item.id, child.id)
+              }))
+            }))}
+        >
+          {project && (
+            <button
+              type="button"
+              className={cn(
+                'flex min-h-9 items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm transition hover:bg-(--theme-surface-hover)',
+                dshOpen ? 'bg-(--theme-accent-soft) font-semibold text-(--theme-accent-text)' : 'text-(--theme-text-secondary)'
+              )}
+              onClick={onOpenAI}
+              aria-current={dshOpen ? 'page' : undefined}
+              aria-label="使用 Agent 协助当前机器人"
             >
-              {subitems.map(item => (
-                <button
-                  className={cn(
-                    'flex min-h-8 items-center rounded-md px-2 text-left text-xs transition-colors',
-                    activeSecondary === item.id
-                      ? 'workspace-nav-sub-active'
-                      : 'text-slate-500 hover:bg-slate-200/40 dark:text-slate-400 dark:hover:bg-slate-700/40'
-                  )}
-                  onClick={() => selectSecondary(item.id)}
-                  key={item.id}
-                >
-                  {item.label}
-                </button>
-              ))}
-            </div>
-          </>
-        ) : (
-          <div
-            className="control-primary-nav grid gap-0.5"
-            aria-label="机器人功能"
-          >
-            {directoryActions
-              .filter(item => developerMode || item.id !== 'build')
-              .map(item => {
-                const hasSubitems = subitemsFor(item.id).length > 0
-                return (
-                  <button
-                    className={cn(
-                      'flex min-h-8 items-center gap-2 rounded-md px-2 text-left text-xs font-medium transition-colors',
-                      activePrimary === item.id
-                        ? 'workspace-nav-active'
-                        : 'text-slate-600 hover:bg-slate-200/40 dark:text-slate-400 dark:hover:bg-slate-700/40'
-                    )}
-                    onClick={() => selectPrimary(item)}
-                    key={item.id}
-                  >
-                    <i className="inline-flex size-4 items-center justify-center not-italic">
-                      {item.icon}
-                    </i>
-                    <span className="min-w-0 flex-1">{item.label}</span>
-                    {pendingCatalogPrimary === item.id && (
-                      <Loader2
-                        className="size-3.5 shrink-0 animate-spin text-brand-600"
-                        aria-label="正在加载子菜单"
-                      />
-                    )}
-                    {hasSubitems && pendingCatalogPrimary !== item.id && (
-                      <ChevronRight
-                        className="size-3.5 shrink-0 text-slate-400 dark:text-slate-500"
-                        aria-label="包含子菜单"
-                      />
-                    )}
-                  </button>
-                )
-              })}
-            {project && (
-              <button
-                className={cn(
-                  'flex min-h-8 items-center gap-2 rounded-md px-2 text-left text-xs font-medium transition-colors',
-                  dshOpen
-                    ? 'workspace-nav-active'
-                    : 'text-slate-600 hover:bg-slate-200/40 dark:text-slate-400 dark:hover:bg-slate-700/40'
-                )}
-                onClick={onOpenAI}
-                aria-label="使用 Agent 协助当前机器人"
-                title="使用 Agent 协助当前机器人"
-              >
-                <i className="inline-flex size-4 items-center justify-center not-italic">
-                  <MessageSquare className="size-4" />
-                </i>
-                <span className="min-w-0 flex-1">Code</span>
-              </button>
-            )}
-          </div>
-        )}
+              <MessageSquare className="size-4" aria-hidden="true" />
+              <span>代码助手</span>
+            </button>
+          )}
+        </ProjectNavigation>
         {project && (
           <footer
             className="control-quick-actions mt-2 grid grid-cols-5 gap-1 border-t border-slate-100 pt-2 dark:border-slate-700"
@@ -16039,6 +15953,7 @@ function GitReleasePanelNext({
     selectedBranch?.name === status?.remoteBranch
       ? 'release'
       : `${(selectedBranch?.name || 'source').replace(/[\s/]+/g, '-')}-release`
+  const createsVersionTag = (session?.target || targetReleaseBranch) === 'release'
   const commits =
     selectedBranch?.commits ?? status?.sourceCommits ?? emptyGitCommits
   useEffect(() => {
@@ -16141,7 +16056,7 @@ function GitReleasePanelNext({
     try {
       const next = await post<PublishResult>('/api/v1/publish/git/publish', {
         sessionId: session.sessionId,
-        version,
+        version: createsVersionTag ? version || status?.suggestedVersion || '' : '',
         artifacts,
         confirm: true
       })
@@ -16359,14 +16274,15 @@ function GitReleasePanelNext({
             <section className="release-source-card compact grid gap-3 rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
               <div className="grid gap-1">
                 <strong className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                  2. 设置发布版本
+                  {createsVersionTag ? '3. 设置发布版本' : '3. 确认分支发布'}
                 </strong>
                 <p className="m-0 text-xs leading-5 text-slate-500">
-                  发布时会创建不可覆盖的 Git Tag，并推送到{' '}
-                  {session?.target || targetReleaseBranch}。
+                  {createsVersionTag
+                    ? '发布产物到 release，并创建和推送不可覆盖的 Git Tag。'
+                    : `仅更新 ${session?.target || targetReleaseBranch} 的构建产物，保留源码包版本，不创建或推送 Git Tag。`}
                 </p>
               </div>
-              <label className="grid max-w-xs gap-1 text-xs font-semibold text-slate-500">
+              {createsVersionTag && <label className="grid max-w-xs gap-1 text-xs font-semibold text-slate-500">
                 版本{' '}
                 <input
                   value={version || status?.suggestedVersion || ''}
@@ -16374,7 +16290,7 @@ function GitReleasePanelNext({
                   className="min-h-9 rounded-lg border border-slate-200 bg-white px-2 text-sm font-normal text-slate-700 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-200"
                   placeholder="v0.0.1"
                 />
-              </label>
+              </label>}
             </section>
           )}
           {phase === 'building' && (
@@ -16393,7 +16309,7 @@ function GitReleasePanelNext({
             <section className="release-source-card release-artifact-card grid gap-3 rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
               <div className="grid gap-1">
                 <strong className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                  3. 选择最终产物
+                  2. 选择最终产物
                 </strong>
                 <p className="m-0 text-xs leading-5 text-slate-500">
                   以下是本次构建实际生成的可发布文件。默认全选；依赖、隐藏文件和
@@ -16530,8 +16446,8 @@ function GitReleasePanelNext({
           {phase === 'confirm' && session && (
             <p className="m-0 rounded-lg border border-brand-200 bg-brand-50 px-3 py-2 text-xs leading-5 text-brand-700 dark:border-brand-200 dark:bg-brand-100/30 dark:text-brand-200">
               即将把 {artifacts.length} 项构建产物发布到{' '}
-              <code>{session.target}</code>，并创建标签{' '}
-              <code>{version || status?.suggestedVersion}</code>。
+              <code>{session.target}</code>
+              {createsVersionTag ? <>，并创建标签 <code>{version || status?.suggestedVersion}</code>。</> : '，不创建或推送 Git Tag。'}
             </p>
           )}
           {requestError && (
@@ -16539,7 +16455,7 @@ function GitReleasePanelNext({
               ！ {requestError}
             </p>
           )}
-          {session && requestError.includes('release 分支已推送') && (
+          {session && createsVersionTag && requestError.includes('release 分支已推送') && (
             <button
               className="inline-flex min-h-9 w-fit items-center justify-center gap-1.5 rounded-lg bg-brand-600 px-3 text-xs font-semibold text-white hover:bg-brand-700 disabled:opacity-50"
               disabled={retryingTag}

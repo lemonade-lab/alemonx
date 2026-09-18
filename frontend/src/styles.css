@@ -2024,6 +2024,19 @@ button {
     overflow-x: overlay;
     overflow-y: hidden;
   }
+  [data-sidebar-window-subnav] {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    display: flex;
+    align-items: center;
+    overflow-x: auto;
+    padding-top: 8px;
+  }
+  [data-sidebar-window-subnav] > button {
+    flex: 0 0 auto;
+    white-space: nowrap;
+    padding-left: 10px;
+  }
   [data-sidebar-window-nav] > button,
   [data-sidebar-window-side-actions] button {
     align-self: stretch;
@@ -9160,6 +9173,10 @@ button > svg,
 @container workbench-window (max-width: 940px) {
   .console-layout {
     grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  .console-layout.sidebar-collapsed {
+    grid-template-rows: minmax(0, 1fr);
   }
   .console-layout .project-rail {
     border-bottom: 1px solid var(--theme-border-default);
@@ -9173,7 +9190,47 @@ button > svg,
   }
 }
 
+.workbench-tools-trigger,
+.workbench-tools-close {
+  display: none;
+}
+
+.workbench-tools-actions {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 4px;
+  margin-left: auto;
+}
+
 @container workbench-window (max-width: 700px) {
+  .topbar-brand {
+    display: none;
+  }
+  .workbench-tools-trigger,
+  .workbench-tools-close {
+    display: inline-flex;
+  }
+  .workbench-tools-actions {
+    display: none;
+    width: 100%;
+    flex-wrap: wrap;
+    gap: 8px;
+    border-top: 1px solid var(--theme-border-default);
+    padding: 8px 0;
+  }
+  .workbench-tools-actions[data-open='true'] {
+    display: flex;
+  }
+  [data-project-navigation] {
+    max-height: 32dvh;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  [data-project-navigation] button,
+  .control-quick-actions button {
+    min-height: 44px;
+  }
   .console-page {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: auto minmax(0, 1fr);

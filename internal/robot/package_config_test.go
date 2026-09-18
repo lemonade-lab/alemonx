@@ -448,7 +448,7 @@ func TestSaveLoginWithoutPlatformValueSkipsPlatformKey(t *testing.T) {
 	}
 }
 
-func TestResolveRuntimePlatformsMergesDeclaredOverBuiltin(t *testing.T) {
+func TestResolveRuntimePlatformsMergesInstalledConnectionsOverBuiltin(t *testing.T) {
 	root := t.TempDir()
 	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"robot","dependencies":{"@myorg/custom":"1.0.0"}}`)
 	writeAppPageFixture(t, filepath.Join(root, "node_modules", "@myorg", "custom", "package.json"), `{
@@ -476,13 +476,48 @@ func TestResolveRuntimePlatformsMergesDeclaredOverBuiltin(t *testing.T) {
 	if onebot.Package != "@myorg/custom" || onebot.Source != "declared" || onebot.Installed != true {
 		t.Fatalf("builtin onebot must be overridden by declared platform: %#v", onebot)
 	}
-	example := byID["example"]
-	if example.Package != "@org/third" || example.Source != "declared" || example.Label != "第三方平台" {
-		t.Fatalf("backpack platform missing: %#v", example)
+	if _, found := byID["example"]; found {
+		t.Fatalf("legacy packages directory must not add a login platform: %#v", byID["example"])
 	}
 	qqBot := byID["qq-bot"]
 	if qqBot.Package != "@alemonjs/qq-bot" || qqBot.Source != "builtin" {
 		t.Fatalf("builtin candidates must remain: %#v", qqBot)
+	}
+}
+
+func TestResolveRuntimePlatformsProvidesDefaultConnections(t *testing.T) {
+	root := t.TempDir()
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
+
+	platforms, err := resolveRuntimePlatforms(root)
+	if err != nil {
+		t.Fatalf("resolveRuntimePlatforms: %v", err)
+	}
+	want := map[string]string{
+		"bubble":         "@alemonjs/bubble",
+		"discord":        "@alemonjs/discord",
+		"douyin":         "@alemonjs/douyin",
+		"douyinbot":      "@alemonjs/douyinbot",
+		"kook":           "@alemonjs/kook",
+		"milky":          "@alemonjs/milky",
+		"onebot":         "@alemonjs/onebot",
+		"qq-bot":         "@alemonjs/qq-bot",
+		"telegram":       "@alemonjs/telegram",
+		"wechat":         "@alemonjs/wechat",
+		"wechat-clawbot": "@alemonjs/wechat-clawbot",
+		"wecom":          "@alemonjs/wecom",
+	}
+	if len(platforms) != len(want) {
+		t.Fatalf("default platform count = %d, want %d", len(platforms), len(want))
+	}
+	for _, platform := range platforms {
+		if platform.Package != want[platform.ID] || platform.Source != "builtin" || platform.Installed {
+			t.Fatalf("default platform = %#v, want builtin default", platform)
+		}
+		delete(want, platform.ID)
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing default platforms: %#v", want)
 	}
 }
 

@@ -1109,6 +1109,7 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	mux.HandleFunc("/api/v1/system/network", s.systemNetworkHandler)
 	mux.HandleFunc("/api/v1/system/dependency-sources", s.dependencySourcesHandler)
 	mux.HandleFunc("/api/v1/system/redis", s.systemRedisHandler)
+	mux.HandleFunc("/api/v1/data/", s.dataHandler)
 	mux.HandleFunc(pluginDownloadBrokerPath, s.pluginDownloadBrokerHandler)
 	mux.HandleFunc("/api/v1/system/plugin-download-cache", s.pluginDownloadCacheHandler)
 	mux.HandleFunc("/api/v1/system/mcp", s.systemMCPHandler)
@@ -9344,7 +9345,7 @@ func (s *server) ginRequestLog() gin.HandlerFunc {
 			"duration_ms":    time.Since(started).Milliseconds(),
 			"response_bytes": c.Writer.Size(),
 		}
-		if responseMessage != "" {
+		if responseMessage != "" && !strings.HasPrefix(c.Request.URL.Path, "/api/v1/data/") {
 			responseFields["response"] = logging.RawJSON(responseMessage)
 		}
 		logging.Event(level, "http.request.completed", responseFields)
@@ -9396,6 +9397,10 @@ func (w *captureWriter) message() string {
 // stream so handlers still decode it. Sensitive fields (tokens, passwords) are
 // redacted; the body is capped to keep logs readable.
 func (s *server) loggableRequestBody(c *gin.Context) string {
+	// SQL, Redis values and credentials must never enter request logs.
+	if strings.HasPrefix(c.Request.URL.Path, "/api/v1/data/") {
+		return ""
+	}
 	if c.Request.Body == nil || c.Request.Body == http.NoBody {
 		return ""
 	}

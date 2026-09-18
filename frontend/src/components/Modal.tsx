@@ -9,6 +9,7 @@ export const GLOBAL_MODAL_Z_INDEX = 2_147_483_000
 let openModalCount = 0
 let previousBodyOverflow = ''
 let previousDocumentOverflow = ''
+const blockingModals: HTMLDivElement[] = []
 
 type Props = {
   open: boolean
@@ -40,8 +41,12 @@ export function Modal({
 }: Props) {
   const overlayRef = useRef<HTMLDivElement>(null)
   const returnFocusRef = useRef<HTMLElement | null>(null)
+  const dismissRef = useRef(onClose ?? onBackdropClick)
+  dismissRef.current = onClose ?? onBackdropClick
   useEffect(() => {
     if (!open) return
+    const overlay = overlayRef.current
+    if (trapFocus && overlay) blockingModals.push(overlay)
     returnFocusRef.current = document.activeElement as HTMLElement | null
     if (lockScroll && openModalCount++ === 0) {
       previousBodyOverflow = document.body.style.overflow
@@ -50,14 +55,17 @@ export function Modal({
       document.documentElement.style.overflow = 'hidden'
     }
     const focusFirst = () => {
-      const focusable = overlayRef.current?.querySelector<HTMLElement>(
-        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
-      )
+      const focusable = Array.from(
+        overlayRef.current?.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        ) ?? []
+      ).find(element => element.getClientRects().length > 0)
       ;(focusable ?? overlayRef.current)?.focus()
     }
     const frame = trapFocus ? window.requestAnimationFrame(focusFirst) : 0
     const onKeyDown = (event: KeyboardEvent) => {
-      const dismiss = onClose ?? onBackdropClick
+      if (blockingModals.length && blockingModals.at(-1) !== overlay) return
+      const dismiss = dismissRef.current
       if (event.key === 'Escape' && dismiss) {
         event.preventDefault()
         dismiss()
@@ -68,7 +76,7 @@ export function Modal({
         overlayRef.current.querySelectorAll<HTMLElement>(
           'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
         )
-      )
+      ).filter(element => element.getClientRects().length > 0)
       if (!focusable.length) {
         event.preventDefault()
         overlayRef.current.focus()
@@ -88,13 +96,17 @@ export function Modal({
     return () => {
       if (trapFocus) window.cancelAnimationFrame(frame)
       document.removeEventListener('keydown', onKeyDown)
+      if (overlay) {
+        const index = blockingModals.indexOf(overlay)
+        if (index >= 0) blockingModals.splice(index, 1)
+      }
       if (lockScroll && --openModalCount === 0) {
         document.body.style.overflow = previousBodyOverflow
         document.documentElement.style.overflow = previousDocumentOverflow
       }
       if (trapFocus) returnFocusRef.current?.focus()
     }
-  }, [lockScroll, onBackdropClick, onClose, open, trapFocus])
+  }, [lockScroll, open, trapFocus])
   if (!open) return null
   return createPortal(
     <div
