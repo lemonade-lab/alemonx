@@ -1,6 +1,7 @@
 package robot
 
 import (
+	"alemonx/internal/systemnetwork"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -654,6 +655,9 @@ const githubPackageMirrorPrefix = "https://ghfast.top/"
 // SSH, Gitee, and URLs carrying credentials or queries retain the exact value
 // chosen by the user, so a mirror never receives a secret or private URL.
 func githubPackageMirror(repository string) (string, bool) {
+	if systemnetwork.UsesGlobalPolicy() {
+		return repository, false
+	}
 	parsed, err := url.Parse(repository)
 	if err != nil || parsed == nil || parsed.Scheme != "https" || !strings.EqualFold(parsed.Hostname(), "github.com") || parsed.User != nil || parsed.RawQuery != "" {
 		return repository, false

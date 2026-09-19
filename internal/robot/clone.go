@@ -1,6 +1,7 @@
 package robot
 
 import (
+	"alemonx/internal/systemnetwork"
 	"bytes"
 	"context"
 	"errors"
@@ -294,6 +295,9 @@ func CloneRepositoryWithAuthorization(destination, repository, branch, name, mir
 	if parsed.Scheme == "https" {
 		remote = parsed.String()
 	}
+	if systemnetwork.UsesGlobalPolicy() {
+		mirror = "official"
+	}
 	switch mirror {
 	case "", "official":
 	case "gh-proxy":
@@ -397,6 +401,11 @@ func runCloneWithProgress(root string, onProgress func(CloneProgress), authoriza
 	progressOutput := &cloneProgressWriter{output: &output, onProgress: onProgress}
 	command.Stdout = progressOutput
 	command.Stderr = progressOutput
+	cleanupNetwork, networkErr := systemnetwork.ApplyCommand(command)
+	if networkErr != nil {
+		return "", networkErr
+	}
+	defer cleanupNetwork()
 	err = command.Run()
 	text := strings.TrimSpace(output.String())
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {

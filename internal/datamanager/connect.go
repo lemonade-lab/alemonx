@@ -1,6 +1,7 @@
 package datamanager
 
 import (
+	"alemonx/internal/systemnetwork"
 	"context"
 	"database/sql"
 	"encoding/base64"
@@ -165,9 +166,11 @@ func openRemote(c Connection) (*sql.DB, error) {
 		if err != nil {
 			return nil, errors.New("PostgreSQL 连接参数无效")
 		}
+		connector.Dialer(systemnetwork.Dialer{Timeout: 5 * time.Second})
 		return sql.OpenDB(connector), nil
 	}
 	cfg := mysql.NewConfig()
+	cfg.DialFunc = (systemnetwork.Dialer{Timeout: 5 * time.Second}).DialContext
 	cfg.User, cfg.Passwd, cfg.Net, cfg.Addr, cfg.DBName = c.Username, c.Password, "tcp", address, c.Database
 	cfg.Timeout, cfg.ReadTimeout, cfg.WriteTimeout = 5*time.Second, 8*time.Second, 8*time.Second
 	cfg.MaxAllowedPacket = 2 << 20

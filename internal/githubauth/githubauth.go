@@ -6,6 +6,7 @@
 package githubauth
 
 import (
+	"alemonx/internal/systemnetwork"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -322,7 +323,7 @@ func cacheLogin(login string) {
 }
 
 func fetchLogin() (string, error) {
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := systemnetwork.DefaultClient(10 * time.Second)
 	response, err := httpcache.GetWithHeaders(client, userURL, time.Hour, map[string]string{
 		"Accept": "application/vnd.github+json",
 	})
@@ -346,7 +347,7 @@ func postForm(endpoint string, form url.Values) ([]byte, error) {
 	request.Header.Set("Accept", "application/json")
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	request.Header.Set("User-Agent", "alemonx")
-	response, err := (&http.Client{Timeout: 15 * time.Second}).Do(request)
+	response, err := (systemnetwork.DefaultClient(15 * time.Second)).Do(request)
 	if err != nil {
 		return nil, err
 	}

@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"alemonx/internal/systemnetwork"
 	"bytes"
 	"context"
 	"crypto/hmac"
@@ -78,7 +79,7 @@ func (s WebhookAlertSink) Send(ctx context.Context, alert Alert) error {
 	}
 	client := s.Client
 	if client == nil {
-		client = http.DefaultClient
+		client = systemnetwork.DefaultClient(0)
 	}
 	resp, err := client.Do(req)
 	if err != nil {

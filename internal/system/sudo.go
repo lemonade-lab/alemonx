@@ -1,6 +1,7 @@
 package system
 
 import (
+	"alemonx/internal/systemnetwork"
 	"context"
 	"errors"
 	"fmt"
@@ -61,7 +62,7 @@ var sudoCommand = func(ctx context.Context, password []byte, program string, arg
 	reader := newSudoPasswordReader(password)
 	command.Stdin = reader
 	defer reader.clear()
-	return command.CombinedOutput()
+	return systemnetwork.CombinedOutput(command)
 }
 
 // RunSudoCommand executes one fixed, manifest-declared native command. It is
@@ -83,7 +84,7 @@ func RunSudoCommand(ctx context.Context, password []byte, program string, args [
 	if os.Geteuid() == 0 {
 		// The host already runs as root; sudo is neither required nor always
 		// installed (common on minimal container images).
-		output, err = exec.CommandContext(ctx, program, append([]string(nil), args...)...).CombinedOutput()
+		output, err = systemnetwork.CombinedOutput(exec.CommandContext(ctx, program, append([]string(nil), args...)...))
 	} else {
 		if len(password) == 0 {
 			return "", errors.New("请输入当前系统账户的 sudo 密码")

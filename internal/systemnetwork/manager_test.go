@@ -69,16 +69,16 @@ func TestDefaultRoutesPreferAvailableMirrors(t *testing.T) {
 		t.Fatal(err)
 	}
 	routes := manager.Settings().Routes
-	if github := routes[RouteGitHub]; github.Mode != ModeMirror || github.MirrorURL != defaultGitHubMirror {
+	if github := routes[RouteGitHub]; github.Mode != ModeAuto || github.MirrorURL != defaultGitHubMirror {
 		t.Fatalf("GitHub defaults = %#v", github)
 	}
-	if npm := routes[RouteNPM]; npm.Mode != ModeMirror || npm.MirrorURL != defaultNPMMirror {
+	if npm := routes[RouteNPM]; npm.Mode != ModeAuto || npm.MirrorURL != defaultNPMMirror {
 		t.Fatalf("NPM defaults = %#v", npm)
 	}
-	if python := routes[RoutePython]; python.Mode != ModeMirror || python.MirrorURL != defaultPythonMirror {
+	if python := routes[RoutePython]; python.Mode != ModeAuto || python.MirrorURL != defaultPythonMirror {
 		t.Fatalf("Python defaults = %#v", python)
 	}
-	if routes[RouteGitee].Mode != ModeDirect || routes[RouteOfficial].Mode != ModeDirect {
+	if routes[RouteGitee].Mode != ModeAuto || routes[RouteOfficial].Mode != ModeAuto {
 		t.Fatalf("unsupported mirror defaults = %#v", routes)
 	}
 	presets := manager.Settings().MirrorPresets[RouteGitHub]
@@ -181,7 +181,7 @@ func TestPythonBuildMirrorUsesActivePythonRoute(t *testing.T) {
 		t.Fatal(err)
 	}
 	SetDefault(manager)
-	if got := PythonBuildMirrorURL(); got != "https://registry.npmmirror.com/-/binary/python" {
+	if got := PythonBuildMirrorURL(); got != "" {
 		t.Fatalf("default Python build mirror = %q", got)
 	}
 	if _, err := manager.Save(Settings{Routes: map[Route]RouteSettings{RoutePython: {Mode: ModeDirect}}}); err != nil {

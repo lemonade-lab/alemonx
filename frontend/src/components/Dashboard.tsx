@@ -132,6 +132,7 @@ import { DSHWorkspace } from './DSHWorkspace'
 import { ErrorNotice } from './ErrorNotice'
 import { EmptyState } from './EmptyState'
 import { WorkspaceWelcome } from './WorkspaceWelcome'
+import { BackpackFolderInstall } from './BackpackFolderInstall'
 import { WorkbenchTools } from './WorkbenchTools'
 import { ProjectNavigation } from './ProjectNavigation'
 import { ConfirmDialog } from './ConfirmDialog'
@@ -3848,17 +3849,6 @@ export function Dashboard({
                   <PanelLeftClose className="size-4" />
                 )}
               </Button>
-              <span className="min-w-0 truncate text-xs text-(--theme-text-secondary)" title={activeProject?.path}>
-                {activeProject?.name ?? '工作台'}
-                {activeProject && (
-                  <span className="text-(--theme-text-primary)">
-                    {' / '}
-                    {aiOpen ? '代码助手' : page === 'robot'
-                      ? ({ runtime: '运行', config: '机器人配置', npmrc: 'npm 源', env: '环境变量', backpack: '背包' }[section])
-                      : directoryActions.find(item => item.id === page)?.label}
-                  </span>
-                )}
-              </span>
             </div>
             <WorkbenchTools>
               <ThemeToggle />
@@ -8322,7 +8312,6 @@ function BackpackPanel({
   loading,
   failed,
   onRefresh,
-  onOpenPlugins,
   onClone,
   busy,
   onSetPrivate,
@@ -8542,10 +8531,6 @@ function BackpackPanel({
               />
             </span>
           </button>
-          <button className="text-button gap-1.5" onClick={onOpenPlugins}>
-            <Blocks className="size-4" />
-            插件中心
-          </button>
           <button
             className="secondary-button min-h-9 gap-1.5"
             onClick={onClone}
@@ -8553,6 +8538,7 @@ function BackpackPanel({
             <GitBranch className="size-3.5" />
             克隆
           </button>
+          <BackpackFolderInstall key={root} root={root} disabled={busy} onInstalled={onRefresh} />
           <button
             className="icon-button size-9 shrink-0 p-0"
             disabled={loading}

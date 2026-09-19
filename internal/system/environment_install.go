@@ -1,6 +1,7 @@
 package system
 
 import (
+	"alemonx/internal/systemnetwork"
 	"context"
 	"errors"
 	"fmt"
@@ -822,7 +823,7 @@ var runPackageCommand = func(ctx context.Context, manager string, args []string)
 		args = append([]string{"-n", "--", manager}, args...)
 		program = "sudo"
 	}
-	output, runErr := exec.CommandContext(ctx, program, args...).CombinedOutput()
+	output, runErr := systemnetwork.CombinedOutput(exec.CommandContext(ctx, program, args...))
 	return strings.TrimSpace(string(output)), runErr
 }
 

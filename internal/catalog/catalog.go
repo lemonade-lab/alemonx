@@ -561,6 +561,9 @@ func repositoryFileCandidates(parsed *url.URL, filename string) ([]string, error
 	// jsDelivr mirrors GitHub raw files on its own CDN, which is not subject
 	// to GitHub's API/raw rate limits. Try it before direct GitHub hosts and
 	// keep the direct URLs as fallbacks.
+	if systemnetwork.UsesGlobalPolicy() {
+		return candidates, nil
+	}
 	js := []string{}
 	for _, candidate := range candidates {
 		if mirror := jsDelivrURL(candidate); mirror != "" {

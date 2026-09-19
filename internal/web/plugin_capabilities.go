@@ -282,7 +282,12 @@ func (s *server) systemCapabilityContextHandler(w http.ResponseWriter, r *http.R
 				writeError(w, http.StatusServiceUnavailable, "当前网络配置不可用。")
 				return
 			}
-			response["network"] = s.network.Settings()
+			settings := s.network.Settings()
+			if settings.Config != nil && settings.Migration == nil {
+				response["network"] = settings.Config
+			} else {
+				response["network"] = settings
+			}
 		default:
 			writeError(w, http.StatusBadRequest, "不支持的工作台上下文能力。")
 			return

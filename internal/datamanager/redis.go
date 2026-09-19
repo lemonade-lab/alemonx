@@ -1,6 +1,7 @@
 package datamanager
 
 import (
+	"alemonx/internal/systemnetwork"
 	"bufio"
 	"context"
 	"errors"
@@ -54,7 +55,7 @@ func RedisCommand(ctx context.Context, input RedisRequest) (any, error) {
 	if _, _, err := net.SplitHostPort(input.Address); err != nil {
 		return nil, errors.New("连接地址应为 host:port")
 	}
-	connection, err := (&net.Dialer{Timeout: 3 * time.Second}).DialContext(ctx, "tcp", input.Address)
+	connection, err := (systemnetwork.Dialer{Timeout: 3 * time.Second}).DialContext(ctx, "tcp", input.Address)
 	if err != nil {
 		return nil, errors.New("无法连接 Redis，请检查地址和服务状态")
 	}

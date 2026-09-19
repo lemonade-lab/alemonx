@@ -1,6 +1,7 @@
 package system
 
 import (
+	"alemonx/internal/systemnetwork"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -193,7 +194,7 @@ func testDependencySource(ctx context.Context, status DependencySourceStatus, pr
 		return DependencySourceCheck{}, err
 	}
 	req.Header.Set("Range", "bytes=0-0")
-	response, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	response, err := (systemnetwork.DefaultClient(10 * time.Second)).Do(req)
 	if err != nil {
 		return DependencySourceCheck{URL: url, LatencyMS: time.Since(started).Milliseconds(), Message: "无法连接镜像仓库。"}, nil
 	}

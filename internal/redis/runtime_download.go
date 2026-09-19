@@ -1,6 +1,7 @@
 package redis
 
 import (
+	"alemonx/internal/systemnetwork"
 	"archive/tar"
 	"archive/zip"
 	"compress/gzip"
@@ -84,7 +85,7 @@ func downloadAndActivateRuntime(ctx context.Context, base string) (string, error
 	if err != nil {
 		return "", err
 	}
-	client := &http.Client{Timeout: 10 * time.Minute}
+	client := systemnetwork.DefaultClient(10 * time.Minute)
 	response, err := client.Do(request)
 	if err != nil {
 		return "", fmt.Errorf("无法获取运行时索引：%w", err)
@@ -166,7 +167,7 @@ func downloadRuntimeAsset(ctx context.Context, asset runtimeAsset, destination s
 	if err != nil {
 		return err
 	}
-	response, err := (&http.Client{Timeout: 10 * time.Minute}).Do(request)
+	response, err := systemnetwork.DefaultClient(10 * time.Minute).Do(request)
 	if err != nil {
 		return err
 	}

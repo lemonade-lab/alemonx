@@ -22,12 +22,12 @@ import (
 type Mode string
 
 const (
+	ModeAuto Mode = "auto"
 	// ModeSystem follows the proxy environment inherited by AlemonX.
 	ModeSystem       Mode = "system"
 	ModeMirror       Mode = "mirror"
 	ModeCustomMirror Mode = "custom-mirror"
-	// ModeManual is retained only for configurations saved by the initial HTTP
-	// proxy implementation. New UI never creates it.
+	// ModeManual uses an explicitly configured HTTP(S) proxy.
 	ModeManual Mode = "manual"
 	ModeDirect Mode = "direct"
 )
@@ -85,13 +85,18 @@ var mirrorPresets = map[Route][]MirrorPreset{
 // RouteSettings is a self-contained answer for one resource category. A
 // GitHub mirror never accidentally becomes the source for Gitee or NPM.
 type RouteSettings struct {
-	Mode           Mode   `json:"mode"`
-	MirrorURL      string `json:"mirrorUrl,omitempty"`
-	ProxyURL       string `json:"proxyUrl,omitempty"`
-	HasCredentials bool   `json:"hasCredentials,omitempty"`
+	Mode             Mode   `json:"mode"`
+	MirrorURL        string `json:"mirrorUrl,omitempty"`
+	ProxyURL         string `json:"proxyUrl,omitempty"`
+	HasCredentials   bool   `json:"hasCredentials,omitempty"`
+	ClearCredentials bool   `json:"clearCredentials,omitempty"`
 }
 
 type Settings struct {
+	*Config
+	Migration     *Migration               `json:"migration,omitempty"`
+	Connection    *RouteSettings           `json:"connection,omitempty"`
+	Overrides     map[Route]RouteSettings  `json:"overrides,omitempty"`
 	Routes        map[Route]RouteSettings  `json:"routes"`
 	MirrorPresets map[Route][]MirrorPreset `json:"mirrorPresets,omitempty"`
 }
@@ -103,8 +108,9 @@ type storedRouteSettings struct {
 }
 
 type storedSettings struct {
-	// Mode and ProxyURL migrate the original all-or-nothing setting. New files
-	// only store per-route objects under Routes.
+	Connection     *storedRouteSettings `json:"connection,omitempty"`
+	OverrideRoutes []Route              `json:"overrideRoutes,omitempty"`
+	// Mode and ProxyURL migrate the original all-or-nothing setting.
 	Mode     Mode                          `json:"mode,omitempty"`
 	ProxyURL string                        `json:"proxyUrl,omitempty"`
 	Routes   map[Route]storedRouteSettings `json:"routes,omitempty"`
@@ -115,14 +121,17 @@ type storedSettings struct {
 // addresses existed.
 func (s *storedSettings) UnmarshalJSON(data []byte) error {
 	var raw struct {
-		Mode     Mode                      `json:"mode"`
-		ProxyURL string                    `json:"proxyUrl"`
-		Routes   map[Route]json.RawMessage `json:"routes"`
+		Connection     *storedRouteSettings      `json:"connection"`
+		OverrideRoutes []Route                   `json:"overrideRoutes"`
+		Mode           Mode                      `json:"mode"`
+		ProxyURL       string                    `json:"proxyUrl"`
+		Routes         map[Route]json.RawMessage `json:"routes"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
 	s.Mode, s.ProxyURL = raw.Mode, raw.ProxyURL
+	s.Connection, s.OverrideRoutes = raw.Connection, raw.OverrideRoutes
 	s.Routes = make(map[Route]storedRouteSettings, len(raw.Routes))
 	for route, value := range raw.Routes {
 		var item storedRouteSettings
@@ -151,14 +160,19 @@ type CheckResult struct {
 // clients for AlemonX-managed content. It does not alter http.DefaultClient
 // or process environment variables.
 type Manager struct {
-	mu       sync.RWMutex
-	path     string
-	settings storedSettings
+	mu        sync.RWMutex
+	path      string
+	settings  storedSettings
+	config    *Config
+	legacyRaw []byte
+	engineMu  sync.Mutex
+	engines   map[string]*selection
+	probe     func(GroupDefinition, string) CandidateState
 }
 
 var (
 	defaultMu      sync.RWMutex
-	defaultManager = &Manager{settings: storedSettings{Routes: defaultRoutes()}}
+	defaultManager = &Manager{settings: initialSettings(), config: defaultConfig()}
 	testEndpoints  = map[Route]string{
 		RouteGitHub:   "https://api.github.com/",
 		RouteGitee:    "https://gitee.com/api/v5/version",
@@ -179,7 +193,7 @@ func New() (*Manager, error) {
 }
 
 func NewAt(path string) (*Manager, error) {
-	manager := &Manager{path: path, settings: storedSettings{Routes: defaultRoutes()}}
+	manager := &Manager{path: path, settings: initialSettings(), config: defaultConfig()}
 	if strings.TrimSpace(path) == "" {
 		return manager, nil
 	}
@@ -191,6 +205,17 @@ func NewAt(path string) (*Manager, error) {
 		return nil, err
 	}
 	var saved storedSettings
+	var versioned Config
+	if err := json.Unmarshal(raw, &versioned); err != nil {
+		return nil, errors.New("网络配置无法读取")
+	}
+	if versioned.Version != 0 {
+		if err := validateConfig(versioned); err != nil {
+			return nil, err
+		}
+		manager.config = &versioned
+		return manager, nil
+	}
 	if err := json.Unmarshal(raw, &saved); err != nil {
 		return nil, fmt.Errorf("系统联网配置无效：%w", err)
 	}
@@ -199,6 +224,8 @@ func NewAt(path string) (*Manager, error) {
 		return nil, fmt.Errorf("系统联网配置无效：%w", err)
 	}
 	manager.settings = saved
+	manager.config = nil
+	manager.legacyRaw = append([]byte(nil), raw...)
 	return manager, nil
 }
 
@@ -215,10 +242,21 @@ func SetDefault(manager *Manager) {
 }
 
 func DefaultClient(timeout time.Duration) *http.Client {
+	// A cold automatic group may need several bounded probe waves before
+	// the actual transfer begins. Caller contexts still cancel immediately.
+	if timeout > 0 {
+		timeout += 35 * time.Second
+	}
+	return &http.Client{Timeout: timeout, Transport: defaultPolicyTransport{}, CheckRedirect: pinRedirect}
+}
+
+type defaultPolicyTransport struct{}
+
+func (defaultPolicyTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	defaultMu.RLock()
-	manager := defaultManager
+	m := defaultManager
 	defaultMu.RUnlock()
-	return manager.Client(timeout)
+	return m.Client(0).Transport.RoundTrip(r)
 }
 
 // PythonBuildMirrorURL returns the base URL accepted by pyenv's python-build.
@@ -253,15 +291,32 @@ func pythonRouteSettings() storedRouteSettings {
 	manager := defaultManager
 	defaultMu.RUnlock()
 	manager.mu.RLock()
+	if manager.config != nil {
+		manager.mu.RUnlock()
+		// V2 child processes are adapted by ApplyCommand, never legacy routes.
+		return storedRouteSettings{Mode: ModeDirect}
+	}
 	saved := manager.settings
 	manager.mu.RUnlock()
-	return normalizedRoutes(saved.Routes, saved.Mode, saved.ProxyURL)[RoutePython]
+	return resolveAuto(normalizedRoutes(saved.Routes, saved.Mode, saved.ProxyURL)[RoutePython], testEndpoints[RoutePython])
 }
 
 func (m *Manager) Settings() Settings {
 	m.mu.RLock()
+	defer m.mu.RUnlock()
 	saved := m.settings
-	m.mu.RUnlock()
+	if m.config != nil {
+		result := publicSettings(saved)
+		result.Config = publicConfig(*m.config)
+		return result
+	}
+	if len(m.legacyRaw) > 0 {
+		c, migration := migrateConfig(saved)
+		result := publicSettings(saved)
+		result.Config = publicConfig(c)
+		result.Migration = &migration
+		return result
+	}
 	return publicSettings(saved)
 }
 
@@ -275,6 +330,19 @@ func MirrorPresets(route Route) []MirrorPreset {
 func publicSettings(saved storedSettings) Settings {
 	routes := normalizedRoutes(saved.Routes, saved.Mode, saved.ProxyURL)
 	result := Settings{Routes: make(map[Route]RouteSettings, len(routes)), MirrorPresets: make(map[Route][]MirrorPreset, len(mirrorPresets))}
+	result.Overrides = make(map[Route]RouteSettings)
+	if saved.Connection != nil {
+		connection := publicRouteSettings(*saved.Connection)
+		result.Connection = &connection
+		for _, route := range saved.OverrideRoutes {
+			result.Overrides[route] = publicRouteSettings(routes[route])
+		}
+	} else {
+		// Legacy configurations retain every route, including system/manual.
+		for route, item := range routes {
+			result.Overrides[route] = publicRouteSettings(item)
+		}
+	}
 	for route, item := range routes {
 		result.Routes[route] = publicRouteSettings(item)
 	}
@@ -297,18 +365,31 @@ func publicRouteSettings(saved storedRouteSettings) RouteSettings {
 }
 
 func (m *Manager) Save(next Settings) (Settings, error) {
-	saved := storedSettings{Routes: make(map[Route]storedRouteSettings, len(next.Routes))}
-	for route, item := range next.Routes {
-		saved.Routes[route] = storedRouteSettings{Mode: item.Mode, MirrorURL: strings.TrimSpace(item.MirrorURL), ProxyURL: strings.TrimSpace(item.ProxyURL)}
+	if next.Config != nil {
+		return m.saveConfig(*next.Config, false)
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	var connection *storedRouteSettings
+	var overrides []Route
+	if next.Connection != nil {
+		var err error
+		next, connection, overrides, err = expandConnection(next, m.settings)
+		if err != nil {
+			return Settings{}, err
+		}
+	}
+	saved := storedSettings{Routes: make(map[Route]storedRouteSettings, len(next.Routes))}
+	saved.Connection, saved.OverrideRoutes = connection, overrides
+	for route, item := range next.Routes {
+		saved.Routes[route] = storedRouteSettings{Mode: item.Mode, MirrorURL: strings.TrimSpace(item.MirrorURL), ProxyURL: strings.TrimSpace(item.ProxyURL)}
+	}
 	saved.Routes = normalizedRoutes(saved.Routes, "", "")
 	current := normalizedRoutes(m.settings.Routes, m.settings.Mode, m.settings.ProxyURL)
 	for _, route := range allRoutes {
 		candidate := saved.Routes[route]
 		previous := current[route]
-		if candidate.Mode == ModeManual && publicRouteSettings(previous).ProxyURL == candidate.ProxyURL {
+		if candidate.Mode == ModeManual && !next.Routes[route].ClearCredentials && publicRouteSettings(previous).ProxyURL == candidate.ProxyURL {
 			old, oldErr := url.Parse(previous.ProxyURL)
 			input, inputErr := url.Parse(candidate.ProxyURL)
 			if oldErr == nil && inputErr == nil && old.User != nil && input.User == nil {
@@ -338,6 +419,7 @@ func (m *Manager) Save(next Settings) (Settings, error) {
 		}
 	}
 	m.settings = saved
+	m.config = nil
 	return publicSettings(saved), nil
 }
 
@@ -346,7 +428,7 @@ func validate(saved storedSettings) error {
 	for _, route := range allRoutes {
 		item := routes[route]
 		switch item.Mode {
-		case ModeSystem, ModeDirect:
+		case ModeAuto, ModeSystem, ModeDirect:
 			continue
 		case ModeMirror, ModeCustomMirror:
 			if err := validateMirrorURL(item.MirrorURL); err != nil {
@@ -371,14 +453,23 @@ func validate(saved storedSettings) error {
 }
 
 func (m *Manager) Client(timeout time.Duration) *http.Client {
+	if c := m.ConfigSnapshot(); timeout > 0 && c != nil && c.Mode == "auto" {
+		timeout += 35 * time.Second
+	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = m.proxyFor
-	return &http.Client{Timeout: timeout, Transport: &mirrorTransport{base: transport, manager: m}}
+	return &http.Client{Timeout: timeout, Transport: &policyTransport{manager: m, legacy: &mirrorTransport{base: transport, manager: m}}, CheckRedirect: pinRedirect}
 }
 
 type mirrorTransport struct {
 	base    http.RoundTripper
 	manager *Manager
+}
+
+func (t *mirrorTransport) CloseIdleConnections() {
+	if closer, ok := t.base.(interface{ CloseIdleConnections() }); ok {
+		closer.CloseIdleConnections()
+	}
 }
 
 func (t *mirrorTransport) RoundTrip(request *http.Request) (*http.Response, error) {
@@ -394,11 +485,11 @@ func (t *mirrorTransport) RoundTrip(request *http.Request) (*http.Response, erro
 		if err != nil {
 			return nil, err
 		}
-		copy := request.Clone(request.Context())
+		copy := request.Clone(context.WithValue(request.Context(), mirrorRequestKey{}, true))
 		copy.URL = target
 		copy.Host = ""
 		response, requestErr := t.base.RoundTrip(copy)
-		if shouldFallbackToOfficialAPI(request, response, requestErr) {
+		if t.manager.allowsOfficialFallback(request.URL) && shouldFallbackToOfficialAPI(request, response, requestErr) {
 			if response != nil && response.Body != nil {
 				response.Body.Close()
 			}
@@ -416,6 +507,9 @@ func (t *mirrorTransport) RoundTrip(request *http.Request) (*http.Response, erro
 
 func (m *Manager) proxyFor(request *http.Request) (*url.URL, error) {
 	if request == nil || bypassProxy(request.URL) {
+		return nil, nil
+	}
+	if request.Context().Value(mirrorRequestKey{}) == true {
 		return nil, nil
 	}
 	route, known := routeForURL(request.URL)
@@ -448,6 +542,13 @@ func (m *Manager) mirrorFor(target *url.URL) (string, bool) {
 	saved := m.settings
 	m.mu.RUnlock()
 	item := normalizedRoutes(saved.Routes, saved.Mode, saved.ProxyURL)[route]
+	if item.Mode == ModeAuto {
+		proxy, err := http.ProxyFromEnvironment(&http.Request{URL: target})
+		if err != nil || proxy != nil {
+			return "", false
+		}
+		return item.MirrorURL, item.MirrorURL != ""
+	}
 	return item.MirrorURL, (item.Mode == ModeMirror || item.Mode == ModeCustomMirror) && item.MirrorURL != ""
 }
 
@@ -458,6 +559,9 @@ func (m *Manager) RewriteURL(raw string) (string, error) {
 	target, err := url.Parse(raw)
 	if err != nil || target == nil || target.Host == "" {
 		return raw, fmt.Errorf("资源地址无效")
+	}
+	if m.ConfigSnapshot() != nil {
+		return raw, nil
 	}
 	mirror, ok := m.mirrorFor(target)
 	if !ok {
@@ -483,7 +587,7 @@ func (m *Manager) mirrorCandidates(target *url.URL) []string {
 	saved := m.settings
 	m.mu.RUnlock()
 	item := normalizedRoutes(saved.Routes, saved.Mode, saved.ProxyURL)[route]
-	if item.Mode != ModeMirror {
+	if item.Mode != ModeMirror && item.Mode != ModeAuto {
 		return []string{mirror}
 	}
 	presets := MirrorPresets(route)
@@ -687,7 +791,9 @@ func (m *Manager) Test(ctx context.Context, route Route) CheckResult {
 	if err != nil {
 		return CheckResult{Target: target, Message: "无法创建测试请求"}
 	}
-	response, err := m.Client(8 * time.Second).Do(request)
+	client := m.Client(8 * time.Second)
+	defer client.CloseIdleConnections()
+	response, err := client.Do(request)
 	if err != nil {
 		return CheckResult{Target: target, LatencyMS: time.Since(started).Milliseconds(), Message: "无法连接该资源，请检查对应代理地址"}
 	}

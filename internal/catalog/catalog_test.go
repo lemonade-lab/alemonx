@@ -56,7 +56,7 @@ func TestJsDelivrURLConvertsRawGitHubURL(t *testing.T) {
 	}
 }
 
-func TestRepositoryFileCandidatesPreferJsDelivr(t *testing.T) {
+func TestRepositoryFileCandidatesUseGlobalPolicy(t *testing.T) {
 	parsed, err := url.Parse("https://github.com/example/project/blob/main/packages/kook/README.md")
 	if err != nil {
 		t.Fatal(err)
@@ -65,8 +65,8 @@ func TestRepositoryFileCandidatesPreferJsDelivr(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(items) == 0 || !strings.HasPrefix(items[0], "https://cdn.jsdelivr.net/gh/") {
-		t.Fatalf("first candidate should be jsDelivr mirror: %v", items)
+	if len(items) == 0 || !strings.HasPrefix(items[0], "https://raw.githubusercontent.com/") {
+		t.Fatalf("source selection belongs to the network engine: %v", items)
 	}
 	if !strings.Contains(strings.Join(items, " "), "raw.githubusercontent.com") {
 		t.Fatalf("raw GitHub fallback must remain: %v", items)
@@ -86,8 +86,8 @@ func TestPackageManifestCandidatesPreferAuthoritativeRepository(t *testing.T) {
 	if len(ordered) == 0 || strings.Contains(ordered[0], "cdn.jsdelivr.net") {
 		t.Fatalf("manifest must prefer its source repository, got %v", ordered)
 	}
-	if !strings.Contains(strings.Join(ordered, " "), "cdn.jsdelivr.net") {
-		t.Fatalf("CDN fallback must remain available, got %v", ordered)
+	if strings.Contains(strings.Join(ordered, " "), "cdn.jsdelivr.net") {
+		t.Fatalf("independent CDN fallback must not bypass global policy, got %v", ordered)
 	}
 }
 

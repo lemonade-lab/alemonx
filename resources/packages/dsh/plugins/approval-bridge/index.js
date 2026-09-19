@@ -1,5 +1,6 @@
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { installSessionResume } from './session-resume.js'
+import './network.js'
 
 installSessionResume()
 

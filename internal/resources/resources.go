@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"alemonx/internal/processutil"
+	"alemonx/internal/systemnetwork"
 	"alemonx/internal/workspace"
 )
 
@@ -88,6 +89,11 @@ var (
 		if len(nodeEnvironment) > 0 && command == nodeProgram {
 			cmd.Env = append([]string(nil), nodeEnvironment...)
 		}
+		cleanup, err := systemnetwork.ApplyCommand(cmd)
+		if err != nil {
+			return err
+		}
+		defer cleanup()
 		output, err := cmd.CombinedOutput()
 		if err != nil {
 			message := strings.TrimSpace(string(output))

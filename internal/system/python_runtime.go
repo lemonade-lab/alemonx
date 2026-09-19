@@ -206,6 +206,11 @@ func runPyenv(ctx context.Context, root string, args ...string) error {
 	environment := append(os.Environ(), "PYENV_ROOT="+root, "PATH="+filepath.Join(root, "bin")+string(os.PathListSeparator)+os.Getenv("PATH"))
 	environment = append(environment, systemnetwork.PythonBuildEnvironment()...)
 	command.Env = environment
+	cleanupNetwork, networkErr := systemnetwork.ApplyCommand(command)
+	if networkErr != nil {
+		return networkErr
+	}
+	defer cleanupNetwork()
 	output, err := command.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("Python 版本操作失败：%s", strings.TrimSpace(string(output)))

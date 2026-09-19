@@ -1,6 +1,7 @@
 package robot
 
 import (
+	"alemonx/internal/systemnetwork"
 	"context"
 	"errors"
 	"net/http"
@@ -97,7 +98,7 @@ func (m Manager) TestPortReachable(root string) (bool, int, error) {
 	if err != nil {
 		return false, info.Port, err
 	}
-	response, err := http.DefaultClient.Do(request)
+	response, err := systemnetwork.DefaultClient(0).Do(request)
 	if err != nil {
 		return false, info.Port, nil
 	}

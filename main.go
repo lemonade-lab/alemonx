@@ -1,6 +1,7 @@
 package main
 
 import (
+	"alemonx/internal/systemnetwork"
 	"bufio"
 	"context"
 	"embed"
@@ -407,7 +408,7 @@ func redisCommand(arguments []string, workbenchPort, account, password string) {
 		return
 	}
 	baseURL := "http://127.0.0.1:" + workbenchPort + "/api/v1/system/redis"
-	client := &http.Client{Timeout: 8 * time.Second}
+	client := systemnetwork.LocalClient(8 * time.Second)
 	token := strings.TrimSpace(os.Getenv("ALX_AUTH_TOKEN"))
 	if token == "" && strings.TrimSpace(account) != "" && password != "" {
 		loginBody, _ := json.Marshal(map[string]string{"account": account, "password": password})

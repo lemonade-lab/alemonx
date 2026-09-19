@@ -17,6 +17,7 @@ import (
 	"alemonx/internal/pm2config"
 	"alemonx/internal/resources"
 	"alemonx/internal/system"
+	"alemonx/internal/systemnetwork"
 )
 
 type Config struct {
@@ -550,6 +551,11 @@ func run(directory string, logs *[]string, name string, args ...string) error {
 		command.Env = runtime.Environment
 	}
 	system.HideWindow(command)
+	cleanup, networkErr := systemnetwork.ApplyCommand(command)
+	if networkErr != nil {
+		return networkErr
+	}
+	defer cleanup()
 	output, err := command.CombinedOutput()
 	line := strings.TrimSpace(string(output))
 	if line != "" {

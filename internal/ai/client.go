@@ -2,6 +2,7 @@
 package ai
 
 import (
+	"alemonx/internal/systemnetwork"
 	"bytes"
 	"encoding/json"
 	"errors"
@@ -322,7 +323,7 @@ func anthropic(r Resolved, messages []map[string]string) (string, error) {
 
 // httpClient is package-level so tests can inject a fake transport without
 // binding a network port.
-var httpClient = &http.Client{Timeout: 90 * time.Second}
+var httpClient = systemnetwork.DefaultClient(90 * time.Second)
 
 func send(req *http.Request, target any) error {
 	response, err := httpClient.Do(req)

@@ -4,6 +4,7 @@
 package agent
 
 import (
+	"alemonx/internal/systemnetwork"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -252,7 +253,7 @@ func rawInput(raw json.RawMessage) any {
 
 // httpClient is a package-level variable so tests can inject a fake transport
 // without binding a network port.
-var httpClient = &http.Client{Timeout: 120 * time.Second}
+var httpClient = systemnetwork.DefaultClient(120 * time.Second)
 
 func doJSON(req *http.Request, target any) error {
 	response, err := httpClient.Do(req)

@@ -1,6 +1,7 @@
 package system
 
 import (
+	"alemonx/internal/systemnetwork"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,7 +17,7 @@ func LocalHealth(port string, timeout time.Duration) (string, error) {
 	if port == "" {
 		port = "17390"
 	}
-	client := &http.Client{Timeout: timeout}
+	client := systemnetwork.LocalClient(timeout)
 	response, err := client.Get("http://127.0.0.1:" + port + "/healthz")
 	if err != nil {
 		return "", fmt.Errorf("无法连接 http://127.0.0.1:%s/healthz：%w", port, err)

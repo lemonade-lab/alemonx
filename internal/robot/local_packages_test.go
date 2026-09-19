@@ -28,8 +28,8 @@ func TestGitHubPackageMirrorUsesOnlyPublicHTTPSRepository(t *testing.T) {
 		{
 			name:       "github public repository",
 			repository: "https://github.com/lemonade-lab/example.git",
-			want:       "https://ghfast.top/https://github.com/lemonade-lab/example.git",
-			mirrored:   true,
+			want:       "https://github.com/lemonade-lab/example.git",
+			mirrored:   false,
 		},
 		{
 			name:       "gitee stays direct",

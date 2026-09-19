@@ -2,6 +2,7 @@
 package robot
 
 import (
+	"alemonx/internal/systemnetwork"
 	"bufio"
 	"context"
 	"crypto/sha256"
@@ -2403,6 +2404,13 @@ func runWithOutput(root string, values map[string]string, combined bool, name st
 		}
 	}
 	var raw []byte
+	if systemnetwork.ManagedCommand(cmd) {
+		cleanupNetwork, networkErr := systemnetwork.ApplyCommand(cmd)
+		if networkErr != nil {
+			return "", networkErr
+		}
+		defer cleanupNetwork()
+	}
 	var err error
 	if combined {
 		raw, err = cmd.CombinedOutput()

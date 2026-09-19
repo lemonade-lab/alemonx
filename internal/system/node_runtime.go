@@ -144,7 +144,7 @@ func runNVM(ctx context.Context, directory string, args ...string) error {
 		command += " '" + arg + "'"
 	}
 	script := "set -eu\nexport NVM_DIR=\"$1\"\n. \"$NVM_DIR/nvm.sh\"\n" + command
-	output, runErr := exec.CommandContext(ctx, shell, "-c", script, "alemonx-nvm", directory).CombinedOutput()
+	output, runErr := systemnetwork.CombinedOutput(exec.CommandContext(ctx, shell, "-c", script, "alemonx-nvm", directory))
 	if runErr != nil {
 		return fmt.Errorf("NVM 执行 %s 失败：%s", strings.Join(args, " "), limitedNodeOutput(output, runErr))
 	}
@@ -203,6 +203,9 @@ func sortNodeVersions(versions []string) {
 // Windows uses the separate nvm-windows implementation when it is available.
 func InstallNodeWithNVM(ctx context.Context) (string, error) {
 	if runtime.GOOS == "windows" {
+		if systemnetwork.UsesGlobalPolicy() {
+			return InstallManagedNode(ctx)
+		}
 		return installNodeWithNVMWindows(ctx)
 	}
 	directory, installedNVM, err := preferredOrEnsureNVM()
@@ -313,7 +316,7 @@ func installNVMNodeLTS(ctx context.Context, directory string) (string, string, e
 	if err != nil {
 		return "", "", errors.New("未检测到 Bash，无法运行 NVM")
 	}
-	output, runErr := exec.CommandContext(ctx, shell, "-c", nvmInstallNode22Script, "alemonx-nvm", directory).CombinedOutput()
+	output, runErr := systemnetwork.CombinedOutput(exec.CommandContext(ctx, shell, "-c", nvmInstallNode22Script, "alemonx-nvm", directory))
 	if runErr != nil {
 		return "", "", fmt.Errorf("NVM 安装 Node.js 22 LTS 失败：%s", limitedNodeOutput(output, runErr))
 	}

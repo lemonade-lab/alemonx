@@ -1,6 +1,7 @@
 package robot
 
 import (
+	"alemonx/internal/systemnetwork"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -282,7 +283,7 @@ func (Manager) NPMPublish(root, sourceCommit, tag, token string) (Result, error)
 }
 
 func npmPackage(name string) (latest, publishedAt string, found bool, err error) {
-	client := &http.Client{Timeout: 8 * time.Second}
+	client := systemnetwork.DefaultClient(8 * time.Second)
 	response, err := client.Get(npmRegistry + "/" + url.PathEscape(name))
 	if err != nil {
 		return "", "", false, err
@@ -313,6 +314,11 @@ func npmWhoami(root string) string {
 	cmd.Dir = root
 	applyManagedNodeEnvironment(cmd)
 	HideWindow(cmd)
+	cleanup, networkErr := systemnetwork.ApplyCommand(cmd)
+	if networkErr != nil {
+		return ""
+	}
+	defer cleanup()
 	output, err := cmd.Output()
 	if err != nil {
 		return ""

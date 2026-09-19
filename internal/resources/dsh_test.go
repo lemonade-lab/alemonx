@@ -20,6 +20,7 @@ func dshArchive(t *testing.T, files map[string]string) []byte {
 	if _, ok := files["plugins/approval-bridge/package.json"]; ok {
 		files["plugins/approval-bridge/index.js"] = "export {}"
 		files["plugins/approval-bridge/session-resume.js"] = "export {}"
+		files["plugins/approval-bridge/network.js"] = "export {}"
 	}
 	var data bytes.Buffer
 	w := zip.NewWriter(&data)

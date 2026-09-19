@@ -83,11 +83,15 @@ func TestSystemNetworkSettingsSaveWithoutLeakingProxyCredentials(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := &server{network: manager}
+	config := manager.Settings().Config
+	config.Mode = "proxy"
+	config.Proxy = systemnetwork.ProxyConfig{URL: "http://127.0.0.1:7890", Credentials: "replace", Username: "name", Password: "secret"}
+	payload, _ := json.Marshal(config)
 
 	update := httptest.NewRequest(
 		http.MethodPut,
 		"/api/v1/system/network",
-		strings.NewReader(`{"routes":{"github":{"mode":"manual","proxyUrl":"http://name:secret@127.0.0.1:7890"}}}`),
+		strings.NewReader(string(payload)),
 	)
 	recorder := httptest.NewRecorder()
 	s.systemNetworkHandler(recorder, update)
@@ -103,7 +107,7 @@ func TestSystemNetworkSettingsSaveWithoutLeakingProxyCredentials(t *testing.T) {
 
 	read := httptest.NewRecorder()
 	s.systemNetworkHandler(read, httptest.NewRequest(http.MethodGet, "/api/v1/system/network", nil))
-	if read.Code != http.StatusOK || strings.Contains(read.Body.String(), "secret") || !strings.Contains(read.Body.String(), `"proxyUrl":"http://127.0.0.1:7890"`) {
+	if read.Code != http.StatusOK || strings.Contains(read.Body.String(), "secret") || !strings.Contains(read.Body.String(), `"url":"http://127.0.0.1:7890"`) {
 		t.Fatalf("read network settings = %d %s", read.Code, read.Body.String())
 	}
 }

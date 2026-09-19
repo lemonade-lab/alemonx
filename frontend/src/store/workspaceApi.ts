@@ -88,9 +88,9 @@ type LocalPackageVersions = {
 type LocalPackageStatus = {
   name: string
   enabled: boolean
-    source: string
-    branch?: string
-    repository?: string
+  source: string
+  branch?: string
+  repository?: string
   dirty?: boolean
   ahead?: number
   workspaceEnabled: boolean
@@ -157,25 +157,46 @@ export type PM2Process = {
   script: string
   cwd: string
 }
-export type SystemNetworkMode =
-  'system' | 'manual' | 'direct' | 'mirror' | 'custom-mirror'
-export type SystemNetworkRoute =
-  'github' | 'gitee' | 'npm' | 'node' | 'python' | 'cdn' | 'official'
-export type SystemNetworkRouteSettings = {
-  mode: SystemNetworkMode
-  mirrorUrl?: string
-  proxyUrl?: string
-  hasCredentials?: boolean
-}
-export type SystemNetworkMirrorPreset = {
+export type SystemNetworkMode = 'auto' | 'direct' | 'proxy'
+export type SystemNetworkGroup = { id: string; candidates: string[] }
+export type SystemNetworkDefinition = {
+  id: string
   label: string
-  value: string
+  probe: string
+  mirrors: boolean
+}
+export type SystemNetworkGroupState = {
+  id: string
+  state: 'idle' | 'checking' | 'ready' | 'unavailable'
+  current: string
+  latencyMs: number
+  checkedAt: string
+  candidates: { url: string; ok: boolean; latencyMs: number; message: string }[]
+}
+export type SystemNetworkStatus = {
+  revision: number
+  definitions: SystemNetworkDefinition[]
+  groups: SystemNetworkGroupState[]
 }
 export type SystemNetworkSettings = {
-  routes: Record<SystemNetworkRoute, SystemNetworkRouteSettings>
-  mirrorPresets?: Partial<
-    Record<SystemNetworkRoute, SystemNetworkMirrorPreset[]>
-  >
+  version: 2
+  revision: number
+  mode: SystemNetworkMode
+  automatic: { groups: SystemNetworkGroup[] }
+  proxy: {
+    legacyId?: string
+    url: string
+    hasCredentials?: boolean
+    credentials?: 'preserve' | 'replace' | 'remove'
+    username?: string
+    password?: string
+  }
+  migration?: {
+    pending: boolean
+    proxies: string[]
+    choices?: { id: string; url: string; hasCredentials: boolean }[]
+  }
+  confirmMigration?: boolean
 }
 export type SystemNetworkCheck = {
   ok: boolean
@@ -183,6 +204,16 @@ export type SystemNetworkCheck = {
   status?: number
   latencyMs?: number
   message: string
+}
+function networkConfigBody(settings: SystemNetworkSettings) {
+  return {
+    version: settings.version,
+    revision: settings.revision,
+    mode: settings.mode,
+    automatic: settings.automatic,
+    proxy: settings.proxy,
+    confirmMigration: settings.confirmMigration
+  }
 }
 export type DependencySourcePreset = {
   id: string
@@ -236,7 +267,15 @@ export type DependencySourceTask = {
   finishedAt?: string
 }
 export type SystemRedisStatus = {
-  mode: 'private-running' | 'fallback-running' | 'preparing-runtime' | 'migrating' | 'external-reused' | 'stopped' | 'disabled' | 'failed'
+  mode:
+    | 'private-running'
+    | 'fallback-running'
+    | 'preparing-runtime'
+    | 'migrating'
+    | 'external-reused'
+    | 'stopped'
+    | 'disabled'
+    | 'failed'
   phase?: string
   ownership: 'alemonx' | 'external' | 'none'
   implementation?: 'MiniRedis' | 'Redis'
@@ -372,8 +411,15 @@ export type SetupPlugin = {
   // This is the registry's actual directory, not a guessed cache path.
   source?: string
   /** Host-derived installation provenance. Never comes from alx.json. */
-  installMode?: 'managed-release' | 'legacy-local' | 'local-upload' | 'development'
-  installOrigin?: 'release' | 'legacy-local' | 'legacy-config' | 'legacy-migration' | 'upload' | 'source'
+  installMode?:
+    'managed-release' | 'legacy-local' | 'local-upload' | 'development'
+  installOrigin?:
+    | 'release'
+    | 'legacy-local'
+    | 'legacy-config'
+    | 'legacy-migration'
+    | 'upload'
+    | 'source'
   installedTag?: string
   fingerprint?: string
   developmentSource?: boolean
@@ -449,7 +495,12 @@ export type NVMNodeStatus = {
   latestVersion?: string
   latestInstalled: boolean
 }
-export type PythonRuntimeStatus = { available: boolean; fixed?: boolean; versions: string[]; activeVersion?: string }
+export type PythonRuntimeStatus = {
+  available: boolean
+  fixed?: boolean
+  versions: string[]
+  activeVersion?: string
+}
 
 export const workspaceApi = createApi({
   reducerPath: 'workspaceApi',
@@ -718,18 +769,37 @@ export const workspaceApi = createApi({
       providesTags: ['DependencySources']
     }),
     dependencySourceTask: build.query<DependencySourceTask, string>({
-      query: taskId => `system/dependency-sources?${new URLSearchParams({ taskId })}`
+      query: taskId =>
+        `system/dependency-sources?${new URLSearchParams({ taskId })}`
     }),
-    deleteDependencySourceBackup: build.mutation<DependencySourceTask, { id: string }>({
-      query: body => ({ url: 'system/dependency-sources', method: 'POST', body: { ...body, action: 'delete-backup' } }),
+    deleteDependencySourceBackup: build.mutation<
+      DependencySourceTask,
+      { id: string }
+    >({
+      query: body => ({
+        url: 'system/dependency-sources',
+        method: 'POST',
+        body: { ...body, action: 'delete-backup' }
+      }),
       invalidatesTags: ['DependencySources']
     }),
     removeManagedDependencySource: build.mutation<DependencySourceTask, void>({
-      query: () => ({ url: 'system/dependency-sources', method: 'POST', body: { action: 'remove-managed-source' } }),
+      query: () => ({
+        url: 'system/dependency-sources',
+        method: 'POST',
+        body: { action: 'remove-managed-source' }
+      }),
       invalidatesTags: ['DependencySources']
     }),
-    testDependencySource: build.mutation<DependencySourceCheck, { preset: string }>({
-      query: body => ({ url: 'system/dependency-sources', method: 'POST', body: { ...body, action: 'test' } })
+    testDependencySource: build.mutation<
+      DependencySourceCheck,
+      { preset: string }
+    >({
+      query: body => ({
+        url: 'system/dependency-sources',
+        method: 'POST',
+        body: { ...body, action: 'test' }
+      })
     }),
     systemRedis: build.query<SystemRedisStatus, void>({
       query: () => 'system/redis',
@@ -755,15 +825,45 @@ export const workspaceApi = createApi({
     }),
     saveSystemNetwork: build.mutation<
       SystemNetworkSettings,
-      Pick<SystemNetworkSettings, 'routes'>
+      SystemNetworkSettings
     >({
-      query: body => ({ url: 'system/network', method: 'PUT', body }),
+      query: settings => ({
+        url: 'system/network',
+        method: 'PUT',
+        body: networkConfigBody(settings)
+      }),
       invalidatesTags: ['SystemNetwork']
     }),
-    testSystemNetwork: build.mutation<SystemNetworkCheck, SystemNetworkRoute>({
+    systemNetworkStatus: build.query<SystemNetworkStatus, string | void>({
+      query: task =>
+        `system/network?${task ? new URLSearchParams({ task }) : 'view=status'}`,
+      providesTags: ['SystemNetwork'],
+      keepUnusedDataFor: 0
+    }),
+    detectSystemNetwork: build.mutation<SystemNetworkStatus, string>({
       query: target => ({
-        url: `system/network?${new URLSearchParams({ target })}`,
+        url: `system/network?${new URLSearchParams({ action: 'detect', target })}`,
         method: 'POST'
+      })
+    }),
+    previewSystemNetwork: build.mutation<
+      { task: string },
+      { target: string; settings: SystemNetworkSettings }
+    >({
+      query: ({ target, settings }) => ({
+        url: `system/network?${new URLSearchParams({ action: 'preview', target })}`,
+        method: 'POST',
+        body: networkConfigBody(settings)
+      })
+    }),
+    testSystemNetwork: build.mutation<
+      SystemNetworkCheck,
+      { target: string; settings: SystemNetworkSettings }
+    >({
+      query: ({ target, settings }) => ({
+        url: `system/network?${new URLSearchParams({ target })}`,
+        method: 'POST',
+        body: networkConfigBody(settings)
       })
     }),
     setSystemCurrentRobot: build.mutation<SystemCurrentRobot, { root: string }>(
@@ -812,14 +912,30 @@ export const workspaceApi = createApi({
       ]
     }),
     packageConfigs: build.query<{ items: PackageConfig[] }, string>({
-      query: root =>
-        `robot/package-configs?${new URLSearchParams({ root })}`,
+      query: root => `robot/package-configs?${new URLSearchParams({ root })}`,
       providesTags: ['PackageConfig']
     }),
     localPackages: build.query<LocalPackages, string>({
       query: root => `robot/packages?${new URLSearchParams({ root })}`,
       providesTags: (_result, _error, root) => [
         { type: 'LocalPackages', id: root }
+      ]
+    }),
+    installRobotPackageFolder: build.mutation<
+      LocalPackages['items'][number],
+      { root: string; files: Array<{ path: string; file: File }> }
+    >({
+      query: ({ root, files }) => {
+        const body = new FormData()
+        files.forEach(item => body.append(`files:${item.path}`, item.file))
+        return {
+          url: `robot/packages/folder?${new URLSearchParams({ root })}`,
+          method: 'POST',
+          body
+        }
+      },
+      invalidatesTags: (_result, _error, arg) => [
+        { type: 'LocalPackages', id: arg.root }
       ]
     }),
     uploadRobotPackage: build.mutation<
@@ -852,10 +968,7 @@ export const workspaceApi = createApi({
         body: { root, snapshot }
       })
     }),
-    robotChatSummary: build.query<
-      { items: RobotChatRecordSummary[] },
-      void
-    >({
+    robotChatSummary: build.query<{ items: RobotChatRecordSummary[] }, void>({
       query: () => 'robot/chat/summary'
     }),
     clearRobotChatHistory: build.mutation<{ ok: boolean }, string>({
@@ -951,7 +1064,17 @@ export const workspaceApi = createApi({
     robotPM2Processes: build.query<{ items: PM2Process[] }, string>({
       query: root => `robot/pm2-processes?${new URLSearchParams({ root })}`
     }),
-    appPort: build.query<{ port: number; configured: boolean; configuredPort?: number; actualPort?: number; drifted?: boolean; source?: string }, string>({
+    appPort: build.query<
+      {
+        port: number
+        configured: boolean
+        configuredPort?: number
+        actualPort?: number
+        drifted?: boolean
+        source?: string
+      },
+      string
+    >({
       query: root => `robot/app-port?${new URLSearchParams({ root })}`
     }),
     robotApps: build.query<{ items: string[] }, string>({
@@ -971,7 +1094,15 @@ export const workspaceApi = createApi({
         `robot/app-port?${new URLSearchParams({ root, probe: '1' })}`
     }),
     testPort: build.query<
-      { port: number; configured: boolean; configuredPort?: number; actualPort?: number; drifted?: boolean; source?: string; sandbox?: boolean },
+      {
+        port: number
+        configured: boolean
+        configuredPort?: number
+        actualPort?: number
+        drifted?: boolean
+        source?: string
+        sandbox?: boolean
+      },
       string
     >({
       query: root => `robot/test-port?${new URLSearchParams({ root })}`
@@ -1239,6 +1370,9 @@ export const {
   useSystemRedisQuery,
   useSaveSystemNetworkMutation,
   useTestSystemNetworkMutation,
+  useSystemNetworkStatusQuery,
+  useDetectSystemNetworkMutation,
+  usePreviewSystemNetworkMutation,
   useControlSystemRedisMutation,
   useSaveSystemRedisConfigMutation,
   useSetSystemCurrentRobotMutation,
@@ -1252,6 +1386,7 @@ export const {
   useLazyPackageConfigQuery,
   useLocalPackagesQuery,
   useUploadRobotPackageMutation,
+  useInstallRobotPackageFolderMutation,
   useRobotChatHistoryQuery,
   useLazyRobotChatHistoryQuery,
   useSaveRobotChatHistoryMutation,

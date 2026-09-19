@@ -1107,6 +1107,7 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	mux.HandleFunc("/api/v1/system/node/nvm", s.nodeNVMHandler)
 	mux.HandleFunc("/api/v1/system/python", s.pythonRuntimeHandler)
 	mux.HandleFunc("/api/v1/system/network", s.systemNetworkHandler)
+	mux.HandleFunc("/api/v1/goals/download", s.downloadGoal)
 	mux.HandleFunc("/api/v1/system/dependency-sources", s.dependencySourcesHandler)
 	mux.HandleFunc("/api/v1/system/redis", s.systemRedisHandler)
 	mux.HandleFunc("/api/v1/data/", s.dataHandler)
@@ -1188,6 +1189,7 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	mux.HandleFunc("/api/v1/robot/packages/diff", s.robotPackageDiffHandler)
 	mux.HandleFunc("/api/v1/robot/packages/stashes", s.robotPackageStashesHandler)
 	mux.HandleFunc("/api/v1/robot/packages/upload", s.robotPackageUploadHandler)
+	mux.HandleFunc("/api/v1/robot/packages/folder", s.robotPackageFolderHandler)
 	mux.HandleFunc("/api/v1/robot/packages/git-clone", s.robotPackageGitCloneHandler)
 	mux.HandleFunc("/api/v1/robot/packages/git-clone/check", s.robotPackageGitCloneCheckHandler)
 	mux.HandleFunc("/api/v1/robot/chat/media", s.robotChatMediaHandler)
@@ -2587,7 +2589,7 @@ func probeMCPRunning() bool {
 	if err != nil {
 		return false
 	}
-	response, err := http.DefaultClient.Do(request)
+	response, err := systemnetwork.DefaultClient(0).Do(request)
 	if err != nil {
 		return false
 	}
@@ -3534,46 +3536,98 @@ func (s *server) updateStatusHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, transaction)
 }
 
-// systemNetworkHandler owns AlemonX-managed content networking. It
-// deliberately does not touch project git/npm settings, robot processes or
-// 机器人应用页 traffic.
+// systemNetworkHandler configures application-owned requests and commands;
+// it never edits project configuration or takes over robot runtime traffic.
 func (s *server) systemNetworkHandler(w http.ResponseWriter, r *http.Request) {
 	if s.network == nil {
-		writeError(w, http.StatusServiceUnavailable, "系统联网配置暂不可用。")
+		writeError(w, 503, "网络配置暂不可用")
 		return
 	}
-	switch r.Method {
-	case http.MethodGet:
-		writeJSON(w, http.StatusOK, s.network.Settings())
-	case http.MethodPut:
-		var input systemnetwork.Settings
-		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-			writeError(w, http.StatusBadRequest, "请求内容无法识别。")
-			return
-		}
-		saved, err := s.network.Save(input)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		writeJSON(w, http.StatusOK, saved)
-	case http.MethodPost:
-		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
-		defer cancel()
-		route := systemnetwork.Route(strings.TrimSpace(r.URL.Query().Get("target")))
-		result := s.network.Test(ctx, route)
-		if !result.OK {
-			status := http.StatusBadGateway
-			if result.Target == "" {
-				status = http.StatusBadRequest
+	if r.Method == http.MethodGet {
+		if task := r.URL.Query().Get("task"); task != "" {
+			if status, ok := systemnetwork.PreviewStatus(task); ok {
+				writeJSON(w, 200, status)
+			} else {
+				writeError(w, 404, "检测任务已过期")
 			}
-			writeJSON(w, status, result)
 			return
 		}
-		writeJSON(w, http.StatusOK, result)
-	default:
-		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
+		if r.URL.Query().Get("view") == "status" {
+			writeJSON(w, 200, s.network.Status())
+			return
+		}
+		settings := s.network.Settings()
+		writeJSON(w, 200, struct {
+			*systemnetwork.Config
+			Migration *systemnetwork.Migration `json:"migration,omitempty"`
+		}{settings.Config, settings.Migration})
+		return
 	}
+	if r.Method != http.MethodPut && r.Method != http.MethodPost {
+		writeError(w, 405, "该操作暂不支持")
+		return
+	}
+	if !s.requireSuperAdmin(w, r) {
+		return
+	}
+	if r.Method == http.MethodPost && r.URL.Query().Get("action") == "detect" {
+		c := s.network.ConfigSnapshot()
+		if c == nil {
+			writeError(w, 409, "请先确认配置迁移")
+			return
+		}
+		if err := s.network.StartDetection(*c, r.URL.Query().Get("target")); err != nil {
+			writeError(w, 400, err.Error())
+			return
+		}
+		writeJSON(w, 202, s.network.Status())
+		return
+	}
+	var input systemnetwork.Config
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil {
+		writeError(w, 400, "网络配置格式已升级，请刷新客户端后重试")
+		return
+	}
+	if input.Version != 2 {
+		writeError(w, 400, "请升级客户端后重新配置网络")
+		return
+	}
+	if r.Method == http.MethodPut {
+		saved, err := s.network.Save(systemnetwork.Settings{Config: &input})
+		if err != nil {
+			code := 400
+			if errors.Is(err, systemnetwork.ErrRevision) {
+				code = 409
+			}
+			writeError(w, code, err.Error())
+			return
+		}
+		writeJSON(w, 200, saved.Config)
+		return
+	}
+	if r.URL.Query().Get("action") == "preview" {
+		task, err := s.network.StartPreview(input, r.URL.Query().Get("target"))
+		if err != nil {
+			code := 400
+			if errors.Is(err, systemnetwork.ErrRevision) {
+				code = 409
+			}
+			writeError(w, code, err.Error())
+			return
+		}
+		writeJSON(w, 202, map[string]string{"task": task})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	result, err := s.network.PreviewConfig(ctx, input, r.URL.Query().Get("target"))
+	if err != nil {
+		writeError(w, 400, err.Error())
+		return
+	}
+	writeJSON(w, 200, result)
 }
 
 // dependencySourcesHandler manages only ALemonX-owned source drop-ins. It
@@ -4987,7 +5041,7 @@ func (s *server) appPortReachable(root string) (bool, int, error) {
 	if err != nil {
 		return false, info.Port, err
 	}
-	response, err := http.DefaultClient.Do(request)
+	response, err := systemnetwork.DefaultClient(0).Do(request)
 	if err != nil {
 		return false, info.Port, nil
 	}
@@ -5063,7 +5117,7 @@ func (s *server) testPortReachable(root string) (bool, int, error) {
 	if err != nil {
 		return false, info.Port, err
 	}
-	response, err := http.DefaultClient.Do(request)
+	response, err := systemnetwork.DefaultClient(0).Do(request)
 	if err != nil {
 		return false, info.Port, nil
 	}
@@ -5972,7 +6026,7 @@ func (s *server) forceFreePortOn(port int) error {
 		_, _ = s.runCommandForPort("kill", "-9", pid)
 	}
 	// Re-check after killing.
-	client := &http.Client{Timeout: 500 * time.Millisecond}
+	client := systemnetwork.LocalClient(500 * time.Millisecond)
 	for i := 0; i < 10; i++ {
 		response, err := client.Get("http://127.0.0.1:" + strconv.Itoa(port))
 		if err != nil {
@@ -8031,7 +8085,7 @@ func (s *server) proxyBotAppPageAPI(w http.ResponseWriter, r *http.Request, root
 			request.Header.Set(header, value)
 		}
 	}
-	response, err := (&http.Client{Timeout: 30 * time.Second}).Do(request)
+	response, err := systemnetwork.DefaultClient(30 * time.Second).Do(request)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "机器人应用尚未启动或无法连接。请在“运行”中启动开发模式后重试。")
 		return
@@ -8968,12 +9022,56 @@ func (s *server) listGoals(w http.ResponseWriter, _ *http.Request) {
 			if result[index].DownloadURL == "" {
 				continue
 			}
+			if s.network.ConfigSnapshot() != nil {
+				result[index].DownloadURL = "/api/v1/goals/download?id=" + url.QueryEscape(result[index].ID)
+				continue
+			}
 			if rewritten, err := s.network.RewriteURL(result[index].DownloadURL); err == nil {
 				result[index].DownloadURL = rewritten
 			}
 		}
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+// Browser hand-offs use the authenticated host, never an external URL that
+// would silently bypass the application's global proxy.
+func (s *server) downloadGoal(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" && r.Method != "HEAD" {
+		writeError(w, 405, "不支持此下载操作")
+		return
+	}
+	goal, ok := findGoal(r.URL.Query().Get("id"))
+	if !ok || goal.DownloadURL == "" {
+		writeError(w, 404, "下载不存在")
+		return
+	}
+	request, err := http.NewRequestWithContext(r.Context(), r.Method, goal.DownloadURL, nil)
+	if err != nil {
+		writeError(w, 400, "下载地址无效")
+		return
+	}
+	for _, key := range []string{"Range", "If-Range"} {
+		if value := r.Header.Get(key); value != "" {
+			request.Header.Set(key, value)
+		}
+	}
+	response, err := systemnetwork.DefaultClient(0).Do(request)
+	if err != nil {
+		writeError(w, 502, "下载连接失败，请检查全局网络设置")
+		return
+	}
+	defer response.Body.Close()
+	for _, key := range []string{"Content-Type", "Content-Length", "Content-Range", "Accept-Ranges", "ETag", "Last-Modified"} {
+		if value := response.Header.Get(key); value != "" {
+			w.Header().Set(key, value)
+		}
+	}
+	w.Header().Set("Content-Disposition", `attachment; filename="alemonapp.apk"`)
+	w.WriteHeader(response.StatusCode)
+	if r.Method != "HEAD" {
+		_, _ = io.Copy(w, response.Body)
+	}
 }
 
 func (s *server) checksHandler(w http.ResponseWriter, r *http.Request) {
@@ -9398,7 +9496,7 @@ func (w *captureWriter) message() string {
 // redacted; the body is capped to keep logs readable.
 func (s *server) loggableRequestBody(c *gin.Context) string {
 	// SQL, Redis values and credentials must never enter request logs.
-	if strings.HasPrefix(c.Request.URL.Path, "/api/v1/data/") {
+	if strings.HasPrefix(c.Request.URL.Path, "/api/v1/data/") || c.Request.URL.Path == "/api/v1/system/network" {
 		return ""
 	}
 	if c.Request.Body == nil || c.Request.Body == http.NoBody {

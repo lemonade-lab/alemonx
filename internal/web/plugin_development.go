@@ -1,6 +1,7 @@
 package web
 
 import (
+	"alemonx/internal/systemnetwork"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -656,7 +657,7 @@ func developmentWebHealthPaths(pluginID, healthPath string) []string {
 
 func waitDevelopmentHTTPAny(port int, healthPaths []string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
-	client := &http.Client{Timeout: 2 * time.Second}
+	client := systemnetwork.LocalClient(2 * time.Second)
 	for time.Now().Before(deadline) {
 		for _, healthPath := range healthPaths {
 			response, err := client.Get("http://127.0.0.1:" + strconv.Itoa(port) + healthPath)

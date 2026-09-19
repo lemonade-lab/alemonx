@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"alemonx/internal/system"
+	"alemonx/internal/systemnetwork"
 )
 
 // CommandRunner executes a whitelisted project command inside the project
@@ -98,6 +99,13 @@ func (commandRunner) Run(ctx context.Context, root, command string, args []strin
 	cmd := exec.CommandContext(timeoutCtx, program, args...)
 	cmd.Dir = root
 	cmd.Env = environment
+	if systemnetwork.ManagedCommand(cmd) {
+		cleanup, err := systemnetwork.ApplyCommand(cmd)
+		if err != nil {
+			return "", err
+		}
+		defer cleanup()
+	}
 	system.HideWindow(cmd)
 	cmd.Stdin = nil
 	var buffer bytes.Buffer

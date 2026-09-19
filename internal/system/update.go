@@ -633,7 +633,7 @@ func waitForUpdateHealth(transaction UpdateTransaction) bool {
 		port = "17390"
 	}
 	deadline := time.Now().Add(40 * time.Second)
-	client := &http.Client{Timeout: 2 * time.Second}
+	client := systemnetwork.LocalClient(2 * time.Second)
 	for time.Now().Before(deadline) {
 		response, err := client.Get("http://127.0.0.1:" + port + "/healthz")
 		if err == nil {

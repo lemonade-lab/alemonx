@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"alemonx/internal/dsh"
 	"alemonx/internal/robot"
+	"alemonx/internal/systemnetwork"
 )
 
 // DSHBridgeHandler is served only on a separate loopback listener. It is not
@@ -22,11 +24,11 @@ func (r *ServerRuntime) DSHBridgeHandler() http.Handler {
 }
 
 func (s *server) dshBridgeHandler(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/approval" && r.URL.Path != "/pm2" {
+	if r.URL.Path != "/approval" && r.URL.Path != "/pm2" && r.URL.Path != "/network" {
 		http.NotFound(w, r)
 		return
 	}
-	if r.Method != http.MethodPost {
+	if r.Method != http.MethodPost && r.URL.Path != "/network" {
 		w.Header().Set("Allow", http.MethodPost)
 		writeError(w, http.StatusMethodNotAllowed, "该 bridge 操作暂不支持。")
 		return
@@ -43,6 +45,10 @@ func (s *server) dshBridgeHandler(w http.ResponseWriter, r *http.Request) {
 	runtime, root, ok := s.dshRuntimes.RuntimeForBridgeToken(token)
 	if !ok {
 		writeError(w, http.StatusUnauthorized, "DSH bridge 凭据无效或已过期。")
+		return
+	}
+	if r.URL.Path == "/network" {
+		s.dshBridgeNetwork(w, r)
 		return
 	}
 	var input struct {
@@ -76,6 +82,55 @@ func (s *server) dshBridgeHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"outcome": "allowed-once"})
+}
+
+func (s *server) dshBridgeNetwork(w http.ResponseWriter, r *http.Request) {
+	target, err := url.Parse(r.Header.Get("X-ALX-Network-URL"))
+	if err != nil || target.Scheme != "https" || target.Host != "api.deepseek.com" || target.User != nil || target.Fragment != "" {
+		writeError(w, 400, "AI 服务地址无效")
+		return
+	}
+	if r.Method != "GET" && r.Method != "POST" {
+		writeError(w, 405, "不支持此 AI 请求")
+		return
+	}
+	request, err := http.NewRequestWithContext(r.Context(), r.Method, target.String(), http.MaxBytesReader(w, r.Body, 16<<20))
+	if err != nil {
+		writeError(w, 400, "AI 请求无效")
+		return
+	}
+	for _, key := range []string{"Authorization", "Content-Type", "Accept", "User-Agent"} {
+		if value := r.Header.Get(key); value != "" {
+			request.Header.Set(key, value)
+		}
+	}
+	response, err := systemnetwork.DefaultClient(0).Do(request)
+	if err != nil {
+		writeError(w, 502, "AI 网络连接失败，请检查全局网络设置")
+		return
+	}
+	defer response.Body.Close()
+	for _, key := range []string{"Content-Type", "Cache-Control", "Retry-After"} {
+		if value := response.Header.Get(key); value != "" {
+			w.Header().Set(key, value)
+		}
+	}
+	w.WriteHeader(response.StatusCode)
+	buffer := make([]byte, 32<<10)
+	for {
+		n, readErr := response.Body.Read(buffer)
+		if n > 0 {
+			if _, err := w.Write(buffer[:n]); err != nil {
+				return
+			}
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+		}
+		if readErr != nil {
+			return
+		}
+	}
 }
 
 func (s *server) dshBridgePM2(w http.ResponseWriter, r *http.Request, runtime *dsh.Runtime, root, sessionID, action string) {
