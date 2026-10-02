@@ -1,13 +1,13 @@
 {
   "description": "template code",
   "devDependencies": {
-    "@alemonjs/db": "^0.0.20",
-    "@alemonjs/onebot": "^2.1.21",
-    "@alemonjs/qq-bot": "^2.1.35",
+    "@alemonjs/db": "^0.0.21",
+    "@alemonjs/onebot": "^2.1.23",
+    "@alemonjs/qq-bot": "^2.1.37",
     "@types/koa-router": "^7.4.8",
     "@types/node": "^22",
     "@types/react": "^19.0.0",
-    "alemonjs": "^2.1.103",
+    "alemonjs": "^2.1.109",
     "cssnano": "^8.0.5",
     "jsxp": "^1.4.0",
     "koa-router": "^14.0.0",
