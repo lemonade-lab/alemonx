@@ -130,6 +130,25 @@ func (s *server) dshHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, err.Error())
 		return
 	}
+	if len(parts) == 3 && parts[2] == "web" && r.Method == http.MethodPost {
+		// Existing keyring/Secret credentials remain usable; first-time setup
+		// and subsequent model/settings changes belong to the official Web UI.
+		key, keyErr := s.dshCredential(root)
+		if keyErr != nil && dshCredentialSource() == "docker-secret" {
+			writeError(w, 503, "无法读取 DSH Docker Secret，请检查部署配置。")
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 35*time.Second)
+		defer cancel()
+		address, err := runtime.StartWeb(ctx, root, key)
+		if err != nil {
+			writeError(w, 503, err.Error())
+			return
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		writeJSON(w, 200, map[string]string{"url": address})
+		return
+	}
 	if s.dshEvents != nil {
 		s.dshEvents.ensureRelay(parts[1], runtime)
 	}

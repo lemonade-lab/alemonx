@@ -133,7 +133,7 @@ import { ErrorNotice } from './ErrorNotice'
 import { EmptyState } from './EmptyState'
 import { WorkspaceWelcome } from './WorkspaceWelcome'
 import { BackpackFolderInstall } from './BackpackFolderInstall'
-import { WorkbenchTools } from './WorkbenchTools'
+import { WorkbenchTools, useWorkbenchSubmenu } from './WorkbenchTools'
 import { ProjectNavigation } from './ProjectNavigation'
 import { ConfirmDialog } from './ConfirmDialog'
 import { DownloadProgress } from './DownloadProgress'
@@ -3272,7 +3272,7 @@ export function Dashboard({
   const currentCatalog =
     catalog.find(group => group.title === catalogTitle) ?? catalog[0]
   const robotContent = aiOpen ? (
-    <DSHWorkspace root={root} />
+    <DSHWorkspace key={root} root={root} onOpenWeb={url => openMiniBrowser(url, undefined, true)} />
   ) : (
     <>
       {section === 'backpack' && (
@@ -3850,44 +3850,46 @@ export function Dashboard({
                 )}
               </Button>
             </div>
-            <WorkbenchTools>
-              <ThemeToggle />
-              {developerMode && <McpControl />}
-              {developerMode && <SSHControl />}
-              <Button
-                variant="secondary"
-                className={cn(
-                  'gap-1.5 px-2',
-                  developerMode
-                    ? 'border-blue-400 bg-slate-100 '
-                    : 'border-slate-200 bg-white  hover:bg-slate-50'
-                )}
-                onClick={() => dispatch(setDeveloperMode(!developerMode))}
-                aria-pressed={developerMode}
-                aria-label={developerMode ? '关闭开发模式' : '开启开发模式'}
-                title={
-                  developerMode
-                    ? '关闭开发模式，收起源码与发布工具'
-                    : '开启开发模式，显示源码、终端与发布工具'
-                }
-              >
-                <Code2 className="size-4" />
-                <span>开发模式</span>
-              </Button>
-              <GitHubAuthControl />
+            <div className="ml-auto flex shrink-0 items-center gap-1">
+              <WorkbenchTools>
+                <ThemeToggle menuItem />
+                {developerMode && <McpControl menuItem />}
+                {developerMode && <SSHControl menuItem />}
+                <Button
+                  variant="secondary"
+                  className={cn(
+                    'workbench-action-item gap-1.5 px-2',
+                    developerMode
+                      ? 'border-blue-400 bg-slate-100 '
+                      : 'border-slate-200 bg-white  hover:bg-slate-50'
+                  )}
+                  onClick={() => dispatch(setDeveloperMode(!developerMode))}
+                  aria-pressed={developerMode}
+                  aria-label={developerMode ? '关闭开发模式' : '开启开发模式'}
+                  title={
+                    developerMode
+                      ? '关闭开发模式，收起源码与发布工具'
+                      : '开启开发模式，显示源码、终端与发布工具'
+                  }
+                >
+                  <Code2 className="size-4" />
+                  <span>开发模式</span>
+                </Button>
+                <GitHubAuthControl menuItem />
+              </WorkbenchTools>
               <Button
                 variant="icon"
                 onClick={() => setRobotNavigationHidden(value => !value)}
                 aria-label={
                   robotNavigationHidden
-                    ? '显示机器人功能导航'
-                    : '隐藏机器人功能导航'
+                    ? '显示机器人导航'
+                    : '隐藏机器人导航'
                 }
                 aria-pressed={!robotNavigationHidden}
                 title={
                   robotNavigationHidden
-                    ? '显示机器人功能导航'
-                    : '隐藏机器人功能导航'
+                    ? '显示机器人导航'
+                    : '隐藏机器人导航'
                 }
               >
                 {robotNavigationHidden ? (
@@ -3904,7 +3906,7 @@ export function Dashboard({
               >
                 <CircleQuestionMark className="size-4" />
               </button>
-            </WorkbenchTools>
+            </div>
           </header>
           <ConfirmDialog
             open={Boolean(pendingBackpackRemoval)}
@@ -5752,8 +5754,9 @@ function ProjectItem({
     </article>
   )
 }
-function McpControl() {
+function McpControl({ menuItem = false }: { menuItem?: boolean }) {
   const [open, setOpen] = useStoreState(false)
+  const submenu = useWorkbenchSubmenu(menuItem, open)
   const [transport, setTransport] = useStoreState<'stdio' | 'http'>('stdio')
   const [copied, setCopied] = useStoreState(false)
   const { data: mcpStatus, refetch: refetchMCP } = useSystemMcpQuery()
@@ -5801,9 +5804,10 @@ function McpControl() {
       window.removeEventListener('alx:top-tool-open', closeWhenAnotherToolOpens)
   }, [setOpen])
   return (
-    <div className="mcp-control relative">
+    <div className="mcp-control relative" ref={submenu.root}>
       <button
         className={cn(
+          menuItem && 'workbench-action-item',
           'mcp-control-button inline-flex min-h-8 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-semibold transition',
           mcpRunning
             ? 'border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 dark:border-blue-900 dark:bg-blue-950/40 dark:text-blue-300 dark:hover:bg-blue-950/70'
@@ -5821,6 +5825,7 @@ function McpControl() {
             return next
           })
         }
+        aria-haspopup="dialog"
         aria-expanded={open}
         title={
           mcpRunning
@@ -5836,9 +5841,13 @@ function McpControl() {
           )}
         </i>
         <span>MCP</span>
+        {menuItem && <ChevronRight className="ml-auto size-4" aria-hidden="true" />}
       </button>
       {open && (
         <section
+          ref={submenu.panel}
+          style={submenu.style}
+          data-workbench-submenu={menuItem || undefined}
           className="topbar-popover mcp-popover absolute right-0 top-[calc(100%+8px)] z-50 grid w-[min(390px,calc(100vw-32px))] gap-2.5 rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-900"
           role="dialog"
           aria-label="连接 MCP"

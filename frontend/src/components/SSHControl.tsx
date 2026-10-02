@@ -1,13 +1,23 @@
 import { useStoreState } from '../store/guideStore'
-import { Copy, ExternalLink, KeyRound, Plus, RefreshCw, X } from 'lucide-react'
+import {
+  ChevronRight,
+  Copy,
+  ExternalLink,
+  KeyRound,
+  Plus,
+  RefreshCw,
+  X
+} from 'lucide-react'
 import { useCallback, useEffect } from 'react'
 import { ConfirmDialog } from './ConfirmDialog'
 import { Button } from './Button'
+import { useWorkbenchSubmenu } from './WorkbenchTools'
 
 type SSHKey = { name: string; value: string }
 
-export function SSHControl() {
+export function SSHControl({ menuItem = false }: { menuItem?: boolean }) {
   const [open, setOpen] = useStoreState(false)
+  const submenu = useWorkbenchSubmenu(menuItem, open)
   const [keys, setKeys] = useStoreState<SSHKey[]>([])
   const [loading, setLoading] = useStoreState(false)
   const [busy, setBusy] = useStoreState(false)
@@ -68,9 +78,10 @@ export function SSHControl() {
     }
   }
   return (
-    <div className="relative">
+    <div className="relative" ref={submenu.root}>
       <Button
         variant="icon"
+        className={menuItem ? 'workbench-action-item' : undefined}
         onClick={() =>
           setOpen(value => {
             const next = !value
@@ -82,18 +93,28 @@ export function SSHControl() {
           })
         }
         aria-label="SSH 管理"
+        aria-haspopup="dialog"
         aria-expanded={open}
         title="SSH 管理"
       >
         <KeyRound className="size-4" />
+        {menuItem && (
+          <>
+            <span>SSH 管理</span>
+            <ChevronRight className="ml-auto size-4" aria-hidden="true" />
+          </>
+        )}
       </Button>
       {open && (
         <section
+          ref={submenu.panel}
+          style={submenu.style}
+          data-workbench-submenu={menuItem || undefined}
           className="topbar-popover absolute right-0 top-[calc(100%+8px)] z-50 grid w-[min(24rem,calc(100vw-2rem))] max-h-[calc(100dvh-5rem)] gap-2.5 overflow-y-auto rounded-xl border border-slate-200 bg-white p-3 shadow-[0_18px_42px_rgb(28_26_23/0.13)]"
           role="dialog"
           aria-label="SSH 管理"
           onKeyDown={event => {
-            if (event.key === 'Escape') setOpen(false)
+            if (event.key === 'Escape' && !menuItem) setOpen(false)
           }}
         >
           <header className="flex items-start justify-between gap-3">

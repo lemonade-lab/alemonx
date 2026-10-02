@@ -524,6 +524,12 @@ export const workspaceApi = createApi({
     'SystemRedis'
   ],
   endpoints: build => ({
+    openDSHWeb: build.mutation<{ url: string }, string>({
+      query: root => ({
+        url: `dsh/runtimes/${btoa(unescape(encodeURIComponent(root))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '')}/web`,
+        method: 'POST'
+      })
+    }),
     goals: build.query<unknown[], void>({ query: () => 'goals' }),
     workspace: build.query<
       {
@@ -1328,6 +1334,7 @@ export const workspaceApi = createApi({
 })
 
 export const {
+  useOpenDSHWebMutation,
   useGoalsQuery,
   useWorkspaceQuery,
   useLazyEnvironmentReportQuery,

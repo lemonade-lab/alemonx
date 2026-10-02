@@ -3073,3 +3073,20 @@ printf '{"output":"{\\"engine\\":\\"fixture\\",\\"installed\\":true}"}'
 		t.Fatalf("non-status action = %d, want 400", recorder.Code)
 	}
 }
+
+func TestBrowserHTMLPreservesRawScriptAndStyle(t *testing.T) {
+	target, _ := url.Parse("http://127.0.0.1:4242")
+	prefix := "/api/v1/browser/http/test/"
+	script := `if (window.a && window.a < 2) window.value = "<tag>&";`
+	style := `.a::before { content: "<tag>&"; background: url(/image.png); }`
+	document := rewriteBrowserHTML(`<html><head><script>`+script+`</script><style>`+style+`</style></head><body>A &amp; B</body></html>`, target, prefix)
+	if !strings.Contains(document, "<script>"+script+"</script>") {
+		t.Fatalf("script raw text corrupted: %s", document)
+	}
+	if !strings.Contains(document, `<style>.a::before { content: "<tag>&"; background: url(`+prefix+`image.png); }</style>`) {
+		t.Fatalf("style raw text corrupted: %s", document)
+	}
+	if !strings.Contains(document, "A &amp; B") {
+		t.Fatal("normal HTML text should remain escaped")
+	}
+}

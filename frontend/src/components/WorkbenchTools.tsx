@@ -1,51 +1,95 @@
-import { useId, useRef, type ReactNode } from 'react'
-import { SlidersHorizontal } from 'lucide-react'
+import { useEffect, useId, useRef, type ReactNode } from 'react'
+import { MoreHorizontal } from 'lucide-react'
 import { useStoreState } from '../store/guideStore'
-import { Button } from './Button'
+import { useViewportPopoverPosition } from '../hooks/useViewportPopoverPosition'
 
 export function WorkbenchTools({ children }: { children: ReactNode }) {
   const [open, setOpen] = useStoreState(false)
   const id = useId()
+  const root = useRef<HTMLDivElement>(null)
   const trigger = useRef<HTMLButtonElement>(null)
+  const menu = useRef<HTMLDivElement>(null)
+  const style = useViewportPopoverPosition({
+    anchor: trigger.current?.getBoundingClientRect() ?? null,
+    open,
+    popoverRef: menu
+  })
+  const close = () => {
+    setOpen(false)
+    window.dispatchEvent(
+      new CustomEvent('alx:top-tool-open', { detail: 'close' })
+    )
+  }
+  useEffect(() => {
+    if (!open) return
+    const outside = (event: PointerEvent) => {
+      if (!root.current?.contains(event.target as Node)) {
+        setOpen(false)
+        window.dispatchEvent(
+          new CustomEvent('alx:top-tool-open', { detail: 'close' })
+        )
+      }
+    }
+    document.addEventListener('pointerdown', outside)
+    return () => document.removeEventListener('pointerdown', outside)
+  }, [open, setOpen])
   return (
-    <div className="contents">
+    <div ref={root} className="workbench-tools relative">
       <button
         ref={trigger}
         type="button"
-        className="workbench-tools-trigger secondary-button ml-auto shrink-0 gap-2"
+        className="icon-button size-8 p-0"
+        aria-label="操作"
+        title="操作"
+        aria-haspopup="true"
         aria-expanded={open}
         aria-controls={id}
-        onClick={() => setOpen(value => !value)}
+        onClick={() => (open ? close() : setOpen(true))}
       >
-        <SlidersHorizontal className="size-4" aria-hidden="true" />
-        工具
+        <MoreHorizontal className="size-4" aria-hidden="true" />
       </button>
       <div
+        ref={menu}
         id={id}
         role="region"
-        aria-label="工作台工具"
-        data-open={open}
-        className="workbench-tools-actions"
+        aria-label="操作菜单"
+        hidden={!open}
+        style={style}
+        className="workbench-tools-menu"
         onKeyDown={event => {
-          if (event.key === 'Escape' && !event.defaultPrevented && trigger.current?.getClientRects().length) {
-            event.stopPropagation()
-            setOpen(false)
+          if (event.key !== 'Escape' || event.defaultPrevented) return
+          const expanded = menu.current?.querySelector<HTMLButtonElement>(
+            'button[aria-expanded="true"]'
+          )
+          event.preventDefault()
+          event.stopPropagation()
+          if (expanded) {
+            window.dispatchEvent(
+              new CustomEvent('alx:top-tool-open', { detail: 'close' })
+            )
+            expanded.focus()
+          } else {
+            close()
             trigger.current?.focus()
           }
         }}
       >
         {children}
-        <Button
-          variant="ghost"
-          className="workbench-tools-close ml-auto"
-          onClick={() => {
-            setOpen(false)
-            trigger.current?.focus()
-          }}
-        >
-          收起工具
-        </Button>
       </div>
     </div>
   )
+}
+
+export function useWorkbenchSubmenu(enabled: boolean, open: boolean) {
+  const root = useRef<HTMLDivElement>(null)
+  const panel = useRef<HTMLElement>(null)
+  const anchor = root.current?.getBoundingClientRect() ?? null
+  const style = useViewportPopoverPosition({
+    anchor,
+    open: enabled && open,
+    popoverRef: panel,
+    placement:
+      anchor && anchor.right + 400 > window.innerWidth ? 'left' : 'right'
+  })
+  return { root, panel, style: enabled ? style : undefined }
 }

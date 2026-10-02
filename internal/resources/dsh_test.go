@@ -18,6 +18,10 @@ import (
 func dshArchive(t *testing.T, files map[string]string) []byte {
 	t.Helper()
 	if _, ok := files["plugins/approval-bridge/package.json"]; ok {
+		files[dshWebIndex] = "<html></html>"
+		files["plugins/workspace-entry/package.json"] = "{}"
+		files["plugins/workspace-entry/index.js"] = "export {}"
+		files["plugins/workspace-entry/client.js"] = ""
 		files["plugins/approval-bridge/index.js"] = "export {}"
 		files["plugins/approval-bridge/session-resume.js"] = "export {}"
 		files["plugins/approval-bridge/network.js"] = "export {}"

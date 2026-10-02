@@ -14,7 +14,7 @@ function preferredTheme(): Theme {
     : 'light'
 }
 
-export function ThemeToggle() {
+export function ThemeToggle({ menuItem = false }: { menuItem?: boolean }) {
   const [theme, setTheme] = useStoreState<Theme>(() => preferredTheme())
   useEffect(() => {
     document.documentElement.dataset.theme = theme
@@ -25,6 +25,7 @@ export function ThemeToggle() {
   return (
     <Button
       variant="icon"
+      className={menuItem ? 'workbench-action-item' : undefined}
       onClick={() => setTheme(next)}
       aria-label={`切换到${next === 'dark' ? '暗色' : '亮色'}主题`}
       title={`切换到${next === 'dark' ? '暗色' : '亮色'}主题`}
@@ -33,6 +34,9 @@ export function ThemeToggle() {
         <Sun className="size-4" />
       ) : (
         <Moon className="size-4" />
+      )}
+      {menuItem && (
+        <span>{`切换到${next === 'dark' ? '暗色' : '亮色'}主题`}</span>
       )}
     </Button>
   )

@@ -25,7 +25,7 @@ func main() {
 
 func pack() error {
 	const source = "resources/packages/dsh"
-	for _, path := range []string{source + "/node_modules/@deepseek-ai/dsh/lib/bin.js", source + "/plugins/approval-bridge/package.json"} {
+	for _, path := range []string{source + "/node_modules/@deepseek-ai/dsh/lib/bin.js", source + "/node_modules/@deepseek-ai/dsh-web-frontend/dist/index.html", source + "/plugins/workspace-entry/package.json", source + "/plugins/workspace-entry/index.js", source + "/plugins/workspace-entry/client.js", source + "/plugins/approval-bridge/package.json"} {
 		if _, err := os.Stat(path); err != nil {
 			return err
 		}

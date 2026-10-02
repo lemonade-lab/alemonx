@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Check,
+  ChevronRight,
   Copy,
   KeyRound,
   Loader2,
@@ -8,6 +9,7 @@ import {
   X
 } from 'lucide-react'
 import { Button } from './Button'
+import { useWorkbenchSubmenu } from './WorkbenchTools'
 import { GithubMark } from './GithubMark'
 
 type AuthStatus = {
@@ -30,8 +32,9 @@ async function readJSON<T>(response: Response): Promise<T> {
   return data
 }
 
-export function GitHubAuthControl() {
+export function GitHubAuthControl({ menuItem = false }: { menuItem?: boolean }) {
   const [open, setOpen] = useState(false)
+  const submenu = useWorkbenchSubmenu(menuItem, open)
   const [status, setStatus] = useState<AuthStatus | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -78,7 +81,8 @@ export function GitHubAuthControl() {
   useEffect(() => {
     if (!open) return
     const onPointerDown = (event: PointerEvent) => {
-      if (rootRef.current && !rootRef.current.contains(event.target as Node))
+      const root = menuItem ? submenu.root.current : rootRef.current
+      if (root && !root.contains(event.target as Node))
         setOpen(false)
     }
     const onKeyDown = (event: KeyboardEvent) => {
@@ -90,7 +94,7 @@ export function GitHubAuthControl() {
       document.removeEventListener('pointerdown', onPointerDown)
       document.removeEventListener('keydown', onKeyDown)
     }
-  }, [open])
+  }, [open, menuItem, submenu.root])
 
   const poll = async (flowID: string, interval: number) => {
     setPolling(true)
@@ -221,9 +225,10 @@ export function GitHubAuthControl() {
   }
 
   return (
-    <div className="relative" ref={rootRef}>
+    <div className="relative" ref={menuItem ? submenu.root : rootRef}>
       <Button
         variant="icon"
+        className={menuItem ? 'workbench-action-item' : undefined}
         onClick={() =>
           setOpen(value => {
             const next = !value
@@ -235,6 +240,7 @@ export function GitHubAuthControl() {
           })
         }
         aria-label="GitHub 登录状态"
+        aria-haspopup="dialog"
         aria-expanded={open}
         title={
           status?.loggedIn
@@ -248,9 +254,13 @@ export function GitHubAuthControl() {
             <span className="absolute -right-0.5 -top-0.5 size-2 rounded-full bg-emerald-500 ring-2 ring-white dark:ring-slate-900" />
           )}
         </span>
+        {menuItem && <><span>GitHub 登录状态</span><ChevronRight className="ml-auto size-4" aria-hidden="true" /></>}
       </Button>
       {open && (
         <section
+          ref={submenu.panel}
+          style={submenu.style}
+          data-workbench-submenu={menuItem || undefined}
           className="topbar-popover absolute right-0 top-[calc(100%+8px)] z-50 grid w-[min(340px,calc(100vw-32px))] gap-3 rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-900"
           role="dialog"
           aria-label="GitHub 授权"

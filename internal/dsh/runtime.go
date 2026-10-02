@@ -137,6 +137,11 @@ type Runtime struct {
 	sessions   map[string]Session
 	lockFile   *os.File
 	managed    bool
+	webCmd     *exec.Cmd
+	webDone    chan struct{}
+	webURL     string
+	webMode    bool
+	webCommand CommandFactory
 }
 
 type request struct {
@@ -276,6 +281,10 @@ func (r *Runtime) Start(ctx context.Context, cfg Config) (startErr error) {
 		}
 	}
 	r.mu.Lock()
+	if r.webMode {
+		r.mu.Unlock()
+		return errors.New("该项目已使用 DSH Web 版，请在 Web 版中管理会话")
+	}
 	if r.cmd != nil {
 		r.mu.Unlock()
 		return nil
@@ -795,6 +804,11 @@ func (r *Runtime) Status() Status {
 }
 
 func (r *Runtime) Stop(ctx context.Context) error {
+	r.startMu.Lock()
+	defer r.startMu.Unlock()
+	if err := r.stopWeb(ctx); err != nil {
+		return err
+	}
 	return r.stop(ctx, true)
 }
 

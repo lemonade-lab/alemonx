@@ -8058,7 +8058,7 @@ button > svg,
   gap: 10px;
   padding: 12px !important;
 }
-.topbar-popover.mcp-popover {
+.topbar-popover.mcp-popover:not([data-workbench-submenu]) {
   top: calc(100% + 8px) !important;
 }
 .topbar-popover-close {
@@ -8901,37 +8901,42 @@ button > svg,
   }
 }
 
-.workbench-tools-trigger,
-.workbench-tools-close {
-  display: none;
+/* Keep the three header actions visible at every window width. */
+.workbench-tools-menu {
+  z-index: 60;
+  width: 190px;
+  padding: 5px;
+  border: 1px solid var(--theme-border-default);
+  border-radius: 10px;
+  background: var(--theme-surface-panel);
+  box-shadow: var(--theme-shadow-pop);
 }
-
-.workbench-tools-actions {
+.workbench-tools-menu[hidden] { display: none; }
+.workbench-tools-menu .workbench-action-item {
   display: flex;
-  align-items: center;
-  flex-shrink: 0;
-  gap: 4px;
-  margin-left: auto;
+  justify-content: flex-start;
+  gap: 8px;
+  width: 100%;
+  height: auto;
+  min-height: 36px;
+  padding: 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--theme-text-primary);
+  font-size: 12px;
+  box-shadow: none;
+}
+.workbench-tools-menu .workbench-action-item:hover {
+  background: var(--theme-surface-hover);
+}
+.workbench-tools-menu .topbar-popover {
+  overflow-y: auto;
 }
 
 @container workbench-window (max-width: 700px) {
   .topbar-brand {
     display: none;
-  }
-  .workbench-tools-trigger,
-  .workbench-tools-close {
-    display: inline-flex;
-  }
-  .workbench-tools-actions {
-    display: none;
-    width: 100%;
-    flex-wrap: wrap;
-    gap: 8px;
-    border-top: 1px solid var(--theme-border-default);
-    padding: 8px 0;
-  }
-  .workbench-tools-actions[data-open='true'] {
-    display: flex;
   }
   [data-project-navigation] {
     max-height: 32dvh;

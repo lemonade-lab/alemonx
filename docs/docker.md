@@ -68,7 +68,7 @@ macOS（Docker Desktop）上唯一的宿主侧要求是让 Docker Desktop 能访
 2. 创建权限受限的 `secrets/` 目录，用编辑器将 Key 写入 `secrets/deepseek_api_key`，建议目录权限 `700`、文件权限 `600`。不要把 Key 填入命令行或 `.env`。
 3. 在 `.env` 中添加 `COMPOSE_FILE=docker-compose.yml:docker-compose.dsh.yml`，然后运行 `docker compose up -d`。如还使用 Yunzai 等覆盖文件，将其一并追加到 `COMPOSE_FILE`。
 
-可用 `ALX_DSH_SECRET_SOURCE` 指定其他宿主机密钥文件路径。界面会显示“由 Docker Secret 管理”，不能通过网页覆盖。只配置模型并连接即可。密钥缺失或为空时只禁用 DSH；更新密钥文件后使用 `docker compose up -d --force-recreate`，避免旧容器仍挂载旧文件。所有机器人默认共用此 Secret。
+可用 `ALX_DSH_SECRET_SOURCE` 指定其他宿主机密钥文件路径。打开 DSH 页的“Web 版”后，在官方界面配置模型并使用；Secret 通过启动环境提供，官方凭据机制将它标记为只读，不能通过网页覆盖。密钥缺失或为空时只禁用 DSH；更新密钥文件后使用 `docker compose up -d --force-recreate`，避免旧容器仍挂载旧文件。所有机器人默认共用此 Secret。
 
 注意：启用覆盖文件后，若宿主机 Secret 文件不存在，Docker Compose 会拒绝创建容器。应先创建文件，或暂时移除该覆盖文件。上述“只禁用 DSH”指已启动容器中 Secret 为空或无法读取的情形。
 
