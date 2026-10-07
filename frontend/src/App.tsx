@@ -1,3 +1,5 @@
+import { OfficialResourcePicker } from './components/OfficialResources'
+import { useResourceOptionsQuery } from './store/workspaceApi'
 import { useStoreState } from './store/guideStore'
 import {
   useCallback,
@@ -784,7 +786,9 @@ export default function App() {
           }}
           onOpenWindow={(name, open, minimized) => {
             if (!open || minimized)
-              window.dispatchEvent(new CustomEvent(`alx:desktop-${name}-toggle`))
+              window.dispatchEvent(
+                new CustomEvent(`alx:desktop-${name}-toggle`)
+              )
           }}
           onOpenSystemWindow={(feature, minimized) => {
             const state = dockWindows.system[feature]
@@ -793,9 +797,11 @@ export default function App() {
                 new CustomEvent('alx:desktop-system-open', { detail: feature })
               )
             else if (minimized)
-            window.dispatchEvent(
-              new CustomEvent('alx:desktop-system-toggle', { detail: feature })
-            )
+              window.dispatchEvent(
+                new CustomEvent('alx:desktop-system-toggle', {
+                  detail: feature
+                })
+              )
           }}
         />
       )}
@@ -1029,20 +1035,22 @@ function WorkbenchDock({
             </button>
           </div>
         )}
-        {Object.entries(windows.system).filter(([, item]) => item.open).map(([feature, item]) => (
-          <div className="workbench-dock-apps" key={feature}>
-            <button
-              className={item.minimized ? '' : 'active'}
-              onClick={() => onSystem(feature)}
-              title={
-                item.minimized ? `恢复${item.label}` : `最小化${item.label}`
-              }
-            >
-              <Settings className="size-5" />
-              <span>{item.label}</span>
-            </button>
-          </div>
-        ))}
+        {Object.entries(windows.system)
+          .filter(([, item]) => item.open)
+          .map(([feature, item]) => (
+            <div className="workbench-dock-apps" key={feature}>
+              <button
+                className={item.minimized ? '' : 'active'}
+                onClick={() => onSystem(feature)}
+                title={
+                  item.minimized ? `恢复${item.label}` : `最小化${item.label}`
+                }
+              >
+                <Settings className="size-5" />
+                <span>{item.label}</span>
+              </button>
+            </div>
+          ))}
       </div>
     </aside>
   )
@@ -1078,34 +1086,35 @@ function Launchpad({
       icon: <Settings className="size-8" />,
       onOpen: onOpenSettings
     },
-    ...([
-      ['terminal', '终端', Terminal],
-      ['foregroundLogs', '前台日志', ClipboardList],
-      ['git', 'Git 仓库管理', GitBranch],
-      ['app', '应用', Monitor],
-      ['test', '测试', FlaskConical],
-      ['live', '在线聊天', MessageSquare],
-      ['pm2Logs', 'PM2 日志', Terminal],
-      ['pm2Status', 'PM2 状态', Activity],
-      ['ops', '运维', ShieldCheck]
-    ] as const)
-      .map(([id, label, Icon]) => ({
-        id,
-        label,
-        icon: <Icon className="size-8" />,
-        onOpen: () =>
-          onOpenWindow(
-            id === 'foregroundLogs'
-              ? 'foreground-logs'
-              : id === 'pm2Logs'
-                ? 'pm2-logs'
-                : id === 'pm2Status'
-                  ? 'pm2-status'
-                  : id,
-            windows[id].open,
-            windows[id].minimized
-          )
-      })),
+    ...(
+      [
+        ['terminal', '终端', Terminal],
+        ['foregroundLogs', '前台日志', ClipboardList],
+        ['git', 'Git 仓库管理', GitBranch],
+        ['app', '应用', Monitor],
+        ['test', '测试', FlaskConical],
+        ['live', '在线聊天', MessageSquare],
+        ['pm2Logs', 'PM2 日志', Terminal],
+        ['pm2Status', 'PM2 状态', Activity],
+        ['ops', '运维', ShieldCheck]
+      ] as const
+    ).map(([id, label, Icon]) => ({
+      id,
+      label,
+      icon: <Icon className="size-8" />,
+      onOpen: () =>
+        onOpenWindow(
+          id === 'foregroundLogs'
+            ? 'foreground-logs'
+            : id === 'pm2Logs'
+              ? 'pm2-logs'
+              : id === 'pm2Status'
+                ? 'pm2-status'
+                : id,
+          windows[id].open,
+          windows[id].minimized
+        )
+    })),
     ...Object.entries(windows.system).map(([feature, item]) => ({
       id: `system-${feature}`,
       label: item.label,
@@ -1197,6 +1206,10 @@ function FlowView({
   const automaticCheck = useRef<string | null>(null)
   const currentStepElement = useRef<HTMLButtonElement | null>(null)
   const capabilities = config.capabilities ?? []
+  const { data: officialExtensions } = useResourceOptionsQuery(
+    'connector,js-plugin',
+    { skip: goal?.id !== 'develop' && goal?.id !== 'install' }
+  )
   const isDeveloper = goal?.id === 'develop'
   const isInstaller = goal?.id === 'install'
   const releaseApp = goal?.id === 'web' && webEdition === 'clean' ? 'alx' : null
@@ -1542,36 +1555,17 @@ function FlowView({
         return (
           <>
             <h1>选择扩展包</h1>
-            <div className="grid gap-2.5 my-5">
-              {[
-                ['database', '数据存储', '@alemonjs/db'],
-                ['qqbot', 'QQ Bot 连接', '@alemonjs/qq-bot'],
-                ['onebot', 'OneBot 连接', '@alemonjs/onebot'],
-                ['bubble', 'bubble服务', '@alemonjs/bubble'],
-                ['discord', 'Discord 连接', '@alemonjs/discord']
-              ].map(([value, label, note]) => (
-                <button
-                  className={
-                    capabilities.includes(value) ? 'choice selected' : 'choice'
-                  }
-                  key={value}
-                  onClick={() => toggleCapability(value)}
-                >
-                  <strong>{label}</strong>
-                  <small
-                    className="truncate"
-                    title={
-                      project.destinationMode === 'custom' &&
-                      project.destination
-                        ? project.destination
-                        : '在目录选择器中选择保存位置。'
-                    }
-                  >
-                    {note} ·{' '}
-                    {capabilities.includes(value) ? '已选择' : '点击添加'}
-                  </small>
-                </button>
-              ))}
+            <div className="my-5 grid gap-3">
+              <OfficialResourcePicker
+                label="项目扩展"
+                selected={capabilities}
+                multiple
+                onSelect={resource => toggleCapability(resource.id)}
+              />
+              <p className="text-xs text-slate-500">
+                连接包与插件按官方安装方式添加；已有模板的兼容版本会保留，其余
+                npm 包使用默认版本。Git 插件使用仓库默认分支。
+              </p>
             </div>
           </>
         )
@@ -1701,7 +1695,14 @@ function FlowView({
                   开发能力包：
                   {capabilities.length
                     ? capabilities
-                        .map(item => capabilityLabels[item] ?? item)
+                        .map(
+                          item =>
+                            officialExtensions?.data.find(
+                              resource => resource.id === item
+                            )?.name ??
+                            capabilityLabels[item] ??
+                            item
+                        )
                         .join('、')
                     : '仅基础框架'}
                 </span>
@@ -1796,6 +1797,12 @@ function FlowView({
                 </small>
               </button>
             </div>
+            <OfficialResourcePicker
+              label="机器人扩展（可选）"
+              selected={capabilities}
+              multiple
+              onSelect={resource => toggleCapability(resource.id)}
+            />
             {folderError && (
               <ErrorNotice
                 message={folderError}
@@ -2086,6 +2093,12 @@ function FlowView({
     setStep(0)
   }
   registerBack(step > 0 ? goBack : () => {})
+  const officialIDs = new Set(
+    officialExtensions?.data.map(resource => resource.id) ?? []
+  )
+  const isLegacyCapability = (id: string) =>
+    !officialIDs.has(id) &&
+    Object.prototype.hasOwnProperty.call(capabilityLabels, id)
   const createConfig = (): ProjectConfig =>
     isInstaller
       ? {
@@ -2101,7 +2114,8 @@ function FlowView({
           imageMode: 'none',
           styleMode: 'css',
           downloadSkills: false,
-          developmentPackages: []
+          developmentPackages: [],
+          resourceIDs: capabilities.filter(item => !isLegacyCapability(item))
         }
       : {
           template: 'dev',
@@ -2116,7 +2130,10 @@ function FlowView({
           imageMode: config.image,
           styleMode: config.image === 'react' ? config.style : 'css',
           downloadSkills: config.skills === 'yes',
-          developmentPackages: capabilities
+          developmentPackages: capabilities.filter(item =>
+            isLegacyCapability(item)
+          ),
+          resourceIDs: capabilities.filter(item => !isLegacyCapability(item))
         }
   const isDownloadFlow = goal?.id === 'mobile'
   const isWeb = goal?.id === 'web'

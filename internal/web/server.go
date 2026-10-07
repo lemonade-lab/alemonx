@@ -1135,6 +1135,8 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	mux.HandleFunc("/api/v1/workspace/open", s.workspaceOpenHandler)
 	mux.HandleFunc("/api/v1/catalog", s.catalogHandler)
 	mux.HandleFunc("/api/v1/catalog/resources", s.catalogResourcesHandler)
+	mux.HandleFunc("/api/v1/catalog/options", s.catalogOptionsHandler)
+	mux.HandleFunc("/api/v1/robot/package-inventory", s.robotPackageInventoryHandler)
 	mux.HandleFunc("/api/v1/catalog/resource", s.catalogResourceHandler)
 	mux.HandleFunc("/api/v1/catalog/versions", s.catalogVersionsHandler)
 	mux.HandleFunc("/api/v1/catalog/document", s.catalogDocumentHandler)
@@ -1630,6 +1632,31 @@ func (s *server) gitBuildRetryTagHandler(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *server) catalogOptionsHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, 405, "该操作暂不支持。")
+		return
+	}
+	items, err := catalog.Options(r.URL.Query().Get("type"))
+	if err != nil {
+		writeError(w, 502, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]any{"data": items})
+}
+func (s *server) robotPackageInventoryHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, 405, "该操作暂不支持。")
+		return
+	}
+	items, err := s.robots.PackageInventory(r.URL.Query().Get("root"))
+	if err != nil {
+		writeError(w, 400, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]any{"items": items})
 }
 
 func (s *server) catalogResourcesHandler(w http.ResponseWriter, r *http.Request) {

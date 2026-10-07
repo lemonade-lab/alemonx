@@ -1,3 +1,4 @@
+import { factFor, resourceTarget } from '../lib/officialResources'
 import { useState } from 'react'
 import Markdown from 'markdown-to-jsx'
 import { ArrowLeft, Package, Search } from 'lucide-react'
@@ -8,8 +9,7 @@ import {
   useMarketResourceQuery,
   useCatalogVersionsQuery,
   usePackageConfigQuery,
-  useLocalPackagesQuery,
-  useRobotFileQuery,
+  usePackageInventoryQuery,
   type MarketResource
 } from '../store/workspaceApi'
 
@@ -19,27 +19,7 @@ function errorMessage(error: unknown) {
     ? data.error
     : '资源暂时无法读取，请重试。'
 }
-function gitTarget(resource: MarketResource) {
-  try {
-    const url = new URL(resource.repositoryUrl)
-    if (
-      url.protocol !== 'https:' ||
-      !['github.com', 'gitee.com'].includes(url.hostname) ||
-      url.username ||
-      url.password
-    )
-      return ''
-    const parts = url.pathname
-      .replace(/\.git$/, '')
-      .split('/')
-      .filter(Boolean)
-    // A monorepo subdirectory is not an independently installable Git package.
-    if (parts.length !== 2) return ''
-    return `git+${url.origin}/${parts.join('/')}.git`
-  } catch {
-    return ''
-  }
-}
+const gitTarget = resourceTarget
 
 export function EcosystemMarket({
   root,
@@ -71,29 +51,9 @@ export function EcosystemMarket({
     error,
     refetch
   } = useMarketResourcesQuery({ type, subtype, q: query, page })
-  const { data: localPackages } = useLocalPackagesQuery(root, { skip: !root })
-  const { data: manifest } = useRobotFileQuery(
-    { root, file: 'package.json' },
-    { skip: !root }
-  )
-  let dependencies: Record<string, unknown> = {}
-  try {
-    const json = JSON.parse(manifest?.output ?? '{}')
-    dependencies = { ...json.dependencies, ...json.devDependencies }
-  } catch {
-    /* An invalid local manifest does not hide the market. */
-  }
+  const { data: inventory } = usePackageInventoryQuery(root, { skip: !root })
   const installed = (item: MarketResource) =>
-    item.installMode === 'npm'
-      ? Boolean(item.packageName && dependencies[item.packageName])
-      : localPackages?.items.some(
-          pkg =>
-            pkg.path.split('/').pop() ===
-            gitTarget(item)
-              .replace(/\.git$/, '')
-              .split('/')
-              .pop()
-        )
+    factFor(item, inventory?.items ?? [])?.installed
   const title = type === 'connector' ? '连接' : '插件'
   if (selected)
     return (
@@ -237,18 +197,9 @@ function ResourceDetail({
     isFetching: versionsLoading,
     error: versionsError
   } = useCatalogVersionsQuery(target, { skip: !npm || !target })
-  const { data: packages, refetch: refetchPackages } = useLocalPackagesQuery(
-    root,
-    { skip: !root }
-  )
-  const directory = target
-    .replace(/^git\+/, '')
-    .replace(/\.git$/, '')
-    .split('/')
-    .pop()
-  const local = packages?.items.find(
-    pkg => pkg.path.split('/').pop() === directory || pkg.name === item?.name
-  )
+  const { data: inventory, refetch: refetchPackages } =
+    usePackageInventoryQuery(root, { skip: !root })
+  const local = item ? factFor(item, inventory?.items ?? []) : undefined
   const configPackage = npm ? item?.packageName : local?.name
   const {
     currentData: config,
@@ -265,7 +216,9 @@ function ResourceDetail({
       ? item?.type === 'connector'
         ? 'install-connection'
         : 'install-module'
-      : 'install-package'
+      : item?.type === 'connector'
+        ? 'install-connection'
+        : 'install-package'
     if (
       await onRun(
         action,

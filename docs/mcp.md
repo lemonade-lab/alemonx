@@ -85,6 +85,17 @@ MCP_ALLOWED_ROOTS='/Users/me/robots:/Users/me/workspaces' alx mcp
 
 `npm-publish` 与 `git-release` 会产生外部副作用，必须在发布前检查之后得到用户本次明确确认；MCP 不读取或传递 npm token。
 
+## 官方资源查询
+
+资源目录来自 `https://open.alemonjs.com/api/v2`，不会回退读取 GitHub 市场清单。
+
+- `alemonjs_resource_taxonomy`：不传 `type` 返回类型，传入父类型返回子类型。
+- `alemonjs_search_resources`：支持 `type`、`subtype`、`q`、`page`、`pageSize`；默认每页 20，最大 100。
+- `alemonjs_get_resource`：按 `id` 读取安装信息与 Markdown 正文。
+- `alemonjs_package_inventory`：传入项目 `root`，读取依赖与背包的声明、实际安装、可加载和启用状态。
+
+先按包名（npm）或仓库（Git）匹配本地状态，再使用 `installMode` 选择安装操作。资源名称不等于登录标识；登录入口和配置字段来自本地已安装包声明。创建项目可传 `resourceIDs`，服务端会重新核对资源类型与安装目标。
+
 ## 推荐的 Agent 工作流
 
 1. 读取 `alemonjs://mcp/capabilities`。

@@ -22,6 +22,16 @@ type RobotTask = {
   createdAt?: string
   finishedAt?: string
 }
+export type PackageFact = {
+  name: string
+  version?: string
+  declared: boolean
+  installed: boolean
+  enabled: boolean
+  loadable: boolean
+  source: string
+  repository?: string
+}
 export type MarketResource = {
   id: string
   type: string
@@ -143,6 +153,7 @@ export type RuntimeOverview = {
     id: string
     label: string
     package: string
+    platformValue?: string
     declared: boolean
     installed: boolean
     version?: string
@@ -911,6 +922,19 @@ export const workspaceApi = createApi({
       query: kind => `catalog?kind=${kind}`,
       providesTags: (_result, _error, kind) => [{ type: 'Catalog', id: kind }]
     }),
+    resourceOptions: build.query<{ data: MarketResource[] }, string>({
+      query: type => `catalog/options?${new URLSearchParams({ type })}`,
+      providesTags: ['Catalog'],
+      keepUnusedDataFor: 60
+    }),
+    packageInventory: build.query<{ items: PackageFact[] }, string>({
+      query: root => `robot/package-inventory?${new URLSearchParams({ root })}`,
+      providesTags: (_result, _error, root) => [
+        { type: 'LocalPackages', id: root },
+        { type: 'Runtime', id: root },
+        { type: 'PackageConfig', id: root }
+      ]
+    }),
     marketResources: build.query<
       { data: MarketResource[]; total: number; page: number; pageSize: number },
       { type: string; subtype?: string; q: string; page: number }
@@ -1407,6 +1431,8 @@ export const {
   useStartSetupPluginTaskMutation,
   useCatalogQuery,
   useMarketResourcesQuery,
+  useResourceOptionsQuery,
+  usePackageInventoryQuery,
   useMarketResourceQuery,
   useCatalogVersionsQuery,
   usePackageConfigQuery,

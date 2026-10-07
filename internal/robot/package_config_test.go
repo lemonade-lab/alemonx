@@ -479,45 +479,20 @@ func TestResolveRuntimePlatformsMergesInstalledConnectionsOverBuiltin(t *testing
 	if _, found := byID["example"]; found {
 		t.Fatalf("legacy packages directory must not add a login platform: %#v", byID["example"])
 	}
-	qqBot := byID["qq-bot"]
-	if qqBot.Package != "@alemonjs/qq-bot" || qqBot.Source != "builtin" {
-		t.Fatalf("builtin candidates must remain: %#v", qqBot)
+	if _, found := byID["qq-bot"]; found {
+		t.Fatal("uninstalled builtin connections must not be advertised as local options")
 	}
 }
 
-func TestResolveRuntimePlatformsProvidesDefaultConnections(t *testing.T) {
+func TestResolveRuntimePlatformsDoesNotAdvertiseUninstalledConnections(t *testing.T) {
 	root := t.TempDir()
 	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
-
 	platforms, err := resolveRuntimePlatforms(root)
 	if err != nil {
-		t.Fatalf("resolveRuntimePlatforms: %v", err)
+		t.Fatal(err)
 	}
-	want := map[string]string{
-		"bubble":         "@alemonjs/bubble",
-		"discord":        "@alemonjs/discord",
-		"douyin":         "@alemonjs/douyin",
-		"douyinbot":      "@alemonjs/douyinbot",
-		"kook":           "@alemonjs/kook",
-		"milky":          "@alemonjs/milky",
-		"onebot":         "@alemonjs/onebot",
-		"qq-bot":         "@alemonjs/qq-bot",
-		"telegram":       "@alemonjs/telegram",
-		"wechat":         "@alemonjs/wechat",
-		"wechat-clawbot": "@alemonjs/wechat-clawbot",
-		"wecom":          "@alemonjs/wecom",
-	}
-	if len(platforms) != len(want) {
-		t.Fatalf("default platform count = %d, want %d", len(platforms), len(want))
-	}
-	for _, platform := range platforms {
-		if platform.Package != want[platform.ID] || platform.Source != "builtin" || platform.Installed {
-			t.Fatalf("default platform = %#v, want builtin default", platform)
-		}
-		delete(want, platform.ID)
-	}
-	if len(want) != 0 {
-		t.Fatalf("missing default platforms: %#v", want)
+	if len(platforms) != 0 {
+		t.Fatalf("uninstalled platforms: %#v", platforms)
 	}
 }
 
@@ -595,5 +570,18 @@ func TestInstallLocalPackageEnablesNPMPackageWithoutGit(t *testing.T) {
 	}
 	if len(enabled) != 1 || enabled[0] != "market-plugin" {
 		t.Fatalf("enabled = %#v, want market-plugin", enabled)
+	}
+}
+
+func TestDeclaredConnectionSeparatesManifestPackageFromPlatformLoader(t *testing.T) {
+	root := t.TempDir()
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"robot","dependencies":{"custom-connect":"1"}}`)
+	writeAppPageFixture(t, filepath.Join(root, "node_modules/custom-connect/package.json"), `{"name":"custom-connect","alemonjs":{"desktop":{"platform":[{"name":"local-login","value":"custom-loader"}]}}}`)
+	platforms, err := resolveRuntimePlatforms(root)
+	if err != nil || len(platforms) != 1 {
+		t.Fatalf("platforms: %#v %v", platforms, err)
+	}
+	if platforms[0].Package != "custom-connect" || platforms[0].PlatformValue != "custom-loader" {
+		t.Fatalf("declaration: %#v", platforms[0])
 	}
 }

@@ -51,6 +51,21 @@ async function mount(page: Page) {
       return route.fulfill({
         json: { latest: '2.0.0', versions: ['2.0.0', '1.0.0'] }
       })
+    if (url.pathname.endsWith('/robot/package-inventory'))
+      return route.fulfill({
+        json: {
+          items: [
+            {
+              name: '@example/data',
+              installed: true,
+              declared: true,
+              enabled: false,
+              loadable: true,
+              source: 'dependency'
+            }
+          ]
+        }
+      })
     if (url.pathname.endsWith('/robot/packages'))
       return route.fulfill({ json: { items: [] } })
     if (url.pathname.endsWith('/robot/package-config'))

@@ -39,6 +39,7 @@ export type ProjectConfig = {
   styleMode: string
   downloadSkills: boolean
   developmentPackages: string[]
+  resourceIDs?: string[]
 }
 
 export type Creation = { path?: string; status?: string; logs?: string[] }

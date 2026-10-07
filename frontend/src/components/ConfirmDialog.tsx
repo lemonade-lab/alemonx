@@ -1,8 +1,10 @@
+import type { ReactNode } from 'react'
 import { AlertTriangle, X } from 'lucide-react'
 import { Button } from './Button'
 import { Modal } from './Modal'
 
 type Props = {
+  children?: ReactNode
   open: boolean
   title: string
   message: string
@@ -19,6 +21,7 @@ type Props = {
 // It deliberately uses the same geometry as the other application dialogs.
 export function ConfirmDialog({
   open,
+  children,
   title,
   message,
   confirmLabel = '确认继续',
@@ -55,9 +58,12 @@ export function ConfirmDialog({
             <X className="size-4" />
           </Button>
         </header>
-        <p className="m-0 min-h-0 overflow-y-auto whitespace-pre-line break-words text-xs leading-5 text-(--theme-text-secondary)">
-          {message}
-        </p>
+        <div className="grid min-h-0 gap-3 overflow-y-auto">
+          <p className="m-0 whitespace-pre-line break-words text-xs leading-5 text-(--theme-text-secondary)">
+            {message}
+          </p>
+          {children}
+        </div>
         <footer className="flex shrink-0 justify-end gap-2">
           <Button variant="secondary" onClick={onCancel}>
             {cancelLabel}

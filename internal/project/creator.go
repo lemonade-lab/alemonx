@@ -14,8 +14,10 @@ import (
 	"strings"
 	"time"
 
+	"alemonx/internal/catalog"
 	"alemonx/internal/pm2config"
 	"alemonx/internal/resources"
+	"alemonx/internal/robot"
 	"alemonx/internal/system"
 	"alemonx/internal/systemnetwork"
 )
@@ -34,6 +36,8 @@ type Config struct {
 	StyleMode           string   `json:"styleMode"`
 	DownloadSkills      bool     `json:"downloadSkills"`
 	DevelopmentPackages []string `json:"developmentPackages"`
+	ResourceIDs         []string `json:"resourceIDs,omitempty"`
+	resolvedResources   []catalog.Resource
 }
 
 type Result struct {
@@ -60,6 +64,9 @@ var validName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$`)
 
 func (c *Creator) Create(config Config) (Result, error) {
 	if err := validate(config); err != nil {
+		return Result{}, err
+	}
+	if err := resolveResources(&config, catalog.Detail); err != nil {
 		return Result{}, err
 	}
 	destination, fallbackNote, err := resolveDestination(config, c.defaultBots)
@@ -148,6 +155,23 @@ func (c *Creator) Create(config Config) (Result, error) {
 			return result, fmt.Errorf("临时使用 %s 安装依赖失败；请确认 Node.js 已安装，或返回“包管理器”步骤选择 npm 后重试：%w", strings.ToUpper(config.PackageManager), err)
 		}
 		return result, fmt.Errorf("安装项目依赖失败：%w", err)
+	}
+
+	for _, resource := range config.resolvedResources {
+		if resource.InstallMode == "npm" {
+			continue
+		}
+		target, _ := catalog.InstallTarget(resource)
+		action := "install-package"
+		if resource.Type == "connector" {
+			action = "install-connection"
+		}
+		log("正在安装官方扩展：" + resource.Name)
+		installed, err := (robot.Manager{}).Run(path, action, "", target, "", "", "", false)
+		log(installed.Output)
+		if err != nil {
+			return result, fmt.Errorf("安装扩展 %s 失败：%w", resource.Name, err)
+		}
 	}
 
 	if config.InitializeGit {
@@ -268,6 +292,18 @@ func patchPackage(root string, config Config) error {
 	}
 	for _, capability := range config.DevelopmentPackages {
 		dependencies[developmentPackageCapabilities[capability]] = developmentPackageVersions[capability]
+	}
+	for _, resource := range config.resolvedResources {
+		if resource.InstallMode != "npm" {
+			continue
+		}
+		version := "latest"
+		for capability, name := range developmentPackageCapabilities {
+			if name == resource.PackageName {
+				version = developmentPackageVersions[capability]
+			}
+		}
+		dependencies[resource.PackageName] = version
 	}
 	if !config.UsePM2 {
 		remove("pm2")
@@ -733,4 +769,31 @@ func missingCommandAdvice(name string) error {
 	default:
 		return fmt.Errorf("未检测到 %s 命令。请安装对应的系统工具后重新创建项目", name)
 	}
+}
+
+// Resolve before any filesystem writes and never trust client-supplied install targets.
+func resolveResources(config *Config, load func(string) (catalog.Resource, error)) error {
+	config.resolvedResources = nil
+	if len(config.ResourceIDs) > 50 {
+		return errors.New("一次最多选择 50 个扩展")
+	}
+	seen := map[string]bool{}
+	for _, id := range config.ResourceIDs {
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		resource, err := load(id)
+		if err != nil {
+			return fmt.Errorf("核对扩展 %s 失败：%w", id, err)
+		}
+		if resource.Type != "connector" && resource.Type != "js-plugin" {
+			return errors.New("项目扩展只能选择连接包或 JS 插件")
+		}
+		if _, err := catalog.InstallTarget(resource); err != nil {
+			return err
+		}
+		config.resolvedResources = append(config.resolvedResources, resource)
+	}
+	return nil
 }

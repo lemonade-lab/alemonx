@@ -319,14 +319,15 @@ type RuntimeOverview struct {
 }
 
 type RuntimePackage struct {
-	ID        string `json:"id"`
-	Label     string `json:"label"`
-	Package   string `json:"package"`
-	Declared  bool   `json:"declared"`
-	Installed bool   `json:"installed"`
-	Version   string `json:"version,omitempty"`
-	Source    string `json:"source,omitempty"`
-	Logo      string `json:"logo,omitempty"`
+	ID            string `json:"id"`
+	Label         string `json:"label"`
+	Package       string `json:"package"`
+	PlatformValue string `json:"platformValue,omitempty"`
+	Declared      bool   `json:"declared"`
+	Installed     bool   `json:"installed"`
+	Version       string `json:"version,omitempty"`
+	Source        string `json:"source,omitempty"`
+	Logo          string `json:"logo,omitempty"`
 }
 
 type RuntimePreflight struct {
@@ -339,8 +340,8 @@ type RuntimePreflight struct {
 
 type platformCandidate struct{ id, label, pkg string }
 
-// builtinPlatforms are the well-known connection packages shown as installable
-// candidates. Discovered desktop.platform declarations always override them.
+// builtinPlatforms provide legacy hints only for packages present on disk.
+// Official install candidates are read separately from the resource API.
 var builtinPlatforms = []platformCandidate{
 	{"bubble", "Bubble", "@alemonjs/bubble"},
 	{"discord", "Discord", "@alemonjs/discord"},
@@ -398,7 +399,9 @@ func resolveRuntimePlatforms(project string) ([]RuntimePackage, error) {
 				item.Version = installed.Version
 			}
 		}
-		merged[item.ID] = item
+		if item.Installed {
+			merged[item.ID] = item
+		}
 	}
 	for name := range declared {
 		packageFile := filepath.Join(project, "node_modules", filepath.FromSlash(name), "package.json")
@@ -444,9 +447,9 @@ func mergeDeclaredPlatform(merged map[string]RuntimePackage, data []byte) {
 		if !yamlNamePattern.MatchString(platform.Name) {
 			continue
 		}
-		packageName := strings.TrimSpace(platform.Value)
-		if packageName == "" {
-			packageName = manifest.Name
+		platformValue := strings.TrimSpace(platform.Value)
+		if platformValue == "@alemonjs/"+platform.Name {
+			platformValue = ""
 		}
 		label := strings.TrimSpace(manifest.Description)
 		if label == "" {
@@ -456,14 +459,15 @@ func mergeDeclaredPlatform(merged map[string]RuntimePackage, data []byte) {
 			}
 		}
 		merged[platform.Name] = RuntimePackage{
-			ID:        platform.Name,
-			Label:     label,
-			Package:   packageName,
-			Declared:  true,
-			Installed: true,
-			Version:   manifest.Version,
-			Source:    "declared",
-			Logo:      manifest.Alemonjs.Desktop.Logo,
+			ID:            platform.Name,
+			Label:         label,
+			Package:       manifest.Name,
+			PlatformValue: platformValue,
+			Declared:      true,
+			Installed:     true,
+			Version:       manifest.Version,
+			Source:        "declared",
+			Logo:          manifest.Alemonjs.Desktop.Logo,
 		}
 	}
 }

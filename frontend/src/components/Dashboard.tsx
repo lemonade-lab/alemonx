@@ -1,3 +1,8 @@
+import {
+  ConnectionCatalog,
+  OfficialResourcePicker,
+  OfficialResourceInfo
+} from './OfficialResources'
 import { useStoreState } from '../store/guideStore'
 import { useAutoSave } from '../hooks/useAutoSave'
 import {
@@ -335,7 +340,9 @@ function systemFeatureLabel(feature: SystemFeature, plugins: SetupPlugin[]) {
 }
 
 function usesSystemFeatureSidebar(feature: SystemFeature) {
-  return ['plugins', 'ops-overview', 'tasks', 'environment', 'data'].includes(feature)
+  return ['plugins', 'ops-overview', 'tasks', 'environment', 'data'].includes(
+    feature
+  )
 }
 const directoryActions: Array<{
   id: Section | Page
@@ -3250,7 +3257,11 @@ export function Dashboard({
   const currentCatalog =
     catalog.find(group => group.title === catalogTitle) ?? catalog[0]
   const robotContent = aiOpen ? (
-    <DSHWorkspace key={root} root={root} onOpenWeb={url => openMiniBrowser(url, undefined, true)} />
+    <DSHWorkspace
+      key={root}
+      root={root}
+      onOpenWeb={url => openMiniBrowser(url, undefined, true)}
+    />
   ) : (
     <>
       {section === 'backpack' && (
@@ -3324,6 +3335,10 @@ export function Dashboard({
           {configEditor === 'visual' ? (
             <>
               <RobotConfigForm
+                root={root}
+                onInstall={(action, target) =>
+                  api('POST', { root, action, package: target })
+                }
                 content={configContent}
                 onChange={next => updateFileContent('alemon.config.yaml', next)}
                 toolbar={
@@ -3482,7 +3497,17 @@ export function Dashboard({
       item => feature === `setup:${item.id}`
     )
     return feature === 'data' ? (
-      <ErrorBoundary><Suspense fallback={<p className="p-4" role="status">正在加载数据管理…</p>}><DataWorkspace /></Suspense></ErrorBoundary>
+      <ErrorBoundary>
+        <Suspense
+          fallback={
+            <p className="p-4" role="status">
+              正在加载数据管理…
+            </p>
+          }
+        >
+          <DataWorkspace />
+        </Suspense>
+      </ErrorBoundary>
     ) : feature === 'ops-overview' ? (
       <OpsOverview
         projects={projects}
@@ -3768,15 +3793,11 @@ export function Dashboard({
                 variant="icon"
                 onClick={() => setRobotNavigationHidden(value => !value)}
                 aria-label={
-                  robotNavigationHidden
-                    ? '显示机器人导航'
-                    : '隐藏机器人导航'
+                  robotNavigationHidden ? '显示机器人导航' : '隐藏机器人导航'
                 }
                 aria-pressed={!robotNavigationHidden}
                 title={
-                  robotNavigationHidden
-                    ? '显示机器人导航'
-                    : '隐藏机器人导航'
+                  robotNavigationHidden ? '显示机器人导航' : '隐藏机器人导航'
                 }
               >
                 {robotNavigationHidden ? (
@@ -4313,7 +4334,11 @@ export function Dashboard({
               sidebarAriaLabel={feature === 'data' ? '数据导航' : '系统功能'}
               items={feature === 'data' ? dataNavigation : undefined}
               activeItem={feature === 'data' ? dataTab : undefined}
-              onActiveItemChange={feature === 'data' ? item => dispatch(setDataTab(item)) : undefined}
+              onActiveItemChange={
+                feature === 'data'
+                  ? item => dispatch(setDataTab(item))
+                  : undefined
+              }
               onClose={() => closeSystemWindow(feature)}
               onMinimize={() =>
                 setSystemWindows(current => ({
@@ -4454,7 +4479,9 @@ function ProjectRail({
       .then(status => {
         if (active) {
           setCanManageAccounts(Boolean(status?.enabled && status.superAdmin))
-          setCanManageData(Boolean(status && (!status.enabled || status.superAdmin)))
+          setCanManageData(
+            Boolean(status && (!status.enabled || status.superAdmin))
+          )
         }
       })
       .catch(() => {
@@ -4577,7 +4604,11 @@ function ProjectRail({
   const systemNav = (
     <nav className="grid gap-0.5">
       {coreFeatureCatalog
-        .filter(item => item.id === 'data' ? canManageData : item.id !== 'accounts' || canManageAccounts)
+        .filter(item =>
+          item.id === 'data'
+            ? canManageData
+            : item.id !== 'accounts' || canManageAccounts
+        )
         .map(item => (
           <button
             className={cn(
@@ -8440,7 +8471,12 @@ function BackpackPanel({
             <GitBranch className="size-3.5" />
             克隆
           </button>
-          <BackpackFolderInstall key={root} root={root} disabled={busy} onInstalled={onRefresh} />
+          <BackpackFolderInstall
+            key={root}
+            root={root}
+            disabled={busy}
+            onInstalled={onRefresh}
+          />
           <button
             className="icon-button size-9 shrink-0 p-0"
             disabled={loading}
@@ -8894,6 +8930,10 @@ function BackpackPackageManager({
           </p>
         ) : tab === 'overview' ? (
           <section className="grid gap-3 rounded-xl border border-slate-200 bg-white p-4 text-sm">
+            <OfficialResourceInfo
+              name={item.name}
+              repository={status?.repository}
+            />
             <div className="grid gap-2 text-xs text-slate-600 sm:grid-cols-2">
               <span>启用状态：{status?.enabled ? '已启用' : '未启用'}</span>
               <span>
@@ -8928,17 +8968,23 @@ function BackpackPackageManager({
             </div>
           </section>
         ) : tab === 'readme' ? (
-          isReadmeFetching ? (
-            <p className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-500">
-              正在读取 README.md…
-            </p>
-          ) : readmeError || !readme ? (
-            <p className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs leading-5 text-slate-500">
-              这个插件没有 README.md；请在“配置”页查看可用设置。
-            </p>
-          ) : (
-            <MarkdownPage markdown={readme.output} />
-          )
+          <div className="grid gap-3">
+            <OfficialResourceInfo
+              name={item.name}
+              repository={status?.repository}
+            />
+            {isReadmeFetching ? (
+              <p className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-500">
+                正在读取 README.md…
+              </p>
+            ) : readmeError || !readme ? (
+              <p className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs leading-5 text-slate-500">
+                这个插件没有 README.md；请在“配置”页查看可用设置。
+              </p>
+            ) : (
+              <MarkdownPage markdown={readme.output} />
+            )}
+          </div>
         ) : tab === 'config' ? (
           isConfigLoading ? (
             <p className="backpack-manager-note">正在读取插件的配置声明…</p>
@@ -10634,6 +10680,10 @@ function RuntimePanel({
       if (await onRun(loginChoice.action)) {
         await refreshPorts()
         closeLoginDialog()
+      } else {
+        setLoginDialogError(
+          '启动未完成。请检查已安装连接、下方必填配置，或从官方目录安装连接包；详细原因见操作记录。'
+        )
       }
     } catch (reason) {
       setLoginDialogError(
@@ -10678,7 +10728,7 @@ function RuntimePanel({
         onClose={() => !dependencyControlBusy && setDependencyControl(null)}
         ariaLabel="依赖控制"
       >
-        <section className="grid w-full max-w-md gap-4 rounded-xl border border-slate-200 bg-white p-5 shadow-[0_20px_58px_rgb(28_26_23/0.22)]">
+        <section className="grid max-h-[calc(100dvh-48px)] w-full max-w-md gap-4 overflow-y-auto rounded-xl border border-slate-200 bg-white p-5 shadow-[0_20px_58px_rgb(28_26_23/0.22)]">
           <header>
             <strong>依赖控制</strong>
             <p className="mt-1 text-xs text-slate-500">
@@ -10711,6 +10761,27 @@ function RuntimePanel({
               </button>
             ))}
           </div>
+          {dependencyControl?.mode === 'add' && (
+            <OfficialResourcePicker
+              root={root}
+              label="选择官方依赖"
+              npmOnly
+              onSelect={resource =>
+                setDependencyControl(current =>
+                  current
+                    ? {
+                        ...current,
+                        name: resource.packageName ?? '',
+                        version: ''
+                      }
+                    : current
+                )
+              }
+            />
+          )}
+          {dependencyControl?.name && (
+            <OfficialResourceInfo name={dependencyControl.name} />
+          )}
           <label className="grid gap-1.5 text-xs font-medium text-slate-600">
             包名
             <input
@@ -10792,6 +10863,21 @@ function RuntimePanel({
             : '请先填写连接包声明的必填字段。'
         }
         message={validationMessage}
+        children={
+          validationTitle !== '已有进程在运行' ? (
+            <ConnectionCatalog
+              root={root}
+              busy={busy}
+              onInstall={(action, target) => onRun(action, target)}
+              onLogin={(login, pkg) => {
+                void onSaveLogin(login, pkg)
+                setCustomLogin(login)
+                setCustomPackage(pkg)
+                setSelectedPlatform(login)
+              }}
+            />
+          ) : undefined
+        }
         confirmLabel="知道了"
         cancelLabel="关闭"
         onCancel={() => setValidationMessage('')}
@@ -10852,7 +10938,7 @@ function RuntimePanel({
                       <option value="__custom__">自由输入</option>
                       {(overview?.platforms ?? []).map(item => (
                         <option key={item.id} value={item.id}>
-                          {item.id}
+                          {item.label} · {item.id}
                           {item.installed ? ' · 已安装' : ' · 需安装'}
                         </option>
                       ))}
@@ -10888,6 +10974,24 @@ function RuntimePanel({
                     </>
                   )}
                 </div>
+                <div className="border-t border-slate-200 p-3">
+                  <ConnectionCatalog
+                    root={root}
+                    busy={busy || loginDialogBusy}
+                    onInstall={(action, target) => onRun(action, target)}
+                    onLogin={(login, pkg) => {
+                      setSelectedPlatform(login)
+                      setCustomLogin(login)
+                      setCustomPackage(pkg)
+                      void loadConnectionConfig(pkg)
+                    }}
+                  />
+                </div>
+                {packageTarget && (
+                  <div className="p-3">
+                    <OfficialResourceInfo name={packageTarget} />
+                  </div>
+                )}
                 {packageTarget &&
                   (!knownPlatform || !knownPlatform.installed) && (
                     <footer className="flex items-center justify-between border-t border-slate-200 bg-slate-50 px-3 py-2">
@@ -12679,7 +12783,11 @@ function ControlCard({
             : []
   }
   const activeSecondary =
-    activePrimary === 'config' ? section : activePrimary === 'build' ? buildMode : catalogTitle
+    activePrimary === 'config'
+      ? section
+      : activePrimary === 'build'
+        ? buildMode
+        : catalogTitle
   function selectPrimary(item: (typeof directoryActions)[number]) {
     if (item.id === 'config') {
       onPage('robot')
@@ -12762,10 +12870,14 @@ function ControlCard({
               label: item.label,
               icon: item.icon,
               onSelect: () => selectPrimary(item),
-              loading: activePrimary === item.id && catalogLoading && ['plugins', 'connections', 'modules'].includes(item.id),
+              loading:
+                activePrimary === item.id &&
+                catalogLoading &&
+                ['plugins', 'connections', 'modules'].includes(item.id),
               children: subitemsFor(item.id).map(child => ({
                 ...child,
-                active: activePrimary === item.id && activeSecondary === child.id,
+                active:
+                  activePrimary === item.id && activeSecondary === child.id,
                 onSelect: () => selectSecondary(item.id, child.id)
               }))
             }))}
@@ -12775,7 +12887,9 @@ function ControlCard({
               type="button"
               className={cn(
                 'flex min-h-9 items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm transition hover:bg-(--theme-surface-hover)',
-                dshOpen ? 'bg-(--theme-accent-soft) font-semibold text-(--theme-accent-text)' : 'text-(--theme-text-secondary)'
+                dshOpen
+                  ? 'bg-(--theme-accent-soft) font-semibold text-(--theme-accent-text)'
+                  : 'text-(--theme-text-secondary)'
               )}
               onClick={onOpenAI}
               aria-current={dshOpen ? 'page' : undefined}
@@ -15359,7 +15473,8 @@ function GitReleasePanelNext({
     selectedBranch?.name === status?.remoteBranch
       ? 'release'
       : `${(selectedBranch?.name || 'source').replace(/[\s/]+/g, '-')}-release`
-  const createsVersionTag = (session?.target || targetReleaseBranch) === 'release'
+  const createsVersionTag =
+    (session?.target || targetReleaseBranch) === 'release'
   const commits =
     selectedBranch?.commits ?? status?.sourceCommits ?? emptyGitCommits
   useEffect(() => {
@@ -15462,7 +15577,9 @@ function GitReleasePanelNext({
     try {
       const next = await post<PublishResult>('/api/v1/publish/git/publish', {
         sessionId: session.sessionId,
-        version: createsVersionTag ? version || status?.suggestedVersion || '' : '',
+        version: createsVersionTag
+          ? version || status?.suggestedVersion || ''
+          : '',
         artifacts,
         confirm: true
       })
@@ -15688,15 +15805,17 @@ function GitReleasePanelNext({
                     : `仅更新 ${session?.target || targetReleaseBranch} 的构建产物，保留源码包版本，不创建或推送 Git Tag。`}
                 </p>
               </div>
-              {createsVersionTag && <label className="grid max-w-xs gap-1 text-xs font-semibold text-slate-500">
-                版本{' '}
-                <input
-                  value={version || status?.suggestedVersion || ''}
-                  onChange={event => onVersionChange(event.target.value)}
-                  className="min-h-9 rounded-lg border border-slate-200 bg-white px-2 text-sm font-normal text-slate-700 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-200"
-                  placeholder="v0.0.1"
-                />
-              </label>}
+              {createsVersionTag && (
+                <label className="grid max-w-xs gap-1 text-xs font-semibold text-slate-500">
+                  版本{' '}
+                  <input
+                    value={version || status?.suggestedVersion || ''}
+                    onChange={event => onVersionChange(event.target.value)}
+                    className="min-h-9 rounded-lg border border-slate-200 bg-white px-2 text-sm font-normal text-slate-700 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-200"
+                    placeholder="v0.0.1"
+                  />
+                </label>
+              )}
             </section>
           )}
           {phase === 'building' && (
@@ -15853,7 +15972,14 @@ function GitReleasePanelNext({
             <p className="m-0 rounded-lg border border-brand-200 bg-brand-50 px-3 py-2 text-xs leading-5 text-brand-700 dark:border-brand-200 dark:bg-brand-100/30 dark:text-brand-200">
               即将把 {artifacts.length} 项构建产物发布到{' '}
               <code>{session.target}</code>
-              {createsVersionTag ? <>，并创建标签 <code>{version || status?.suggestedVersion}</code>。</> : '，不创建或推送 Git Tag。'}
+              {createsVersionTag ? (
+                <>
+                  ，并创建标签{' '}
+                  <code>{version || status?.suggestedVersion}</code>。
+                </>
+              ) : (
+                '，不创建或推送 Git Tag。'
+              )}
             </p>
           )}
           {requestError && (
@@ -15861,20 +15987,22 @@ function GitReleasePanelNext({
               ！ {requestError}
             </p>
           )}
-          {session && createsVersionTag && requestError.includes('release 分支已推送') && (
-            <button
-              className="inline-flex min-h-9 w-fit items-center justify-center gap-1.5 rounded-lg bg-brand-600 px-3 text-xs font-semibold text-white hover:bg-brand-700 disabled:opacity-50"
-              disabled={retryingTag}
-              onClick={() => void retryTag()}
-            >
-              {retryingTag ? (
-                <Loader2 className="size-4 animate-spin" />
-              ) : (
-                <GitBranch className="size-4" />
-              )}
-              {retryingTag ? '正在重试标签…' : '重试推送 Tag'}
-            </button>
-          )}
+          {session &&
+            createsVersionTag &&
+            requestError.includes('release 分支已推送') && (
+              <button
+                className="inline-flex min-h-9 w-fit items-center justify-center gap-1.5 rounded-lg bg-brand-600 px-3 text-xs font-semibold text-white hover:bg-brand-700 disabled:opacity-50"
+                disabled={retryingTag}
+                onClick={() => void retryTag()}
+              >
+                {retryingTag ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <GitBranch className="size-4" />
+                )}
+                {retryingTag ? '正在重试标签…' : '重试推送 Tag'}
+              </button>
+            )}
           {phase === 'published' && result?.output && (
             <pre className="release-result">{result.output}</pre>
           )}

@@ -189,3 +189,25 @@ func TestPolicyRejectsSymlinkEscapingAllowedRoot(t *testing.T) {
 		t.Fatalf("symlink policy error = %v", err)
 	}
 }
+
+func TestOfficialResourceToolsAreDiscoverableAndValidateInput(t *testing.T) {
+	encoded, err := json.Marshal(tools())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"alemonjs_search_resources", "alemonjs_get_resource", "alemonjs_resource_taxonomy", "alemonjs_package_inventory"} {
+		if !strings.Contains(string(encoded), name) {
+			t.Fatalf("missing tool %s", name)
+		}
+	}
+	server := NewServer("test", nil)
+	for _, test := range []struct{ name, args string }{
+		{"alemonjs_search_resources", `{"page":-1}`},
+		{"alemonjs_search_resources", `{"pageSize":101}`},
+		{"alemonjs_get_resource", `{"id":"https://github.com/example/repo"}`},
+	} {
+		if _, err := server.execute(test.name, json.RawMessage(test.args)); err == nil {
+			t.Fatalf("invalid input accepted: %s", test.args)
+		}
+	}
+}

@@ -1,3 +1,12 @@
+import {
+  ConnectionCatalog,
+  OfficialResourceInfo,
+  ModuleCatalog
+} from './OfficialResources'
+import {
+  useRobotRuntimeQuery,
+  usePackageInventoryQuery
+} from '../store/workspaceApi'
 import { useStoreState } from '../store/guideStore'
 import { useEffect, useState, type ReactNode } from 'react'
 import { Settings, SlidersHorizontal } from 'lucide-react'
@@ -6,6 +15,8 @@ import { load } from 'js-yaml'
 import { RobotPanel } from './RobotPanel'
 
 type Props = {
+  root?: string
+  onInstall?: (action: string, target: string) => Promise<boolean>
   content: string
   toolbar?: ReactNode
   extensionConfig?: ReactNode
@@ -18,6 +29,7 @@ type TextKey =
   | 'serverPort'
   | 'input'
   | 'login'
+  | 'platform'
   | 'url'
   | 'fullReceive'
   | 'disabledRegular'
@@ -44,6 +56,7 @@ const empty: Values = {
   serverPort: '',
   input: '',
   login: '',
+  platform: '',
   url: '',
   fullReceive: '',
   masterID: [],
@@ -73,7 +86,9 @@ const empty: Values = {
 
 function sameValues(left: Values, right: Values) {
   return Object.keys(empty).every(
-    key => JSON.stringify(left[key as keyof Values]) === JSON.stringify(right[key as keyof Values])
+    key =>
+      JSON.stringify(left[key as keyof Values]) ===
+      JSON.stringify(right[key as keyof Values])
   )
 }
 const managed = new Set([
@@ -81,6 +96,7 @@ const managed = new Set([
   'serverPort',
   'input',
   'login',
+  'platform',
   'url',
   'is_full_receive',
   'master_id',
@@ -123,7 +139,9 @@ const record = (value: unknown): Record<string, unknown> | null =>
     ? (value as Record<string, unknown>)
     : null
 const text = (value: unknown) =>
-  typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean'
+  typeof value === 'string' ||
+  typeof value === 'number' ||
+  typeof value === 'boolean'
     ? String(value)
     : ''
 const list = (value: unknown) => {
@@ -138,7 +156,10 @@ const list = (value: unknown) => {
 }
 const accessItems = (value: unknown): AccessItem[] => {
   if (Array.isArray(value))
-    return value.map(text).filter(Boolean).map(value => ({ value, enabled: true }))
+    return value
+      .map(text)
+      .filter(Boolean)
+      .map(value => ({ value, enabled: true }))
   const values = record(value)
   return values
     ? Object.entries(values).map(([value, enabled]) => ({
@@ -161,12 +182,15 @@ function readValues(source: string): Values | null {
     serverPort: 'serverPort',
     input: 'input',
     login: 'login',
+    platform: 'platform',
     url: 'url',
     disabled_text_regular: 'disabledRegular',
     redirect_text_regular: 'redirectRegular',
     redirect_text_target: 'redirectTarget'
   }
-  Object.entries(map).forEach(([yaml, field]) => (values[field] = text(root[yaml])))
+  Object.entries(map).forEach(
+    ([yaml, field]) => (values[field] = text(root[yaml]))
+  )
   values.fullReceive = text(root.is_full_receive)
   values.masterID = accessItems(root.master_id)
   values.masterKey = accessItems(root.master_key)
@@ -204,6 +228,7 @@ function toYaml(values: Values, includeMapping = true) {
   add('serverPort', values.serverPort)
   add('input', values.input)
   add('login', values.login)
+  add('platform', values.platform)
   add('url', values.url)
   if (values.fullReceive) lines.push(`is_full_receive: ${values.fullReceive}`)
   if (values.autoPort) lines.push(`autoPort: ${values.autoPort}`)
@@ -221,7 +246,11 @@ function toYaml(values: Values, includeMapping = true) {
   )
   add('redirect_text_regular', values.redirectRegular)
   add('redirect_text_target', values.redirectTarget)
-  if (includeMapping && values.mappingRegular.trim() && values.mappingTarget.trim())
+  if (
+    includeMapping &&
+    values.mappingRegular.trim() &&
+    values.mappingTarget.trim()
+  )
     lines.push(
       'mapping_text:',
       `  - regular: ${quote(values.mappingRegular.trim())}`,
@@ -267,7 +296,11 @@ function toYaml(values: Values, includeMapping = true) {
   }
   return lines.length ? `${lines.join('\n')}\n` : ''
 }
-function mergeConfig(existing: string, generated: string, preserved = new Set<string>()) {
+function mergeConfig(
+  existing: string,
+  generated: string,
+  preserved = new Set<string>()
+) {
   const normalized = /^\{\s*\}$/.test(existing.trim()) ? '' : existing
   const lines = normalized.replace(/\r/g, '').split('\n')
   const kept: string[] = []
@@ -288,9 +321,21 @@ function mergeConfig(existing: string, generated: string, preserved = new Set<st
   return `${kept.length && generated ? `${kept.join('\n')}\n\n` : kept.join('\n')}${generated}`
 }
 
-export function RobotConfigForm({ content, toolbar, onChange, extensionConfig }: Props) {
+export function RobotConfigForm({
+  content,
+  toolbar,
+  onChange,
+  extensionConfig,
+  root,
+  onInstall
+}: Props) {
   const [values, setValues] = useStoreState<Values>(empty)
   const [advanced, setAdvanced] = useState(false)
+  const { data: runtime } = useRobotRuntimeQuery(root ?? '', { skip: !root })
+  const { data: inventory, error: inventoryError } = usePackageInventoryQuery(
+    root ?? '',
+    { skip: !root }
+  )
   const [invalidConfig, setInvalidConfig] = useState(false)
   useEffect(() => {
     const next = readValues(content)
@@ -305,8 +350,8 @@ export function RobotConfigForm({ content, toolbar, onChange, extensionConfig }:
       changedKey === 'mappingRegular' || changedKey === 'mappingTarget'
     const writeMapping = Boolean(
       mappingChange &&
-        ((next.mappingRegular.trim() && next.mappingTarget.trim()) ||
-          (!next.mappingRegular.trim() && !next.mappingTarget.trim()))
+      ((next.mappingRegular.trim() && next.mappingTarget.trim()) ||
+        (!next.mappingRegular.trim() && !next.mappingTarget.trim()))
     )
     setValues(next)
     onChange(
@@ -348,12 +393,16 @@ export function RobotConfigForm({ content, toolbar, onChange, extensionConfig }:
     return (
       <section className="col-span-2 grid gap-2 rounded-lg border border-slate-200 bg-slate-50/50 p-2.5">
         <div className="flex items-center justify-between gap-2">
-          <label className="text-xs font-semibold text-slate-600">{label}</label>
+          <label className="text-xs font-semibold text-slate-600">
+            {label}
+          </label>
           <button
             type="button"
             className="secondary-button min-h-7 px-2 text-xs"
             disabled={invalidConfig}
-            onClick={() => setAccessItems(key, [...items, { value: '', enabled: true }])}
+            onClick={() =>
+              setAccessItems(key, [...items, { value: '', enabled: true }])
+            }
           >
             + 新增项
           </button>
@@ -369,7 +418,9 @@ export function RobotConfigForm({ content, toolbar, onChange, extensionConfig }:
                   disabled={invalidConfig}
                   value={item.value}
                   placeholder={hint}
-                  onChange={event => updateItem(index, { value: event.target.value })}
+                  onChange={event =>
+                    updateItem(index, { value: event.target.value })
+                  }
                 />
                 <label className="flex shrink-0 items-center gap-1.5 text-xs font-medium text-slate-600">
                   <input
@@ -377,7 +428,9 @@ export function RobotConfigForm({ content, toolbar, onChange, extensionConfig }:
                     className="size-4 accent-brand-600"
                     disabled={invalidConfig}
                     checked={item.enabled}
-                    onChange={event => updateItem(index, { enabled: event.target.checked })}
+                    onChange={event =>
+                      updateItem(index, { enabled: event.target.checked })
+                    }
                   />
                   开启
                 </label>
@@ -472,8 +525,144 @@ export function RobotConfigForm({ content, toolbar, onChange, extensionConfig }:
     >
       {invalidConfig && (
         <p className="m-0 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-          配置包含无法解析的 YAML；为避免覆盖原内容，已暂停可视化编辑。请切换到文本模式修复后再继续。
+          配置包含无法解析的
+          YAML；为避免覆盖原内容，已暂停可视化编辑。请切换到文本模式修复后再继续。
         </p>
+      )}
+      {group(
+        '登录连接',
+        '常用',
+        <>
+          <label className={labelClass}>
+            已安装连接
+            <select
+              aria-label="已安装连接"
+              className={inputClass}
+              disabled={invalidConfig}
+              value={
+                runtime?.platforms.some(
+                  platform => platform.id === values.login
+                )
+                  ? values.login
+                  : ''
+              }
+              onChange={event => {
+                const login = event.target.value
+                saveValues(
+                  {
+                    ...values,
+                    login,
+                    platform:
+                      runtime?.platforms.find(item => item.id === login)
+                        ?.platformValue ?? ''
+                  },
+                  'login'
+                )
+              }}
+            >
+              <option value="">不选择</option>
+              {runtime?.platforms
+                .filter(platform => platform.installed)
+                .map(platform => (
+                  <option key={platform.id} value={platform.id}>
+                    {platform.label} · {platform.id}
+                  </option>
+                ))}
+            </select>
+          </label>
+          {field(
+            'login',
+            '登录标识（可手动填写）',
+            '如 onebot',
+            '来自已安装连接包的登录声明。'
+          )}
+          {field(
+            'platform',
+            '连接加载目标（可选）',
+            '按本地连接声明填写',
+            '选择已安装连接时自动更新，也可手动填写。'
+          )}
+          {root && onInstall && !invalidConfig && (
+            <div className="col-span-2">
+              <ConnectionCatalog
+                root={root}
+                onInstall={onInstall}
+                onLogin={(login, _pkg, platformValue) =>
+                  saveValues(
+                    { ...values, login, platform: platformValue ?? '' },
+                    'login'
+                  )
+                }
+              />
+            </div>
+          )}
+          {runtime?.platforms.find(platform => platform.id === values.login)
+            ?.package && (
+            <div className="col-span-2">
+              <OfficialResourceInfo
+                name={
+                  runtime.platforms.find(
+                    platform => platform.id === values.login
+                  )!.package
+                }
+              />
+            </div>
+          )}
+        </>
+      )}
+      {group(
+        '启用模块',
+        '常用',
+        <div className="col-span-2 grid gap-2">
+          {inventoryError && (
+            <p role="alert" className="text-xs">
+              本地模块暂时无法读取，仍可编辑自定义启用项。
+            </p>
+          )}
+          {(inventory?.items ?? [])
+            .filter(item => item.installed && item.loadable)
+            .map(item => (
+              <label
+                key={item.name}
+                className="flex items-center gap-2 text-xs"
+              >
+                <input
+                  type="checkbox"
+                  disabled={invalidConfig}
+                  checked={values.apps.some(
+                    app => app.value === item.name && app.enabled
+                  )}
+                  onChange={event => {
+                    const next = values.apps.filter(
+                      app => app.value !== item.name
+                    )
+                    setAccessItems('apps', [
+                      ...next,
+                      { value: item.name, enabled: event.target.checked }
+                    ])
+                  }}
+                />
+                {item.name} · {item.version || '本地版本'}
+              </label>
+            ))}
+          {root && onInstall && !invalidConfig && (
+            <ModuleCatalog
+              root={root}
+              onInstall={onInstall}
+              onEnable={name =>
+                setAccessItems('apps', [
+                  ...values.apps.filter(app => app.value !== name),
+                  { value: name, enabled: true }
+                ])
+              }
+            />
+          )}
+          {accessItemsField(
+            'apps',
+            '自定义启用项',
+            '可保留未安装或自定义插件的启用配置。'
+          )}
+        </div>
       )}
       {extensionConfig}
       {group(
@@ -513,42 +702,36 @@ export function RobotConfigForm({ content, toolbar, onChange, extensionConfig }:
             'lib/index.js',
             '机器人启动时加载的文件。'
           )}
-          {field(
-            'login',
-            '登录连接',
-            '如 discord',
-            '推荐在“运行”页直接选择已安装的平台。'
-          )}
         </>
       )}
       {advanced &&
         group(
-        'CBP 运行',
-        '常用',
-        <>
-          {field(
-            'url',
-            'CBP 地址',
-            'ws://127.0.0.1:17117',
-            '机器人连接到 CBP 服务的地址。'
-          )}
-          <label
-            className={labelClass}
-            title="是否接收所有 CBP 事件；不确定时保持不设置。"
-          >
-            全量接收
-            <select
-              className={inputClass}
-              disabled={invalidConfig}
-              value={values.fullReceive}
-              onChange={event => set('fullReceive', event.target.value)}
+          'CBP 运行',
+          '常用',
+          <>
+            {field(
+              'url',
+              'CBP 地址',
+              'ws://127.0.0.1:17117',
+              '机器人连接到 CBP 服务的地址。'
+            )}
+            <label
+              className={labelClass}
+              title="是否接收所有 CBP 事件；不确定时保持不设置。"
             >
-              <option value="">不设置</option>
-              <option value="true">开启</option>
-              <option value="false">关闭</option>
-            </select>
-          </label>
-        </>
+              全量接收
+              <select
+                className={inputClass}
+                disabled={invalidConfig}
+                value={values.fullReceive}
+                onChange={event => set('fullReceive', event.target.value)}
+              >
+                <option value="">不设置</option>
+                <option value="true">开启</option>
+                <option value="false">关闭</option>
+              </select>
+            </label>
+          </>
         )}
       {group(
         '身份与权限',
@@ -562,58 +745,57 @@ export function RobotConfigForm({ content, toolbar, onChange, extensionConfig }:
       )}
       {advanced &&
         group(
-        '消息规则',
-        '高级',
-        <>
-          {field('disabledRegular', '禁用文本正则', '/闭关')}
-          {field(
-            'disabledSelects',
-            '禁用事件',
-            'message.create, private.message.create'
-          )}
-          {field('disabledUserID', '禁用用户 ID', '多个用逗号分隔')}
-          {field('disabledUserKey', '禁用用户 Key', '多个用逗号分隔')}
-          {field('redirectRegular', '重定向正则', '^#')}
-          {field('redirectTarget', '重定向目标', '/')}
-          {field('mappingRegular', '映射匹配文本', '/帮助')}
-          {field('mappingTarget', '映射替换文本', '/help')}
-        </>
+          '消息规则',
+          '高级',
+          <>
+            {field('disabledRegular', '禁用文本正则', '/闭关')}
+            {field(
+              'disabledSelects',
+              '禁用事件',
+              'message.create, private.message.create'
+            )}
+            {field('disabledUserID', '禁用用户 ID', '多个用逗号分隔')}
+            {field('disabledUserKey', '禁用用户 Key', '多个用逗号分隔')}
+            {field('redirectRegular', '重定向正则', '^#')}
+            {field('redirectTarget', '重定向目标', '/')}
+            {field('mappingRegular', '映射匹配文本', '/帮助')}
+            {field('mappingTarget', '映射替换文本', '/help')}
+          </>
         )}
       {advanced &&
         group(
-        '运行与模块',
-        '高级',
-        <>
-          {field('repeatedEventTime', '重复事件窗口（毫秒）', '60000')}
-          {field('repeatedUserTime', '重复用户窗口（毫秒）', '1000')}
-          {accessItemsField('apps', '启用模块', '例如 alemonjs-openai')}
-        </>
+          '运行与模块',
+          '高级',
+          <>
+            {field('repeatedEventTime', '重复事件窗口（毫秒）', '60000')}
+            {field('repeatedUserTime', '重复用户窗口（毫秒）', '1000')}
+          </>
         )}
       {advanced &&
         group(
-        'CBP 高级参数',
-        '高级',
-        <>
-          {field('cbpTimeout', '连接超时（毫秒）', '180000')}
-          {field('cbpReconnect', '重连间隔（毫秒）', '6000')}
-          {field('cbpHeartbeat', '连接心跳（毫秒）', '18000')}
-          {field('cbpHealthCheck', '连接健康检查（毫秒）', '30000')}
-          {field('cbpUserAgent', 'User-Agent', 'platform')}
-          {field('cbpDeviceID', '设备 ID', 'auto-generated')}
-          <label className={labelClass}>
-            CBP 全量接收
-            <select
-              className={inputClass}
-              disabled={invalidConfig}
-              value={values.cbpFullReceive}
-              onChange={event => set('cbpFullReceive', event.target.value)}
-            >
-              <option value="">不设置</option>
-              <option value="1">开启</option>
-              <option value="0">关闭</option>
-            </select>
-          </label>
-        </>
+          'CBP 高级参数',
+          '高级',
+          <>
+            {field('cbpTimeout', '连接超时（毫秒）', '180000')}
+            {field('cbpReconnect', '重连间隔（毫秒）', '6000')}
+            {field('cbpHeartbeat', '连接心跳（毫秒）', '18000')}
+            {field('cbpHealthCheck', '连接健康检查（毫秒）', '30000')}
+            {field('cbpUserAgent', 'User-Agent', 'platform')}
+            {field('cbpDeviceID', '设备 ID', 'auto-generated')}
+            <label className={labelClass}>
+              CBP 全量接收
+              <select
+                className={inputClass}
+                disabled={invalidConfig}
+                value={values.cbpFullReceive}
+                onChange={event => set('cbpFullReceive', event.target.value)}
+              >
+                <option value="">不设置</option>
+                <option value="1">开启</option>
+                <option value="0">关闭</option>
+              </select>
+            </label>
+          </>
         )}
     </RobotPanel>
   )

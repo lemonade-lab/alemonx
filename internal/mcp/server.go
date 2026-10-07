@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -14,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -241,12 +243,16 @@ func tools() []map[string]any {
 		tool("alemonjs_check_environment", "检查环境", "检查 Setup 中指定目标所需的本机运行环境，不修改系统。", objectSchema(map[string]any{"goalId": map[string]any{"type": "string", "enum": []string{"install", "develop", "mobile", "web", "build"}, "description": "Setup 目标 ID。"}, "variant": stringSchema("web 可为 clean/docker；build 可为 npm/git。")}, "goalId"), true, false),
 		toolExternal("alemonjs_list_releases", "列出版本", "从官方 GitHub 仓库读取支持应用的发布版本。", objectSchema(map[string]any{"app": map[string]any{"type": "string", "enum": []string{"alemonapp", "alx", "alemonx"}, "description": "应用 ID。"}}, "app")),
 		toolExternal("alemonjs_check_setup_update", "检查 Setup 更新", "检查当前 ALemonX 是否有官方更新。", objectSchema(map[string]any{})),
+		toolExternal("alemonjs_search_resources", "搜索官方资源", "搜索官方资源，支持类型、子类型与分页。安装方式以 installMode 为准；登录和配置声明需读取本地已安装包。", objectSchema(map[string]any{"type": stringSchema("资源类型 ID，可省略；多个用逗号连接。"), "subtype": stringSchema("子类型 ID。"), "q": stringSchema("关键词，最多200字符。"), "page": map[string]any{"type": "integer", "minimum": 1, "maximum": 100000}, "pageSize": map[string]any{"type": "integer", "minimum": 1, "maximum": 100}})),
+		toolExternal("alemonjs_get_resource", "读取官方资源详情", "按资源 ID 读取安装方式、包名、仓库和 Markdown 文档。", objectSchema(map[string]any{"id": stringSchema("官方资源 ID。")}, "id")),
+		toolExternal("alemonjs_resource_taxonomy", "读取资源分类", "读取官方资源类型或指定父类型下的子类型，不根据 ID 前缀猜测归属。", objectSchema(map[string]any{"type": stringSchema("提供父类型 ID 时返回子类型，否则返回资源类型。")})),
 		toolExternal("alemonjs_list_catalog", "读取生态目录", "读取官方 AlemonJS 应用或环境连接目录。", objectSchema(map[string]any{"kind": map[string]any{"type": "string", "enum": []string{"apps", "environment"}, "description": "目录类型。"}}, "kind")),
 		toolExternal("alemonjs_get_catalog_document", "读取生态文档", "读取开放平台资源详情中的 Markdown 文档。", objectSchema(map[string]any{"source": stringSchema("开放平台资源 ID。")}, "source")),
 		tool("alemonjs_get_catalog_package_config", "读取生态配置", "读取当前机器人已安装包的配置声明。", objectSchema(map[string]any{"root": stringSchema("机器人目录。"), "package": stringSchema("已安装包名。")}, "root", "package"), true, false),
 		tool("alemonjs_list_project_files", "列出项目文件", "列出机器人项目内可由 AI 管理的源码和配置文件。会排除密钥、Git 元数据、依赖目录和符号链接。", objectSchema(map[string]any{"root": stringSchema("机器人项目的绝对路径。")}, "root"), true, false),
 		tool("alemonjs_read_project_file", "读取项目文件", "读取机器人项目内的源码或配置文件。不能读取 .env、.npmrc、密钥、Git 元数据、依赖目录或符号链接。", objectSchema(map[string]any{"root": stringSchema("机器人项目的绝对路径。"), "path": stringSchema("相对于机器人项目根目录的文件路径，例如 src/index.ts。")}, "root", "path"), true, false),
 		tool("alemonjs_write_project_file", "写入项目文件", "创建或更新机器人项目中的源码或配置文件。必须在用户明确确认后调用；不能写入密钥、Git 元数据、依赖目录或符号链接。", objectSchema(map[string]any{"root": stringSchema("机器人项目的绝对路径。"), "path": stringSchema("相对于机器人项目根目录的文件路径；父目录必须已存在。"), "content": stringSchema("完整的新文本内容。"), "confirm": map[string]any{"type": "boolean", "description": "用户已经明确确认本次文件写入时为 true。"}}, "root", "path", "content", "confirm"), false, true),
+		tool("alemonjs_package_inventory", "读取本地安装状态", "读取项目依赖与背包的真实安装、启用状态，可与官方资源按包名或仓库匹配。", objectSchema(map[string]any{"root": stringSchema("机器人项目的绝对路径。")}, "root"), true, false),
 		tool("alemonjs_list_local_packages", "列出本地包", "列出机器人项目 packages 目录中已发现的本地 AlemonJS 包。", objectSchema(map[string]any{"root": stringSchema("机器人项目的绝对路径。")}, "root"), true, false),
 		tool("alemonjs_get_package_runtime_config", "读取运行配置", "读取已安装 AlemonJS 包声明的运行配置字段与当前值。", objectSchema(map[string]any{"root": stringSchema("机器人项目的绝对路径。"), "package": stringSchema("已安装的包名。")}, "root", "package"), true, false),
 		tool("alemonjs_save_package_runtime_config", "保存运行配置", "按包声明的字段校验后保存 AlemonJS 运行配置。必须在用户明确确认后调用。", objectSchema(map[string]any{"root": stringSchema("机器人项目的绝对路径。"), "package": stringSchema("已安装的包名。"), "values": map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}, "description": "字段名到字符串值的映射。"}, "confirm": boolSchema("用户已经确认保存运行配置时为 true。")}, "root", "package", "values", "confirm"), false, true),
@@ -359,6 +365,71 @@ func (s *Server) execute(name string, arguments json.RawMessage) (string, error)
 			return "", err
 		}
 		return encodeResult(update)
+	case "alemonjs_search_resources":
+		var input struct {
+			Type     string `json:"type"`
+			Subtype  string `json:"subtype"`
+			Q        string `json:"q"`
+			Page     int    `json:"page"`
+			PageSize int    `json:"pageSize"`
+		}
+		if err := decodeArguments(arguments, &input); err != nil {
+			return "", err
+		}
+		if input.Page == 0 {
+			input.Page = 1
+		}
+		if input.PageSize == 0 {
+			input.PageSize = 20
+		}
+		if input.Page < 1 || input.Page > 100000 || input.PageSize < 1 || input.PageSize > 100 || len([]rune(strings.TrimSpace(input.Q))) > 200 {
+			return "", errors.New("搜索分页参数无效")
+		}
+		query := url.Values{"page": {strconv.Itoa(input.Page)}, "pageSize": {strconv.Itoa(input.PageSize)}}
+		if input.Type != "" {
+			query.Set("type", input.Type)
+		}
+		if input.Subtype != "" {
+			query.Set("subtype", input.Subtype)
+		}
+		if input.Q != "" {
+			query.Set("q", input.Q)
+		}
+		var result catalog.ResourcePage
+		if err := catalog.PlatformGet("resources", query, &result); err != nil {
+			return "", err
+		}
+		return encodeResult(result)
+	case "alemonjs_get_resource":
+		var input struct {
+			ID string `json:"id"`
+		}
+		if err := decodeArguments(arguments, &input); err != nil {
+			return "", err
+		}
+		resource, err := catalog.Detail(input.ID)
+		if err != nil {
+			return "", err
+		}
+		return encodeResult(resource)
+	case "alemonjs_resource_taxonomy":
+		var input struct {
+			Type string `json:"type"`
+		}
+		if err := decodeArguments(arguments, &input); err != nil {
+			return "", err
+		}
+		path := "resource-types"
+		query := url.Values{}
+		if input.Type != "" {
+			path = "resource-subtypes"
+			query.Set("type", input.Type)
+		}
+		var result map[string]any
+		if err := catalog.PlatformGet(path, query, &result); err != nil {
+			return "", err
+		}
+		return encodeResult(result)
 	case "alemonjs_list_catalog":
 		var input struct {
 			Kind string `json:"kind"`
@@ -445,6 +516,21 @@ func (s *Server) execute(name string, arguments json.RawMessage) (string, error)
 		}
 		result, err := s.robots.WriteProjectFile(input.Root, input.Path, input.Content)
 		return result.Output, err
+	case "alemonjs_package_inventory":
+		var input struct {
+			Root string `json:"root"`
+		}
+		if err := decodeArguments(arguments, &input); err != nil {
+			return "", err
+		}
+		if err := s.authorizeRoot(input.Root); err != nil {
+			return "", err
+		}
+		items, err := s.robots.PackageInventory(input.Root)
+		if err != nil {
+			return "", err
+		}
+		return encodeResult(items)
 	case "alemonjs_list_local_packages":
 		var input struct {
 			Root string `json:"root"`
