@@ -1,10 +1,6 @@
 export type DashboardPage = 'robot' | 'build' | 'plugins' | 'connections' | 'modules'
 export type DashboardSection =
-  | 'backpack'
-  | 'config'
-  | 'npmrc'
-  | 'env'
-  | 'runtime'
+  'backpack' | 'config' | 'npmrc' | 'env' | 'runtime'
 export type DashboardBuildMode = 'manifest' | 'npm' | 'git'
 export type DashboardConfigEditor = 'visual' | 'text'
 
@@ -49,7 +45,8 @@ const dashboardConfigEditors = new Set<DashboardConfigEditor>([
  */
 export function readDashboardNavigation(search: string): DashboardNavigation {
   const parameters = new URLSearchParams(search)
-  const requestedPage = parameters.get('page')
+  const requestedPage =
+    parameters.get('page') === 'modules' ? 'plugins' : parameters.get('page')
   const requestedSection = parameters.get('section')
   const requestedBuildMode = parameters.get('build')
   const requestedConfigEditor = parameters.get('editor')

@@ -494,13 +494,16 @@ func TestRegistryCanDisableAndReenablePlugin(t *testing.T) {
 }
 
 func TestRegistrySeparatesOnlineMarketFromLocalPlugins(t *testing.T) {
+	var manifestReads, releaseReads int
 	server := newTestHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/apps-x.md":
-			_, _ = w.Write([]byte("[network]: https://github.com/lemonade-lab/alemonx-network\n"))
+			_, _ = w.Write([]byte(`{"data":[{"id":"network","type":"x-plugin","installMode":"git","name":"网络","repositoryUrl":"https://github.com/lemonade-lab/alemonx-network"}],"total":1,"page":1,"pageSize":100}`))
 		case "/alx.json":
+			manifestReads++
 			_, _ = w.Write([]byte(`{"id":"alemonx-network","name":"网络","version":"1.0.0","web":{"root":"web"}}`))
 		case "/releases":
+			releaseReads++
 			_, _ = w.Write([]byte(`[{"tag_name":"v1.2.3"}]`))
 		default:
 			http.NotFound(w, r)
@@ -519,16 +522,16 @@ func TestRegistrySeparatesOnlineMarketFromLocalPlugins(t *testing.T) {
 		roots:          []string{root},
 		onlineIndexURL: server.URL + "/apps-x.md",
 		httpClient:     server.Client(),
-		onlineManifestURL: func(string) string {
-			return server.URL + "/alx.json"
-		},
-		releaseURL: func(string) string { return server.URL + "/releases" },
+		releaseURL:     func(string) string { return server.URL + "/releases" },
 	}
 	if local := registry.List(); len(local) != 1 || local[0].Name != "本地网络" {
 		t.Fatalf("local plugins = %#v", local)
 	}
 	plugins := registry.Market()
-	if len(plugins) != 1 || !plugins[0].Online || plugins[0].Runnable || plugins[0].Name != "网络" || plugins[0].Version != "v1.2.3" {
+	if manifestReads != 0 || releaseReads != 0 {
+		t.Fatalf("market browsing fetched repository metadata: manifests=%d releases=%d", manifestReads, releaseReads)
+	}
+	if len(plugins) != 1 || !plugins[0].Online || plugins[0].Runnable || plugins[0].Name != "网络" || plugins[0].Version != "" {
 		t.Fatalf("online plugin = %#v", plugins)
 	}
 	if _, err := registry.Run("alemonx-network", "check", nil, false); err == nil {
@@ -631,7 +634,7 @@ func TestRegistryInstallsOnlinePluginLocally(t *testing.T) {
 	server := newTestHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/apps-x.md":
-			_, _ = w.Write([]byte("[network]: https://github.com/lemonade-lab/alemonx-network\n"))
+			_, _ = w.Write([]byte(`{"data":[{"id":"network","type":"x-plugin","installMode":"git","name":"网络","repositoryUrl":"https://github.com/lemonade-lab/alemonx-network"}],"total":1,"page":1,"pageSize":100}`))
 		case "/alx.json":
 			_, _ = w.Write([]byte(`{"id":"alemonx-network","name":"网络","version":"1.0.0","web":{"root":"web"}}`))
 		case "/releases":
@@ -645,11 +648,10 @@ func TestRegistryInstallsOnlinePluginLocally(t *testing.T) {
 	defer server.Close()
 	root := t.TempDir()
 	registry := Registry{
-		roots:             []string{root},
-		onlineIndexURL:    server.URL + "/apps-x.md",
-		httpClient:        server.Client(),
-		onlineManifestURL: func(string) string { return server.URL + "/alx.json" },
-		releaseURL:        func(string) string { return server.URL + "/releases" },
+		roots:          []string{root},
+		onlineIndexURL: server.URL + "/apps-x.md",
+		httpClient:     server.Client(),
+		releaseURL:     func(string) string { return server.URL + "/releases" },
 	}
 	installed, err := registry.Install("alemonx-network", "v1.0.0", assetName)
 	if err != nil {
@@ -854,7 +856,7 @@ func TestRegistrySwitchesBetweenCachedReleaseVersionsOffline(t *testing.T) {
 	server := newTestHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/apps-x.md":
-			_, _ = w.Write([]byte("[network]: https://github.com/lemonade-lab/alemonx-network\n"))
+			_, _ = w.Write([]byte(`{"data":[{"id":"network","type":"x-plugin","installMode":"git","name":"网络","repositoryUrl":"https://github.com/lemonade-lab/alemonx-network"}],"total":1,"page":1,"pageSize":100}`))
 		case "/alx.json":
 			_, _ = w.Write([]byte(`{"id":"alemonx-network","name":"网络","version":"1.0.0","web":{"root":"web"}}`))
 		case "/releases":
@@ -870,7 +872,7 @@ func TestRegistrySwitchesBetweenCachedReleaseVersionsOffline(t *testing.T) {
 	}))
 	defer server.Close()
 	root := t.TempDir()
-	registry := Registry{roots: []string{root}, onlineIndexURL: server.URL + "/apps-x.md", httpClient: server.Client(), onlineManifestURL: func(string) string { return server.URL + "/alx.json" }, releaseURL: func(string) string { return server.URL + "/releases" }}
+	registry := Registry{roots: []string{root}, onlineIndexURL: server.URL + "/apps-x.md", httpClient: server.Client(), releaseURL: func(string) string { return server.URL + "/releases" }}
 	if _, err := registry.Install("alemonx-network", "v1.0.0", assetName); err != nil {
 		t.Fatalf("install v1 failed: %v", err)
 	}
@@ -890,5 +892,16 @@ func TestRegistrySwitchesBetweenCachedReleaseVersionsOffline(t *testing.T) {
 	versions, err := registry.Versions("alemonx-network")
 	if err != nil || len(versions) != 2 || !versions[1].Active {
 		t.Fatalf("expected two versions with v1 active: %#v, %v", versions, err)
+	}
+}
+
+func TestPlatformMarketOutageIsNotEmptySuccess(t *testing.T) {
+	server := newTestHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+	registry := Registry{onlineIndexURL: server.URL + "/resources?type=x-plugin", httpClient: server.Client()}
+	if _, err := registry.MarketWithError(); err == nil {
+		t.Fatal("platform outage must be reported")
 	}
 }

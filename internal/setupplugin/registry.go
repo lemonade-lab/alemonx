@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -30,6 +31,7 @@ import (
 	"sync"
 	"time"
 
+	"alemonx/internal/catalog"
 	"alemonx/internal/system"
 	"alemonx/internal/systemnetwork"
 	"alemonx/internal/workspace"
@@ -40,7 +42,7 @@ import (
 const manifestName = "alx.json"
 const installMetadataName = ".alx-install.json"
 const maxManifestSize = 64 * 1024
-const onlineIndexURL = "https://raw.githubusercontent.com/lemonade-lab/alemonjs.dev/main/docs/apps-x.md"
+const onlineIndexURL = catalog.PlatformURL + "/resources?type=x-plugin&pageSize=100"
 
 // Release archives use a dedicated long-running transfer path. Metadata
 // requests keep their short client timeout, while a valid archive may take
@@ -51,7 +53,6 @@ const downloadAttempts = 3
 const maxPluginArchiveSize int64 = 300 << 20
 
 var validID = regexp.MustCompile(`^[a-z][a-z0-9-]{1,63}$`)
-var onlineRepository = regexp.MustCompile(`(?m)^\s*\[[^\]]+\]:\s*(https://github\.com/lemonade-lab/([A-Za-z0-9_.-]+))\s*$`)
 var onlineSource = regexp.MustCompile(`^https://github\.com/lemonade-lab/[A-Za-z0-9_.-]+$`)
 
 // Navigation controls where the plugin appears in the global function rail.
@@ -291,22 +292,21 @@ type Progress struct {
 // Results are cached and refreshed by Rescan/StartWatch so hot-plugging a
 // plugin directory is reflected without restarting alx.
 type Registry struct {
-	mu                sync.RWMutex
-	roots             []string
-	installPath       string
-	storeRoot         string
-	statePath         string
-	cacheRoot         string
-	onlineIndexURL    string
-	httpClient        *http.Client
-	onlineManifestURL func(string) string
-	releaseURL        func(string) string
-	cached            []Plugin
-	revision          uint64
-	loaded            bool
-	lastFingerprint   string
-	listeners         map[chan struct{}]struct{}
-	development       map[string]Plugin
+	mu              sync.RWMutex
+	roots           []string
+	installPath     string
+	storeRoot       string
+	statePath       string
+	cacheRoot       string
+	onlineIndexURL  string
+	httpClient      *http.Client
+	releaseURL      func(string) string
+	cached          []Plugin
+	revision        uint64
+	loaded          bool
+	lastFingerprint string
+	listeners       map[chan struct{}]struct{}
+	development     map[string]Plugin
 	// runnerEnvironment is owned by the host. It is deliberately not a
 	// manifest feature: a downloaded plugin must never be able to request
 	// credentials or networking policy merely by adding a field to alx.json.
@@ -408,16 +408,15 @@ func NewWorkspaceRegistry(workspaceRoot string) *Registry {
 	installPath := filepath.Join(root, "plugins")
 	roots := append([]string{installPath}, applicationPluginRoots()...)
 	return &Registry{
-		roots:             uniqueRoots(roots),
-		installPath:       installPath,
-		storeRoot:         filepath.Join(root, "store"),
-		statePath:         defaultStatePath(),
-		cacheRoot:         defaultCacheRoot(),
-		onlineIndexURL:    onlineIndexURL,
-		httpClient:        systemnetwork.DefaultClient(5 * time.Second),
-		onlineManifestURL: defaultOnlineManifestURL,
-		releaseURL:        defaultReleaseURL,
-		development:       map[string]Plugin{},
+		roots:          uniqueRoots(roots),
+		installPath:    installPath,
+		storeRoot:      filepath.Join(root, "store"),
+		statePath:      defaultStatePath(),
+		cacheRoot:      defaultCacheRoot(),
+		onlineIndexURL: onlineIndexURL,
+		httpClient:     systemnetwork.DefaultClient(5 * time.Second),
+		releaseURL:     defaultReleaseURL,
+		development:    map[string]Plugin{},
 	}
 }
 
@@ -519,13 +518,19 @@ func (r *Registry) All() []Plugin {
 // plugins. An installed plugin therefore remains in "我的", while its online
 // entry remains visible in "市场" for discovery and downloads.
 func (r *Registry) Market() []Plugin {
-	candidates := r.onlinePlugins()
+	items, _ := r.MarketWithError()
+	return items
+}
+
+// MarketWithError distinguishes a platform outage from an empty catalog.
+func (r *Registry) MarketWithError() ([]Plugin, error) {
+	candidates, err := r.onlinePluginsResult()
+	if err != nil {
+		return nil, err
+	}
 	items := make([]Plugin, 0, len(candidates))
 	for _, plugin := range candidates {
 		if supportsCurrentPlatform(plugin.Platforms) {
-			// Marketplace version must describe the latest installable Release,
-			// not the source manifest version from the default branch.
-			plugin.Version, _ = r.latestReleaseTag(plugin)
 			items = append(items, plugin)
 		}
 	}
@@ -535,43 +540,7 @@ func (r *Registry) Market() []Plugin {
 		}
 		return items[i].Navigation.Label < items[j].Navigation.Label
 	})
-	return items
-}
-
-func (r *Registry) latestReleaseTag(plugin Plugin) (string, error) {
-	if plugin.Source == "" || r.httpClient == nil {
-		return "", errors.New("插件 Release 来源不可用")
-	}
-	url := r.releaseURL
-	if url == nil {
-		url = defaultReleaseURL
-	}
-	request, err := http.NewRequest(http.MethodGet, url(plugin.Source), nil)
-	if err != nil {
-		return "", err
-	}
-	response, err := r.httpClient.Do(request)
-	if err != nil {
-		return "", err
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return "", errors.New("插件版本暂时无法获取")
-	}
-	var releases []struct {
-		TagName    string `json:"tag_name"`
-		Draft      bool   `json:"draft"`
-		Prerelease bool   `json:"prerelease"`
-	}
-	if err := json.NewDecoder(io.LimitReader(response.Body, 4<<20)).Decode(&releases); err != nil {
-		return "", err
-	}
-	for _, release := range releases {
-		if release.TagName != "" && !release.Draft && !release.Prerelease {
-			return release.TagName, nil
-		}
-	}
-	return "", errors.New("暂未找到可用的插件正式版本")
+	return items, nil
 }
 
 // Find returns one currently discoverable plugin from the cache.
@@ -1650,41 +1619,50 @@ func validateCommandSpec(command *CommandSpec) error {
 	return nil
 }
 
-func defaultOnlineManifestURL(repository string) string {
-	name := strings.TrimPrefix(repository, "https://github.com/lemonade-lab/")
-	return "https://raw.githubusercontent.com/lemonade-lab/" + name + "/main/" + manifestName
-}
-
-// onlinePlugins reads the curated Apps-X index. Only repositories owned by
-// lemonade-lab are accepted, so a documentation edit cannot turn discovery
-// into an arbitrary URL fetch. Online manifests are deliberately read-only:
-// they render in the manager but must be installed locally before execution.
+// Discovery reads platform summaries only. Executable manifests are validated
+// from a selected release archive at installation time, never during browsing.
 func (r *Registry) onlinePlugins() []Plugin {
-	if r.onlineIndexURL == "" || r.httpClient == nil || r.onlineManifestURL == nil {
-		return nil
-	}
-	index, err := r.readOnlineFile(r.onlineIndexURL)
-	if err != nil {
-		return nil
-	}
-	items := make([]Plugin, 0)
-	seen := map[string]bool{}
-	for _, match := range onlineRepository.FindAllStringSubmatch(string(index), -1) {
-		repository := match[1]
-		manifest, err := r.readOnlineFile(r.onlineManifestURL(repository))
-		if err != nil {
-			continue
-		}
-		plugin, err := decodeManifest(manifest, repository)
-		if err != nil || seen[plugin.ID] {
-			continue
-		}
-		plugin.Online = true
-		plugin.Runnable = false
-		seen[plugin.ID] = true
-		items = append(items, plugin)
-	}
+	items, _ := r.onlinePluginsResult()
 	return items
+}
+func (r *Registry) onlinePluginsResult() ([]Plugin, error) {
+	if r.onlineIndexURL == "" || r.httpClient == nil {
+		return nil, errors.New("生态资源平台暂时不可用，请重试")
+	}
+	items := []Plugin{}
+	seen := map[string]bool{}
+	for page := 1; ; page++ {
+		endpoint, err := url.Parse(r.onlineIndexURL)
+		if err != nil {
+			return nil, errors.New("生态资源平台暂时不可用，请重试")
+		}
+		query := endpoint.Query()
+		query.Set("page", strconv.Itoa(page))
+		endpoint.RawQuery = query.Encode()
+		body, err := r.readOnlineFile(endpoint.String())
+		if err != nil {
+			return nil, errors.New("生态资源平台暂时不可用，请重试")
+		}
+		var result catalog.ResourcePage
+		if json.Unmarshal(body, &result) != nil {
+			return nil, errors.New("生态资源平台暂时不可用，请重试")
+		}
+		for _, resource := range result.Data {
+			if resource.Type != "x-plugin" || resource.InstallMode != "git" || !onlineSource.MatchString(resource.RepositoryURL) {
+				continue
+			}
+			id := filepath.Base(resource.RepositoryURL)
+			if !validID.MatchString(id) || seen[id] {
+				continue
+			}
+			seen[id] = true
+			items = append(items, Plugin{ID: id, Name: resource.Name, Description: resource.Description, Source: resource.RepositoryURL, Online: true, Navigation: Navigation{Label: resource.Name}})
+		}
+		if len(result.Data) == 0 || result.PageSize <= 0 || page*result.PageSize >= result.Total {
+			break
+		}
+	}
+	return items, nil
 }
 
 type ReleaseAsset struct {

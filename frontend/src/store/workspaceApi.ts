@@ -22,7 +22,20 @@ type RobotTask = {
   createdAt?: string
   finishedAt?: string
 }
+export type MarketResource = {
+  id: string
+  type: string
+  subtype: string
+  name: string
+  description: string
+  repositoryUrl: string
+  installMode: 'git' | 'npm'
+  packageName?: string
+  ownerLogin?: string
+  markdown?: string
+}
 type CatalogGroup = {
+  id: string
   title: string
   items: Array<{
     name: string
@@ -31,7 +44,6 @@ type CatalogGroup = {
     install: string
   }>
 }
-type CatalogDocument = { source: string; markdown: string }
 type CatalogVersions = { latest: string; versions: string[] }
 export type PackageConfigField = {
   name: string
@@ -526,7 +538,10 @@ export const workspaceApi = createApi({
   endpoints: build => ({
     openDSHWeb: build.mutation<{ url: string }, string>({
       query: root => ({
-        url: `dsh/runtimes/${btoa(unescape(encodeURIComponent(root))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '')}/web`,
+        url: `dsh/runtimes/${btoa(unescape(encodeURIComponent(root)))
+          .replace(/\+/g, '-')
+          .replace(/\//g, '_')
+          .replace(/=/g, '')}/web`,
         method: 'POST'
       })
     }),
@@ -896,16 +911,22 @@ export const workspaceApi = createApi({
       query: kind => `catalog?kind=${kind}`,
       providesTags: (_result, _error, kind) => [{ type: 'Catalog', id: kind }]
     }),
+    marketResources: build.query<
+      { data: MarketResource[]; total: number; page: number; pageSize: number },
+      { type: string; subtype?: string; q: string; page: number }
+    >({
+      query: params =>
+        `catalog/resources?${new URLSearchParams({ type: params.type, ...(params.subtype ? { subtype: params.subtype } : {}), q: params.q, page: String(params.page), pageSize: '20' })}`,
+      providesTags: ['Catalog']
+    }),
+    marketResource: build.query<{ data: MarketResource }, string>({
+      query: id => `catalog/resource?${new URLSearchParams({ id })}`,
+      providesTags: ['Catalog']
+    }),
     catalogVersions: build.query<CatalogVersions, string>({
       query: packageName =>
         `catalog/versions?${new URLSearchParams({ package: packageName })}`,
       keepUnusedDataFor: 5 * 60
-    }),
-    catalogDocument: build.query<CatalogDocument, string>({
-      query: url => `catalog/document?${new URLSearchParams({ url })}`
-    }),
-    catalogPackageConfig: build.query<PackageConfig, string>({
-      query: url => `catalog/package-config?${new URLSearchParams({ url })}`
     }),
     packageConfig: build.query<
       PackageConfig,
@@ -1385,9 +1406,9 @@ export const {
   useSetSystemCurrentRobotMutation,
   useStartSetupPluginTaskMutation,
   useCatalogQuery,
+  useMarketResourcesQuery,
+  useMarketResourceQuery,
   useCatalogVersionsQuery,
-  useCatalogDocumentQuery,
-  useCatalogPackageConfigQuery,
   usePackageConfigQuery,
   usePackageConfigsQuery,
   useLazyPackageConfigQuery,
@@ -1430,6 +1451,7 @@ export const {
   useApplyRuntimeRepairMutation,
   useLazyRobotProjectQuery,
   useLazyRobotFileQuery,
+  useRobotFileQuery,
   useGitStatusQuery,
   useGitWorkspaceQuery,
   useGitWorkspaceActionMutation,

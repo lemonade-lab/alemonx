@@ -54,7 +54,6 @@ import {
   ArrowRight,
   ArrowRightLeft,
   Bot,
-  Blocks,
   Cable,
   Check,
   CheckCircle2,
@@ -123,6 +122,7 @@ import { Tabs } from './Tabs'
 import { NpmrcConfigForm } from './NpmrcConfigForm'
 import { EnvConfigForm } from './EnvConfigForm'
 import { RobotPanel } from './RobotPanel'
+import { EcosystemMarket } from './EcosystemMarket'
 import meLogo from '../assets/images/me.png'
 import { OpsCenter } from './OpsCenter'
 import { OpsOverview } from './OpsOverview'
@@ -168,10 +168,7 @@ import { ConfigFieldsEditor, ConfigSourceLinks } from './PackageConfigFields'
 import { sameConfigValues } from './configFieldUtils'
 import {
   workspaceApi,
-  useCatalogDocumentQuery,
-  useCatalogPackageConfigQuery,
   useCatalogQuery,
-  useCatalogVersionsQuery,
   useGitStatusQuery,
   useGitWorkspaceQuery,
   useLazyRobotConsoleQuery,
@@ -266,13 +263,7 @@ type Check = {
   suggestion: string
   optional?: boolean
 }
-type CatalogItem = {
-  name: string
-  description: string
-  url: string
-  install: string
-}
-type CatalogGroup = { title: string; items: CatalogItem[] }
+type CatalogGroup = { id: string; title: string; items: unknown[] }
 type Page = DashboardPage
 type Section = DashboardSection
 type Project = { id: string; path: string; name: string; pinned?: boolean }
@@ -357,7 +348,6 @@ const directoryActions: Array<{
   { id: 'backpack', label: '背包', icon: <Archive />, kind: 'section' },
   { id: 'plugins', label: '插件', icon: <Package />, kind: 'page' },
   { id: 'connections', label: '连接', icon: <Link />, kind: 'page' },
-  { id: 'modules', label: '模块', icon: <Blocks />, kind: 'page' },
   { id: 'build', label: '发布', icon: <Send />, kind: 'page' }
 ]
 const emptyGitCommits: Array<{
@@ -1169,7 +1159,6 @@ export function Dashboard({
   const [browserHomeVersion, setBrowserHomeVersion] = useStoreState(0)
   const [busy, setBusy] = useStoreState(false)
   const [catalogTitle, setCatalogTitle] = useStoreState('')
-  const [catalogItem, setCatalogItem] = useStoreState<CatalogItem | null>(null)
   const [configEditor, setConfigEditor] = useStoreState<DashboardConfigEditor>(
     () => navigationFromURL.configEditor
   )
@@ -1609,14 +1598,13 @@ export function Dashboard({
       : page === 'connections'
         ? 'environment'
         : 'modules'
-  const {
-    data: catalogData,
-    isFetching: catalogLoading,
-    error: catalogQueryError
-  } = useCatalogQuery(catalogKind, {
-    skip: !['plugins', 'connections', 'modules'].includes(page),
-    refetchOnMountOrArgChange: true
-  })
+  const { data: catalogData, isFetching: catalogLoading } = useCatalogQuery(
+    catalogKind,
+    {
+      skip: !['plugins', 'connections', 'modules'].includes(page),
+      refetchOnMountOrArgChange: true
+    }
+  )
   // RTK Query leaves data undefined until the first fetch, and a backend may
   // respond with JSON null for an empty list. Normalise both to an array so
   // render-time .find/.map never touches a null value.
@@ -1629,15 +1617,6 @@ export function Dashboard({
   } = useLocalPackagesQuery(root, {
     skip: !root || (section !== 'backpack' && page !== 'plugins')
   })
-  const installedPluginKeys = useMemo(() => {
-    const keys = new Set<string>()
-    for (const item of localPackages?.items ?? []) {
-      keys.add(item.name.toLowerCase())
-      const directory = item.path.split('/').filter(Boolean).pop()
-      if (directory) keys.add(directory.toLowerCase())
-    }
-    return keys
-  }, [localPackages])
   const {
     data: runtime,
     isFetching: runtimeLoading,
@@ -1691,7 +1670,6 @@ export function Dashboard({
     },
     []
   )
-  const catalogError = catalogQueryError ? '在线目录暂时无法读取。' : ''
   // Details are reserved for operations whose command output is useful for
   // diagnosis. Form validation and ordinary save/status feedback belongs in a
   // transient notification, never in a draggable log window.
@@ -2850,6 +2828,7 @@ export function Dashboard({
           workspaceApi.util.invalidateTags([
             { type: 'LocalPackages', id: root },
             { type: 'PackageManifest', id: root },
+            { type: 'RobotFile', id: `${root}:package.json` },
             // Installing/uninstalling a connection package changes whether
             // its alemon.config.yaml section can be parsed, so drop any
             // cached PackageConfig for this root.
@@ -3182,7 +3161,6 @@ export function Dashboard({
     setSystemWindowFeature(null)
     setSystemWindows({})
     setPage(nextPage)
-    setCatalogItem(null)
     setOutput('')
   }
   function openAI() {
@@ -3479,111 +3457,20 @@ export function Dashboard({
     </>
   )
 
-  const catalogContent =
-    catalogItem && currentCatalog ? (
-      <CatalogDetail
-        item={catalogItem}
-        group={currentCatalog.title}
-        kind={
-          page === 'connections'
-            ? 'connection'
-            : page === 'modules'
-              ? 'module'
-              : 'plugin'
-        }
-        busy={busy}
-        onBack={() => setCatalogItem(null)}
-        onRun={(action, packageName) =>
-          api('POST', { root, action, package: packageName })
-        }
-        onSaveConfig={savePackageConfig}
-      />
-    ) : (
-      <RobotPanel
-        className="catalog-workspace max-w-190"
-        icon={<Globe className="size-4" />}
-        title={currentCatalog?.title || '目录'}
-        description={
-          page === 'modules'
-            ? '浏览并管理机器人项目的 JS 模块依赖'
-            : '浏览并管理可安装的机器人包'
-        }
-      >
-        {catalogLoading && (
-          <EmptyState
-            loading
-            icon={
-              page === 'modules' ? (
-                <Blocks className="size-6 text-slate-400 dark:text-slate-500" />
-              ) : page === 'connections' ? (
-                <Link className="size-6 text-slate-400 dark:text-slate-500" />
-              ) : (
-                <Package className="size-6 text-slate-400 dark:text-slate-500" />
-              )
-            }
-            title={`正在读取${
-              page === 'modules'
-                ? '模块目录'
-                : page === 'connections'
-                  ? '连接目录'
-                  : '插件目录'
-            }`}
-            description="正在加载可用内容，请稍候。"
-          />
-        )}
-        {catalogError && (
-          <EmptyState
-            icon={<AlertTriangle className="size-6 text-amber-500" />}
-            title="目录暂时不可用"
-            description={catalogError}
-          />
-        )}
-        {!catalogLoading && !catalogError && currentCatalog && (
-          <section className="grid gap-2">
-            {currentCatalog.items.map(item => {
-              const repositoryName = item.install
-                .replace(/^git\+/, '')
-                .split('#')[0]
-                .replace(/\.git$/, '')
-                .split('/')
-                .filter(Boolean)
-                .pop()
-                ?.toLowerCase()
-              const installed =
-                page === 'plugins' &&
-                (installedPluginKeys.has(item.name.toLowerCase()) ||
-                  Boolean(
-                    repositoryName && installedPluginKeys.has(repositoryName)
-                  ))
-              return (
-                <button
-                  className="flex items-center gap-3 rounded-lg border border-slate-200 bg-white p-3 text-left transition hover:border-slate-300 hover:bg-slate-50"
-                  key={`${currentCatalog.title}-${item.name}`}
-                  onClick={() => setCatalogItem(item)}
-                >
-                  <div className="grid min-w-0 flex-1 gap-1">
-                    <div className="flex items-center gap-2">
-                      <strong className="truncate text-sm font-semibold text-slate-800">
-                        {item.name}
-                      </strong>
-                      {installed && (
-                        <small className="w-fit rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700">
-                          已安装
-                        </small>
-                      )}
-                    </div>
-                    <small className="truncate text-xs text-slate-500">
-                      {item.description || '查看包说明、安装与配置'}
-                    </small>
-                  </div>
-                  <ChevronRight className="size-4 shrink-0 text-slate-400" />
-                </button>
-              )
-            })}
-          </section>
-        )}
-      </RobotPanel>
-    )
+  const catalogContent = (
+    <EcosystemMarket
+      key={`${root}:${page}:${currentCatalog?.id ?? ''}`}
+      root={root}
+      type={page === 'connections' ? 'connector' : 'js-plugin'}
+      subtype={currentCatalog?.id}
+      category={currentCatalog?.title ?? '全部'}
+      busy={busy}
+      onRun={(action, packageName) =>
+        api('POST', { root, action, package: packageName })
+      }
+      onSaveConfig={savePackageConfig}
+    />
+  )
   const workspaceSetupPlugin = setupPlugins.find(
     item => systemFeature === `setup:${item.id}`
   )
@@ -4187,7 +4074,6 @@ export function Dashboard({
                     }}
                     onCatalog={title => {
                       setCatalogTitle(title)
-                      setCatalogItem(null)
                     }}
                     onGit={() => {
                       setGitProject(activeProject)
@@ -4571,7 +4457,12 @@ function ProjectRail({
           setCanManageData(Boolean(status && (!status.enabled || status.superAdmin)))
         }
       })
-      .catch(() => { if (active) { setCanManageAccounts(false); setCanManageData(false) } })
+      .catch(() => {
+        if (active) {
+          setCanManageAccounts(false)
+          setCanManageData(false)
+        }
+      })
     return () => {
       active = false
     }
@@ -5841,7 +5732,9 @@ function McpControl({ menuItem = false }: { menuItem?: boolean }) {
           )}
         </i>
         <span>MCP</span>
-        {menuItem && <ChevronRight className="ml-auto size-4" aria-hidden="true" />}
+        {menuItem && (
+          <ChevronRight className="ml-auto size-4" aria-hidden="true" />
+        )}
       </button>
       {open && (
         <section
@@ -7212,7 +7105,7 @@ function SystemPluginCenter({
                     <div className="mt-0.5 flex items-center gap-2 text-xs text-slate-400 dark:text-slate-500">
                       <span className="font-mono">
                         {isOnline
-                          ? plugin.version || '版本暂不可用'
+                          ? plugin.version || '安装时选择版本'
                           : (plugin.installedTag ?? `v${plugin.version}`)}
                       </span>
                       <span className="size-0.5 rounded-full bg-slate-300 dark:bg-slate-600" />
@@ -9437,488 +9330,6 @@ function BackpackPackageManager({
         }}
       />
     </RobotPanel>
-  )
-}
-function CatalogDetail({
-  item,
-  group,
-  kind,
-  busy,
-  onBack,
-  onRun,
-  onSaveConfig
-}: {
-  item: CatalogItem
-  group: string
-  kind: 'connection' | 'module' | 'plugin'
-  busy: boolean
-  onBack: () => void
-  onRun: (action: string, packageName: string) => void
-  onSaveConfig: (
-    packageName: string,
-    values: Record<string, unknown>
-  ) => Promise<boolean>
-}) {
-  const [tab, setTab] = useStoreState<
-    'overview' | 'config' | 'version' | 'document'
-  >('overview')
-  const [version, setVersion] = useStoreState('')
-  const packageName =
-    item.install ||
-    (kind !== 'plugin' &&
-    (item.name === 'alemonjs' || item.name.startsWith('@alemonjs/'))
-      ? item.name
-      : '')
-  const repositoryInstall = packageName.startsWith('git+')
-  const releaseBranchInstall = kind === 'plugin' && repositoryInstall
-  const npmPackage = Boolean(packageName && !repositoryInstall)
-  const {
-    data: packageVersions,
-    isFetching: versionsLoading,
-    error: versionsError
-  } = useCatalogVersionsQuery(packageName, {
-    skip: !packageName || releaseBranchInstall
-  })
-  useEffect(() => {
-    setVersion('')
-  }, [packageName, setVersion])
-  useEffect(() => {
-    if (!version && packageVersions?.latest) setVersion(packageVersions.latest)
-  }, [packageVersions?.latest, version, setVersion])
-  const noRepositoryTag =
-    repositoryInstall &&
-    !versionsLoading &&
-    !versionsError &&
-    packageVersions?.versions.length === 0
-  const installTarget = releaseBranchInstall
-    ? packageName
-    : version.trim()
-      ? npmPackage
-        ? `${packageName}@${version.trim()}`
-        : `${packageName.split('#')[0]}#${version.trim()}`
-      : packageName
-  const installAction =
-    kind === 'connection'
-      ? 'install-connection'
-      : kind === 'module'
-        ? 'install-module'
-        : 'install-package'
-  const uninstallAction =
-    kind === 'connection'
-      ? 'uninstall-connection'
-      : kind === 'module'
-        ? 'uninstall-module'
-        : 'uninstall-package'
-  const kindLabel =
-    kind === 'connection' ? '连接' : kind === 'module' ? '模块' : '插件'
-  const sourceLabel = repositoryInstall
-    ? 'Git 仓库'
-    : npmPackage
-      ? 'npm 仓库'
-      : '目录条目'
-  const versionLabel = releaseBranchInstall
-    ? '固定 release 分支'
-    : versionsLoading
-      ? '正在读取'
-      : versionsError
-        ? '读取失败'
-        : noRepositoryTag
-          ? '暂无可用版本'
-          : packageVersions?.latest
-            ? `最新 ${packageVersions.latest}`
-            : '按默认版本安装'
-  return (
-    <RobotPanel
-      className="catalog-detail max-w-190"
-      icon={<Globe className="size-4" />}
-      title={group}
-      description={
-        kind === 'module'
-          ? '作为当前机器人项目依赖安装'
-          : '查看版本、安装与配置'
-      }
-      actions={
-        <>
-          <button className="text-button gap-1.5" onClick={onBack}>
-            <ArrowLeft className="size-4" />
-            返回目录
-          </button>
-        </>
-      }
-    >
-      <Tabs
-        ariaLabel={`${kindLabel}详情`}
-        items={[
-          {
-            id: 'overview',
-            label: '概览',
-            icon: <Activity className="size-3.5" />
-          },
-          {
-            id: 'config',
-            label: '配置',
-            icon: <Settings className="size-3.5" />
-          },
-          {
-            id: 'version',
-            label: '版本',
-            icon: <GitBranch className="size-3.5" />
-          },
-          {
-            id: 'document',
-            label: '文档',
-            icon: <FileText className="size-3.5" />
-          }
-        ]}
-        onChange={value => setTab(value as typeof tab)}
-        value={tab}
-      />
-      {tab === 'overview' && (
-        <section className="catalog-overview grid gap-4 rounded-xl border border-slate-200 bg-white p-4 text-sm">
-          <div className="grid gap-1">
-            <strong className="text-slate-800">{kindLabel}信息概览</strong>
-            <p className="m-0 text-xs leading-5 text-slate-500">
-              {item.description || '在线生态目录条目'}
-            </p>
-          </div>
-          <div className="grid gap-2 text-xs text-slate-600 sm:grid-cols-2">
-            <span className="min-w-0 truncate" title={item.name}>
-              名称：{item.name}
-            </span>
-            <span>类型：{kindLabel}</span>
-            <span>来源：{sourceLabel}</span>
-            <span>版本：{versionLabel}</span>
-          </div>
-          <div className="flex flex-wrap items-end justify-end gap-2 border-t border-slate-200 pt-3">
-            <button
-              className="primary-button"
-              disabled={
-                busy ||
-                !packageName ||
-                versionsLoading ||
-                Boolean(versionsError) ||
-                noRepositoryTag ||
-                (!releaseBranchInstall && repositoryInstall && !version.trim())
-              }
-              onClick={() => onRun(installAction, installTarget)}
-            >
-              {busy ? (
-                <Loader2 className="size-4 animate-spin" />
-              ) : (
-                <Package className="size-4" />
-              )}
-              {busy ? '处理中…' : '安装'}
-            </button>
-            <button
-              className="secondary-button gap-1.5"
-              disabled={
-                busy || !packageName || (kind === 'plugin' && repositoryInstall)
-              }
-              title={
-                repositoryInstall && kind === 'plugin'
-                  ? '仓库插件请按文档卸载'
-                  : '卸载当前包'
-              }
-              onClick={() => onRun(uninstallAction, packageName)}
-            >
-              <Trash2 className="size-4" />
-              卸载
-            </button>
-            {item.url && (
-              <a
-                className="inline-flex min-h-9 items-center justify-center rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 transition hover:border-slate-400 hover:bg-slate-50"
-                href={item.url}
-                target="_blank"
-                rel="noreferrer"
-              >
-                ↗
-              </a>
-            )}
-          </div>
-        </section>
-      )}
-      {tab === 'version' && (
-        <section className="grid gap-4 rounded-xl border border-slate-200 bg-white p-4 text-sm">
-          <div className="flex flex-wrap items-end justify-between gap-3 border-slate-200 pt-3">
-            {releaseBranchInstall ? (
-              <span className="rounded-md bg-slate-100 px-2.5 py-2 text-xs font-semibold text-slate-600">
-                release
-              </span>
-            ) : packageName ? (
-              <label className="grid gap-1 text-[11px] font-semibold text-slate-500">
-                <span>安装版本</span>
-                <select
-                  className="h-9 min-w-48 rounded-md border border-slate-300 bg-white px-2 text-xs font-medium text-slate-700 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
-                  value={version}
-                  onChange={event => setVersion(event.target.value)}
-                  disabled={
-                    versionsLoading || Boolean(versionsError) || noRepositoryTag
-                  }
-                >
-                  {versionsLoading && <option value="">读取版本…</option>}
-                  {versionsError && <option value="">版本读取失败</option>}
-                  {noRepositoryTag && (
-                    <option value="">该插件没有可用的 Release</option>
-                  )}
-                  {packageVersions?.versions.map(itemVersion => (
-                    <option key={itemVersion} value={itemVersion}>
-                      {itemVersion}
-                      {itemVersion === packageVersions.latest
-                        ? ' · 最新版'
-                        : ''}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            ) : (
-              <span className="text-xs text-slate-500">
-                该条目没有可用的安装来源。
-              </span>
-            )}
-            <button
-              className="primary-button"
-              disabled={
-                busy ||
-                !packageName ||
-                versionsLoading ||
-                Boolean(versionsError) ||
-                noRepositoryTag ||
-                (!releaseBranchInstall && repositoryInstall && !version.trim())
-              }
-              onClick={() => onRun(installAction, installTarget)}
-            >
-              {busy ? (
-                <Loader2 className="size-4 animate-spin" />
-              ) : (
-                <Package className="size-4" />
-              )}
-              {busy ? '处理中…' : '安装所选版本'}
-            </button>
-          </div>
-        </section>
-      )}
-      {tab === 'version' && repositoryInstall && noRepositoryTag && (
-        <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-          该插件仓库没有可用的 Release，不能作为可复现的版本安装。
-        </p>
-      )}
-      {tab === 'version' && repositoryInstall && versionsError && (
-        <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-          无法读取插件 Release，请检查网络后重试。
-        </p>
-      )}
-      {tab === 'config' && (
-        <PackageConfigPanel
-          source={item.url}
-          readmeURL={item.url}
-          onSave={onSaveConfig}
-          showDocument={false}
-        />
-      )}
-      {tab === 'document' && (
-        <PackageDocumentationPanel
-          source={item.url}
-          fallbackURL={item.url}
-          kindLabel={kindLabel}
-        />
-      )}
-    </RobotPanel>
-  )
-}
-function ConfigReadmeCard({
-  docURL,
-  document,
-  loading,
-  error
-}: {
-  docURL?: string
-  document?: { source: string; markdown: string }
-  loading: boolean
-  error: boolean
-}) {
-  return (
-    <section className="catalog-document grid gap-3 rounded-xl border border-slate-200 bg-white p-4">
-      <header className="flex flex-wrap items-center justify-between gap-3">
-        <strong className="text-sm font-semibold text-slate-800">
-          配置说明
-        </strong>
-        {docURL && (
-          <a
-            className="text-xs font-semibold text-slate-600 hover:text-slate-900"
-            href={docURL}
-            target="_blank"
-            rel="noreferrer"
-          >
-            在浏览器打开 ↗
-          </a>
-        )}
-      </header>
-      {loading && <p className="text-sm text-slate-500">正在读取配置文档…</p>}
-      {error && (
-        <p className="text-sm text-slate-500">
-          配置文档暂时无法读取，请使用右上角链接查看。
-        </p>
-      )}
-      {document && (
-        <div className="max-h-96 overflow-auto rounded-lg border border-slate-100 bg-slate-50/40 p-3">
-          <MarkdownPage markdown={document.markdown} />
-        </div>
-      )}
-    </section>
-  )
-}
-function PackageConfigPanel({
-  source,
-  readmeURL,
-  onSave,
-  showDocument = true
-}: {
-  source: string
-  readmeURL?: string
-  showDocument?: boolean
-  onSave: (
-    packageName: string,
-    values: Record<string, unknown>
-  ) => Promise<boolean>
-}) {
-  const {
-    data,
-    isLoading: isConfigLoading,
-    error
-  } = useCatalogPackageConfigQuery(source, { skip: !source })
-  const docURL = data?.configSource?.readme || readmeURL
-  const {
-    data: document,
-    isFetching: isDocumentFetching,
-    error: documentError
-  } = useCatalogDocumentQuery(docURL ?? '', { skip: !showDocument || !docURL })
-  const [values, setValues] = useStoreState<Record<string, unknown>>({})
-  const scheduleSave = useAutoSave<Record<string, unknown>>(next =>
-    onSave(data?.package ?? '', next)
-  )
-  const updateValue = (name: string, value: unknown) => {
-    const next = { ...values, [name]: value }
-    setValues(next)
-    scheduleSave(next)
-  }
-  useEffect(() => {
-    if (!data) return
-    const next: Record<string, unknown> = {}
-    for (const field of data.fields ?? []) {
-      if (field.name in data.values) {
-        next[field.name] = data.values[field.name]
-      } else if (field.default !== undefined && field.default !== null) {
-        next[field.name] = field.default
-      }
-    }
-    setValues(current => (sameConfigValues(current, next) ? current : next))
-  }, [data, setValues])
-  if (isConfigLoading)
-    return (
-      <section className="package-config-panel grid gap-3 rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-500">
-        <p>正在读取包配置声明…</p>
-      </section>
-    )
-  if (error || !data)
-    return (
-      <section className="package-config-panel rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-500">
-        <p>
-          {error
-            ? operationErrorMessage(
-                error,
-                '无法读取机器人运行配置；请先在文本模式修复 YAML。'
-              )
-            : '该条目没有可读取的 alemonjs.config 声明。'}
-        </p>
-      </section>
-    )
-  if (!data.fields?.length)
-    return (
-      <div className="grid gap-4">
-        <section className="package-config-panel grid gap-3 rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-500">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <p className="m-0">该条目没有可填写的配置项。</p>
-            <ConfigSourceLinks
-              source={data.configSource}
-              readmeURL={readmeURL}
-            />
-          </div>
-        </section>
-        {showDocument && (
-          <ConfigReadmeCard
-            docURL={docURL}
-            document={document}
-            loading={isDocumentFetching}
-            error={Boolean(documentError)}
-          />
-        )}
-      </div>
-    )
-  return (
-    <div className="grid gap-4">
-      <section className="package-config-panel grid gap-4 rounded-xl border border-slate-200 bg-white p-4">
-        <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3">
-          <div className="grid gap-1">
-            <strong className="flex items-center gap-2 text-sm font-semibold text-slate-800">
-              <PlatformLogo logo={data.logo} className="size-4" />
-              运行配置
-            </strong>
-          </div>
-          <div className="flex items-center gap-3">
-            <small className="text-xs text-slate-400">自动保存</small>
-            <ConfigSourceLinks
-              source={data.configSource}
-              readmeURL={readmeURL}
-            />
-          </div>
-        </header>
-        <ConfigFieldsEditor
-          fields={data.fields ?? []}
-          values={values}
-          onChange={updateValue}
-        />
-      </section>
-      {showDocument && (
-        <ConfigReadmeCard
-          docURL={docURL}
-          document={document}
-          loading={isDocumentFetching}
-          error={Boolean(documentError)}
-        />
-      )}
-    </div>
-  )
-}
-function PackageDocumentationPanel({
-  source,
-  fallbackURL
-}: {
-  source: string
-  fallbackURL?: string
-  kindLabel: string
-}) {
-  const { data: config } = useCatalogPackageConfigQuery(source, {
-    skip: !source
-  })
-  const docURL = config?.configSource?.readme || fallbackURL
-  const {
-    data: document,
-    isFetching,
-    error
-  } = useCatalogDocumentQuery(docURL ?? '', { skip: !docURL })
-  return (
-    <section>
-      {docURL ? (
-        <ConfigReadmeCard
-          docURL={docURL}
-          document={document}
-          loading={isFetching}
-          error={Boolean(error)}
-        />
-      ) : (
-        <span className="text-xs text-slate-500">该条目暂未提供文档链接。</span>
-      )}
-    </section>
   )
 }
 function ProjectExtensionConfigsPanel({

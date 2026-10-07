@@ -1134,9 +1134,10 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	mux.HandleFunc("/api/v1/workspace", s.workspaceHandler)
 	mux.HandleFunc("/api/v1/workspace/open", s.workspaceOpenHandler)
 	mux.HandleFunc("/api/v1/catalog", s.catalogHandler)
+	mux.HandleFunc("/api/v1/catalog/resources", s.catalogResourcesHandler)
+	mux.HandleFunc("/api/v1/catalog/resource", s.catalogResourceHandler)
 	mux.HandleFunc("/api/v1/catalog/versions", s.catalogVersionsHandler)
 	mux.HandleFunc("/api/v1/catalog/document", s.catalogDocumentHandler)
-	mux.HandleFunc("/api/v1/catalog/package-config", s.catalogPackageConfigHandler)
 	mux.HandleFunc("/api/v1/setup/plugins", s.setupPluginsHandler)
 	mux.HandleFunc("/api/v1/setup/plugins/market", s.setupPluginMarketHandler)
 	mux.HandleFunc("/api/v1/setup/plugins/revision", s.setupPluginRevisionHandler)
@@ -1631,12 +1632,52 @@ func (s *server) gitBuildRetryTagHandler(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, result)
 }
 
+func (s *server) catalogResourcesHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
+		return
+	}
+	var result catalog.ResourcePage
+	if err := catalog.PlatformGet("resources", r.URL.Query(), &result); err != nil {
+		status := http.StatusBadGateway
+		if failure, ok := err.(*catalog.PlatformError); ok {
+			status = failure.Status
+		}
+		writeError(w, status, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+func (s *server) catalogResourceHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
+		return
+	}
+	var result struct {
+		Data catalog.Resource `json:"data"`
+	}
+	id := r.URL.Query().Get("id")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "缺少资源 ID")
+		return
+	}
+	if err := catalog.PlatformGet("resources/"+url.PathEscape(id), nil, &result); err != nil {
+		status := http.StatusBadGateway
+		if failure, ok := err.(*catalog.PlatformError); ok {
+			status = failure.Status
+		}
+		writeError(w, status, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
 func (s *server) catalogHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
 		return
 	}
-	groups, err := catalog.Fetch(r.URL.Query().Get("kind"))
+	groups, err := catalog.Categories(r.URL.Query().Get("kind"))
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
@@ -1662,25 +1703,12 @@ func (s *server) catalogDocumentHandler(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
 		return
 	}
-	document, err := catalog.LoadDocument(r.URL.Query().Get("url"))
+	document, err := catalog.LoadDocument(r.URL.Query().Get("id"))
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, document)
-}
-
-func (s *server) catalogPackageConfigHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
-		return
-	}
-	config, err := catalog.LoadPackageConfig(r.URL.Query().Get("url"))
-	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, config)
 }
 
 // setupPluginsHandler returns locally downloaded plugins, including disabled
@@ -1700,7 +1728,12 @@ func (s *server) setupPluginMarketHandler(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
 		return
 	}
-	writeJSON(w, http.StatusOK, s.plugins.Market())
+	items, err := s.plugins.MarketWithError()
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, items)
 }
 
 // setupPluginRevisionHandler exposes the plugin registry revision so the UI can

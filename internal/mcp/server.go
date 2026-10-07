@@ -242,8 +242,8 @@ func tools() []map[string]any {
 		toolExternal("alemonjs_list_releases", "列出版本", "从官方 GitHub 仓库读取支持应用的发布版本。", objectSchema(map[string]any{"app": map[string]any{"type": "string", "enum": []string{"alemonapp", "alx", "alemonx"}, "description": "应用 ID。"}}, "app")),
 		toolExternal("alemonjs_check_setup_update", "检查 Setup 更新", "检查当前 ALemonX 是否有官方更新。", objectSchema(map[string]any{})),
 		toolExternal("alemonjs_list_catalog", "读取生态目录", "读取官方 AlemonJS 应用或环境连接目录。", objectSchema(map[string]any{"kind": map[string]any{"type": "string", "enum": []string{"apps", "environment"}, "description": "目录类型。"}}, "kind")),
-		toolExternal("alemonjs_get_catalog_document", "读取生态文档", "读取官方生态目录中的 GitHub/Gitee 文档；不接受任意网络地址。", objectSchema(map[string]any{"source": stringSchema("官方目录条目的 URL。")}, "source")),
-		toolExternal("alemonjs_get_catalog_package_config", "读取生态配置", "读取官方生态目录中包声明的 AlemonJS 配置字段。", objectSchema(map[string]any{"source": stringSchema("官方目录条目的 URL。")}, "source")),
+		toolExternal("alemonjs_get_catalog_document", "读取生态文档", "读取开放平台资源详情中的 Markdown 文档。", objectSchema(map[string]any{"source": stringSchema("开放平台资源 ID。")}, "source")),
+		tool("alemonjs_get_catalog_package_config", "读取生态配置", "读取当前机器人已安装包的配置声明。", objectSchema(map[string]any{"root": stringSchema("机器人目录。"), "package": stringSchema("已安装包名。")}, "root", "package"), true, false),
 		tool("alemonjs_list_project_files", "列出项目文件", "列出机器人项目内可由 AI 管理的源码和配置文件。会排除密钥、Git 元数据、依赖目录和符号链接。", objectSchema(map[string]any{"root": stringSchema("机器人项目的绝对路径。")}, "root"), true, false),
 		tool("alemonjs_read_project_file", "读取项目文件", "读取机器人项目内的源码或配置文件。不能读取 .env、.npmrc、密钥、Git 元数据、依赖目录或符号链接。", objectSchema(map[string]any{"root": stringSchema("机器人项目的绝对路径。"), "path": stringSchema("相对于机器人项目根目录的文件路径，例如 src/index.ts。")}, "root", "path"), true, false),
 		tool("alemonjs_write_project_file", "写入项目文件", "创建或更新机器人项目中的源码或配置文件。必须在用户明确确认后调用；不能写入密钥、Git 元数据、依赖目录或符号链接。", objectSchema(map[string]any{"root": stringSchema("机器人项目的绝对路径。"), "path": stringSchema("相对于机器人项目根目录的文件路径；父目录必须已存在。"), "content": stringSchema("完整的新文本内容。"), "confirm": map[string]any{"type": "boolean", "description": "用户已经明确确认本次文件写入时为 true。"}}, "root", "path", "content", "confirm"), false, true),
@@ -385,12 +385,16 @@ func (s *Server) execute(name string, arguments json.RawMessage) (string, error)
 		return encodeResult(document)
 	case "alemonjs_get_catalog_package_config":
 		var input struct {
-			Source string `json:"source"`
+			Root    string `json:"root"`
+			Package string `json:"package"`
 		}
 		if err := decodeArguments(arguments, &input); err != nil {
 			return "", err
 		}
-		config, err := catalog.LoadPackageConfig(input.Source)
+		if err := s.authorizeRoot(input.Root); err != nil {
+			return "", err
+		}
+		config, err := s.robots.PackageConfig(input.Root, input.Package)
 		if err != nil {
 			return "", err
 		}
