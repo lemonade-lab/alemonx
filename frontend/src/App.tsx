@@ -1,4 +1,4 @@
-import { OfficialResourcePicker } from './components/OfficialResources'
+import { OfficialExtensionChoices } from './components/OfficialResources'
 import { useResourceOptionsQuery } from './store/workspaceApi'
 import { useStoreState } from './store/guideStore'
 import {
@@ -1556,16 +1556,11 @@ function FlowView({
           <>
             <h1>选择扩展包</h1>
             <div className="my-5 grid gap-3">
-              <OfficialResourcePicker
+              <OfficialExtensionChoices
                 label="项目扩展"
                 selected={capabilities}
-                multiple
                 onSelect={resource => toggleCapability(resource.id)}
               />
-              <p className="text-xs text-slate-500">
-                连接包与插件按官方安装方式添加；已有模板的兼容版本会保留，其余
-                npm 包使用默认版本。Git 插件使用仓库默认分支。
-              </p>
             </div>
           </>
         )
@@ -1797,12 +1792,18 @@ function FlowView({
                 </small>
               </button>
             </div>
-            <OfficialResourcePicker
-              label="机器人扩展（可选）"
-              selected={capabilities}
-              multiple
-              onSelect={resource => toggleCapability(resource.id)}
-            />
+            <details>
+              <summary className="cursor-pointer text-sm">
+                选择扩展包（可选）
+              </summary>
+              <div className="mt-3">
+                <OfficialExtensionChoices
+                  label="机器人扩展"
+                  selected={capabilities}
+                  onSelect={resource => toggleCapability(resource.id)}
+                />
+              </div>
+            </details>
             {folderError && (
               <ErrorNotice
                 message={folderError}

@@ -1,14 +1,10 @@
+import { ConnectionCatalog } from './OfficialResources'
 import {
-  ConnectionCatalog,
-  OfficialResourceInfo,
-  ModuleCatalog
-} from './OfficialResources'
-import {
-  useRobotRuntimeQuery,
-  usePackageInventoryQuery
+  usePackageInventoryQuery,
+  useResourceOptionsQuery
 } from '../store/workspaceApi'
 import { useStoreState } from '../store/guideStore'
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useState, useId, type ReactNode } from 'react'
 import { Settings, SlidersHorizontal } from 'lucide-react'
 import cn from 'classnames'
 import { load } from 'js-yaml'
@@ -331,11 +327,29 @@ export function RobotConfigForm({
 }: Props) {
   const [values, setValues] = useStoreState<Values>(empty)
   const [advanced, setAdvanced] = useState(false)
-  const { data: runtime } = useRobotRuntimeQuery(root ?? '', { skip: !root })
-  const { data: inventory, error: inventoryError } = usePackageInventoryQuery(
-    root ?? '',
-    { skip: !root }
-  )
+  const [customConnection, setCustomConnection] = useState(false)
+  const [moduleInstalling, setModuleInstalling] = useState('')
+  const [moduleMessage, setModuleMessage] = useState('')
+  const moduleOptionsID = useId()
+  const { data: inventory } = usePackageInventoryQuery(root ?? '', {
+    skip: !root
+  })
+  const { data: officialModules } = useResourceOptionsQuery('js-plugin', {
+    skip: !root
+  })
+  const installModule = async (name: string) => {
+    if (!onInstall) return
+    setModuleInstalling(name)
+    setModuleMessage('')
+    try {
+      if (!(await onInstall('install-module', name)))
+        setModuleMessage('安装未完成，请查看操作记录。')
+    } catch {
+      setModuleMessage('安装未完成，请查看操作记录。')
+    } finally {
+      setModuleInstalling('')
+    }
+  }
   const [invalidConfig, setInvalidConfig] = useState(false)
   useEffect(() => {
     const next = readValues(content)
@@ -416,12 +430,34 @@ export function RobotConfigForm({
                 <input
                   className={inputClass}
                   disabled={invalidConfig}
+                  aria-label={key === 'apps' ? `模块 ${index + 1}` : undefined}
+                  list={key === 'apps' ? moduleOptionsID : undefined}
                   value={item.value}
                   placeholder={hint}
                   onChange={event =>
                     updateItem(index, { value: event.target.value })
                   }
                 />
+                {key === 'apps' &&
+                  inventory &&
+                  onInstall &&
+                  officialModules?.data.some(
+                    resource =>
+                      resource.installMode === 'npm' &&
+                      resource.packageName === item.value
+                  ) &&
+                  !inventory?.items.some(
+                    fact => fact.name === item.value && fact.installed
+                  ) && (
+                    <button
+                      type="button"
+                      className="secondary-button min-h-8 shrink-0 px-2 text-xs"
+                      disabled={invalidConfig || Boolean(moduleInstalling)}
+                      onClick={() => void installModule(item.value)}
+                    >
+                      {moduleInstalling === item.value ? '安装中…' : '安装'}
+                    </button>
+                  )}
                 <label className="flex shrink-0 items-center gap-1.5 text-xs font-medium text-slate-600">
                   <input
                     type="checkbox"
@@ -529,141 +565,6 @@ export function RobotConfigForm({
           YAML；为避免覆盖原内容，已暂停可视化编辑。请切换到文本模式修复后再继续。
         </p>
       )}
-      {group(
-        '登录连接',
-        '常用',
-        <>
-          <label className={labelClass}>
-            已安装连接
-            <select
-              aria-label="已安装连接"
-              className={inputClass}
-              disabled={invalidConfig}
-              value={
-                runtime?.platforms.some(
-                  platform => platform.id === values.login
-                )
-                  ? values.login
-                  : ''
-              }
-              onChange={event => {
-                const login = event.target.value
-                saveValues(
-                  {
-                    ...values,
-                    login,
-                    platform:
-                      runtime?.platforms.find(item => item.id === login)
-                        ?.platformValue ?? ''
-                  },
-                  'login'
-                )
-              }}
-            >
-              <option value="">不选择</option>
-              {runtime?.platforms
-                .filter(platform => platform.installed)
-                .map(platform => (
-                  <option key={platform.id} value={platform.id}>
-                    {platform.label} · {platform.id}
-                  </option>
-                ))}
-            </select>
-          </label>
-          {field(
-            'login',
-            '登录标识（可手动填写）',
-            '如 onebot',
-            '来自已安装连接包的登录声明。'
-          )}
-          {field(
-            'platform',
-            '连接加载目标（可选）',
-            '按本地连接声明填写',
-            '选择已安装连接时自动更新，也可手动填写。'
-          )}
-          {root && onInstall && !invalidConfig && (
-            <div className="col-span-2">
-              <ConnectionCatalog
-                root={root}
-                onInstall={onInstall}
-                onLogin={(login, _pkg, platformValue) =>
-                  saveValues(
-                    { ...values, login, platform: platformValue ?? '' },
-                    'login'
-                  )
-                }
-              />
-            </div>
-          )}
-          {runtime?.platforms.find(platform => platform.id === values.login)
-            ?.package && (
-            <div className="col-span-2">
-              <OfficialResourceInfo
-                name={
-                  runtime.platforms.find(
-                    platform => platform.id === values.login
-                  )!.package
-                }
-              />
-            </div>
-          )}
-        </>
-      )}
-      {group(
-        '启用模块',
-        '常用',
-        <div className="col-span-2 grid gap-2">
-          {inventoryError && (
-            <p role="alert" className="text-xs">
-              本地模块暂时无法读取，仍可编辑自定义启用项。
-            </p>
-          )}
-          {(inventory?.items ?? [])
-            .filter(item => item.installed && item.loadable)
-            .map(item => (
-              <label
-                key={item.name}
-                className="flex items-center gap-2 text-xs"
-              >
-                <input
-                  type="checkbox"
-                  disabled={invalidConfig}
-                  checked={values.apps.some(
-                    app => app.value === item.name && app.enabled
-                  )}
-                  onChange={event => {
-                    const next = values.apps.filter(
-                      app => app.value !== item.name
-                    )
-                    setAccessItems('apps', [
-                      ...next,
-                      { value: item.name, enabled: event.target.checked }
-                    ])
-                  }}
-                />
-                {item.name} · {item.version || '本地版本'}
-              </label>
-            ))}
-          {root && onInstall && !invalidConfig && (
-            <ModuleCatalog
-              root={root}
-              onInstall={onInstall}
-              onEnable={name =>
-                setAccessItems('apps', [
-                  ...values.apps.filter(app => app.value !== name),
-                  { value: name, enabled: true }
-                ])
-              }
-            />
-          )}
-          {accessItemsField(
-            'apps',
-            '自定义启用项',
-            '可保留未安装或自定义插件的启用配置。'
-          )}
-        </div>
-      )}
       {extensionConfig}
       {group(
         '常规运行',
@@ -702,6 +603,32 @@ export function RobotConfigForm({
             'lib/index.js',
             '机器人启动时加载的文件。'
           )}
+          {root && onInstall ? (
+            <ConnectionCatalog
+              root={root}
+              value={customConnection ? '__custom__' : values.login}
+              busy={invalidConfig}
+              onInstall={onInstall}
+              onCustom={() => setCustomConnection(true)}
+              onClear={() => {
+                setCustomConnection(false)
+                saveValues({ ...values, login: '', platform: '' }, 'login')
+              }}
+              onLogin={(login, _pkg, platformValue) => {
+                setCustomConnection(false)
+                saveValues(
+                  { ...values, login, platform: platformValue ?? '' },
+                  'login'
+                )
+              }}
+            />
+          ) : (
+            field('login', '登录连接', '如 onebot')
+          )}
+          {customConnection && field('login', '登录标识', '如 onebot')}
+          {advanced &&
+            customConnection &&
+            field('platform', '连接加载目标（可选）')}
         </>
       )}
       {advanced &&
@@ -769,6 +696,28 @@ export function RobotConfigForm({
           <>
             {field('repeatedEventTime', '重复事件窗口（毫秒）', '60000')}
             {field('repeatedUserTime', '重复用户窗口（毫秒）', '1000')}
+            {accessItemsField('apps', '启用模块', '例如 alemonjs-openai')}
+            <datalist id={moduleOptionsID}>
+              {Array.from(
+                new Set([
+                  ...(inventory?.items ?? [])
+                    .filter(item => item.installed && item.loadable)
+                    .map(item => item.name),
+                  ...(officialModules?.data ?? [])
+                    .filter(item => item.installMode === 'npm')
+                    .map(item => item.packageName ?? '')
+                ])
+              )
+                .filter(Boolean)
+                .map(name => (
+                  <option key={name} value={name} />
+                ))}
+            </datalist>
+            {moduleMessage && (
+              <p role="status" className="text-xs">
+                {moduleMessage}
+              </p>
+            )}
           </>
         )}
       {advanced &&

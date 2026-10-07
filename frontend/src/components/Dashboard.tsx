@@ -1,6 +1,6 @@
 import {
   ConnectionCatalog,
-  OfficialResourcePicker,
+  OfficialDependencyOptions,
   OfficialResourceInfo
 } from './OfficialResources'
 import { useStoreState } from '../store/guideStore'
@@ -8930,10 +8930,6 @@ function BackpackPackageManager({
           </p>
         ) : tab === 'overview' ? (
           <section className="grid gap-3 rounded-xl border border-slate-200 bg-white p-4 text-sm">
-            <OfficialResourceInfo
-              name={item.name}
-              repository={status?.repository}
-            />
             <div className="grid gap-2 text-xs text-slate-600 sm:grid-cols-2">
               <span>启用状态：{status?.enabled ? '已启用' : '未启用'}</span>
               <span>
@@ -10616,14 +10612,8 @@ function RuntimePanel({
     setLoginDialogBusy(true)
     try {
       if (await onRun('install-connection', packageTarget)) {
+        await onRefreshOverview()
         await loadConnectionConfig(packageTarget)
-        // Re-read the preflight so the "确认启动" gate sees the package as
-        // installed instead of keeping it disabled on the pre-install snapshot.
-        const preflight = await loadRuntimePreflight(root, false).unwrap()
-        setLoginChoice(current =>
-          current ? { ...current, preflight } : current
-        )
-        setLoginDialogError('连接包已安装。请填写下方配置后点击“启动”。')
       }
     } catch (reason) {
       setLoginDialogError(operationErrorMessage(reason, '连接包安装未完成。'))
@@ -10636,7 +10626,7 @@ function RuntimePanel({
   // Without a login it starts directly; with one it persists the required
   // fields silently before launching.
   const startFromDialog = async () => {
-    if (!loginChoice) return
+    if (!loginChoice || selectedPlatform === '__pending__') return
     // 登录值只来自用户的选择：已识别平台或自由输入。选择“不选择”时清空，
     // 直接无 login 启动，避免沿用文件里的旧登录连接。
     const login =
@@ -10682,7 +10672,7 @@ function RuntimePanel({
         closeLoginDialog()
       } else {
         setLoginDialogError(
-          '启动未完成。请检查已安装连接、下方必填配置，或从官方目录安装连接包；详细原因见操作记录。'
+          '启动未完成。请检查已安装连接、下方必填配置，或先安装所选连接包；详细原因见操作记录。'
         )
       }
     } catch (reason) {
@@ -10761,30 +10751,14 @@ function RuntimePanel({
               </button>
             ))}
           </div>
-          {dependencyControl?.mode === 'add' && (
-            <OfficialResourcePicker
-              root={root}
-              label="选择官方依赖"
-              npmOnly
-              onSelect={resource =>
-                setDependencyControl(current =>
-                  current
-                    ? {
-                        ...current,
-                        name: resource.packageName ?? '',
-                        version: ''
-                      }
-                    : current
-                )
-              }
-            />
-          )}
-          {dependencyControl?.name && (
-            <OfficialResourceInfo name={dependencyControl.name} />
-          )}
           <label className="grid gap-1.5 text-xs font-medium text-slate-600">
             包名
             <input
+              list={
+                dependencyControl?.mode === 'add'
+                  ? 'official-dependency-options'
+                  : undefined
+              }
               className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm font-normal text-slate-800 outline-none transition focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
               value={dependencyControl?.name ?? ''}
               onChange={event =>
@@ -10800,6 +10774,9 @@ function RuntimePanel({
               autoFocus
             />
           </label>
+          {dependencyControl?.mode === 'add' && (
+            <OfficialDependencyOptions id="official-dependency-options" />
+          )}
           <label className="grid gap-1.5 text-xs font-medium text-slate-600">
             版本（可选）
             <input
@@ -10863,21 +10840,6 @@ function RuntimePanel({
             : '请先填写连接包声明的必填字段。'
         }
         message={validationMessage}
-        children={
-          validationTitle !== '已有进程在运行' ? (
-            <ConnectionCatalog
-              root={root}
-              busy={busy}
-              onInstall={(action, target) => onRun(action, target)}
-              onLogin={(login, pkg) => {
-                void onSaveLogin(login, pkg)
-                setCustomLogin(login)
-                setCustomPackage(pkg)
-                setSelectedPlatform(login)
-              }}
-            />
-          ) : undefined
-        }
         confirmLabel="知道了"
         cancelLabel="关闭"
         onCancel={() => setValidationMessage('')}
@@ -10928,22 +10890,30 @@ function RuntimePanel({
                   </strong>
                 </header>
                 <div className="grid gap-3 p-3 sm:grid-cols-3">
-                  <label className="grid gap-1 text-xs font-semibold text-slate-600">
-                    已识别平台
-                    <select
-                      value={selectedPlatform}
-                      onChange={event => choosePlatform(event.target.value)}
-                    >
-                      <option value="">不选择</option>
-                      <option value="__custom__">自由输入</option>
-                      {(overview?.platforms ?? []).map(item => (
-                        <option key={item.id} value={item.id}>
-                          {item.label} · {item.id}
-                          {item.installed ? ' · 已安装' : ' · 需安装'}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
+                  <ConnectionCatalog
+                    root={root}
+                    value={selectedPlatform}
+                    label="登录平台"
+                    busy={busy || loginDialogBusy}
+                    onInstall={(action, target) => onRun(action, target)}
+                    onClear={() => void choosePlatform('')}
+                    onCustom={() => void choosePlatform('__custom__')}
+                    onPending={() => {
+                      setSelectedPlatform('__pending__')
+                      setCustomLogin('')
+                      setCustomPackage('')
+                      setConnectionConfig(null)
+                      setConnectionValues({})
+                    }}
+                    onLogin={(login, pkg) => {
+                      setSelectedPlatform(login)
+                      setCustomLogin(login)
+                      setCustomPackage(pkg)
+                      setLoginDialogError('')
+                      void onRefreshOverview()
+                      void loadConnectionConfig(pkg)
+                    }}
+                  />
                   {selectedPlatform === '__custom__' && (
                     <>
                       <label className="grid gap-1 text-xs font-semibold text-slate-600">
@@ -10974,36 +10944,18 @@ function RuntimePanel({
                     </>
                   )}
                 </div>
-                <div className="border-t border-slate-200 p-3">
-                  <ConnectionCatalog
-                    root={root}
-                    busy={busy || loginDialogBusy}
-                    onInstall={(action, target) => onRun(action, target)}
-                    onLogin={(login, pkg) => {
-                      setSelectedPlatform(login)
-                      setCustomLogin(login)
-                      setCustomPackage(pkg)
-                      void loadConnectionConfig(pkg)
-                    }}
-                  />
-                </div>
-                {packageTarget && (
-                  <div className="p-3">
-                    <OfficialResourceInfo name={packageTarget} />
-                  </div>
-                )}
-                {packageTarget &&
-                  (!knownPlatform || !knownPlatform.installed) && (
-                    <footer className="flex items-center justify-between border-t border-slate-200 bg-slate-50 px-3 py-2">
+                {selectedPlatform === '__custom__' &&
+                  packageTarget &&
+                  !knownPlatform?.installed && (
+                    <footer className="flex items-center justify-between border-t border-slate-200 px-3 py-2">
                       <small className="text-xs text-slate-500">
-                        {packageTarget} 尚未安装；安装后才能读取它的连接配置。
+                        安装后可读取连接配置。
                       </small>
                       <button
-                        className="secondary-button gap-1.5"
-                        disabled={loginDialogBusy || busy}
+                        className="secondary-button"
+                        disabled={busy || loginDialogBusy}
                         onClick={() => void installSelectedConnection()}
                       >
-                        <Package className="size-4" />
                         安装连接包
                       </button>
                     </footer>
@@ -11064,6 +11016,7 @@ function RuntimePanel({
                   )
                   .map(field => field.description || field.name)
                 const blocked =
+                  selectedPlatform === '__pending__' ||
                   (loginChoice.requireLogin && !userLogin) ||
                   (userLogin && missing.length > 0)
                 return (
@@ -11072,9 +11025,11 @@ function RuntimePanel({
                     disabled={loginDialogBusy || busy || blocked}
                     title={
                       blocked
-                        ? !userLogin
-                          ? '在线聊天必须选择或填写登录连接。'
-                          : `请先填写必填项：${missing.join('、')}`
+                        ? selectedPlatform === '__pending__'
+                          ? '请先安装所选连接包。'
+                          : !userLogin
+                            ? '在线聊天必须选择或填写登录连接。'
+                            : `请先填写必填项：${missing.join('、')}`
                         : userLogin
                           ? '会先保存当前连接配置，再启动机器人。'
                           : '无 login 启动机器人。'

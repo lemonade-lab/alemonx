@@ -1,9 +1,4 @@
-import {
-  resourceTarget,
-  findResource,
-  factFor,
-  packageState
-} from '../lib/officialResources'
+import { resourceTarget, findResource, factFor } from '../lib/officialResources'
 import { useState } from 'react'
 import Markdown from 'markdown-to-jsx'
 import {
@@ -14,88 +9,74 @@ import {
   type MarketResource
 } from '../store/workspaceApi'
 
-export function OfficialResourcePicker({
-  type = 'connector,js-plugin',
-  label = '官方资源',
-  onSelect,
-  selected = [],
-  multiple = false,
-  root,
-  npmOnly = false
+export function OfficialExtensionChoices({
+  label,
+  selected,
+  onSelect
 }: {
-  type?: string
-  label?: string
+  label: string
+  selected: string[]
   onSelect: (resource: MarketResource) => void
-  selected?: string[]
-  multiple?: boolean
-  root?: string
-  npmOnly?: boolean
 }) {
-  const [query, setQuery] = useState('')
-  const { data, isFetching, error, refetch } = useResourceOptionsQuery(type)
-  const { data: inventory, error: inventoryError } = usePackageInventoryQuery(
-    root ?? '',
-    {
-      skip: !root
-    }
-  )
-  const items = (data?.data ?? []).filter(
-    item =>
-      (!npmOnly || item.installMode === 'npm') &&
-      `${item.name} ${item.description} ${item.packageName ?? ''}`
-        .toLowerCase()
-        .includes(query.toLowerCase())
+  const { data, isFetching, error, refetch } = useResourceOptionsQuery(
+    'connector,js-plugin'
   )
   return (
-    <section className="grid gap-2" aria-label={label}>
-      <strong className="text-xs">{label}</strong>
-      <input
-        aria-label={`搜索${label}`}
-        className="min-h-9 w-full rounded border border-(--theme-border-default) bg-(--theme-surface-panel) px-2 text-sm"
-        placeholder="搜索名称、包名或简介"
-        maxLength={200}
-        value={query}
-        onChange={event => setQuery(event.target.value)}
-      />
+    <div className="grid gap-2.5" aria-label={label}>
       {error ? (
-        <div role="alert" className="text-xs">
-          官方目录暂不可用，本地功能仍可使用。
-          <button className="text-button" onClick={() => void refetch()}>
+        <p role="alert" className="text-xs">
+          扩展选项暂时无法读取。
+          <button
+            type="button"
+            className="text-button"
+            onClick={() => void refetch()}
+          >
             重试
           </button>
-        </div>
+        </p>
       ) : isFetching ? (
         <p role="status" className="text-xs">
-          正在读取官方目录…
+          正在读取扩展选项…
         </p>
       ) : (
-        <div className="grid max-h-56 gap-1 overflow-y-auto">
-          {items.map(item => (
-            <button
-              type="button"
-              key={item.id}
-              aria-pressed={multiple ? selected.includes(item.id) : undefined}
-              disabled={!resourceTarget(item)}
-              className={`grid gap-1 rounded border border-(--theme-border-default) p-2 text-left text-xs ${selected.includes(item.id) ? 'bg-(--theme-accent-soft)' : ''}`}
-              onClick={() => onSelect(item)}
-            >
-              <strong>
-                {multiple ? (selected.includes(item.id) ? '☑ ' : '☐ ') : ''}
-                {item.name}
-              </strong>
-              <span>{item.description}</span>
-              <small>
-                {item.installMode === 'npm' ? item.packageName : 'Git'}
-                {root
-                  ? ` · ${inventoryError || !inventory ? '本地状态未读取' : packageState(factFor(item, inventory.items))}`
-                  : ''}
-              </small>
-            </button>
-          ))}
-          {!items.length && <p className="text-xs">暂无匹配资源。</p>}
-        </div>
+        (data?.data ?? []).map(resource => (
+          <button
+            type="button"
+            key={resource.id}
+            className={
+              selected.includes(resource.id) ? 'choice selected' : 'choice'
+            }
+            aria-pressed={selected.includes(resource.id)}
+            disabled={!resourceTarget(resource)}
+            onClick={() => onSelect(resource)}
+          >
+            <strong>
+              {resource.name === resource.packageName
+                ? resource.description || resource.name
+                : resource.name}
+            </strong>
+            <small>
+              {selected.includes(resource.id) ? '已选择' : '点击添加'}
+            </small>
+          </button>
+        ))
       )}
-    </section>
+    </div>
+  )
+}
+
+export function OfficialDependencyOptions({ id }: { id: string }) {
+  const { data } = useResourceOptionsQuery('connector,js-plugin')
+  return (
+    <datalist id={id}>
+      {(data?.data ?? [])
+        .filter(item => item.installMode === 'npm' && resourceTarget(item))
+        .map(item => (
+          <option key={item.id} value={item.packageName}>
+            {item.name === item.packageName ? item.description : item.name}
+          </option>
+        ))}
+    </datalist>
   )
 }
 
@@ -141,214 +122,187 @@ export function OfficialResourceInfo({
   const item = findResource(data?.data ?? [], name, repository)
   if (!item) return null
   return (
-    <section className="grid gap-2 rounded border border-(--theme-border-default) p-3 text-xs">
-      <strong>{item.name}</strong>
-      <p>{item.description}</p>
+    <div className="grid gap-2 text-xs">
       <button
         type="button"
         className="text-button w-fit"
         onClick={() => setOpen(!open)}
       >
-        {open ? '收起平台文档' : '查看平台文档'}
+        {open ? '收起官方文档' : '官方文档'}
       </button>
       {open && <ResourceDocument id={item.id} />}
-    </section>
-  )
-}
-
-export function ConnectionCatalog({
-  root,
-  busy,
-  onInstall,
-  onLogin
-}: {
-  root: string
-  busy?: boolean
-  onInstall: (action: string, target: string) => Promise<boolean>
-  onLogin: (login: string, pkg: string, platformValue?: string) => void
-}) {
-  const [selected, setSelected] = useState<MarketResource | null>(null)
-  const [working, setWorking] = useState(false)
-  const [message, setMessage] = useState('')
-  const { refetch } = useRobotRuntimeQuery(root, { skip: !root })
-  const { refetch: refetchInventory } = usePackageInventoryQuery(root, {
-    skip: !root
-  })
-  return (
-    <div className="grid gap-3">
-      <details>
-        <summary className="cursor-pointer text-xs font-semibold">
-          从官方目录选择连接包
-        </summary>
-        <div className="mt-3">
-          <OfficialResourcePicker
-            type="connector"
-            root={root}
-            label="官方连接包"
-            onSelect={item => {
-              setSelected(item)
-              setMessage('')
-            }}
-          />
-        </div>
-      </details>
-      {selected && (
-        <div className="grid gap-2 rounded border border-(--theme-border-default) p-3 text-xs">
-          <strong>{selected.name}</strong>
-          <span>{selected.description}</span>
-          <button
-            type="button"
-            className="primary-button w-fit"
-            disabled={busy || working || !resourceTarget(selected)}
-            onClick={() => {
-              setWorking(true)
-              setMessage('')
-              void (async () => {
-                try {
-                  const inventory = await refetchInventory().unwrap()
-                  const existing = factFor(selected, inventory.items)
-                  const before = await refetch().unwrap()
-                  let choices = before.platforms.filter(
-                    platform =>
-                      platform.package ===
-                        (existing?.name ?? selected.packageName) &&
-                      platform.installed
-                  )
-                  if (!existing?.installed) {
-                    if (
-                      !(await onInstall(
-                        'install-connection',
-                        resourceTarget(selected)
-                      ))
-                    ) {
-                      setMessage('安装未完成，请查看操作记录。')
-                      return
-                    }
-                    const refreshed = await refetchInventory().unwrap()
-                    const installed = factFor(selected, refreshed.items)
-                    const overview = await refetch().unwrap()
-                    choices = overview.platforms.filter(
-                      platform =>
-                        platform.package ===
-                          (installed?.name ?? selected.packageName) &&
-                        platform.installed
-                    )
-                  }
-                  if (choices.length === 1) {
-                    onLogin(
-                      choices[0].id,
-                      choices[0].package,
-                      choices[0].platformValue
-                    )
-                    setMessage('已读取本地登录声明，请填写配置。')
-                  } else
-                    setMessage(
-                      choices.length
-                        ? '连接包包含多个登录入口，请从已安装连接中选择。'
-                        : '连接包已安装，但尚未读取到登录声明；可刷新或手动填写。'
-                    )
-                } catch {
-                  setMessage('连接操作未完成，请检查本地包与操作记录。')
-                } finally {
-                  setWorking(false)
-                }
-              })()
-            }}
-          >
-            {working ? '处理中…' : '安装／使用此连接'}
-          </button>
-          <details>
-            <summary className="cursor-pointer">连接文档</summary>
-            <ResourceDocument id={selected.id} />
-          </details>
-          <p role="status">{message}</p>
-        </div>
-      )}
     </div>
   )
 }
 
-export function ModuleCatalog({
+// One selector serves local logins and official install candidates.
+export function ConnectionCatalog({
   root,
+  busy,
   onInstall,
-  onEnable
+  onLogin,
+  value,
+  label = '登录连接',
+  onClear,
+  onCustom,
+  onPending
 }: {
   root: string
+  busy?: boolean
+  value?: string
+  label?: string
   onInstall: (action: string, target: string) => Promise<boolean>
-  onEnable: (name: string) => void
+  onLogin: (login: string, pkg: string, platformValue?: string) => void
+  onClear?: () => void
+  onCustom?: () => void
+  onPending?: () => void
 }) {
-  const [selected, setSelected] = useState<MarketResource | null>(null)
+  const [pending, setPending] = useState<MarketResource | null>(null)
+  const [localValue, setLocalValue] = useState('')
   const [working, setWorking] = useState(false)
   const [message, setMessage] = useState('')
-  const { refetch } = usePackageInventoryQuery(root)
+  const { data: catalog, error: catalogError } =
+    useResourceOptionsQuery('connector')
+  const { data: runtime, refetch } = useRobotRuntimeQuery(root, { skip: !root })
+  const { data: inventory, refetch: refetchInventory } =
+    usePackageInventoryQuery(root, { skip: !root })
+  const platforms = (runtime?.platforms ?? []).filter(item => item.installed)
+  const candidates = (catalog?.data ?? []).filter(
+    resource =>
+      !platforms.some(
+        platform =>
+          platform.package ===
+          (factFor(resource, inventory?.items ?? [])?.name ??
+            resource.packageName)
+      )
+  )
+  const selectLogin = (
+    platform: NonNullable<typeof runtime>['platforms'][number]
+  ) => {
+    setPending(null)
+    setLocalValue(platform.id)
+    onLogin(platform.id, platform.package, platform.platformValue)
+  }
   return (
     <div className="grid gap-2">
-      <details>
-        <summary className="cursor-pointer text-xs font-semibold">
-          从官方目录添加模块
-        </summary>
-        <div className="mt-3">
-          <OfficialResourcePicker
-            root={root}
-            type="js-plugin"
-            label="官方插件与模块"
-            onSelect={resource => {
-              setSelected(resource)
-              setMessage('')
-            }}
-          />
-        </div>
-      </details>
-      {selected && (
-        <section className="grid gap-2 rounded border border-(--theme-border-default) p-3 text-xs">
-          <strong>{selected.name}</strong>
-          <button
-            type="button"
-            className="primary-button w-fit"
-            disabled={working || !resourceTarget(selected)}
-            onClick={() => {
-              setWorking(true)
-              setMessage('')
-              void (async () => {
-                try {
-                  let fact = factFor(selected, (await refetch().unwrap()).items)
-                  if (!fact?.installed) {
-                    if (
-                      !(await onInstall(
-                        selected.installMode === 'npm'
-                          ? 'install-module'
-                          : 'install-package',
-                        resourceTarget(selected)
-                      ))
-                    ) {
-                      setMessage('安装未完成，请查看操作记录。')
-                      return
-                    }
-                    fact = factFor(selected, (await refetch().unwrap()).items)
-                  }
-                  if (fact?.installed && fact.loadable) {
-                    onEnable(fact.name)
-                    setMessage('已加入启用列表，请保存配置。')
-                  } else
-                    setMessage(
-                      '未读取到可加载的本地模块声明，请检查安装结果或编辑自定义启用项。'
-                    )
-                } catch {
-                  setMessage('模块操作未完成，请检查操作记录。')
-                } finally {
-                  setWorking(false)
+      <label className="grid gap-1 text-xs font-semibold text-slate-600">
+        {label}
+        <select
+          aria-label={label}
+          disabled={busy || working}
+          value={pending ? `resource:${pending.id}` : (value ?? localValue)}
+          onChange={event => {
+            const next = event.target.value
+            setMessage('')
+            setPending(null)
+            setLocalValue(next)
+            if (!next) {
+              onClear?.()
+              return
+            }
+            if (next === '__custom__') {
+              onCustom?.()
+              return
+            }
+            const platform = platforms.find(item => item.id === next)
+            if (platform) {
+              selectLogin(platform)
+              return
+            }
+            const resource = candidates.find(
+              item => `resource:${item.id}` === next
+            )
+            if (resource) {
+              setPending(resource)
+              onPending?.()
+            }
+          }}
+        >
+          <option value="">不选择</option>
+          {onCustom && <option value="__custom__">自由输入</option>}
+          {platforms.map(platform => (
+            <option key={platform.id} value={platform.id}>
+              {platform.label} · {platform.id}
+            </option>
+          ))}
+          {candidates.map(resource => (
+            <option
+              key={resource.id}
+              value={`resource:${resource.id}`}
+              disabled={!resourceTarget(resource)}
+            >
+              {resource.name === resource.packageName
+                ? resource.description || resource.name
+                : resource.name}{' '}
+              · 需安装
+            </option>
+          ))}
+          {value &&
+            value !== '__pending__' &&
+            value !== '__custom__' &&
+            !platforms.some(item => item.id === value) && (
+              <option value={value}>{value}</option>
+            )}
+        </select>
+      </label>
+      {catalogError && (
+        <small className="text-(--theme-text-secondary)">
+          官方选项暂时无法读取，仍可选择本地连接。
+        </small>
+      )}
+      {pending && (
+        <button
+          type="button"
+          className="secondary-button w-fit"
+          disabled={busy || working}
+          onClick={() => {
+            setWorking(true)
+            setMessage('')
+            void (async () => {
+              try {
+                if (
+                  !(await onInstall(
+                    'install-connection',
+                    resourceTarget(pending)
+                  ))
+                ) {
+                  setMessage('安装未完成，请查看操作记录。')
+                  return
                 }
-              })()
-            }}
-          >
-            {working ? '处理中…' : '安装／启用此模块'}
-          </button>
-          <details>
-            <summary className="cursor-pointer">模块文档</summary>
-            <ResourceDocument id={selected.id} />
-          </details>
-          <p role="status">{message}</p>
-        </section>
+                const facts = await refetchInventory().unwrap()
+                const installed = factFor(pending, facts.items)
+                const fresh = await refetch().unwrap()
+                const choices = fresh.platforms.filter(
+                  item =>
+                    item.installed &&
+                    item.package === (installed?.name ?? pending.packageName)
+                )
+                if (choices.length === 1) selectLogin(choices[0])
+                else {
+                  setPending(null)
+                  setLocalValue('')
+                  onClear?.()
+                  setMessage(
+                    choices.length
+                      ? '请在选项中选择此连接包的登录入口。'
+                      : '未读取到登录声明，可使用自由输入。'
+                  )
+                }
+              } catch {
+                setMessage('安装未完成，请查看操作记录。')
+              } finally {
+                setWorking(false)
+              }
+            })()
+          }}
+        >
+          {working ? '安装中…' : '安装连接包'}
+        </button>
+      )}
+      {message && (
+        <p role="status" className="m-0 text-xs">
+          {message}
+        </p>
       )}
     </div>
   )
