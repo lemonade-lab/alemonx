@@ -5,15 +5,16 @@
     "@alemonjs/onebot": "^2.1.23",
     "@alemonjs/qq-bot": "^2.1.37",
     "@types/koa-router": "^7.4.8",
-    "@types/node": "^22",
+    "@types/node": "^26.6.5",
     "@types/react": "^19.0.0",
     "alemonjs": "^2.1.109",
     "cssnano": "^8.0.5",
     "jsxp": "^1.4.0",
     "koa-router": "^14.0.0",
-    "lvyjs": "^0.3.0-alpha.5",
-    "react": "^19.0.0",
-    "tailwindcss": "3"
+    "lvyjs": "^0.3.1",
+    "lvyjs-plugin-postcss": "^0.1.0",
+    "lvyjs-plugin-tailwindcss": "^0.1.1",
+    "react": "^19.0.0"
   },
   "exports": {
     ".": "./lib/index.js",
