@@ -4229,6 +4229,7 @@ export function Dashboard({
       )}
       {gitProject && (
         <RobotGitControl
+          key={gitProject.path}
           project={gitProject}
           minimized={gitMinimized}
           zIndex={windowLayers.git}

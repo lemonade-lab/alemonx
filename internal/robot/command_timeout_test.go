@@ -6,6 +6,9 @@ import (
 )
 
 func TestCommandTimeouts(t *testing.T) {
+	if got := commandTimeout("git", "ls-remote", "origin"); got != 30*time.Second {
+		t.Fatalf("git status probe timeout = %s, want 30s", got)
+	}
 	if got := commandTimeout("git", "fetch", "origin"); got != 10*time.Minute {
 		t.Fatalf("git fetch timeout = %s, want 10m", got)
 	}

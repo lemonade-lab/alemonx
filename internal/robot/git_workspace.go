@@ -11,23 +11,32 @@ import (
 // no package-build or release-branch checks: Git management and publishing are
 // separate user workflows.
 type GitWorkspaceStatus struct {
-	Root            string            `json:"root"`
-	Repository      bool              `json:"repository"`
-	GitRoot         string            `json:"gitRoot,omitempty"`
-	Remote          string            `json:"remote,omitempty"`
-	Branch          string            `json:"branch,omitempty"`
-	Upstream        string            `json:"upstream,omitempty"`
-	RemoteReachable bool              `json:"remoteReachable"`
-	RemoteSynced    bool              `json:"remoteSynced"`
-	RemoteChecked   bool              `json:"remoteChecked"`
-	Ahead           int               `json:"ahead"`
-	Behind          int               `json:"behind"`
-	Changes         []GitChange       `json:"changes"`
-	Branches        []GitBranch       `json:"branches"`
-	RemoteBranches  []GitRemoteBranch `json:"remoteBranches"`
-	Commits         []GitCommit       `json:"commits"`
-	Tags            []GitTag          `json:"tags"`
-	Remotes         []GitRemote       `json:"remotes"`
+	Root             string            `json:"root"`
+	Repository       bool              `json:"repository"`
+	AtRepositoryRoot bool              `json:"atRepositoryRoot"`
+	GitRoot          string            `json:"gitRoot,omitempty"`
+	RemoteName       string            `json:"remoteName,omitempty"`
+	RemoteAdvice     string            `json:"remoteAdvice,omitempty"`
+	Stashes          []GitStash        `json:"stashes"`
+	Remote           string            `json:"remote,omitempty"`
+	Branch           string            `json:"branch,omitempty"`
+	Upstream         string            `json:"upstream,omitempty"`
+	RemoteReachable  bool              `json:"remoteReachable"`
+	RemoteSynced     bool              `json:"remoteSynced"`
+	RemoteChecked    bool              `json:"remoteChecked"`
+	Ahead            int               `json:"ahead"`
+	Behind           int               `json:"behind"`
+	AuthorName       string            `json:"authorName,omitempty"`
+	AuthorEmail      string            `json:"authorEmail,omitempty"`
+	IndexRevision    string            `json:"indexRevision,omitempty"`
+	MergeInProgress  bool              `json:"mergeInProgress"`
+	HistoryHasMore   bool              `json:"historyHasMore"`
+	Changes          []GitChange       `json:"changes"`
+	Branches         []GitBranch       `json:"branches"`
+	RemoteBranches   []GitRemoteBranch `json:"remoteBranches"`
+	Commits          []GitCommit       `json:"commits"`
+	Tags             []GitTag          `json:"tags"`
+	Remotes          []GitRemote       `json:"remotes"`
 }
 
 type GitBranch struct {
@@ -57,8 +66,12 @@ type GitRemote struct {
 }
 
 type GitChange struct {
-	Status string `json:"status"`
-	Path   string `json:"path"`
+	Status       string `json:"status"`
+	Path         string `json:"path"`
+	OriginalPath string `json:"originalPath,omitempty"`
+	Staged       bool   `json:"staged"`
+	Unstaged     bool   `json:"unstaged"`
+	Conflict     bool   `json:"conflict"`
 }
 
 func GitWorkspace(root string) (GitWorkspaceStatus, error) { return GitWorkspaceView(root, "all") }
@@ -67,6 +80,17 @@ func GitWorkspace(root string) (GitWorkspaceStatus, error) { return GitWorkspace
 // tag lists and remote branch lists are therefore not read when opening the
 // default "提交" tab.
 func GitWorkspaceView(root, view string) (GitWorkspaceStatus, error) {
+	return GitWorkspaceViewForRemote(root, view, "")
+}
+
+func GitWorkspaceViewForRemote(root, view, remote string) (GitWorkspaceStatus, error) {
+	return GitWorkspaceViewWithOptions(root, view, remote, 0)
+}
+
+func GitWorkspaceViewWithOptions(root, view, remote string, offset int) (GitWorkspaceStatus, error) {
+	if offset < 0 || offset > 100000 {
+		return GitWorkspaceStatus{}, errors.New("提交记录页码无效")
+	}
 	path, err := workspacePath(root)
 	if err != nil {
 		return GitWorkspaceStatus{}, err
@@ -77,19 +101,26 @@ func GitWorkspaceView(root, view string) (GitWorkspaceStatus, error) {
 		return status, nil
 	}
 	status.Repository = true
-	status.GitRoot, _ = gitRun(path, "rev-parse", "--show-toplevel")
+	status.GitRoot, _ = gitWorkspaceRoot(path)
+	status.AtRepositoryRoot = sameWorkspacePath(path, status.GitRoot)
 	status.Branch, _ = gitRun(path, "branch", "--show-current")
+	status.AuthorName, _ = gitRun(path, "config", "--get", "user.name")
+	status.AuthorEmail, _ = gitRun(path, "config", "--get", "user.email")
+	if _, err := gitRun(path, "rev-parse", "--verify", "MERGE_HEAD"); err == nil {
+		status.MergeInProgress = true
+	}
+	var loadError error
 	loadChanges := func() {
-		if output, err := gitRun(path, "status", "--porcelain=v1"); err == nil {
-			for _, line := range strings.Split(output, "\n") {
-				if len(line) < 4 {
-					continue
-				}
-				file := strings.TrimSpace(line[3:])
-				if renamed := strings.LastIndex(file, " -> "); renamed >= 0 {
-					file = strings.TrimSpace(file[renamed+4:])
-				}
-				status.Changes = append(status.Changes, GitChange{Status: strings.TrimSpace(line[:2]), Path: file})
+		status.Changes, loadError = gitWorkspaceChanges(path)
+		status.IndexRevision, _ = gitWorkspaceIndexRevision(path)
+		if status.Changes == nil {
+			status.Changes = []GitChange{}
+		}
+		status.Stashes = []GitStash{}
+		for _, line := range gitLines(path, "stash", "list", "--format=%H%x1f%gd%x1f%s") {
+			parts := strings.SplitN(line, "\x1f", 3)
+			if len(parts) == 3 {
+				status.Stashes = append(status.Stashes, GitStash{SHA: parts[0], Ref: parts[1], Subject: parts[2]})
 			}
 		}
 	}
@@ -122,9 +153,10 @@ func GitWorkspaceView(root, view string) (GitWorkspaceStatus, error) {
 			status.Tags = append(status.Tags, tag)
 		}
 	}
-	loadRemotes := func() {
-		if output, err := gitRun(path, "remote", "get-url", "origin"); err == nil {
-			status.Remote = output
+	loadRemotes := func(check bool) {
+		for _, name := range gitLines(path, "remote") {
+			url, _ := gitRun(path, "remote", "get-url", name)
+			status.Remotes = append(status.Remotes, GitRemote{Name: name, URL: url})
 		}
 		if upstream, err := gitRun(path, "rev-parse", "--abbrev-ref", "@{upstream}"); err == nil {
 			status.Upstream = upstream
@@ -132,107 +164,142 @@ func GitWorkspaceView(root, view string) (GitWorkspaceStatus, error) {
 				_, _ = fmt.Sscanf(counts, "%d\t%d", &status.Ahead, &status.Behind)
 			}
 		}
-		// Keep Git management consistent with the release preflight. The
-		// tracking ref above is local cache; this query checks the actual remote
-		// without changing the worktree or remote-tracking refs. Reachability is
-		// intentionally independent from whether the current local branch exists
-		// on that remote: a clone may be on a stale/renamed branch while origin is
-		// still perfectly reachable.
-		if output, err := gitRun(path, "ls-remote", "origin"); err == nil {
-			status.RemoteReachable = true
-			status.RemoteChecked = true
-			remoteHeads := map[string]string{}
-			for _, line := range strings.Split(output, "\n") {
-				fields := strings.Fields(line)
-				if len(fields) >= 2 && strings.HasPrefix(fields[1], "refs/heads/") {
-					remoteHeads[strings.TrimPrefix(fields[1], "refs/heads/")] = fields[0]
-				}
-			}
-			if status.Branch != "" && validGitRef(status.Branch) {
-				if remoteHead, exists := remoteHeads[status.Branch]; exists {
-					if head, headErr := gitRun(path, "rev-parse", "HEAD"); headErr == nil {
-						status.RemoteSynced = strings.TrimSpace(head) == remoteHead
-					}
-				}
+		name, err := gitWorkspaceRemote(path, remote)
+		if err != nil {
+			return
+		}
+		status.RemoteName = name
+		status.Remote, _ = gitRun(path, "remote", "get-url", name)
+		if !check {
+			return
+		}
+		status.RemoteChecked = true
+		output, err := runWithEnv(path, map[string]string{"GIT_TERMINAL_PROMPT": "0"}, "git", "ls-remote", "--heads", name)
+		if err != nil {
+			status.RemoteAdvice = strings.ReplaceAll(remoteAdvice(output), "origin", name)
+			return
+		}
+		status.RemoteReachable = true
+		mergeRef := "refs/heads/" + status.Branch
+		if upstreamRemote, _ := gitRun(path, "config", "--get", "branch."+status.Branch+".remote"); upstreamRemote == name {
+			if ref, err := gitRun(path, "config", "--get", "branch."+status.Branch+".merge"); err == nil {
+				mergeRef = ref
 			}
 		}
-		for _, name := range gitLines(path, "remote") {
-			url, _ := gitRun(path, "remote", "get-url", name)
-			status.Remotes = append(status.Remotes, GitRemote{Name: name, URL: url})
+		head, _ := gitRun(path, "rev-parse", "HEAD")
+		for _, line := range strings.Split(output, "\n") {
+			fields := strings.Fields(line)
+			if len(fields) == 2 && fields[1] == mergeRef {
+				status.RemoteSynced = head == fields[0]
+			}
 		}
 	}
+
 	switch view {
 	case "commit":
 		loadChanges()
+		loadRemotes(false)
 	case "history":
-		status.Commits = sourceCommits(path)
+		status.Commits, status.HistoryHasMore, loadError = gitWorkspaceHistoryPage(path, offset)
 	case "tag":
 		loadTags()
+		loadRemotes(false)
 	case "branch":
 		loadBranches()
-		loadRemotes()
+		loadRemotes(view == "remote" || view == "all")
 	case "remote":
-		loadRemotes()
+		loadRemotes(view == "remote" || view == "all")
 	case "all":
 		loadChanges()
 		loadBranches()
 		status.Commits = sourceCommits(path)
 		loadTags()
-		loadRemotes()
+		loadRemotes(view == "remote" || view == "all")
 	default:
 		return GitWorkspaceStatus{}, errors.New("不支持的 Git 视图")
 	}
-	return status, nil
+	return status, loadError
 }
 
 // GitWorkspaceAction only exposes named Git operations. It never executes a
 // browser-provided shell command.
 func GitWorkspaceAction(root, action, value, message string) (Result, error) {
+	return GitWorkspaceActionWithOptions(root, action, value, message, GitWorkspaceActionOptions{})
+}
+
+func GitWorkspaceActionWithOptions(root, action, value, message string, options GitWorkspaceActionOptions) (Result, error) {
 	path, err := workspacePath(root)
 	if err != nil {
 		return Result{}, err
+	}
+	unlock, err := lockGitWorkspace(path)
+	if err != nil {
+		return Result{}, err
+	}
+	defer unlock()
+	value = strings.TrimSpace(value)
+	if options.ExpectedBranch != "" && currentBranch(path) != options.ExpectedBranch {
+		return Result{}, errors.New("当前分支在确认期间发生变化，请刷新后重新确认操作")
 	}
 	inside, err := gitRun(path, "rev-parse", "--is-inside-work-tree")
 	if err != nil || inside != "true" {
 		return Result{}, errors.New("当前机器人目录尚未初始化 Git")
 	}
 	switch action {
-	case "fetch":
-		// A shallow clone (--depth 1) only carries the branch that was cloned.
-		// Convert it to a full history first, then fetch every remote branch
-		// explicitly; --unshallow alone only fills the current branch's history
-		// and never discovers the other refs. Without this, later fetch/pull
-		// keep seeing a single branch and a truncated log.
-		if shallow, err := gitRun(path, "rev-parse", "--is-shallow-repository"); err == nil && strings.TrimSpace(shallow) == "true" {
-			if unshallow, err := gitRun(path, "fetch", "--unshallow", "origin"); err != nil {
-				return Result{Path: path, Output: unshallow}, err
-			}
-		}
-		output, err := gitRun(path, "fetch", "--prune", "--tags", "origin", "+refs/heads/*:refs/remotes/origin/*")
-		return Result{Path: path, Output: output}, err
-	case "pull":
-		output, err := gitRun(path, "pull", "--ff-only")
-		return Result{Path: path, Output: output}, err
-	case "push":
-		if upstream, err := gitRun(path, "rev-parse", "--abbrev-ref", "@{upstream}"); err != nil || upstream == "" {
-			branch := currentBranch(path)
-			if branch == "" {
-				return Result{}, errors.New("当前处于分离 HEAD 状态，请先在“分支”中切换到一个本地分支")
-			}
-			output, pushErr := gitRun(path, "push", "-u", "origin", branch)
-			return Result{Path: path, Output: output}, pushErr
-		}
-		output, err := gitRun(path, "push")
-		return Result{Path: path, Output: output}, err
+	case "fetch", "pull", "push", "tag-push":
+		return gitWorkspaceNetworkAction(path, action, value, options.Remote)
+	case "stage", "unstage", "restore":
+		return gitWorkspaceFileAction(path, action, options.Paths)
 	case "commit":
-		message = strings.TrimSpace(message)
-		if message == "" || strings.ContainsAny(message, "\r\n") {
-			return Result{}, errors.New("请填写单行提交说明")
+		if strings.TrimSpace(message) == "" {
+			return Result{}, errors.New("请填写提交说明")
 		}
-		if output, err := gitRun(path, "add", "-A"); err != nil {
-			return Result{Path: path, Output: output}, err
+		if options.IndexRevision != "" {
+			revision, err := gitWorkspaceIndexRevision(path)
+			if err != nil {
+				return Result{}, err
+			}
+			if revision != options.IndexRevision {
+				return Result{}, errors.New("已暂存内容在确认期间发生变化，请刷新并重新审查后提交")
+			}
+		}
+		if err := ensureScopedGitIndex(path); err != nil {
+			return Result{}, err
+		}
+		staged, err := gitRawOutput(path, "diff", "--cached", "--name-only", "-z", "--", ".")
+		if err != nil {
+			return Result{}, err
+		}
+		if staged == "" {
+			return Result{}, errors.New("没有已暂存的变更，请先选择文件并暂存")
 		}
 		output, err := gitRun(path, "commit", "-m", message)
+		return Result{Path: path, Output: output}, err
+	case "stash-save", "stash-apply", "stash-drop":
+		return gitWorkspaceStashAction(path, action, value, message)
+	case "merge", "merge-abort":
+		if action == "merge-abort" {
+			output, err := gitRun(path, "merge", "--abort")
+			return Result{Path: path, Output: output}, err
+		}
+		if !validGitRef(value) {
+			return Result{}, errors.New("分支名称无效")
+		}
+		changes, err := gitWorkspaceChangesAtRepository(path)
+		if err != nil {
+			return Result{}, err
+		}
+		if len(changes) > 0 {
+			return Result{}, errors.New("请先提交或临时保存整个仓库的改动，再合并分支")
+		}
+		ref := "refs/heads/" + value
+		if strings.HasPrefix(value, "refs/remotes/") {
+			ref = value
+		}
+		if _, err := gitRun(path, "show-ref", "--verify", ref); err != nil {
+			return Result{}, errors.New("所选分支不存在，请获取远程分支后重试")
+		}
+		output, err := gitRun(path, "merge", "--no-edit", ref)
 		return Result{Path: path, Output: output}, err
 	case "branch-create":
 		if !validGitRef(value) {
@@ -269,19 +336,24 @@ func GitWorkspaceAction(root, action, value, message string) (Result, error) {
 		}
 		output, err := gitRun(path, "tag", "-a", value, "-m", message)
 		return Result{Path: path, Output: output}, err
-	case "tag-push":
-		if !validGitRef(value) {
-			return Result{}, errors.New("标签名称无效")
-		}
-		output, err := gitRun(path, "push", "origin", value)
-		return Result{Path: path, Output: output}, err
 	case "tag-delete":
 		if !validGitRef(value) {
 			return Result{}, errors.New("标签名称无效")
 		}
 		output, err := gitRun(path, "tag", "-d", value)
 		return Result{Path: path, Output: output}, err
+	case "identity-set":
+		name, email := strings.TrimSpace(value), strings.TrimSpace(message)
+		if name == "" || email == "" || strings.ContainsAny(name+email, "\r\n") {
+			return Result{}, errors.New("请填写有效的 Git 提交姓名和邮箱")
+		}
+		if _, err := gitRun(path, "config", "--local", "user.name", name); err != nil {
+			return Result{}, err
+		}
+		output, err := gitRun(path, "config", "--local", "user.email", email)
+		return Result{Path: path, Output: output}, err
 	case "remote-add", "remote-set-url":
+		message = strings.TrimSpace(message)
 		if !validRemoteName(value) || !validRemoteURL(message) {
 			return Result{}, errors.New("远程名称或仓库地址无效")
 		}

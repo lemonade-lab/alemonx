@@ -1221,6 +1221,7 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	mux.HandleFunc("/api/v1/robot/git-init", s.robotGitInitHandler)
 	mux.HandleFunc("/api/v1/robot/git", s.robotGitHandler)
 	mux.HandleFunc("/api/v1/robot/git/diff", s.robotGitDiffHandler)
+	mux.HandleFunc("/api/v1/robot/git/commit", s.robotGitCommitHandler)
 	mux.HandleFunc("/api/v1/robot/git-clone", s.robotGitCloneHandler)
 	mux.HandleFunc("/api/v1/robot/git-clone/auth-check", s.robotGitCloneAuthorizationHandler)
 	mux.HandleFunc("/api/v1/robot/git-clone/check", s.robotGitCloneCheckHandler)
@@ -8748,7 +8749,16 @@ func (s *server) robotGitHandler(w http.ResponseWriter, r *http.Request) {
 		if view == "" {
 			view = "commit"
 		}
-		status, err := robot.GitWorkspaceView(r.URL.Query().Get("root"), view)
+		offset := 0
+		if raw := r.URL.Query().Get("offset"); raw != "" {
+			var err error
+			offset, err = strconv.Atoi(raw)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "提交记录页码无效")
+				return
+			}
+		}
+		status, err := robot.GitWorkspaceViewWithOptions(r.URL.Query().Get("root"), view, r.URL.Query().Get("remote"), offset)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
@@ -8765,12 +8775,26 @@ func (s *server) robotGitHandler(w http.ResponseWriter, r *http.Request) {
 		Action  string `json:"action"`
 		Value   string `json:"value"`
 		Message string `json:"message"`
+		robot.GitWorkspaceActionOptions
 	}
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 		writeError(w, http.StatusBadRequest, "Git 操作内容无法识别。")
 		return
 	}
-	result, err := robot.GitWorkspaceAction(input.Root, input.Action, input.Value, input.Message)
+	result, err := robot.GitWorkspaceActionWithOptions(input.Root, input.Action, input.Value, input.Message, input.GitWorkspaceActionOptions)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *server) robotGitCommitHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
+		return
+	}
+	result, err := robot.GitWorkspaceCommit(r.URL.Query().Get("root"), r.URL.Query().Get("sha"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -8789,7 +8813,11 @@ func (s *server) robotGitDiffHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "缺少机器人目录或文件路径。")
 		return
 	}
-	result, err := robot.GitDiff(root, path)
+	view := r.URL.Query().Get("view")
+	if view == "" {
+		view = "all"
+	}
+	result, err := robot.GitDiffView(root, path, view)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return

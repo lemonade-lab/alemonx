@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -37,7 +39,22 @@ func GitDiff(root, changePath string) (GitDiffResult, error) {
 
 // gitDiffAtRepository is shared by the robot workspace and a discovered
 // backpack package. Its caller must resolve repo from a trusted root.
+func GitDiffView(root, changePath, view string) (GitDiffResult, error) {
+	repo, err := workspacePath(root)
+	if err != nil {
+		return GitDiffResult{}, err
+	}
+	if view != "all" && view != "staged" && view != "unstaged" {
+		return GitDiffResult{}, errors.New("不支持的变更对比视图")
+	}
+	return gitDiffAtRepositoryView(repo, changePath, view)
+}
+
 func gitDiffAtRepository(repo, changePath string) (GitDiffResult, error) {
+	return gitDiffAtRepositoryView(repo, changePath, "all")
+}
+
+func gitDiffAtRepositoryView(repo, changePath, view string) (GitDiffResult, error) {
 	cleanPath, err := cleanGitChangePath(changePath)
 	if err != nil {
 		return GitDiffResult{}, err
@@ -50,38 +67,52 @@ func gitDiffAtRepository(repo, changePath string) (GitDiffResult, error) {
 	if status := gitStatusForPath(repo, cleanPath); status != "" {
 		result.Status = status
 	}
-	if strings.HasPrefix(result.Status, "??") {
+	if view != "staged" && strings.HasPrefix(result.Status, "??") {
 		return gitUntrackedDiff(repo, cleanPath, result)
 	}
-	output, diffErr := gitRun(repo, "diff", "--no-ext-diff", "--unified=3", "--no-color", "HEAD", "--", cleanPath)
+	args := []string{"diff", "--no-ext-diff", "--unified=3", "--no-color"}
+	if view == "staged" {
+		args = append(args, "--cached")
+	} else if view == "all" {
+		args = append(args, "HEAD")
+	}
+	args = append(args, "--", ":(literal)"+cleanPath)
+	changes, err := gitWorkspaceChanges(repo)
+	if err != nil {
+		return GitDiffResult{}, err
+	}
+	for _, change := range changes {
+		if change.Path == cleanPath && change.OriginalPath != "" && !strings.HasPrefix(change.OriginalPath, "../") {
+			args = append(args, ":(literal)"+change.OriginalPath)
+		}
+	}
+	output, diffErr := gitRawOutput(repo, args...)
 	if diffErr != nil {
-		// A repository without a HEAD commit cannot diff against HEAD; show
-		// tracked-but-uncommitted files the same way as untracked additions.
-		return gitUntrackedDiff(repo, cleanPath, result)
+		if view == "all" {
+			if _, err := gitRun(repo, "rev-parse", "--verify", "HEAD"); err != nil {
+				return gitUntrackedDiff(repo, cleanPath, result)
+			}
+		}
+		return GitDiffResult{}, diffErr
 	}
 	if strings.Contains(output, "Binary files") || strings.Contains(output, "GIT binary patch") {
 		result.Binary = true
+		result.Truncated = len(output) > maxGitDiffBytes
 		result.Diff = truncateGitDiff(output)
 		return result, nil
 	}
+	result.Truncated = len(output) > maxGitDiffBytes
 	result.Diff = truncateGitDiff(output)
 	return result, nil
 }
 
 func gitStatusForPath(repo, cleanPath string) string {
-	output, err := gitRun(repo, "status", "--porcelain=v1", "--", cleanPath)
+	output, err := gitRawOutput(repo, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--", ":(literal)"+cleanPath)
 	if err != nil {
 		return ""
 	}
-	for _, line := range strings.Split(output, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		if len(line) >= 2 {
-			return strings.TrimSpace(line[:2])
-		}
-		return line
+	if len(output) >= 2 {
+		return strings.TrimSpace(output[:2])
 	}
 	return ""
 }
@@ -111,7 +142,12 @@ func gitUntrackedDiff(repo, cleanPath string, result GitDiffResult) (GitDiffResu
 		result.Diff = "该路径不是可对比的文件。"
 		return result, nil
 	}
-	content, err := os.ReadFile(resolved)
+	file, err := os.Open(resolved)
+	if err != nil {
+		return GitDiffResult{}, fmt.Errorf("无法读取变更文件：%w", err)
+	}
+	defer file.Close()
+	content, err := io.ReadAll(io.LimitReader(file, maxGitDiffBytes+1))
 	if err != nil {
 		return GitDiffResult{}, fmt.Errorf("无法读取变更文件：%w", err)
 	}
@@ -142,7 +178,13 @@ func gitUntrackedDiff(repo, cleanPath string, result GitDiffResult) (GitDiffResu
 }
 
 func cleanGitChangePath(changePath string) (string, error) {
-	clean := filepath.ToSlash(filepath.Clean(strings.ReplaceAll(changePath, "\\", "/")))
+	if runtime.GOOS == "windows" {
+		changePath = strings.ReplaceAll(changePath, "\\", "/")
+	}
+	if strings.ContainsRune(changePath, 0) {
+		return "", errors.New("变更文件路径无效")
+	}
+	clean := filepath.ToSlash(filepath.Clean(changePath))
 	if clean == "." || clean == ".." || filepath.IsAbs(clean) ||
 		strings.HasPrefix(clean, "../") || strings.Contains(clean, "/../") {
 		return "", errors.New("变更文件路径无效")

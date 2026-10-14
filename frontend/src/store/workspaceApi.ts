@@ -330,10 +330,53 @@ export type SystemCurrentRobot = {
   root: string
   name: string
 } | null
+export type GitAction =
+  | 'fetch'
+  | 'pull'
+  | 'push'
+  | 'commit'
+  | 'stage'
+  | 'unstage'
+  | 'restore'
+  | 'stash-save'
+  | 'stash-apply'
+  | 'stash-drop'
+  | 'merge'
+  | 'merge-abort'
+  | 'branch-create'
+  | 'branch-switch'
+  | 'branch-track'
+  | 'branch-delete'
+  | 'tag-create'
+  | 'tag-push'
+  | 'tag-delete'
+  | 'remote-add'
+  | 'remote-set-url'
+  | 'remote-remove'
+  | 'identity-set'
+export type GitActionInput = {
+  root: string
+  action: GitAction
+  value?: string
+  message?: string
+  paths?: string[]
+  indexRevision?: string
+  expectedBranch?: string
+  remote?: string
+}
+export type GitChange = {
+  status: string
+  path: string
+  originalPath?: string
+  staged: boolean
+  unstaged: boolean
+  conflict: boolean
+}
 export type GitWorkspace = {
   root: string
   repository: boolean
   gitRoot?: string
+  atRepositoryRoot: boolean
   remote?: string
   branch?: string
   upstream?: string
@@ -342,7 +385,15 @@ export type GitWorkspace = {
   remoteChecked: boolean
   ahead: number
   behind: number
-  changes: Array<{ status: string; path: string }>
+  authorName?: string
+  authorEmail?: string
+  indexRevision?: string
+  mergeInProgress: boolean
+  historyHasMore: boolean
+  changes: GitChange[]
+  stashes: Array<{ sha: string; ref: string; subject: string }>
+  remoteName?: string
+  remoteAdvice?: string
   branches: Array<{ name: string; current: boolean; upstream?: string }>
   remoteBranches: Array<{ name: string; remote: string; branch: string }>
   commits: Array<{
@@ -1241,10 +1292,15 @@ export const workspaceApi = createApi({
     }),
     gitWorkspace: build.query<
       GitWorkspace,
-      { root: string; view: 'commit' | 'history' | 'tag' | 'branch' | 'remote' }
+      {
+        root: string
+        view: 'commit' | 'history' | 'tag' | 'branch' | 'remote'
+        remote?: string
+        offset?: number
+      }
     >({
-      query: ({ root, view }) =>
-        `robot/git?${new URLSearchParams({ root, view })}`,
+      query: ({ root, view, remote, offset }) =>
+        `robot/git?${new URLSearchParams({ root, view, ...(remote ? { remote } : {}), ...(offset ? { offset: String(offset) } : {}) })}`,
       providesTags: (_result, _error, arg) => [
         { type: 'GitStatus', id: arg.root }
       ]
@@ -1268,37 +1324,28 @@ export const workspaceApi = createApi({
         { type: 'LocalPackages', id: body.root }
       ]
     }),
-    gitWorkspaceAction: build.mutation<
-      RobotResult,
-      {
-        root: string
-        action:
-          | 'fetch'
-          | 'pull'
-          | 'push'
-          | 'commit'
-          | 'branch-create'
-          | 'branch-switch'
-          | 'branch-track'
-          | 'branch-delete'
-          | 'tag-create'
-          | 'tag-push'
-          | 'tag-delete'
-          | 'remote-add'
-          | 'remote-set-url'
-          | 'remote-remove'
-        value?: string
-        message?: string
-      }
-    >({
+    gitWorkspaceAction: build.mutation<RobotResult, GitActionInput>({
       query: body => ({ url: 'robot/git', method: 'POST', body }),
       invalidatesTags: (_result, _error, body) => [
         { type: 'GitStatus', id: body.root }
       ]
     }),
-    gitDiff: build.query<GitDiff, { root: string; path: string }>({
-      query: ({ root, path }) =>
-        `robot/git/diff?${new URLSearchParams({ root, path })}`
+    gitCommit: build.query<RobotResult, { root: string; sha: string }>({
+      query: ({ root, sha }) =>
+        `robot/git/commit?${new URLSearchParams({ root, sha })}`,
+      providesTags: (_result, _error, arg) => [
+        { type: 'GitStatus', id: arg.root }
+      ]
+    }),
+    gitDiff: build.query<
+      GitDiff,
+      { root: string; path: string; view?: 'staged' | 'unstaged' | 'all' }
+    >({
+      query: ({ root, path, view }) =>
+        `robot/git/diff?${new URLSearchParams({ root, path, ...(view ? { view } : {}) })}`,
+      providesTags: (_result, _error, arg) => [
+        { type: 'GitStatus', id: arg.root }
+      ]
     }),
     startRobotTask: build.mutation<RobotTask, Record<string, string>>({
       query: body => ({ url: 'robot/tasks', method: 'POST', body }),
@@ -1482,6 +1529,7 @@ export const {
   useGitWorkspaceQuery,
   useGitWorkspaceActionMutation,
   useGitDiffQuery,
+  useGitCommitQuery,
   useNpmStatusQuery,
   useLazyNpmPackQuery,
   useRobotOperationMutation,

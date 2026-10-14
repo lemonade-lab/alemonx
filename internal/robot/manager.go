@@ -2384,6 +2384,10 @@ func runWithEnv(root string, values map[string]string, name string, args ...stri
 }
 
 func runWithOutput(root string, values map[string]string, combined bool, name string, args ...string) (string, error) {
+	return runCommandOutput(root, values, combined, true, name, args...)
+}
+
+func runCommandOutput(root string, values map[string]string, combined, trim bool, name string, args ...string) (string, error) {
 	timeout := commandTimeout(name, args...)
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
@@ -2421,7 +2425,16 @@ func runWithOutput(root string, values map[string]string, combined bool, name st
 	} else {
 		raw, err = cmd.Output()
 	}
-	text := strings.TrimSpace(string(raw))
+	if !combined && err != nil {
+		var exitError *exec.ExitError
+		if errors.As(err, &exitError) {
+			raw = append(raw, exitError.Stderr...)
+		}
+	}
+	text := string(raw)
+	if trim {
+		text = strings.TrimSpace(text)
+	}
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return text, fmt.Errorf("操作超时（%s）；请检查网络、登录状态或代理后重试", timeout.Round(time.Second))
 	}
@@ -2471,7 +2484,9 @@ func commandTimeout(name string, args ...string) time.Duration {
 	base := strings.ToLower(filepath.Base(name))
 	if base == "git" && len(args) > 0 {
 		switch args[0] {
-		case "clone", "fetch", "pull", "push", "ls-remote":
+		case "ls-remote":
+			return 30 * time.Second
+		case "clone", "fetch", "pull", "push":
 			return 10 * time.Minute
 		}
 	}
