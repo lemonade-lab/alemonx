@@ -247,6 +247,18 @@ func copyTemplate(source fs.FS, template, target string) error {
 		}
 		rel := strings.TrimPrefix(path, template)
 		rel = strings.TrimPrefix(rel, "/")
+		// Templates may have been installed locally before being bundled or
+		// edited in the workspace. Each generated project installs its own
+		// selected dependencies, so never inherit those installation artifacts.
+		if entry.IsDir() && entry.Name() == "node_modules" {
+			return fs.SkipDir
+		}
+		if !entry.IsDir() {
+			switch rel {
+			case "yarn.lock", "package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "bun.lock", "bun.lockb":
+				return nil
+			}
+		}
 		output := filepath.Join(target, rel)
 		if entry.IsDir() {
 			return os.MkdirAll(output, 0755)

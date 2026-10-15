@@ -6,7 +6,39 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/fstest"
 )
+
+func TestCopyTemplateExcludesInstallationArtifacts(t *testing.T) {
+	for _, template := range []string{"dev", "bot"} {
+		t.Run(template, func(t *testing.T) {
+			source := fstest.MapFS{
+				template + "/package.json":                     {Data: []byte(`{"name":"template"}`)},
+				template + "/src/index.js":                     {Data: []byte(`export default 1`)},
+				template + "/node_modules/dependency/index.js": {Data: []byte(`installed dependency`)},
+			}
+			locks := []string{"yarn.lock", "package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "bun.lock", "bun.lockb"}
+			for _, name := range locks {
+				source[template+"/"+name] = &fstest.MapFile{Data: []byte("stale lock")}
+			}
+			root := t.TempDir()
+			if err := copyTemplate(source, template, root); err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range append(locks, "node_modules") {
+				if _, err := os.Stat(filepath.Join(root, name)); !os.IsNotExist(err) {
+					t.Errorf("generated project retained installation artifact %s: %v", name, err)
+				}
+			}
+			for _, name := range []string{"package.json", "src/index.js"} {
+				data, err := os.ReadFile(filepath.Join(root, name))
+				if err != nil || string(data) != string(source[template+"/"+name].Data) {
+					t.Errorf("template source %s was not preserved: %v", name, err)
+				}
+			}
+		})
+	}
+}
 
 func TestDevelopmentTemplatePackagesFollowSelections(t *testing.T) {
 	root := t.TempDir()
@@ -273,10 +305,9 @@ func TestDevelopmentTemplateKeepsOnlyChosenLanguageVariant(t *testing.T) {
 	run(t, "ts", "ts", []string{"js"})
 }
 
-// TestJSLvyConfigDisablesTypeScriptPlugin verifies the JS project's lvy.config
-// disables the TypeScript plugin, otherwise lvy build reads tsconfig.json
-// (absent in a JS project) and fails with TS18003.
-func TestJSLvyConfigDisablesTypeScriptPlugin(t *testing.T) {
+// LVY 0.3 uses tsdown with declaration generation disabled by default. The
+// former Rollup TypeScript plugin options are no longer part of its API.
+func TestJSLvyConfigUsesCurrentBuildAPI(t *testing.T) {
 	root := t.TempDir()
 	if err := copyTemplate(os.DirFS("../../resources/templates"), "dev", root); err != nil {
 		t.Fatal(err)
@@ -293,14 +324,15 @@ func TestJSLvyConfigDisablesTypeScriptPlugin(t *testing.T) {
 		t.Fatal(err)
 	}
 	content := string(data)
-	if !strings.Contains(content, "typescript: false") {
-		t.Fatalf("JS lvy.config.js should disable the typescript plugin:\n%s", content)
+	for _, legacy := range []string{"typescript:", "RollupOptions", "include: ['src/**/*.js']"} {
+		if strings.Contains(content, legacy) {
+			t.Fatalf("JS lvy.config.js must not use legacy build option %q:\n%s", legacy, content)
+		}
 	}
-	if strings.Contains(content, "include: ['src/**/*.js']") {
-		t.Fatalf("JS lvy.config.js must not use the invalid build.include:\n%s", content)
-	}
-	if !strings.Contains(content, "OutputOptions") {
-		t.Fatalf("JS lvy.config.js should set output via OutputOptions:\n%s", content)
+	for _, want := range []string{"defineConfig", "plugins:", "@src"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("JS lvy.config.js missing %q:\n%s", want, content)
+		}
 	}
 }
 
