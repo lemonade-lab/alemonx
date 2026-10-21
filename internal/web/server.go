@@ -4665,6 +4665,20 @@ func (s *server) cachedRobotConsole(root string) (robot.Result, error) {
 }
 
 func parsePM2AuditQuery(r *http.Request) (robot.PM2AuditQuery, error) {
+	values, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
+		return robot.PM2AuditQuery{}, errors.New("日志参数编码无效")
+	}
+	for _, key := range []string{"root", "date", "since", "until", "source", "query", "page", "perPage", "snapshot"} {
+		if len(values[key]) > 1 {
+			return robot.PM2AuditQuery{}, fmt.Errorf("日志参数 %s 不能重复", key)
+		}
+	}
+	if r.URL.Path == "/api/v1/robot/pm2-logs/stream" {
+		if value := values.Get("snapshot"); value != "" && value != "0" && value != "1" {
+			return robot.PM2AuditQuery{}, errors.New("日志快照参数无效")
+		}
+	}
 	q := robot.PM2AuditQuery{
 		Date:   strings.TrimSpace(r.URL.Query().Get("date")),
 		Since:  strings.TrimSpace(r.URL.Query().Get("since")),
@@ -4687,7 +4701,7 @@ func parsePM2AuditQuery(r *http.Request) (robot.PM2AuditQuery, error) {
 		}
 		q.PerPage = perPage
 	}
-	return q, nil
+	return q, q.Validate()
 }
 
 func (s *server) robotPM2LogsHandler(w http.ResponseWriter, r *http.Request) {
@@ -4706,6 +4720,10 @@ func (s *server) robotPM2LogsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == http.MethodDelete {
+		if r.URL.Query().Has("page") || r.URL.Query().Has("perPage") {
+			writeError(w, http.StatusBadRequest, "删除不支持分页条件")
+			return
+		}
 		result, err := s.robots.DeletePM2Logs(root, query)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
@@ -4730,6 +4748,11 @@ func (s *server) robotPM2LogDaysHandler(w http.ResponseWriter, r *http.Request) 
 	root := r.URL.Query().Get("root")
 	if root == "" {
 		writeError(w, http.StatusBadRequest, "请选择机器人目录。")
+		return
+	}
+	values, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil || len(values["root"]) > 1 {
+		writeError(w, http.StatusBadRequest, "日志参数编码无效或 root 重复")
 		return
 	}
 	days, err := s.robots.PM2LogDays(root)
@@ -4782,6 +4805,15 @@ func (s *server) robotPM2LogStreamHandler(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, "请选择机器人目录。")
 		return
 	}
+	query, err := parsePM2AuditQuery(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := s.robots.ValidatePM2LogRequest(root, query); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		writeError(w, http.StatusInternalServerError, "SSE 不受支持。")
@@ -4791,12 +4823,17 @@ func (s *server) robotPM2LogStreamHandler(w http.ResponseWriter, r *http.Request
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
+	// Commit headers promptly even for legacy streams with no initial data.
+	flusher.Flush()
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 	var writeMu sync.Mutex
 	writeFrame := func(payload []byte) bool {
 		writeMu.Lock()
 		defer writeMu.Unlock()
+		if ctx.Err() != nil {
+			return false
+		}
 		if _, err := w.Write(append(append([]byte("data: "), payload...), '\n', '\n')); err != nil {
 			cancel()
 			return false
@@ -4819,12 +4856,25 @@ func (s *server) robotPM2LogStreamHandler(w http.ResponseWriter, r *http.Request
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		if err := s.robots.StreamPM2LogFiles(ctx, root, emit); err != nil && ctx.Err() == nil {
+		var streamErr error
+		if r.URL.Query().Get("snapshot") == "1" {
+			streamErr = s.robots.StreamPM2LogsWithSnapshot(ctx, root, query, func(page robot.PM2AuditPage) {
+				payload, err := json.Marshal(map[string]any{"snapshot": page})
+				if err == nil {
+					writeFrame(payload)
+				}
+			}, emit)
+		} else {
+			streamErr = s.robots.StreamPM2LogFilesMatching(ctx, root, query, emit)
+		}
+		if err := streamErr; err != nil && ctx.Err() == nil {
 			if payload, marshalErr := json.Marshal(map[string]string{"error": err.Error()}); marshalErr == nil {
 				writeFrame(payload)
 			}
 		}
 	}()
+	// The producer must stop before net/http reuses the response writer.
+	defer func() { cancel(); <-done }()
 	for {
 		select {
 		case <-done:

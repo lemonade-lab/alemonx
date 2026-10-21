@@ -592,7 +592,7 @@ func projectPackageManager(root string) string {
 	if _, err := os.Stat(filepath.Join(root, "pnpm-lock.yaml")); err == nil {
 		return "pnpm"
 	}
-	return "npm"
+	return "yarn"
 }
 
 func githubActionsURL(remote string) string {

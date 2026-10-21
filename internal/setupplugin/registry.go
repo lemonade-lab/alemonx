@@ -1089,7 +1089,7 @@ func (r *Registry) RunResultWithProgress(id, actionID string, params map[string]
 	if err != nil {
 		return ActionResult{}, err
 	}
-	program, args, environment, _ := system.PrepareDevelopmentCommand(entry.name, entry.args)
+	program, args, environment, _ := system.PrepareDevelopmentCommandAt(plugin.Source, entry.name, entry.args)
 	command := exec.Command(program, args...)
 	command.Dir = plugin.Source
 	runnerEnvironment, environmentErr := r.environmentForRunner(plugin, actionID)

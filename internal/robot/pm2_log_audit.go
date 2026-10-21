@@ -2,6 +2,7 @@ package robot
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -27,6 +28,44 @@ type PM2AuditQuery struct {
 	Query   string // case-insensitive substring
 	Page    int
 	PerPage int
+}
+
+// Validate rejects ambiguous filters before reading files or starting SSE.
+func (q PM2AuditQuery) Validate() error {
+	if q.Source != "" && !strings.EqualFold(q.Source, "all") && !strings.EqualFold(q.Source, "out") && !strings.EqualFold(q.Source, "err") {
+		return errors.New("日志来源无效")
+	}
+	if q.Date != "" {
+		if _, err := time.ParseInLocation("2006-01-02", q.Date, time.Local); err != nil {
+			return fmt.Errorf("日期无效：%s", q.Date)
+		}
+	}
+	var since, until time.Time
+	var err error
+	if q.Since != "" {
+		if since, err = parsePM2AuditTime(q.Since); err != nil {
+			return err
+		}
+	}
+	if q.Until != "" {
+		if until, err = parsePM2AuditTime(q.Until); err != nil {
+			return err
+		}
+	}
+	if !since.IsZero() && !until.IsZero() && since.After(until) {
+		return errors.New("开始时间不能晚于结束时间")
+	}
+	return nil
+}
+
+// ValidatePM2LogRequest performs only input validation, without launching PM2
+// or reading log content. SSE must do this before committing its 200 headers.
+func (Manager) ValidatePM2LogRequest(root string, q PM2AuditQuery) error {
+	if err := q.Validate(); err != nil {
+		return err
+	}
+	_, err := projectPath(root)
+	return err
 }
 
 // PM2AuditPage is one page of filtered PM2 output plus pagination metadata.
@@ -88,6 +127,7 @@ const (
 	pm2LogPathCacheTTL    = 30 * time.Second
 	pm2LogTailInterval    = 400 * time.Millisecond
 	pm2LogMaxTailChunk    = 16 << 20
+	pm2LogSnapshotBytes   = 8 << 20
 )
 
 // pm2AuditLogLine is one parsed line from a PM2 log file. Timestamps are
@@ -410,18 +450,29 @@ func readPM2LogFile(path string, maxLines int) ([]pm2AuditLogLine, bool, error) 
 		return nil, false, err
 	}
 	defer file.Close()
+	return readPM2LogReader(file, maxLines)
+}
+
+func readPM2LogReader(reader io.Reader, maxLines int) ([]pm2AuditLogLine, bool, error) {
 	var lines []pm2AuditLogLine
-	scanner := bufio.NewScanner(file)
+	next := 0
+	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
 	truncated := false
 	for scanner.Scan() {
-		if maxLines > 0 && len(lines) >= maxLines {
-			truncated = true
-			break
-		}
 		text := scanner.Text()
 		ts, has := parsePM2LogTimestamp(text)
-		lines = append(lines, pm2AuditLogLine{Text: text, Timestamp: ts, HasTime: has})
+		line := pm2AuditLogLine{Text: text, Timestamp: ts, HasTime: has}
+		if maxLines > 0 && len(lines) >= maxLines {
+			truncated = true
+			lines[next] = line
+			next = (next + 1) % maxLines
+		} else {
+			lines = append(lines, line)
+		}
+	}
+	if truncated && next > 0 {
+		lines = append(lines[next:], lines[:next]...)
 	}
 	if err := scanner.Err(); err != nil {
 		return lines, truncated, err
@@ -465,13 +516,7 @@ func (m Manager) readPM2AuditLines(root string) ([]pm2AuditLogLine, []string, bo
 		}
 		lines = append(lines, fileLines...)
 	}
-	sort.SliceStable(lines, func(i, j int) bool {
-		a, b := lines[i], lines[j]
-		if a.HasTime && b.HasTime && !a.Timestamp.Equal(b.Timestamp) {
-			return a.Timestamp.After(b.Timestamp)
-		}
-		return a.HasTime && !b.HasTime
-	})
+	sortPM2AuditLines(lines)
 	sources := make([]string, 0, len(sourceSet))
 	for source := range sourceSet {
 		sources = append(sources, source)
@@ -480,7 +525,25 @@ func (m Manager) readPM2AuditLines(root string) ([]pm2AuditLogLine, []string, bo
 	return lines, sources, truncated, nil
 }
 
+func sortPM2AuditLines(lines []pm2AuditLogLine) {
+	// Reverse physical order first so equal or missing timestamps still show
+	// the latest records on page one, and retain stack trace line order.
+	for i, j := 0, len(lines)-1; i < j; i, j = i+1, j-1 {
+		lines[i], lines[j] = lines[j], lines[i]
+	}
+	sort.SliceStable(lines, func(i, j int) bool {
+		a, b := lines[i], lines[j]
+		if a.HasTime && b.HasTime && !a.Timestamp.Equal(b.Timestamp) {
+			return a.Timestamp.After(b.Timestamp)
+		}
+		return a.HasTime && !b.HasTime
+	})
+}
+
 func filterPM2AuditLines(lines []pm2AuditLogLine, q PM2AuditQuery) ([]pm2AuditLogLine, error) {
+	if err := q.Validate(); err != nil {
+		return nil, err
+	}
 	var since, until time.Time
 	var err error
 	if q.Since != "" {
@@ -501,7 +564,7 @@ func filterPM2AuditLines(lines []pm2AuditLogLine, q PM2AuditQuery) ([]pm2AuditLo
 	}
 	lowerQuery := strings.ToLower(q.Query)
 	wantSource := func(source string) bool {
-		return q.Source == "" || q.Source == "all" || strings.EqualFold(q.Source, source)
+		return q.Source == "" || strings.EqualFold(q.Source, "all") || strings.EqualFold(q.Source, source)
 	}
 	wantLine := func(line pm2AuditLogLine) bool {
 		if !wantSource(line.Source) {
@@ -554,6 +617,14 @@ func (m Manager) pm2AuditLines(root string, q PM2AuditQuery) ([]pm2AuditLogLine,
 
 // PM2AuditLogs returns one filtered, newest-first page of PM2 log output.
 func (m Manager) PM2AuditLogs(root string, q PM2AuditQuery) (PM2AuditPage, error) {
+	allLines, sources, truncated, err := m.readPM2AuditLines(root)
+	if err != nil {
+		return PM2AuditPage{}, err
+	}
+	return buildPM2AuditPage(allLines, sources, truncated, q)
+}
+
+func buildPM2AuditPage(allLines []pm2AuditLogLine, sources []string, truncated bool, q PM2AuditQuery) (PM2AuditPage, error) {
 	if q.Page < 1 {
 		q.Page = 1
 	}
@@ -563,23 +634,24 @@ func (m Manager) PM2AuditLogs(root string, q PM2AuditQuery) (PM2AuditPage, error
 	if q.PerPage > pm2LogMaxPageSize {
 		q.PerPage = pm2LogMaxPageSize
 	}
-	allLines, sources, truncated, err := m.readPM2AuditLines(root)
-	if err != nil {
-		return PM2AuditPage{}, err
-	}
 	matched, err := filterPM2AuditLines(allLines, q)
 	if err != nil {
 		return PM2AuditPage{}, err
 	}
 	diagnostics := diagnosePM2LogLines(allLines)
 	total := len(matched)
-	start := (q.Page - 1) * q.PerPage
+	// Bound the page before multiplication to prevent signed integer overflow.
+	start := total
+	if q.Page-1 <= total/q.PerPage {
+		start = (q.Page - 1) * q.PerPage
+	}
 	if start >= total {
 		return PM2AuditPage{
 			Output:      "没有更早的 PM2 日志。",
 			Lines:       []PM2AuditLine{},
 			Page:        q.Page,
 			PerPage:     q.PerPage,
+			HasNewer:    q.Page > 1 && total > 0,
 			Total:       total,
 			Truncated:   truncated,
 			Sources:     sources,
@@ -645,6 +717,7 @@ func (m Manager) PM2LogDays(root string) ([]PM2LogDay, error) {
 		}
 		for i := range lines {
 			line := lines[i]
+			line.Source = file.Source
 			if !line.HasTime {
 				continue
 			}
@@ -668,9 +741,6 @@ func (m Manager) PM2LogDays(root string) ([]PM2LogDay, error) {
 			}
 		}
 	}
-	if len(days) == 0 {
-		return nil, fmt.Errorf("PM2 日志中暂无可识别日期的记录。")
-	}
 	result := make([]PM2LogDay, 0, len(days))
 	for _, stats := range days {
 		if !stats.first.IsZero() {
@@ -691,6 +761,16 @@ func (m Manager) PM2LogDays(root string) ([]PM2LogDay, error) {
 // day. A source can narrow deletion to stdout or stderr; no date means no
 // deletion, so the current live log cannot be cleared accidentally.
 func (m Manager) DeletePM2Logs(root string, q PM2AuditQuery) (PM2LogDeleteResult, error) {
+	if err := q.Validate(); err != nil {
+		return PM2LogDeleteResult{}, err
+	}
+	if q.Query != "" || q.Since != "" || q.Until != "" || q.Page > 1 || q.PerPage > 0 {
+		return PM2LogDeleteResult{}, errors.New("删除仅支持按日期和来源指定范围，不支持搜索、时间范围或分页条件")
+	}
+	q.Source = strings.ToLower(q.Source)
+	if q.Source == "all" {
+		q.Source = ""
+	}
 	day, err := time.ParseInLocation("2006-01-02", strings.TrimSpace(q.Date), time.Local)
 	if err != nil {
 		return PM2LogDeleteResult{}, errors.New("请选择要删除的日志日期")
@@ -791,12 +871,20 @@ type pm2LogStreamLine struct {
 	Text   string
 }
 
-// tailPM2LogFile follows one log file from its current end, emitting complete
-// lines as they are appended. Rotation/truncation restarts the tail.
-func tailPM2LogFile(ctx context.Context, file pm2LogFile, onLine func(source, text string)) {
+type pm2TailStart struct {
+	offset int64
+	info   os.FileInfo
+}
+
+// tailPM2LogFile follows one log file, emitting complete appended lines.
+// A replaced or truncated file restarts the tail.
+func tailPM2LogFile(ctx context.Context, file pm2LogFile, onLine func(source, text string), starts ...pm2TailStart) {
 	offset := int64(0)
-	if info, err := os.Stat(file.Path); err == nil {
-		offset = info.Size()
+	var previous os.FileInfo
+	if len(starts) > 0 {
+		offset, previous = starts[0].offset, starts[0].info
+	} else if info, err := os.Stat(file.Path); err == nil {
+		offset, previous = info.Size(), info
 	}
 	var pending strings.Builder
 	ticker := time.NewTicker(pm2LogTailInterval)
@@ -821,10 +909,11 @@ func tailPM2LogFile(ctx context.Context, file pm2LogFile, onLine func(source, te
 			_ = handle.Close()
 			continue
 		}
-		if info.Size() < offset {
+		if info.Size() < offset || (previous != nil && !os.SameFile(previous, info)) {
 			offset = 0
 			pending.Reset()
 		}
+		previous = info
 		toRead := info.Size() - offset
 		if toRead > 0 {
 			if toRead > pm2LogMaxTailChunk {
@@ -836,10 +925,10 @@ func tailPM2LogFile(ctx context.Context, file pm2LogFile, onLine func(source, te
 				offset += int64(n)
 				start := 0
 				for start < n {
-					if idx := strings.IndexByte(string(data[start:n]), '\n'); idx >= 0 {
+					if idx := bytes.IndexByte(data[start:n], '\n'); idx >= 0 {
 						pending.Write(data[start : start+idx])
 						if strings.TrimSpace(pending.String()) != "" {
-							onLine(file.Source, pending.String())
+							onLine(file.Source, strings.TrimSuffix(pending.String(), "\r"))
 						}
 						pending.Reset()
 						start += idx + 1
@@ -862,32 +951,129 @@ func tailPM2LogFile(ctx context.Context, file pm2LogFile, onLine func(source, te
 // onLine serially for each new complete line. It returns when ctx is cancelled
 // or the underlying files disappear permanently.
 func (m Manager) StreamPM2LogFiles(ctx context.Context, root string, onLine func(source, text string)) error {
+	return m.StreamPM2LogFilesMatching(ctx, root, PM2AuditQuery{}, onLine)
+}
+
+// StreamPM2LogFilesMatching applies the same filters as history without sending
+// an initial snapshot, for callers using the original tail-only protocol.
+func (m Manager) StreamPM2LogFilesMatching(ctx context.Context, root string, q PM2AuditQuery, onLine func(source, text string)) error {
+	return m.streamPM2LogFiles(ctx, root, q, nil, onLine)
+}
+
+// StreamPM2LogsWithSnapshot captures complete-line boundaries before reading
+// history. Tails resume at those boundaries, preventing overlap and gaps.
+func (m Manager) StreamPM2LogsWithSnapshot(ctx context.Context, root string, q PM2AuditQuery, onSnapshot func(PM2AuditPage), onLine func(source, text string)) error {
+	return m.streamPM2LogFiles(ctx, root, q, onSnapshot, onLine)
+}
+
+func (m Manager) streamPM2LogFiles(ctx context.Context, root string, q PM2AuditQuery, onSnapshot func(PM2AuditPage), onLine func(source, text string)) error {
+	if err := q.Validate(); err != nil {
+		return err
+	}
 	files, err := m.pm2LogFiles(root)
 	if err != nil {
 		return err
+	}
+	starts := make([]pm2TailStart, len(files))
+	var snapshot []pm2AuditLogLine
+	var sources []string
+	truncated := false
+	for i, file := range files {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		handle, err := os.Open(file.Path)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		info, err := handle.Stat()
+		if err != nil {
+			handle.Close()
+			return err
+		}
+		starts[i] = pm2TailStart{offset: info.Size(), info: info}
+		if onSnapshot != nil {
+			// Leave an unfinished final line to the tail until its newline arrives.
+			offset := info.Size()
+			buffer := make([]byte, 4096)
+			for offset > 0 {
+				start := offset - int64(len(buffer))
+				if start < 0 {
+					start = 0
+				}
+				n, readErr := handle.ReadAt(buffer[:offset-start], start)
+				if readErr != nil && !errors.Is(readErr, io.EOF) {
+					handle.Close()
+					return readErr
+				}
+				if end := bytes.LastIndexByte(buffer[:n], '\n'); end >= 0 {
+					offset = start + int64(end) + 1
+					break
+				}
+				offset = start
+			}
+			starts[i].offset = offset
+			start := int64(0)
+			if offset > pm2LogSnapshotBytes {
+				start = offset - pm2LogSnapshotBytes
+				// Discard only the partial first line of this byte window.
+				reader := bufio.NewReader(io.NewSectionReader(handle, start, offset-start))
+				skipped, _ := reader.ReadString('\n')
+				start += int64(len(skipped))
+				truncated = true
+			}
+			lines, cut, readErr := readPM2LogReader(io.NewSectionReader(handle, start, offset-start), pm2LogMaxLines)
+			if readErr != nil {
+				handle.Close()
+				return readErr
+			}
+			for j := range lines {
+				lines[j].Source = file.Source
+			}
+			snapshot = append(snapshot, lines...)
+			sources = append(sources, file.Source)
+			truncated = truncated || cut
+		}
+		handle.Close()
+	}
+	if onSnapshot != nil {
+		sortPM2AuditLines(snapshot)
+		page, err := buildPM2AuditPage(snapshot, sources, truncated, q)
+		if err != nil {
+			return err
+		}
+		onSnapshot(page)
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	lines := make(chan pm2LogStreamLine, 128)
 	var group sync.WaitGroup
-	for _, file := range files {
+	for i, file := range files {
 		file := file
+		start := starts[i]
 		group.Add(1)
 		go func() {
 			defer group.Done()
 			tailPM2LogFile(ctx, file, func(source, text string) {
 				select {
-				case lines <- pm2LogStreamLine{Source: source, Text: redactPM2LogText(text)}:
+				case lines <- pm2LogStreamLine{Source: source, Text: text}:
 				case <-ctx.Done():
 				}
-			})
+			}, start)
 		}()
 	}
 	dispatched := make(chan struct{})
 	go func() {
 		defer close(dispatched)
 		for line := range lines {
-			onLine(line.Source, line.Text)
+			stamp, hasTime := parsePM2LogTimestamp(line.Text)
+			matched, _ := filterPM2AuditLines([]pm2AuditLogLine{{Source: line.Source, Text: line.Text, Timestamp: stamp, HasTime: hasTime}}, q)
+			if len(matched) > 0 {
+				onLine(line.Source, redactPM2LogText(line.Text))
+			}
 		}
 	}()
 	group.Wait()

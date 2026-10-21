@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"strings"
 
+	"alemonx/internal/packagemanager"
 	"alemonx/internal/resources"
 )
 
@@ -23,6 +24,12 @@ var (
 // runtime, then npx. Neither fallback installs a global package or modifies
 // the user's shell configuration.
 func PrepareDevelopmentCommand(program string, args []string) (string, []string, []string, string) {
+	return PrepareDevelopmentCommandAt("", program, args)
+}
+
+// PrepareDevelopmentCommandAt retains the project's package-manager version
+// when a portable launcher is needed.
+func PrepareDevelopmentCommandAt(root, program string, args []string) (string, []string, []string, string) {
 	environment := DevelopmentCommandEnvironment()
 	if runtime, err := CurrentNodeRuntime(); err == nil && (program == "node" || program == "npm" || program == "npx" || program == "corepack") {
 		if path, pathErr := runtime.CommandPath(program); pathErr == nil {
@@ -37,20 +44,16 @@ func PrepareDevelopmentCommand(program string, args []string) (string, []string,
 	}
 	// The bundled Yarn works offline, so it outranks Corepack/npx which may
 	// need the registry on first use.
-	if program == "yarn" {
+	if program == "yarn" && !packagemanager.ModernYarn(root) {
 		if command, prefix, ok := resources.ToolCommand("yarn"); ok {
 			return command, append(prefix, args...), environment, "未找到独立的 Yarn，已使用内置 Yarn。"
 		}
 	}
 	if corepack, err := ResolveDevelopmentCommand("corepack"); err == nil {
-		return corepack, append([]string{program}, args...), environment, "未找到独立的 " + program + "，已使用 Node.js 自带的 Corepack。"
+		return corepack, append([]string{packagemanager.Spec(root, program)}, args...), environment, "未找到独立的 " + program + "，已使用 Node.js 自带的 Corepack。"
 	}
 	if npx, err := ResolveDevelopmentCommand("npx"); err == nil {
-		packageName := program + "@latest"
-		if program == "yarn" {
-			packageName = "yarn@1.22.22"
-		}
-		return npx, append([]string{"--yes", packageName}, args...), environment, "未找到独立的 " + program + "，本次将通过 Node.js 自动运行它。"
+		return npx, append(packagemanager.NPXArgs(root, program), args...), environment, "未找到独立的 " + program + "，本次将通过 Node.js 自动运行它。"
 	}
 	return program, append([]string(nil), args...), environment, ""
 }

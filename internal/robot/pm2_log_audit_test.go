@@ -1,6 +1,7 @@
 package robot
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -241,5 +242,103 @@ func TestPM2AuditLogsDiagnosesFullLatestRunAndRedactsOutputs(t *testing.T) {
 	}
 	if !strings.Contains(exported, "[REDACTED]") {
 		t.Fatalf("export has no redaction marker: %s", exported)
+	}
+}
+
+func TestPM2LogReaderKeepsLatestRecords(t *testing.T) {
+	for _, input := range []string{"one\ntwo\nthree\nfour\nfive\n", "one\ntwo\nthree\nfour\n"} {
+		lines, cut, err := readPM2LogReader(strings.NewReader(input), 2)
+		if err != nil || !cut {
+			t.Fatalf("cut=%v err=%v", cut, err)
+		}
+		sortPM2AuditLines(lines)
+		page, err := buildPM2AuditPage(lines, []string{"out"}, cut, PM2AuditQuery{PerPage: 1})
+		all := strings.Fields(input)
+		if err != nil || len(page.Lines) != 1 || page.Lines[0].Text != all[len(all)-1] || !page.HasOlder {
+			t.Fatalf("latest page = %#v, err=%v", page, err)
+		}
+	}
+}
+
+func cachePM2TestLog(t *testing.T, root, path string) {
+	t.Helper()
+	pm2LogPathCache.Lock()
+	pm2LogPathCache.entries[root] = pm2LogPathCacheEntry{files: []pm2LogFile{{Source: "out", Path: path}}, fetchedAt: time.Now()}
+	pm2LogPathCache.Unlock()
+	t.Cleanup(func() { pm2LogPathCache.Lock(); delete(pm2LogPathCache.entries, root); pm2LogPathCache.Unlock() })
+}
+
+func TestPM2StreamSnapshotContinuesAtCompleteLineBoundary(t *testing.T) {
+	root := t.TempDir()
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"bot"}`)
+	path := filepath.Join(root, "out.log")
+	writeAppPageFixture(t, path, "existing\npartial")
+	cachePM2TestLog(t, root, path)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	var received []string
+	err := (Manager{}).StreamPM2LogsWithSnapshot(ctx, root, PM2AuditQuery{}, func(page PM2AuditPage) {
+		if len(page.Lines) != 1 || page.Lines[0].Text != "existing" {
+			t.Errorf("snapshot = %#v", page.Lines)
+		}
+		f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0600)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = f.WriteString(" completed\r\nnext\n")
+		f.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}, func(source, text string) {
+		received = append(received, text)
+		if len(received) == 2 {
+			cancel()
+		}
+	})
+	if err != nil || strings.Join(received, "|") != "partial completed|next" {
+		t.Fatalf("received=%q, err=%v", received, err)
+	}
+}
+
+func TestPM2StreamDetectsLargerReplacement(t *testing.T) {
+	root := t.TempDir()
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"bot"}`)
+	path := filepath.Join(root, "out.log")
+	writeAppPageFixture(t, path, "old\n")
+	cachePM2TestLog(t, root, path)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	var received []string
+	err := (Manager{}).StreamPM2LogsWithSnapshot(ctx, root, PM2AuditQuery{}, func(page PM2AuditPage) {
+		replacement := filepath.Join(root, "replacement.log")
+		writeAppPageFixture(t, replacement, "replacement longer than original\n")
+		if err := os.Rename(replacement, path); err != nil {
+			t.Fatal(err)
+		}
+	}, func(source, text string) { received = append(received, text); cancel() })
+	if err != nil || strings.Join(received, "|") != "replacement longer than original" {
+		t.Fatalf("received=%q, err=%v", received, err)
+	}
+}
+
+func TestPM2StreamBoundsInitialSnapshot(t *testing.T) {
+	root := t.TempDir()
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"bot"}`)
+	path := filepath.Join(root, "out.log")
+	writeAppPageFixture(t, path, strings.Repeat("x", pm2LogSnapshotBytes+1)+"\nlatest\n")
+	cachePM2TestLog(t, root, path)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	captured := false
+	err := (Manager{}).StreamPM2LogsWithSnapshot(ctx, root, PM2AuditQuery{}, func(page PM2AuditPage) {
+		captured = true
+		if !page.Truncated || len(page.Lines) != 1 || page.Lines[0].Text != "latest" {
+			t.Errorf("snapshot=%#v", page)
+		}
+		cancel()
+	}, func(source, text string) { t.Errorf("unexpected tail: %q", text) })
+	if err != nil || !captured {
+		t.Fatalf("captured=%v err=%v", captured, err)
 	}
 }

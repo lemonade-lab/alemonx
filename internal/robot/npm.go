@@ -161,7 +161,7 @@ func (Manager) NPMPackPreviewAtCommit(root, sourceCommit string) (NPMPackPreview
 func npmPackPreview(path string) (NPMPackPreview, error) {
 	// --ignore-scripts keeps this preview side-effect free. The actual npm
 	// publish still runs the package lifecycle scripts and is shown separately.
-	output, err := run(path, "npm", "pack", "--dry-run", "--json", "--ignore-scripts")
+	output, err := runNPMJSON(path, "pack", "--dry-run", "--json", "--ignore-scripts")
 	if err != nil {
 		return NPMPackPreview{}, fmt.Errorf("无法生成 npm 打包预览：%w", err)
 	}
@@ -259,7 +259,7 @@ func (Manager) NPMPublish(root, sourceCommit, tag, token string) (Result, error)
 	// Both release paths now run the same explicit build plan. Ignore npm
 	// lifecycle scripts here so prepack/prepare cannot silently build a
 	// different artifact after that plan has completed.
-	output, err = run(worktree, "npm", "pack", "--json", "--ignore-scripts")
+	output, err = runNPMJSON(worktree, "pack", "--json", "--ignore-scripts")
 	logs = append(logs, output)
 	if err != nil {
 		return Result{Path: path, Output: strings.Join(logs, "\n")}, fmt.Errorf("从所选提交打包失败：%w", err)
@@ -280,6 +280,12 @@ func (Manager) NPMPublish(root, sourceCommit, tag, token string) (Result, error)
 		return Result{Path: path, Output: strings.Join(append(logs, output), "\n")}, fmt.Errorf("npm 发布失败：%w", err)
 	}
 	return Result{Path: path, Output: strings.Join(logs, "\n") + "\n已从 " + status.Branch + "@" + shortGitSHA(sourceCommit) + " 打包并发布到 npm。\n" + output}, nil
+}
+
+// Successful JSON commands must not mix npm's diagnostic stderr into stdout.
+// runCommandOutput still includes stderr when the command fails.
+func runNPMJSON(root string, args ...string) (string, error) {
+	return runCommandOutput(root, nil, false, true, "npm", args...)
 }
 
 func npmPackage(name string) (latest, publishedAt string, found bool, err error) {

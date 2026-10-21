@@ -23,26 +23,18 @@ import (
 	"time"
 )
 
-// ApplyCommand scopes network changes to an application-owned command. Robot
+// ManagedCommand identifies application-owned network operations. Robot
 // runtime launchers deliberately do not call this function.
 func ManagedCommand(cmd *exec.Cmd) bool {
-	name := strings.ToLower(filepath.Base(cmd.Path))
-	if strings.TrimSuffix(name, ".exe") == "git" {
+	name := commandBase(cmd.Path)
+	if name == "git" {
 		return true
 	}
-	if strings.TrimSuffix(name, ".exe") == "node" && len(cmd.Args) > 1 {
-		name = strings.ToLower(filepath.Base(cmd.Args[1]))
+	p := inspectPackageCommand(cmd)
+	if p.bootstrap >= 0 || p.networkOperation() {
+		return true
 	}
-	if !strings.Contains(name, "npm") && !strings.Contains(name, "yarn") && !strings.Contains(name, "pip") && !strings.Contains(name, "npx") {
-		return false
-	}
-	for _, arg := range cmd.Args[1:] {
-		switch arg {
-		case "install", "add", "ci", "view", "info", "publish", "whoami", "pack", "create", "init", "update", "upgrade":
-			return true
-		}
-	}
-	return strings.Contains(name, "npx")
+	return (name == "pip" || strings.HasPrefix(name, "pip3")) && len(cmd.Args) > 1 && cmd.Args[1] == "install"
 }
 
 func UsesGlobalPolicy() bool {
@@ -73,7 +65,7 @@ func ApplyCommand(cmd *exec.Cmd) (func(), error) {
 		env = os.Environ()
 	}
 	env = append([]string(nil), env...)
-	values := map[string]string{"HTTP_PROXY": "", "HTTPS_PROXY": "", "ALL_PROXY": "", "NO_PROXY": "localhost,127.0.0.1,::1", "http_proxy": "", "https_proxy": "", "all_proxy": "", "no_proxy": "localhost,127.0.0.1,::1", "npm_config_proxy": "", "npm_config_https_proxy": "", "npm_config_registry": "https://registry.npmjs.org/", "YARN_REGISTRY": "https://registry.npmjs.org/", "PIP_INDEX_URL": "https://pypi.org/simple", "PIP_EXTRA_INDEX_URL": "", "PIP_PROXY": "", "PIP_CONFIG_FILE": os.DevNull, "PYTHON_BUILD_MIRROR_URL": ""}
+	values := map[string]string{"HTTP_PROXY": "", "HTTPS_PROXY": "", "ALL_PROXY": "", "NO_PROXY": "localhost,127.0.0.1,::1", "http_proxy": "", "https_proxy": "", "all_proxy": "", "no_proxy": "localhost,127.0.0.1,::1", "npm_config_proxy": "", "npm_config_https_proxy": "", "npm_config_registry": "https://registry.npmjs.org/", "PIP_INDEX_URL": "https://pypi.org/simple", "PIP_EXTRA_INDEX_URL": "", "PIP_PROXY": "", "PIP_CONFIG_FILE": os.DevNull, "PYTHON_BUILD_MIRROR_URL": ""}
 	cleanup := func() {}
 	proxyURL := ""
 	values["NVM_NODEJS_ORG_MIRROR"] = "https://nodejs.org/dist"
@@ -118,7 +110,7 @@ func ApplyCommand(cmd *exec.Cmd) (func(), error) {
 	if strings.TrimSuffix(name, ".exe") == "node" && len(cmd.Args) > 1 {
 		tool = strings.ToLower(filepath.Base(cmd.Args[1]))
 	}
-	packageTool := strings.Contains(tool, "npm") || strings.Contains(tool, "yarn") || strings.Contains(tool, "pnpm") || strings.Contains(tool, "npx")
+	packageCommand := inspectPackageCommand(cmd)
 	if strings.Contains(tool, "python") {
 		for _, arg := range cmd.Args {
 			if arg == "pip" {
@@ -131,9 +123,6 @@ func ApplyCommand(cmd *exec.Cmd) (func(), error) {
 		if arg == "install" || arg == "add" || arg == "ci" || arg == "view" || arg == "info" {
 			networkRead = true
 		}
-	}
-	if strings.Contains(tool, "npx") {
-		networkRead = true
 	}
 	if c.Mode == "auto" && strings.Contains(strings.Join(cmd.Args, " "), "alemonx-nvm") && strings.Contains(strings.Join(cmd.Args, " "), "install") {
 		ctx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
@@ -152,7 +141,7 @@ func ApplyCommand(cmd *exec.Cmd) (func(), error) {
 			values["NVM_NODEJS_ORG_MIRROR"] = strings.TrimSuffix(u.String(), "/")
 		}
 	}
-	if c.Mode == "auto" && packageTool && networkRead && !commandHasCredentials(cmd, env) {
+	if c.Mode == "auto" && packageCommand.mirrorRead() && !commandHasCredentials(cmd, env) {
 		ctx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
 		defer cancel()
 		state, err := m.selected(ctx, *c, groupConfig(*c, "npm"))
@@ -167,7 +156,6 @@ func ApplyCommand(cmd *exec.Cmd) (func(), error) {
 				return func() {}, err
 			}
 			values["npm_config_registry"] = target.String()
-			values["YARN_REGISTRY"] = target.String()
 		}
 	}
 	if c.Mode == "auto" && (strings.Contains(tool, "pip") || strings.Contains(tool, "pyenv")) && networkRead && !commandHasCredentials(cmd, env) {
@@ -196,9 +184,7 @@ func ApplyCommand(cmd *exec.Cmd) (func(), error) {
 		}
 	}
 	// CLI flags outrank project/user registry and proxy settings, without editing them.
-	if packageTool && networkRead {
-		cmd.Args = append(cmd.Args, "--registry="+values["npm_config_registry"], "--proxy="+proxyURL, "--https-proxy="+proxyURL)
-	}
+	packageCommand.applyNetworkOptions(cmd, values, proxyURL)
 	if tool == "pip" || strings.HasPrefix(tool, "pip3") {
 		if networkRead {
 			cmd.Args = append(cmd.Args, "--index-url="+values["PIP_INDEX_URL"], "--proxy="+proxyURL)
@@ -290,6 +276,15 @@ func ApplyCommand(cmd *exec.Cmd) (func(), error) {
 		}
 		env = append(filtered, k+"="+v)
 	}
+	if packageCommand.modernYarn {
+		filtered := env[:0]
+		for _, entry := range env {
+			if !strings.HasPrefix(entry, "YARN_REGISTRY=") {
+				filtered = append(filtered, entry)
+			}
+		}
+		env = filtered
+	}
 	cmd.Env = env
 	return cleanup, nil
 }
@@ -302,9 +297,9 @@ func commandHasCredentials(cmd *exec.Cmd, env []string) bool {
 			return true
 		}
 	}
-	paths := []string{filepath.Join(cmd.Dir, ".npmrc"), filepath.Join(cmd.Dir, ".yarnrc")}
+	paths := []string{filepath.Join(cmd.Dir, ".npmrc"), filepath.Join(cmd.Dir, ".yarnrc"), filepath.Join(cmd.Dir, ".yarnrc.yml"), filepath.Join(cmd.Dir, "pnpm-workspace.yaml")}
 	if home, err := os.UserHomeDir(); err == nil {
-		paths = append(paths, filepath.Join(home, ".npmrc"), filepath.Join(home, ".yarnrc"))
+		paths = append(paths, filepath.Join(home, ".npmrc"), filepath.Join(home, ".yarnrc"), filepath.Join(home, ".yarnrc.yml"))
 	}
 	for _, path := range paths {
 		if raw, err := os.ReadFile(path); err == nil {

@@ -9162,8 +9162,8 @@ button > svg,
 /* PM2 audit log viewer */
 .pm2-audit {
   background: var(--theme-surface-panel);
-  display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
+  display: flex;
+  flex-direction: column;
   height: 100%;
   min-height: 0;
 }
@@ -9293,6 +9293,7 @@ button > svg,
   scrollbar-gutter: stable;
 }
 .pm2-audit-body {
+  flex: 1;
   background: #020617;
   color: #a7f3d0;
   font:
@@ -9307,6 +9308,8 @@ button > svg,
   scrollbar-gutter: stable;
 }
 .pm2-audit-line {
+  display: flex;
+  gap: 12px;
   white-space: pre-wrap;
   word-break: break-all;
 }
@@ -9317,6 +9320,49 @@ button > svg,
   color: #64748b;
   font-size: 0.7rem;
   padding: 6px 0 0;
+}
+
+.pm2-audit-toolbar,
+.pm2-audit-diagnostics,
+.pm2-audit-footer,
+.pm2-audit-notice {
+  flex-shrink: 0;
+}
+.pm2-audit-line-source {
+  color: #64748b;
+  flex: 0 0 3ch;
+  font-size: 0.65rem;
+  user-select: none;
+}
+.pm2-audit-line-err .pm2-audit-line-source {
+  color: #fda4af;
+}
+.pm2-audit-nowrap .pm2-audit-line {
+  white-space: pre;
+  word-break: normal;
+}
+.pm2-audit-footer {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  padding: 6px 10px;
+  font-size: 0.7rem;
+  color: var(--theme-text-muted);
+  border-top: 1px solid var(--theme-border-default);
+}
+.pm2-audit-footer button {
+  margin-left: auto;
+}
+.pm2-audit-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  color: var(--theme-text-secondary);
+  background: var(--theme-surface-raised);
+  font-size: 0.72rem;
 }
 
 /* Git 变更对比 */

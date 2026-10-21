@@ -62,7 +62,7 @@ func TestPrepareDevelopmentCommandFallsBackToCorepack(t *testing.T) {
 	}
 	t.Setenv("PATH", "")
 	program, args, _, notice := PrepareDevelopmentCommand("yarn", []string{"build"})
-	if program != corepack || strings.Join(args, " ") != "yarn build" || notice == "" {
+	if program != corepack || strings.Join(args, " ") != "yarn@1.22.22 build" || notice == "" {
 		t.Fatalf("PrepareDevelopmentCommand fallback = (%q, %#v, %q)", program, args, notice)
 	}
 }

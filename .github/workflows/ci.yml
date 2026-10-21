@@ -37,6 +37,8 @@ jobs:
             (cd "$dir" && npm ci --no-bin-links --ignore-scripts --no-audit --no-fund)
           done
       - run: go test ./internal/... && go vet ./internal/... && go build -o /tmp/alemonx .
+      - name: Verify real package-manager command compatibility
+        run: node scripts/test-package-managers.mjs
       - run: go test -tags alxdev .
       # A release must retain one verified package for each primary desktop
       # system. Extra architectures are best-effort in the packaging matrix.

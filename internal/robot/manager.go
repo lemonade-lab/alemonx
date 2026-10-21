@@ -22,6 +22,7 @@ import (
 	"golang.org/x/mod/semver"
 
 	"alemonx/internal/catalog"
+	"alemonx/internal/packagemanager"
 	"alemonx/internal/resources"
 	"alemonx/internal/system"
 )
@@ -965,13 +966,17 @@ func (m Manager) UpgradeAlemonDependencies(root string) (Result, error) {
 		// changed in package.json, with their necessary lock entries updated.
 		// In a Yarn workspace, -W explicitly confirms that these are root
 		// dependencies; without it Yarn aborts before resolving any package.
+		workspaceFlags := []string{}
+		if !packagemanager.ModernYarn(path) && plan.Workspace {
+			workspaceFlags = append(workspaceFlags, "-W")
+		}
 		if len(plan.Dependencies) > 0 {
-			if err := runUpgrade(append([]string{"add", "-W"}, latest(plan.Dependencies)...)...); err != nil {
+			if err := runUpgrade(append(append([]string{"add"}, workspaceFlags...), latest(plan.Dependencies)...)...); err != nil {
 				return Result{Path: path, Output: strings.Join(outputs, "\n")}, err
 			}
 		}
 		if len(plan.DevDependencies) > 0 {
-			if err := runUpgrade(append([]string{"add", "--dev", "-W"}, latest(plan.DevDependencies)...)...); err != nil {
+			if err := runUpgrade(append(append([]string{"add", "--dev"}, workspaceFlags...), latest(plan.DevDependencies)...)...); err != nil {
 				return Result{Path: path, Output: strings.Join(outputs, "\n")}, err
 			}
 		}
@@ -1018,7 +1023,7 @@ func readAlemonUpgradePlan(root string) (alemonUpgradePlan, error) {
 	return alemonUpgradePlan{
 		Dependencies:    filter(manifest.Dependencies),
 		DevDependencies: filter(manifest.DevDependencies),
-		Workspace:       len(manifest.Workspaces) > 0 && string(manifest.Workspaces) != "null",
+		Workspace:       packageWorkspaceRoot(root, projectPackageManager(root), manifest.Workspaces),
 	}, nil
 }
 
@@ -1878,7 +1883,7 @@ func (m Manager) Run(root, action, message, packageName, version, tag, token str
 		if !regexp.MustCompile(`^\d+\.\d+\.\d+$`).MatchString(version) {
 			return Result{}, errors.New("版本号应为 1.2.3")
 		}
-		name, args = manager, packageVersionArgs(manager, version)
+		name, args = manager, packageVersionArgs(root, manager, version)
 	case "dev":
 		if err := m.ValidateEnabledBackpackRelease(root); err != nil {
 			return Result{}, err
@@ -2308,7 +2313,7 @@ func packageManagerCommand(root, manager string, args ...string) (*exec.Cmd, str
 		HideWindow(command)
 		return command, ""
 	}
-	if manager == "yarn" {
+	if manager == "yarn" && !packagemanager.ModernYarn(root) {
 		if command, prefix, ok := resources.ToolCommand("yarn"); ok {
 			executable := exec.Command(command, append(prefix, args...)...)
 			executable.Dir = root
@@ -2317,12 +2322,9 @@ func packageManagerCommand(root, manager string, args ...string) (*exec.Cmd, str
 			return executable, "使用内置 Yarn 运行"
 		}
 	}
-	packageName := ""
 	switch manager {
 	case "yarn":
-		packageName = "yarn@1.22.22"
 	case "pnpm":
-		packageName = "pnpm@latest"
 	default:
 		command := exec.Command(manager, args...)
 		command.Dir = root
@@ -2330,7 +2332,7 @@ func packageManagerCommand(root, manager string, args ...string) (*exec.Cmd, str
 		HideWindow(command)
 		return command, ""
 	}
-	command := exec.Command(nodeToolPath("npx"), append([]string{"--yes", packageName}, args...)...)
+	command := exec.Command(nodeToolPath("npx"), append(packagemanager.NPXArgs(root, manager), args...)...)
 	command.Dir = root
 	applyManagedNodeEnvironment(command)
 	HideWindow(command)
@@ -2341,8 +2343,11 @@ func runPackageManager(root string, args ...string) (string, error) {
 	return runNamedPackageManager(root, projectPackageManager(root), args...)
 }
 
-func packageVersionArgs(manager, version string) []string {
+func packageVersionArgs(root, manager, version string) []string {
 	if manager == "yarn" {
+		if packagemanager.ModernYarn(root) {
+			return []string{"version", version}
+		}
 		return []string{"version", "--new-version", version, "--no-git-tag-version"}
 	}
 	return []string{"version", version, "--no-git-tag-version"}

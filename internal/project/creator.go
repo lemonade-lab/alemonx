@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"alemonx/internal/catalog"
+	"alemonx/internal/packagemanager"
 	"alemonx/internal/pm2config"
 	"alemonx/internal/resources"
 	"alemonx/internal/robot"
@@ -121,7 +122,6 @@ func (c *Creator) Create(config Config) (Result, error) {
 	log("已按你的选择配置项目。")
 
 	packageCommand := config.PackageManager
-	packageName := ""
 	packagePrefix := []string{}
 	if !projectCommandAvailable(config.PackageManager) {
 		if config.PackageManager == "yarn" {
@@ -135,11 +135,6 @@ func (c *Creator) Create(config Config) (Result, error) {
 		// rights. npx is scoped to this one command and keeps a new machine
 		// usable without modifying its global package directory.
 		if len(packagePrefix) == 0 && (config.PackageManager == "yarn" || config.PackageManager == "pnpm") {
-			if config.PackageManager == "yarn" {
-				packageName = "yarn@1.22.22"
-			} else {
-				packageName = "pnpm@latest"
-			}
 			log("未找到 " + strings.ToUpper(config.PackageManager) + "，临时使用 npm 下载并执行；不会修改电脑的全局安装。")
 			packageCommand = "npx"
 		}
@@ -148,7 +143,7 @@ func (c *Creator) Create(config Config) (Result, error) {
 	install := map[string][]string{"yarn": {"install"}, "npm": {"install"}, "pnpm": {"install"}}[config.PackageManager]
 	install = append(append([]string{}, packagePrefix...), install...)
 	if packageCommand == "npx" {
-		install = append([]string{"--yes", packageName}, install...)
+		install = append(packagemanager.NPXArgs(path, config.PackageManager), install...)
 	}
 	if err := run(path, &result.Logs, packageCommand, install...); err != nil {
 		if packageCommand == "npx" {
@@ -286,7 +281,7 @@ func patchPackage(root string, config Config) error {
 	// read package.json first, so a copied project behaves consistently even
 	// before a lock file exists.
 	if config.PackageManager != "" {
-		pkg["packageManager"] = map[string]string{"npm": "npm@10", "yarn": "yarn@1.22.22", "pnpm": "pnpm@9.15.0"}[config.PackageManager]
+		pkg["packageManager"] = map[string]string{"npm": "npm@10", "yarn": "yarn@" + packagemanager.YarnVersion, "pnpm": "pnpm@" + packagemanager.PNPMVersion}[config.PackageManager]
 	}
 	dependencies, _ := pkg["devDependencies"].(map[string]any)
 	if dependencies == nil {

@@ -1,6 +1,7 @@
 package robot
 
 import (
+	"alemonx/internal/packagemanager"
 	"alemonx/internal/systemnetwork"
 	"encoding/json"
 	"errors"
@@ -61,7 +62,7 @@ func installLocalPackage(root, source string) (Result, error) {
 		return Result{}, err
 	}
 	defer os.RemoveAll(temporary)
-	output, err := run(temporary, "npm", "pack", source, "--json")
+	output, err := runNPMJSON(temporary, "pack", source, "--json")
 	if err != nil {
 		return Result{Path: target, Output: output}, fmt.Errorf("下载 npm 插件包失败：%w", err)
 	}
@@ -172,15 +173,28 @@ func connectionPackageCommand(root, action, source string) (string, []string, er
 	}
 	manager := projectPackageManager(root)
 	args := []string{action, source}
-	if len(manifest.Workspaces) > 0 && string(manifest.Workspaces) != "null" {
+	if packageWorkspaceRoot(root, manager, manifest.Workspaces) {
 		switch manager {
 		case "yarn":
-			args = append(args, "-W")
+			if !packagemanager.ModernYarn(root) {
+				args = append(args, "-W")
+			}
 		case "pnpm":
 			args = append(args, "-w")
 		}
 	}
 	return manager, args, nil
+}
+
+func packageWorkspaceRoot(root, manager string, workspaces json.RawMessage) bool {
+	if len(workspaces) > 0 && string(workspaces) != "null" {
+		return true
+	}
+	if manager == "pnpm" {
+		_, err := os.Stat(filepath.Join(root, "pnpm-workspace.yaml"))
+		return err == nil
+	}
+	return false
 }
 
 func ensurePackagesWorkspace(root string) error {

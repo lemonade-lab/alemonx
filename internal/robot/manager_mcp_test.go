@@ -150,6 +150,9 @@ func TestConnectionPackagesFollowPackageJSONManagerAndWorkspace(t *testing.T) {
 		{"pnpm workspace", `{"packageManager":"pnpm@9","workspaces":["packages/*"]}`, "pnpm", []string{"add", "@alemonjs/onebot", "-w"}},
 		{"npm workspace", `{"packageManager":"npm@10","workspaces":["packages/*"]}`, "npm", []string{"add", "@alemonjs/onebot"}},
 		{"plain project", `{"packageManager":"yarn@1.22.22"}`, "yarn", []string{"add", "@alemonjs/onebot"}},
+		{"default project", `{}`, "yarn", []string{"add", "@alemonjs/onebot"}},
+		{"default workspace", `{"workspaces":["packages/*"]}`, "yarn", []string{"add", "@alemonjs/onebot", "-W"}},
+		{"modern yarn workspace", `{"packageManager":"yarn@4.9.2","workspaces":["packages/*"]}`, "yarn", []string{"add", "@alemonjs/onebot"}},
 	}
 	for _, item := range cases {
 		t.Run(item.name, func(t *testing.T) {
@@ -165,6 +168,31 @@ func TestConnectionPackagesFollowPackageJSONManagerAndWorkspace(t *testing.T) {
 	}
 }
 
+func TestPNPMWorkspaceYAMLUsesRootFlag(t *testing.T) {
+	root := t.TempDir()
+	for name, content := range map[string]string{"package.json": `{"packageManager":"pnpm@9.15.0"}`, "pnpm-workspace.yaml": "packages:\n - 'packages/*'\n"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, action := range []string{"add", "remove"} {
+		manager, args, err := connectionPackageCommand(root, action, "@alemonjs/onebot")
+		if err != nil || manager != "pnpm" || !reflect.DeepEqual(args, []string{action, "@alemonjs/onebot", "-w"}) {
+			t.Fatalf("command: %s %v: %v", manager, args, err)
+		}
+	}
+}
+
+func TestModernYarnVersionArgs(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "package.json"), []byte(`{"packageManager":"yarn@4.9.2"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if got := packageVersionArgs(root, "yarn", "1.2.3"); !reflect.DeepEqual(got, []string{"version", "1.2.3"}) {
+		t.Fatalf("version command: %v", got)
+	}
+}
+
 func TestPackageJSONManagerWinsOverLockFiles(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "package.json"), []byte(`{"packageManager":"pnpm@9.15.0"}`), 0644); err != nil {
@@ -176,7 +204,7 @@ func TestPackageJSONManagerWinsOverLockFiles(t *testing.T) {
 	if got := projectPackageManager(root); got != "pnpm" {
 		t.Fatalf("project package manager = %q, want pnpm", got)
 	}
-	if got, want := packageVersionArgs("yarn", "1.2.3"), []string{"version", "--new-version", "1.2.3", "--no-git-tag-version"}; !reflect.DeepEqual(got, want) {
+	if got, want := packageVersionArgs(root, "yarn", "1.2.3"), []string{"version", "--new-version", "1.2.3", "--no-git-tag-version"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("yarn version args = %#v", got)
 	}
 }

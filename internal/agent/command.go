@@ -94,6 +94,8 @@ func (commandRunner) Run(ctx context.Context, root, command string, args []strin
 				return "", fmt.Errorf("未检测到 %s 环境", command)
 			}
 			program = path
+		} else {
+			program, args, environment, _ = system.PrepareDevelopmentCommandAt(root, command, args)
 		}
 	}
 	cmd := exec.CommandContext(timeoutCtx, program, args...)
