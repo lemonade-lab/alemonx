@@ -23,15 +23,11 @@ type redisProxy struct {
 	connections sync.Map // net.Conn -> struct{}
 }
 
-func newRedisProxy(address, backend string) (*redisProxy, error) {
-	listener, err := net.Listen("tcp", address)
-	if err != nil {
-		return nil, err
-	}
+func newRedisProxy(listener net.Listener, backend string) *redisProxy {
 	p := &redisProxy{listener: listener, closed: make(chan struct{})}
 	p.backend.Store(backend)
 	go p.serve()
-	return p, nil
+	return p
 }
 
 func (p *redisProxy) setBackend(address string) { p.backend.Store(address) }

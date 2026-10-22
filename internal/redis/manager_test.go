@@ -19,8 +19,8 @@ import (
 	"github.com/alicebob/miniredis/v2"
 )
 
-// freePort reserves a loopback port and releases it so the manager can bind it
-// without racing the test helper itself.
+// freePort finds a currently available port; the manager must still handle
+// another process taking it before startup.
 func freePort(t *testing.T) int {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -34,7 +34,44 @@ func freePort(t *testing.T) int {
 
 func newTestManager(t *testing.T) *Manager {
 	t.Helper()
-	return NewManager(filepath.Join(t.TempDir(), "alx-redis.json"))
+	manager := NewManager(filepath.Join(t.TempDir(), "alx-redis.json"))
+	t.Cleanup(manager.Close)
+	return manager
+}
+
+func TestManagerKeepsReservedPublicPortThroughBackendStartup(t *testing.T) {
+	manager := newTestManager(t)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	address := listener.Addr().String()
+	port := listener.Addr().(*net.TCPAddr).Port
+	if err := manager.Configure(port, false, false); err != nil {
+		t.Fatal(err)
+	}
+	manager.mu.Lock()
+	err = manager.startManagedLocked(listener)
+	manager.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ping(t, address) || manager.backendAddress == address {
+		t.Fatalf("public address %s must forward to a separate backend %s", address, manager.backendAddress)
+	}
+	if _, err := manager.Restart(); err != nil {
+		t.Fatal(err)
+	}
+	if !ping(t, address) {
+		t.Fatal("restarted Redis must still answer on the configured public port")
+	}
+	manager.Close()
+	reopened, err := net.Listen("tcp", address)
+	if err != nil {
+		t.Fatalf("Close must release the public port: %v", err)
+	}
+	_ = reopened.Close()
 }
 
 func TestManagerStartsAndStopsTemporaryRedis(t *testing.T) {

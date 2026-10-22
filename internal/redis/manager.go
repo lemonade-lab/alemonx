@@ -372,7 +372,8 @@ func (m *Manager) startLocked() error {
 	}
 	port := m.config.Port
 	address := net.JoinHostPort(bindHost, strconv.Itoa(port))
-	if !portFree(port) {
+	listener, err := net.Listen("tcp", address)
+	if err != nil {
 		if isRedis, _ := probeRedis(address, 1500*time.Millisecond); isRedis {
 			m.external = true
 			m.skipped = true
@@ -383,6 +384,17 @@ func (m *Manager) startLocked() error {
 		m.skipped = false
 		return fmt.Errorf("端口 %d 已被其他程序占用，且不是可用的 Redis 服务", port)
 	}
+	return m.startManagedLocked(listener)
+}
+
+// Keep the public port bound while backends allocate their own random ports.
+// The proxy takes ownership of this same listener once the backend is ready.
+func (m *Manager) startManagedLocked(listener net.Listener) error {
+	defer func() {
+		if listener != nil {
+			_ = listener.Close()
+		}
+	}()
 	if m.privateInstalledLocked() {
 		backend := net.JoinHostPort(bindHost, "0")
 		if err := m.startPrivateLocked(backend); err == nil {
@@ -395,18 +407,14 @@ func (m *Manager) startLocked() error {
 					if err := m.saveLocked(); err != nil {
 						log.Printf("保存私有 Redis 初始化状态失败：%v", err)
 					}
-					if err := m.startProxyLocked(address); err != nil {
-						_ = m.stopPrivateLocked()
-						return err
-					}
+					m.startProxyLocked(listener)
+					listener = nil
 					m.mode, m.phase, m.message = "private-running", "", "ALemonX 私有 Redis 已准备好。"
 					return nil
 				}
 			} else {
-				if err := m.startProxyLocked(address); err != nil {
-					_ = m.stopPrivateLocked()
-					return err
-				}
+				m.startProxyLocked(listener)
+				listener = nil
 				m.mode, m.phase = "private-running", ""
 				return nil
 			}
@@ -429,28 +437,16 @@ func (m *Manager) startLocked() error {
 		m.message = "内置 Redis 已启动，已启用本地持久化。"
 	}
 	m.startSnapshotterLocked()
-	if err := m.startProxyLocked(address); err != nil {
-		m.stopSnapshotterLocked()
-		m.server.Close()
-		m.server = nil
-		return fmt.Errorf("启动 Redis 本地代理失败：%w", err)
-	}
+	m.startProxyLocked(listener)
+	listener = nil
 	m.external = false
 	m.skipped = false
 	m.mode, m.phase, m.retryable = "fallback-running", "preparing-runtime", true
 	return nil
 }
 
-func (m *Manager) startProxyLocked(address string) error {
-	if m.proxy != nil {
-		return nil
-	}
-	proxy, err := newRedisProxy(address, m.backendAddress)
-	if err != nil {
-		return err
-	}
-	m.proxy = proxy
-	return nil
+func (m *Manager) startProxyLocked(listener net.Listener) {
+	m.proxy = newRedisProxy(listener, m.backendAddress)
 }
 
 func (m *Manager) statusLocked() Status {
@@ -592,16 +588,6 @@ func (m *Manager) saveLocked() error {
 		return fmt.Errorf("保存 Redis 配置失败：%w", err)
 	}
 	return nil
-}
-
-// portFree reports whether the loopback port is not currently bound.
-func portFree(port int) bool {
-	listener, err := net.Listen("tcp", net.JoinHostPort(bindHost, strconv.Itoa(port)))
-	if err != nil {
-		return false
-	}
-	_ = listener.Close()
-	return true
 }
 
 // probeRedis asks a RESP server on the address whether it is Redis. A +PONG
