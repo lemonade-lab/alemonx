@@ -235,18 +235,17 @@ func (c *Checker) browser() Check {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
 	defer cancel()
-	output, err := exec.CommandContext(ctx, path, "--version").CombinedOutput()
+	version, err := browserVersion(ctx, path)
 	if ctx.Err() != nil || err != nil {
 		return Check{
 			ID:         "browser",
 			Name:       "浏览器",
 			Status:     "warning",
-			Detail:     "已找到 " + name + "，但无法正常启动",
-			Suggestion: "可选：请修复或重新安装浏览器后重试。",
+			Detail:     "已找到 " + name + "，但无法读取版本信息",
+			Suggestion: "可选：请检查浏览器安装；自动化是否可用请查看运行环境检查。",
 			Optional:   true,
 		}
 	}
-	version := strings.TrimSpace(strings.Split(normalizeCommandOutput(output), "\n")[0])
 	return Check{ID: "browser", Name: "浏览器", Status: "ready", Detail: version, Optional: true}
 }
 
@@ -514,6 +513,7 @@ func browserCanLaunchHeadless(path string) bool {
 			args = append(args, "--no-sandbox")
 		}
 		command := exec.CommandContext(ctx, path, args...)
+		HideWindow(command)
 		command.Stdout = io.Discard
 		command.Stderr = io.Discard
 		if err := command.Run(); err == nil && ctx.Err() == nil {
