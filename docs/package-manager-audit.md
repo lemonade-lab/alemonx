@@ -25,6 +25,8 @@
 - npx/npm exec 的 npm 配置放在启动器参数区，子工具参数保持原位，避免把 registry/proxy 传给 lvy、PM2 或业务脚本。
 - 不再扫描所有参数中的 `install` 等单词；`run install`、`run build -- install` 不会被当成依赖安装。
 - Yarn 2+ 使用其环境配置键，避免 Classic 网络参数、`YARN_REGISTRY` 和 workspace `-W` 导致错误；版本修改使用现代 Yarn 的语法。
+- Yarn 1 直连使用进程级 `YARN_PROXY=false`、`YARN_HTTPS_PROXY=false`，防止空 CLI 代理参数回退到 `.yarnrc` 中的旧代理；代理模式使用当前临时通道。真实 CLI 回归通过本地 HTTP/HTTPS 仓库验证请求没有进入旧代理。
+- 受管 Yarn 1 网络命令启用 `--non-interactive`，避免应用操作窗口中的不可见交互提示。包管理命令失败时追加入口、耗时、日志识别到的 Yarn 版本和阶段、距最近输出时间及本次仓库/代理摘要；摘要隐藏仓库凭据、路径和临时代理地址。超时按最后识别阶段提供排查提示，不把超时直接判定为代理故障。成功输出及 npm JSON 输出保持原格式。
 - npm 直连使用 `--proxy=false --https-proxy=false`，避免空代理参数产生警告并污染 `pack --json` 输出。
 - npm JSON 命令单独读取 stdout，成功时不把诊断 stderr 混入 JSON；失败时仍保留 stderr 错误信息。
 - 临时 pnpm 不再使用 `latest`；npx/Corepack 沿用项目声明版本。无版本声明时使用集中定义的固定版本。Yarn 2+ 的 npm 分发包使用 `@yarnpkg/cli-dist`，不误用 `yarn@4`。
@@ -43,7 +45,7 @@ node scripts/test-package-managers.mjs
 
 | CLI | 真实命令验证 |
 | --- | --- |
-| Yarn 1.22.22 | 安装、普通/开发依赖添加与卸载、workspace 根、脚本运行、版本修改。 |
+| Yarn 1.22.22 | 安装、普通/开发依赖添加与卸载、workspace 根、脚本运行、版本修改，以及存在旧代理配置时的 HTTP/HTTPS 直连。 |
 | Yarn 4.9.2 | 同上，并验证不传 Classic 参数。 |
 | pnpm 9.15.0、10.17.1 | 同上，并验证卸载接受配置形式的 registry/proxy 参数。 |
 | npm 10.9.8、11.6.2 | 同上，加 npm pack JSON、npm exec/npx 子进程参数。 |

@@ -5,10 +5,13 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -36,7 +39,7 @@ func TestPackageCLISmoke(t *testing.T) {
 		t.Fatal(err)
 	}
 	settings := network.Settings()
-	settings.Mode = "direct"
+	settings.Config.Mode = "direct"
 	if _, err := network.Save(settings); err != nil {
 		t.Fatal(err)
 	}
@@ -61,6 +64,64 @@ func TestPackageCLISmoke(t *testing.T) {
 				}
 			}
 			home := t.TempDir()
+			if tool.Manager == "yarn" && strings.HasPrefix(tool.Version, "1.") {
+				// Empty CLI proxy values must not fall back to saved Yarn/npm
+				// proxies. Exercise real HTTP and HTTPS requests, not just parsing.
+				var staleRequests atomic.Int32
+				stale := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					staleRequests.Add(1)
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = w.Write([]byte(`{"name":"alx-proxy-check","dist-tags":{"latest":"9.0.0"},"versions":{"9.0.0":{"version":"9.0.0"}}}`))
+				}))
+				defer stale.Close()
+				for _, name := range []string{".yarnrc", ".npmrc"} {
+					content := "proxy=" + stale.URL + "\nhttps-proxy=" + stale.URL + "\n"
+					if name == ".yarnrc" {
+						content = "proxy \"" + stale.URL + "\"\nhttps-proxy \"" + stale.URL + "\"\n"
+					}
+					if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				for _, secure := range []bool{false, true} {
+					var registryRequests atomic.Int32
+					handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						registryRequests.Add(1)
+						w.Header().Set("Content-Type", "application/json")
+						_, _ = w.Write([]byte(`{"name":"alx-proxy-check","dist-tags":{"latest":"1.0.0"},"versions":{"1.0.0":{"version":"1.0.0"}}}`))
+					})
+					registry := httptest.NewUnstartedServer(handler)
+					if secure {
+						registry.StartTLS()
+					} else {
+						registry.Start()
+					}
+					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+					cmd := exec.CommandContext(ctx, node, tool.Entry, "info", "alx-proxy-check", "version", "--non-interactive", "--network-timeout=1000")
+					cmd.Dir = root
+					cmd.Env = append(os.Environ(), "HOME="+home, "USERPROFILE="+home, "YARN_STRICT_SSL=false")
+					cleanup, err := systemnetwork.ApplyCommand(cmd)
+					if err != nil {
+						t.Fatal(err)
+					}
+					// Use a local registry and disable loopback bypass so a stale
+					// proxy cannot be hidden by NO_PROXY in this regression check.
+					cmd.Args = append(cmd.Args, "--registry="+registry.URL)
+					cmd.Env = append(cmd.Env, "NO_PROXY=", "no_proxy=")
+					output, err := cmd.CombinedOutput()
+					cleanup()
+					cancel()
+					registry.Close()
+					if err != nil || registryRequests.Load() == 0 || staleRequests.Load() != 0 {
+						t.Fatalf("Yarn direct request (TLS=%v): registry=%d stale proxy=%d err=%v\n%s", secure, registryRequests.Load(), staleRequests.Load(), err, output)
+					}
+				}
+				for _, name := range []string{".yarnrc", ".npmrc"} {
+					if err := os.Remove(filepath.Join(root, name)); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
 			runCLI := func(args ...string) string {
 				t.Helper()
 				ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)

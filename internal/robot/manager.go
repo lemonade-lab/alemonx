@@ -2393,6 +2393,7 @@ func runWithOutput(root string, values map[string]string, combined bool, name st
 }
 
 func runCommandOutput(root string, values map[string]string, combined, trim bool, name string, args ...string) (string, error) {
+	started := time.Now()
 	timeout := commandTimeout(name, args...)
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
@@ -2425,7 +2426,13 @@ func runCommandOutput(root string, values map[string]string, combined, trim bool
 		defer cleanupNetwork()
 	}
 	var err error
-	if combined {
+	var diagnostic *packageCommandOutput
+	if combined && systemnetwork.ManagedCommand(cmd) && packageCommandEntry(cmd) != "" {
+		diagnostic = &packageCommandOutput{started: started}
+		cmd.Stdout, cmd.Stderr = diagnostic, diagnostic
+		err = cmd.Run()
+		raw = diagnostic.Bytes()
+	} else if combined {
 		raw, err = cmd.CombinedOutput()
 	} else {
 		raw, err = cmd.Output()
@@ -2440,7 +2447,13 @@ func runCommandOutput(root string, values map[string]string, combined, trim bool
 	if trim {
 		text = strings.TrimSpace(text)
 	}
+	if diagnostic != nil && (err != nil || errors.Is(ctx.Err(), context.DeadlineExceeded)) {
+		text = strings.TrimSpace(text + "\n\n" + diagnostic.summary(cmd, time.Now()))
+	}
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		if diagnostic != nil {
+			return text, packageTimeoutError(timeout, diagnostic.stage)
+		}
 		return text, fmt.Errorf("操作超时（%s）；请检查网络、登录状态或代理后重试", timeout.Round(time.Second))
 	}
 	if err != nil {

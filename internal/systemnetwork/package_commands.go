@@ -132,6 +132,14 @@ func insertCommandOptions(cmd *exec.Cmd, index int, options []string) {
 func (p packageCommand) applyNetworkOptions(cmd *exec.Cmd, values map[string]string, proxyURL string) {
 	if p.tool == "yarn" && !p.modernYarn {
 		values["YARN_REGISTRY"] = values["npm_config_registry"]
+		// Classic falls back to .yarnrc/.npmrc when CLI proxy values are
+		// empty. Yarn normalizes the environment string "false" to a boolean,
+		// which overrides saved proxies without treating "false" as a host.
+		proxyValue := proxyURL
+		if proxyValue == "" {
+			proxyValue = "false"
+		}
+		values["YARN_PROXY"], values["YARN_HTTPS_PROXY"] = proxyValue, proxyValue
 	}
 	if p.modernYarn {
 		// Berry rejects Classic's CLI flags and YARN_REGISTRY environment key.
@@ -156,6 +164,11 @@ func (p packageCommand) applyNetworkOptions(cmd *exec.Cmd, values map[string]str
 			}
 		}
 		insertCommandOptions(cmd, index, []string{prefix + "registry=" + values["npm_config_registry"], prefix + "proxy=" + proxyValue, prefix + "https-proxy=" + proxyValue})
+		if p.tool == "yarn" {
+			// Application-owned installs have no interactive terminal. Resolve
+			// prompts as errors instead of waiting behind the operation dialog.
+			insertCommandOptions(cmd, index, []string{"--non-interactive"})
+		}
 	}
 	if p.bootstrap >= 0 {
 		// npx stops parsing options at the first positional argument. Appending

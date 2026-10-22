@@ -145,3 +145,52 @@ func TestModernYarnUsesEnvironmentInsteadOfClassicFlags(t *testing.T) {
 		})
 	}
 }
+
+func TestClassicYarnOverridesSavedProxy(t *testing.T) {
+	previous := defaultManager
+	t.Cleanup(func() { SetDefault(previous) })
+	for _, mode := range []string{"direct", "proxy"} {
+		for _, args := range [][]string{
+			{"yarn", "install"},
+			{"node", "/tools/yarn.js", "add", "alemonjs"},
+			{"corepack", "yarn", "install"},
+			{"npx", "--yes", "yarn@1.22.22", "install"},
+		} {
+			t.Run(mode+"/"+strings.Join(args, " "), func(t *testing.T) {
+				c := testConfig(mode)
+				c.Proxy.URL = "http://127.0.0.1:1"
+				SetDefault(&Manager{config: &c})
+				cmd := exec.Command(args[0], args[1:]...)
+				cmd.Dir = t.TempDir()
+				cmd.Env = []string{"YARN_PROXY=http://stale.invalid:1", "YARN_HTTPS_PROXY=http://stale.invalid:1"}
+				cleanup, err := ApplyCommand(cmd)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer cleanup()
+				env := make(map[string]string)
+				for _, entry := range cmd.Env {
+					key, value, _ := strings.Cut(entry, "=")
+					env[key] = value
+				}
+				want := "false"
+				if mode == "proxy" {
+					want = env["HTTPS_PROXY"]
+					if !strings.HasPrefix(want, "http://alx:") {
+						t.Fatal("missing command-scoped proxy gateway")
+					}
+				}
+				if env["YARN_PROXY"] != want || env["YARN_HTTPS_PROXY"] != want {
+					t.Fatal("Classic Yarn did not override inherited proxy settings")
+				}
+				found := false
+				for _, arg := range cmd.Args {
+					found = found || arg == "--non-interactive"
+				}
+				if !found {
+					t.Fatal("managed Yarn must not wait for interactive prompts")
+				}
+			})
+		}
+	}
+}
