@@ -200,3 +200,58 @@ func TestDefaultGitArtifacts(t *testing.T) {
 		})
 	}
 }
+
+func TestReleasePackageScriptsMatchAlemonc(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		scripts map[string]any
+		custom  string
+		want    map[string]any
+	}{
+		{"runtime", map[string]any{"bundle": "echo bundle", "build": "echo build", "prepublish": "echo prepublish", "prepare": "echo prepare", "prepublishOnly": "echo prepublishOnly", "prepack": "echo prepack", "postpack": "echo postpack", "publish": "echo publish", "postpublish": "echo postpublish", "start": "node lib/index.js", "install": "node install.js", "postinstall": "node setup.js", "test": "node test.js", "custom": "echo custom"}, "custom", map[string]any{"start": "node lib/index.js", "install": "node install.js", "postinstall": "node setup.js", "test": "node test.js"}},
+		{"only build", map[string]any{"build": "echo build", "prepare": "echo prepare"}, "", nil},
+		{"empty", map[string]any{}, "", nil},
+		{"absent", nil, "", nil},
+		{"unselected custom", map[string]any{"bundle": "echo bundle", "custom": "echo custom", "start": "node lib/index.js"}, "", map[string]any{"custom": "echo custom", "start": "node lib/index.js"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			source, destination := t.TempDir(), t.TempDir()
+			pkg := map[string]any{"name": "fixture", "version": "1.0.0"}
+			if tc.scripts != nil {
+				pkg["scripts"] = tc.scripts
+			}
+			if tc.custom != "" {
+				pkg["alemonjs"] = map[string]any{"build": tc.custom}
+			}
+			original, err := json.Marshal(pkg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			manifest := filepath.Join(source, "package.json")
+			if err := os.WriteFile(manifest, original, 0644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(source, "artifact.js"), []byte("built"), 0644); err != nil {
+				t.Fatal(err)
+			}
+			if err := copyReleaseFiles(source, destination, "2.0.0", []string{"artifact.js"}, "source-sha"); err != nil {
+				t.Fatal(err)
+			}
+			published, err := readPackage(destination)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.want == nil {
+				if _, exists := published["scripts"]; exists {
+					t.Fatalf("expected omitted scripts, got %v", published["scripts"])
+				}
+			} else if !reflect.DeepEqual(published["scripts"], tc.want) {
+				t.Fatalf("scripts = %v, want %v", published["scripts"], tc.want)
+			}
+			unchanged, err := os.ReadFile(manifest)
+			if err != nil || string(unchanged) != string(original) {
+				t.Fatal("source manifest changed")
+			}
+		})
+	}
+}

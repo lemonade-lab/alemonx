@@ -504,8 +504,19 @@ func copyReleaseFiles(source, destination, version string, artifacts []string, s
 	if err != nil {
 		return err
 	}
-	for _, key := range []string{"devDependencies", "workspaces", "private", "scripts", "packageManager"} {
+	for _, key := range []string{"devDependencies", "workspaces", "private", "packageManager"} {
 		delete(pkg, key)
+	}
+	// Match alemonc publish: remove build/publish scripts, preserving runtime
+	// and install scripts needed by consumers of the already built package.
+	if scripts, ok := pkg["scripts"].(map[string]any); ok {
+		_, buildScript := resolveBuildScript(source)
+		for _, name := range []string{"bundle", "build", "prepublish", "prepare", "prepublishOnly", "prepack", "postpack", "publish", "postpublish", buildScript} {
+			delete(scripts, name)
+		}
+		if len(scripts) == 0 {
+			delete(pkg, "scripts")
+		}
 	}
 	pkg["gitHead"] = sourceCommit
 	if version != "" {
