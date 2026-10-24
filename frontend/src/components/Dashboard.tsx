@@ -14800,6 +14800,7 @@ function GitReleasePanelNext({
     commit: string
     target: string
     files: string[]
+    defaultArtifacts?: string[]
     logs: string
     expiresAt: string
   }
@@ -14924,7 +14925,8 @@ function GitReleasePanelNext({
       })
       setSession(next)
       setArtifacts(
-        ['lib', 'dist', 'README.md'].filter(item => next.files.includes(item))
+        next.defaultArtifacts ??
+          ['lib', 'dist', 'README.md'].filter(item => next.files.includes(item))
       )
       setPhase('artifacts')
     } catch (err) {
@@ -15020,11 +15022,16 @@ function GitReleasePanelNext({
     )
   }
   const toggleArtifact = (item: string) => {
-    setArtifacts(current =>
-      current.includes(item)
-        ? current.filter(value => value !== item)
-        : [...current, item]
-    )
+    setArtifacts(current => {
+      const selected = new Set(current.flatMap(value => descendantFiles(value)))
+      const leaves = descendantFiles(item)
+      const remove = leaves.every(leaf => selected.has(leaf))
+      for (const leaf of leaves) {
+        if (remove) selected.delete(leaf)
+        else selected.add(leaf)
+      }
+      return [...selected]
+    })
   }
   return (
     <RobotPanel
@@ -15200,7 +15207,8 @@ function GitReleasePanelNext({
                   2. 选择最终产物
                 </strong>
                 <p className="m-0 text-xs leading-5 text-slate-500">
-                  以下是本次构建实际生成的可发布文件。默认全选；依赖、隐藏文件和
+                  以下是构建目录中的可选文件。非空 files 按 npm 发布清单默认勾选，
+                  否则默认勾选 lib、dist、README.md；仍可手动调整。依赖、隐藏文件和
                   package.json 不会显示。
                 </p>
               </div>

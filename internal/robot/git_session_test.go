@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -27,7 +29,7 @@ func TestPublishTagsOnlyExactReleaseTarget(t *testing.T) {
 			run(root, "config", "commit.gpgsign", "false")
 			run(root, "config", "tag.gpgsign", "false")
 			for _, dir := range []string{root, source} {
-				if err := os.WriteFile(filepath.Join(dir, "package.json"), []byte(`{"name":"example","version":"1.2.3"}`), 0644); err != nil {
+				if err := os.WriteFile(filepath.Join(dir, "package.json"), []byte(`{"name":"example","version":"1.2.3","packageManager":"yarn@1.22.22","gitHead":"stale"}`), 0644); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -61,6 +63,26 @@ func TestPublishTagsOnlyExactReleaseTarget(t *testing.T) {
 			var pkg map[string]any
 			if err := json.Unmarshal([]byte(run(remote, "show", target+":package.json")), &pkg); err != nil {
 				t.Fatal(err)
+			}
+			if pkg["gitHead"] != head {
+				t.Fatalf("gitHead = %v, want %s", pkg["gitHead"], head)
+			}
+			if _, ok := pkg["packageManager"]; ok {
+				t.Fatal("packageManager leaked into artifact")
+			}
+			if _, err := gitRun(remote, "show", target+":.alx-release.json"); err == nil {
+				t.Fatal("legacy mapping must not be generated")
+			}
+			message := run(remote, "log", "-1", "--format=%B", target)
+			if !strings.Contains(message, "\nSource-Branch: main\nSource-Commit: "+head) {
+				t.Fatalf("missing source trailers: %s", message)
+			}
+			var sourcePkg map[string]any
+			if err := json.Unmarshal([]byte(run(root, "show", "HEAD:package.json")), &sourcePkg); err != nil {
+				t.Fatal(err)
+			}
+			if sourcePkg["gitHead"] != "stale" || sourcePkg["packageManager"] != "yarn@1.22.22" {
+				t.Fatal("source manifest changed")
 			}
 			if target == "release" {
 				if run(remote, "rev-parse", "refs/tags/v2.0.0^{}") != releaseHead {
@@ -132,5 +154,49 @@ func TestScanPublishFilesExcludesDependenciesAndHiddenFiles(t *testing.T) {
 		if has(value) {
 			t.Fatalf("unexpected scanned artifact %q", value)
 		}
+	}
+}
+
+func TestDefaultGitArtifacts(t *testing.T) {
+	for _, tc := range []struct {
+		name, rules string
+		want        []string
+	}{
+		{"missing", "", []string{"lib", "dist", "README.md"}},
+		{"empty", `,"files":[]`, []string{"lib", "dist", "README.md"}},
+		{"directory", `,"files":["dist"]`, []string{"dist/index.js", "dist/nested/app.js", "dist/debug.map", "README.md"}},
+		{"glob", `,"files":["dist/**/*.js"]`, []string{"dist/index.js", "dist/nested/app.js", "README.md"}},
+		{"unmatched", `,"files":["missing"]`, []string{"README.md"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			for _, name := range []string{"lib/index.js", "dist/index.js", "dist/nested/app.js", "dist/debug.map", "README.md", "src/index.js", ".npmignore"} {
+				path := filepath.Join(root, name)
+				if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte("fixture"), 0644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			original := []byte(`{"name":"selection-fixture","version":"1.0.0","scripts":{"prepare":"node -e \"process.exit(99)\"","prepack":"node -e \"process.exit(99)\""}` + tc.rules + `}`)
+			manifest := filepath.Join(root, "package.json")
+			if err := os.WriteFile(manifest, original, 0644); err != nil {
+				t.Fatal(err)
+			}
+			got, err := defaultGitArtifacts(root, scanPublishFiles(root, ""))
+			if err != nil {
+				t.Fatal(err)
+			}
+			sort.Strings(got)
+			sort.Strings(tc.want)
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("got %v, want %v", got, tc.want)
+			}
+			restored, err := os.ReadFile(manifest)
+			if err != nil || string(restored) != string(original) {
+				t.Fatal("source manifest not restored")
+			}
+		})
 	}
 }

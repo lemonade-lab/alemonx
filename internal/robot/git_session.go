@@ -13,14 +13,15 @@ import (
 )
 
 type GitBuildSession struct {
-	ID        string    `json:"sessionId"`
-	Branch    string    `json:"branch"`
-	Commit    string    `json:"commit"`
-	Target    string    `json:"target"`
-	Files     []string  `json:"files"`
-	Logs      string    `json:"logs"`
-	CreatedAt time.Time `json:"createdAt"`
-	ExpiresAt time.Time `json:"expiresAt"`
+	ID               string    `json:"sessionId"`
+	Branch           string    `json:"branch"`
+	Commit           string    `json:"commit"`
+	Target           string    `json:"target"`
+	Files            []string  `json:"files"`
+	DefaultArtifacts []string  `json:"defaultArtifacts"`
+	Logs             string    `json:"logs"`
+	CreatedAt        time.Time `json:"createdAt"`
+	ExpiresAt        time.Time `json:"expiresAt"`
 }
 type gitBuildState struct {
 	GitBuildSession
@@ -106,11 +107,16 @@ func PrepareGitBuild(root, branch, commit string) (GitBuildSession, error) {
 		cleanup()
 		return GitBuildSession{}, errors.New("构建后没有可发布的产物")
 	}
+	defaults, err := defaultGitArtifacts(worktree, files)
+	if err != nil {
+		cleanup()
+		return GitBuildSession{}, err
+	}
 	bytes := make([]byte, 12)
 	_, _ = rand.Read(bytes)
 	id := hex.EncodeToString(bytes)
 	createdAt := time.Now()
-	session := GitBuildSession{ID: id, Branch: branch, Commit: commit, Target: releaseBranchName(branch, status.RemoteBranch), Files: files, Logs: strings.TrimSpace(output), CreatedAt: createdAt, ExpiresAt: createdAt.Add(30 * time.Minute)}
+	session := GitBuildSession{ID: id, Branch: branch, Commit: commit, Target: releaseBranchName(branch, status.RemoteBranch), Files: files, DefaultArtifacts: defaults, Logs: strings.TrimSpace(output), CreatedAt: createdAt, ExpiresAt: createdAt.Add(30 * time.Minute)}
 	gitBuildSessions.Lock()
 	cleanupGitBuildSessions()
 	gitBuildSessions.items[id] = gitBuildState{GitBuildSession: session, root: path, worktree: worktree}
@@ -251,6 +257,59 @@ func scanPublishFiles(root, prefix string) []string {
 	}
 	return items
 }
+
+// defaultGitArtifacts changes only the initial selection, not the available files.
+// Use npm's own files/glob rules and suppress lifecycle scripts while listing.
+func defaultGitArtifacts(root string, files []string) (selected []string, err error) {
+	selected = []string{}
+	manifest := filepath.Join(root, "package.json")
+	original, err := os.ReadFile(manifest)
+	if err != nil {
+		return nil, err
+	}
+	var pkg map[string]any
+	if err = json.Unmarshal(original, &pkg); err != nil {
+		return nil, err
+	}
+	rules, _ := pkg["files"].([]any)
+	allowed := map[string]bool{}
+	for _, file := range files {
+		allowed[file] = true
+	}
+	if len(rules) == 0 {
+		for _, file := range []string{"lib", "dist", "README.md"} {
+			if allowed[file] {
+				selected = append(selected, file)
+			}
+		}
+		return selected, nil
+	}
+	delete(pkg, "scripts")
+	data, err := json.Marshal(pkg)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if restoreErr := os.WriteFile(manifest, original, 0644); restoreErr != nil {
+			err = errors.Join(err, restoreErr)
+		}
+	}()
+	if err = os.WriteFile(manifest, data, 0644); err != nil {
+		return nil, err
+	}
+	preview, err := npmPackPreview(root)
+	if err != nil {
+		return nil, err
+	}
+	for _, file := range preview.Files {
+		file = filepath.FromSlash(file)
+		if allowed[file] {
+			selected = append(selected, file)
+		}
+	}
+	return selected, nil
+}
+
 func cleanupGitBuildSessions() {
 	now := time.Now()
 	for id, s := range gitBuildSessions.items {
@@ -416,14 +475,7 @@ func publishRelease(root, sourceWorktree, sourceBranch, sourceCommit, version, s
 	if output, err = gitRun(worktree, "clean", "-fdx"); err != nil {
 		return "", Result{}, errors.New("无法清理发布目录：" + output)
 	}
-	if err := copyReleaseFiles(sourceWorktree, worktree, strings.TrimPrefix(version, "v"), artifacts); err != nil {
-		return "", Result{}, err
-	}
-	mappingData, err := json.MarshalIndent(ReleaseMapping{Version: version, SourceBranch: sourceBranch, SourceCommit: sourceCommit}, "", "  ")
-	if err != nil {
-		return "", Result{}, err
-	}
-	if err := os.WriteFile(filepath.Join(worktree, ".alx-release.json"), append(mappingData, '\n'), 0644); err != nil {
+	if err := copyReleaseFiles(sourceWorktree, worktree, strings.TrimPrefix(version, "v"), artifacts, sourceCommit); err != nil {
 		return "", Result{}, err
 	}
 	if _, err := gitRun(worktree, "add", "-A"); err != nil {
@@ -433,6 +485,7 @@ func publishRelease(root, sourceWorktree, sourceBranch, sourceCommit, version, s
 	if !createTag {
 		commitMessage = "build: " + targetBranch + " (" + sourceBranch + "@" + shortGitSHA(sourceCommit) + ")"
 	}
+	commitMessage += "\n\nSource-Branch: " + sourceBranch + "\nSource-Commit: " + sourceCommit
 	if output, err = gitRun(worktree, "commit", "-m", commitMessage); err != nil {
 		return "", Result{}, errors.New("无法创建 release 提交（请先配置 Git 用户名和邮箱）：" + output)
 	}

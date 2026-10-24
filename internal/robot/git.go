@@ -59,16 +59,6 @@ type GitSourceBranch struct {
 	Commits []GitCommit `json:"commits"`
 }
 
-// ReleaseMapping is stored inside every release commit as .alx-release.json.
-// It makes it possible to answer exactly which source revision produced a
-// published package even after the source branch has moved on.
-type ReleaseMapping struct {
-	Version       string `json:"version"`
-	SourceBranch  string `json:"sourceBranch"`
-	SourceCommit  string `json:"sourceCommit"`
-	ReleaseCommit string `json:"releaseCommit,omitempty"`
-}
-
 type GitInitConfig struct {
 	AuthorName  string `json:"authorName"`
 	AuthorEmail string `json:"authorEmail"`
@@ -494,7 +484,7 @@ func sourceCommitsAt(root, ref string) []GitCommit {
 	return items
 }
 
-func copyReleaseFiles(source, destination, version string, artifacts []string) error {
+func copyReleaseFiles(source, destination, version string, artifacts []string, sourceCommit string) error {
 	if len(artifacts) == 0 {
 		artifacts = []string{"dist"}
 	}
@@ -514,9 +504,10 @@ func copyReleaseFiles(source, destination, version string, artifacts []string) e
 	if err != nil {
 		return err
 	}
-	for _, key := range []string{"devDependencies", "workspaces", "private", "scripts"} {
+	for _, key := range []string{"devDependencies", "workspaces", "private", "scripts", "packageManager"} {
 		delete(pkg, key)
 	}
+	pkg["gitHead"] = sourceCommit
 	if version != "" {
 		pkg["version"] = version
 	}
