@@ -1,3 +1,4 @@
+import { useNavigationState } from '../hooks/useNavigationState'
 import { useEffect, useState } from 'react'
 import {
   KeyRound,
@@ -71,7 +72,7 @@ const sections: SidebarWindowItem<SettingsSection>[] = [
 export function AppSettingsPanel({
   ...windowProps
 }: Omit<DesktopWindowProps, 'children'>) {
-  const [active, setActive] = useState<SettingsSection>('auth')
+  const [active, setActive] = useNavigationState<SettingsSection>('settings.section', [], 'auth', sections.map(item => item.id))
   const [stopBusy, setStopBusy] = useState(false)
   const [stopConfirm, setStopConfirm] = useState(false)
   const [stopMessage, setStopMessage] = useState('')
@@ -79,13 +80,10 @@ export function AppSettingsPanel({
     skip: !windowProps.open
   })
   useEffect(() => {
-    if (windowProps.open) setActive('auth')
-  }, [windowProps.open])
-  useEffect(() => {
     if (dependencySources && !dependencySources.supported && active === 'dependency-sources') {
       setActive('auth')
     }
-  }, [active, dependencySources])
+  }, [active, dependencySources, setActive])
   const stopService = async () => {
     setStopBusy(true)
     setStopMessage('')

@@ -1,3 +1,4 @@
+import { useNavigationState } from '../hooks/useNavigationState'
 import { useStoreState } from '../store/guideStore'
 import { useEffect } from 'react'
 import { ClipboardList, FileText, KeyRound, Plus, Trash2 } from 'lucide-react'
@@ -42,7 +43,7 @@ function sameEntries(left: Entry[], right: Entry[]) {
 }
 
 export function EnvConfigForm({ content, onChange }: Props) {
-  const [mode, setMode] = useStoreState<'visual' | 'text'>('visual')
+  const [mode, setMode] = useNavigationState<'visual' | 'text'>('env.editor', [], 'visual', ['visual', 'text'])
   const [entries, setEntries] = useStoreState<Entry[]>([])
   useEffect(() => {
     const next = parse(content)

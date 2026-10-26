@@ -138,3 +138,11 @@ docker-yunzai-buildx-push: ## Build and publish the multi-architecture alemonx-y
 
 docker-local-dev: ## Start a local Docker development environment
 	./scripts/docker-local-dev.sh
+
+.PHONY: test-api
+test-api: ## Test HTTP API contracts and generate the route coverage report
+	@set -e; \
+	tmp="$$(mktemp -d)"; \
+	trap 'rm -rf "$$tmp"' EXIT; \
+	go test ./internal/web -count=1 -coverprofile="$$tmp/api-coverage.out"; \
+	node scripts/audit-api-tests.mjs "$$tmp/api-coverage.out"

@@ -378,9 +378,64 @@ func TestBackpackStatusIgnoresUntrackedNodeModules(t *testing.T) {
 	if err != nil || status.Dirty {
 		t.Fatalf("node_modules should not make the plugin dirty: %#v, %v", status, err)
 	}
+	head, headErr := gitRun(plugin, "rev-parse", "--short", "HEAD")
+	if headErr != nil || status.Current != strings.TrimSpace(head) {
+		t.Fatalf("backpack version must expose the installed Git commit: %#v, %v", status, headErr)
+	}
 	writeAppPageFixture(t, filepath.Join(plugin, "local-change.txt"), "actual edit\n")
 	changes, err = (Manager{}).LocalPackageChanges(root, "local-plugin")
 	if err != nil || len(changes) != 1 || changes[0].Path != "local-change.txt" {
 		t.Fatalf("real local change should remain visible: %#v, %v", changes, err)
+	}
+}
+
+func TestBackpackNeverUsesParentGitRepository(t *testing.T) {
+	root := t.TempDir()
+	plugin := filepath.Join(root, "packages", "local-plugin")
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
+	writeAppPageFixture(t, filepath.Join(plugin, "package.json"), `{"name":"local-plugin","version":"1.2.3"}`)
+	for _, args := range [][]string{{"init", "-b", "main"}, {"config", "user.name", "Fixture"}, {"config", "user.email", "fixture@example.invalid"}, {"add", "."}, {"commit", "-m", "fixture"}, {"remote", "add", "origin", "file:///original-robot-remote"}} {
+		if _, err := gitRun(root, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	original, _ := gitRun(root, "rev-parse", "HEAD")
+	manager := Manager{}
+	status, err := manager.LocalPackageStatus(root, "local-plugin")
+	if err != nil || status.Source != "directory" || status.Current != "" {
+		t.Fatalf("inherited parent version: %#v %v", status, err)
+	}
+	if _, err := manager.LocalPackageChanges(root, "local-plugin"); err == nil {
+		t.Error("parent changes exposed")
+	}
+	if _, err := manager.LocalPackageDiff(root, "local-plugin", "package.json"); err == nil {
+		t.Error("parent diff exposed")
+	}
+	if _, err := manager.LocalPackageStashes(root, "local-plugin"); err == nil {
+		t.Error("parent stash exposed")
+	}
+	if _, err := manager.StashAndSyncLocalPackage(root, "local-plugin", ""); err == nil {
+		t.Error("parent stash/sync accepted")
+	}
+	if _, err := manager.ApplyLocalPackageStash(root, "local-plugin", "stash@{0}", true); err == nil {
+		t.Error("parent stash apply accepted")
+	}
+	if _, err := manager.DropLocalPackageStash(root, "local-plugin", "stash@{0}"); err == nil {
+		t.Error("parent stash drop accepted")
+	}
+	if _, err := manager.RefreshLocalPackageHistory(root, "local-plugin"); err == nil {
+		t.Error("parent history refresh accepted")
+	}
+	// Even a failed configuration fetch must only initialize the plugin's repo.
+	remote := filepath.ToSlash(t.TempDir())
+	raw, _ := json.Marshal(map[string]string{"repository": "file://" + remote, "branch": "main"})
+	_, _ = manager.ConfigureLocalPackageGit(root, "local-plugin", string(raw))
+	actual, _ := gitRun(root, "remote", "get-url", "origin")
+	head, _ := gitRun(root, "rev-parse", "HEAD")
+	if actual != "file:///original-robot-remote" || head != original {
+		t.Fatal("parent repository was modified")
+	}
+	if !isLocalPackageRepository(plugin) {
+		t.Fatal("plugin did not receive an independent repository")
 	}
 }

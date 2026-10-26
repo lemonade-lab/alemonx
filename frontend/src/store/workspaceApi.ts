@@ -95,7 +95,7 @@ type LocalPackages = {
     valid: boolean
   }>
 }
-type LocalPackageVersions = {
+export type LocalPackageVersions = {
   source: 'git' | 'npm'
   current: string
   latest?: string
@@ -107,7 +107,8 @@ type LocalPackageVersions = {
   page?: number
   hasMore?: boolean
 }
-type LocalPackageStatus = {
+export type LocalPackageStatus = {
+  current?: string
   name: string
   enabled: boolean
   source: string
@@ -1084,14 +1085,20 @@ export const workspaceApi = createApi({
       { root: string; package: string; page?: number }
     >({
       query: ({ root, package: packageName, page = 1 }) =>
-        `robot/package-versions?${new URLSearchParams({ root, package: packageName, page: String(page) })}`
+        `robot/package-versions?${new URLSearchParams({ root, package: packageName, page: String(page) })}`,
+      providesTags: (_result, _error, arg) => [
+        { type: 'LocalPackages', id: arg.root }
+      ]
     }),
     localPackageReadme: build.query<
       RobotResult,
       { root: string; package: string }
     >({
       query: ({ root, package: packageName }) =>
-        `robot/package-readme?${new URLSearchParams({ root, package: packageName })}`
+        `robot/package-readme?${new URLSearchParams({ root, package: packageName })}`,
+      providesTags: (_result, _error, arg) => [
+        { type: 'LocalPackages', id: arg.root }
+      ]
     }),
     localPackageStatus: build.query<
       LocalPackageStatus,
@@ -1494,6 +1501,7 @@ export const {
   useRobotChatSummaryQuery,
   useClearRobotChatHistoryMutation,
   useLocalPackageVersionsQuery,
+  useLazyLocalPackageVersionsQuery,
   useLocalPackageReadmeQuery,
   useLocalPackageStatusQuery,
   useLocalPackageStatusesQuery,

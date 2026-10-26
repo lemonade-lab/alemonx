@@ -4,12 +4,13 @@ import {
   type KeyboardEvent,
   type ReactNode,
   useContext,
+  useMemo,
   useEffect,
   useState
 } from 'react'
 import { createPortal } from 'react-dom'
 import { DesktopWindow, type DesktopWindowProps } from './DesktopWindow'
-import { useStoreState } from '../store/guideStore'
+import { useNavigationState } from '../hooks/useNavigationState'
 
 export type SidebarWindowItem<ID extends string> = {
   id: ID
@@ -69,7 +70,16 @@ export function SidebarWindow<ID extends string>({
   const hasNavigation = Boolean(
     activeItem && items?.length && onActiveItemChange
   )
-  const [visited, setVisited] = useStoreState<Record<string, ID>>({})
+  const [visitedJSON, setVisitedJSON] = useNavigationState<string>('sidebar.visited', [windowProps.id], '{}')
+  const visited = useMemo<Record<string, ID>>(() => {
+    try {
+      const saved = JSON.parse(visitedJSON) as Record<string, unknown>
+      return Object.fromEntries((items ?? []).flatMap(group => {
+        const child = group.children?.find(item => item.id === saved?.[group.id])
+        return child ? [[group.id, child.id]] : []
+      }))
+    } catch { return {} }
+  }, [items, visitedJSON])
   const activeGroup = items?.find(
     item =>
       item.id === activeItem ||
@@ -81,8 +91,8 @@ export function SidebarWindow<ID extends string>({
       activeItem &&
       visited[activeGroup.id] !== activeItem
     )
-      setVisited(previous => ({ ...previous, [activeGroup.id]: activeItem }))
-  }, [activeGroup, activeItem, visited, setVisited])
+      setVisitedJSON(JSON.stringify({ ...visited, [activeGroup.id]: activeItem }))
+  }, [activeGroup, activeItem, visited, setVisitedJSON])
   const panelID = hasNavigation
     ? `${windowProps.id}-panel-${activeItem}`
     : `${windowProps.id}-panel`

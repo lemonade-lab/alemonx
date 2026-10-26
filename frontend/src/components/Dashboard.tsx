@@ -1,3 +1,5 @@
+import { BackpackPackageUpdate } from './BackpackPackageUpdate'
+import { useNavigationState } from '../hooks/useNavigationState'
 import {
   ConnectionCatalog,
   OfficialDependencyOptions,
@@ -1617,7 +1619,7 @@ export function Dashboard({
   // render-time .find/.map never touches a null value.
   const catalog = useMemo(() => catalogData ?? [], [catalogData])
   const {
-    data: localPackages,
+    currentData: localPackages,
     isFetching: packagesLoading,
     error: packagesError,
     refetch: refetchPackages
@@ -2844,6 +2846,8 @@ export function Dashboard({
           ])
         )
       }
+      if (current.status === 'failed')
+        throw new Error(current.error || current.output || '操作失败。')
       showOutput(current.output ?? '操作完成。')
       return true
     } catch (reason) {
@@ -6143,9 +6147,7 @@ function EnvironmentPage({
   onFix: (check: Check) => void
   sidebarLayout?: boolean
 }) {
-  const [environmentView, setEnvironmentView] = useState<
-    'general' | 'nodejs' | 'python'
-  >('general')
+  const [environmentView, setEnvironmentView] = useNavigationState<'general' | 'nodejs' | 'python'>('environment.section', [], 'general', ['general', 'nodejs', 'python'])
   // NodeJS has its own version-management page. Keeping it out of the
   // general checklist avoids showing two competing “current” versions.
   const checks = (report?.checks ?? []).filter(check => check.id !== 'node')
@@ -6526,9 +6528,7 @@ function SystemPluginCenter({
     useStoreState<SetupPluginDevelopment | null>(null)
   const [developmentLog, setDevelopmentLog] = useStoreState('')
   const [developmentFinderOpen, setDevelopmentFinderOpen] = useStoreState(false)
-  const [pluginView, setPluginView] = useStoreState<
-    'market' | 'mine' | 'development'
-  >('mine')
+  const [pluginView, setPluginView] = useNavigationState<'market' | 'mine' | 'development'>('system-plugins.section', [], 'mine', ['market', 'mine', 'development'])
   useEffect(() => {
     if (sidebarLayout && pluginView === 'market') {
       void loadMarket(undefined, true)
@@ -8241,7 +8241,7 @@ function PluginUploadDropzone({
   )
 }
 
-function BackpackPanel({
+export function BackpackPanel({
   root,
   items,
   loading,
@@ -8292,12 +8292,12 @@ function BackpackPanel({
   ) => Promise<boolean>
   onOpenLogs: () => void
 }) {
-  const [selectedName, setSelectedName] = useStoreState('')
+  const [selectedName, setSelectedName] = useNavigationState<string>(
+    'backpack.package', [root], ''
+  )
   const [selectedNames, setSelectedNames] = useStoreState<string[]>([])
   const [query, setQuery] = useState('')
-  const [filter, setFilter] = useState<
-    'all' | 'enabled' | 'attention' | 'dirty'
-  >('all')
+  const [filter, setFilter] = useNavigationState<'all' | 'enabled' | 'attention' | 'dirty'>('backpack.filter', [root], 'all', ['all', 'enabled', 'attention', 'dirty'])
   const [appToggleBusy, setAppToggleBusy] = useStoreState('')
   const [privacyToggleBusy, setPrivacyToggleBusy] = useStoreState(false)
   const { data: appsData, refetch: refetchApps } = useRobotAppsQuery(root, {
@@ -8345,9 +8345,12 @@ function BackpackPanel({
     manifest.workspaces?.includes('packages/*')
   )
   useEffect(() => {
-    if (selectedName && !items.some(item => item.name === selectedName))
+    if (
+      !loading && !failed && selectedName &&
+      !items.some(item => item.name === selectedName)
+    )
       setSelectedName('')
-  }, [items, selectedName, setSelectedName])
+  }, [items, loading, failed, selectedName, setSelectedName])
   useEffect(() => {
     setSelectedNames(current =>
       current.filter(name => items.some(item => item.name === name))
@@ -8386,12 +8389,15 @@ function BackpackPanel({
       const version = (await response.json()) as {
         latest?: string
         current?: string
+        source?: string
         dirty?: boolean
         ahead?: number
       }
       if (
         !version.latest ||
         version.latest === version.current ||
+        (version.source === 'git' && version.current &&
+          version.current.length >= 7 && version.latest.startsWith(version.current)) ||
         version.dirty ||
         version.ahead
       )
@@ -8404,6 +8410,7 @@ function BackpackPanel({
   if (selected)
     return (
       <BackpackPackageManager
+        key={`${root}:${selected.name}`}
         root={root}
         item={selected}
         busy={busy}
@@ -8589,12 +8596,15 @@ function BackpackPanel({
                   <div className="min-w-0 flex-1">
                     <strong className="flex items-center gap-2 text-sm font-semibold text-slate-800">
                       {item.name}
-                      {item.version && (
-                        <em className="not-italic text-xs text-slate-400">
-                          v{item.version}
-                        </em>
-                      )}
+                      <em className="not-italic text-xs text-(--theme-text-muted)">
+                        {item.version ? `v${item.version}` : '版本未声明'}
+                      </em>
                     </strong>
+                    {statusByName.get(item.name)?.source === 'git' && (
+                      <span className="block text-xs text-(--theme-text-muted)">
+                        Git {statusByName.get(item.name)?.branch || '未检出分支'} · {statusByName.get(item.name)?.current || '提交未知'}
+                      </span>
+                    )}
                     <span className="text-xs text-slate-500">
                       {item.valid
                         ? item.description || '本地 AlemonJS 插件包'
@@ -8617,7 +8627,7 @@ function BackpackPanel({
                   </div>
                   <ChevronRight className="size-4 shrink-0 text-slate-400" />
                 </button>
-                <div className="flex justify-end shrink-0 items-center gap-2 border-t border-slate-100 px-3 py-2">
+                <div className="flex flex-wrap justify-end shrink-0 items-center gap-2 border-t border-slate-100 px-3 py-2">
                   <label className="mr-auto flex items-center gap-1 text-[11px] text-slate-500">
                     <input
                       type="checkbox"
@@ -8637,6 +8647,17 @@ function BackpackPanel({
                       ? '已启用,机器人启动时会加载'
                       : '未启用,下次启动不会加载'}
                   </span>
+                  {item.valid && (
+                    <BackpackPackageUpdate
+                      key={`${root}:${item.name}`}
+                      root={root}
+                      name={item.name}
+                      status={statusByName.get(item.name)}
+                      busy={busy}
+                      onReplace={onReplace}
+                      onRefresh={onRefresh}
+                    />
+                  )}
                   {item.valid && (
                     <button
                       className={
@@ -8741,9 +8762,7 @@ function BackpackPackageManager({
   onBack: () => void
   onRefresh: () => void
 }) {
-  const [tab, setTab] = useStoreState<
-    'overview' | 'readme' | 'config' | 'version' | 'changes' | 'recovery'
-  >('overview')
+  const [tab, setTab] = useNavigationState<'overview' | 'readme' | 'config' | 'version' | 'changes' | 'recovery'>('backpack.tab', [root, item.name], 'overview', ['overview', 'readme', 'config', 'version', 'changes', 'recovery'])
   const [version, setVersion] = useStoreState('')
   const [commitPage, setCommitPage] = useState(1)
   const [gitRepository, setGitRepository] = useStoreState('')
@@ -10322,7 +10341,9 @@ function RuntimePanel({
   }
   const [customLogin, setCustomLogin] = useStoreState('')
   const [customPackage, setCustomPackage] = useStoreState('')
-  const [selectedPlatform, setSelectedPlatform] = useStoreState('')
+  const [selectedPlatform, setSelectedPlatform] = useNavigationState<string>(
+    'robot.platform', [root], ''
+  )
   const [pending, setPending] = useStoreState<PendingAction | null>(null)
   const [validationMessage, setValidationMessage] = useStoreState('')
   const [validationTitle, setValidationTitle] =

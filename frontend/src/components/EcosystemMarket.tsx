@@ -1,3 +1,4 @@
+import { useNavigationState } from '../hooks/useNavigationState'
 import { factFor, resourceTarget } from '../lib/officialResources'
 import { useState } from 'react'
 import Markdown from 'markdown-to-jsx'
@@ -43,8 +44,8 @@ export function EcosystemMarket({
 }) {
   const [search, setSearch] = useState('')
   const [query, setQuery] = useState('')
-  const [page, setPage] = useState(1)
-  const [selected, setSelected] = useState('')
+  const [page, setPage] = useNavigationState<number>('market.page', [root, type, subtype ?? ''], 1)
+  const [selected, setSelected] = useNavigationState<string>('market.resource', [root, type, subtype ?? ''], '')
   const {
     currentData: list,
     isFetching,
@@ -186,7 +187,7 @@ function ResourceDetail({
         ? gitTarget(item)
         : ''
     : ''
-  const [tab, setTab] = useState('overview')
+  const [tab, setTab] = useNavigationState<string>('market.tab', [root, id], 'overview', ['overview', 'document', 'config'])
   const [version, setVersion] = useState('')
   const [branch, setBranch] = useState('')
   const branchValid =

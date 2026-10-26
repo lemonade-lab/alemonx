@@ -1,0 +1,974 @@
+{
+  "date": "2026-10-26",
+  "registeredRoutes": 161,
+  "authenticationRequests": 936,
+  "unsupportedMethodRequests": 161,
+  "routes": [
+    {
+      "path": "/api/v1/agent-archive/",
+      "handler": "agentArchiveHandler",
+      "handlerStatementCoverage": "12.5%",
+      "prefix": true
+    },
+    {
+      "path": "/api/v1/agent/",
+      "handler": "(inline legacy endpoint)",
+      "handlerStatementCoverage": null,
+      "prefix": true
+    },
+    {
+      "path": "/api/v1/ai/chat",
+      "handler": "aiChatHandler",
+      "handlerStatementCoverage": "20.0%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/ai/models",
+      "handler": "aiModelsHandler",
+      "handlerStatementCoverage": "37.5%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/ai/providers",
+      "handler": "aiProvidersHandler",
+      "handlerStatementCoverage": "22.2%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/auth/accounts",
+      "handler": "authAccountsHandler",
+      "handlerStatementCoverage": "64.3%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/auth/accounts/",
+      "handler": "authAccountHandler",
+      "handlerStatementCoverage": "23.8%",
+      "prefix": true
+    },
+    {
+      "path": "/api/v1/auth/login",
+      "handler": "authLoginHandler",
+      "handlerStatementCoverage": "69.2%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/auth/logout",
+      "handler": "authLogoutHandler",
+      "handlerStatementCoverage": "60.0%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/auth/management",
+      "handler": "authManagementHandler",
+      "handlerStatementCoverage": "66.7%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/auth/roles",
+      "handler": "authRolesHandler",
+      "handlerStatementCoverage": "64.3%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/auth/roles/",
+      "handler": "authRoleHandler",
+      "handlerStatementCoverage": "23.8%",
+      "prefix": true
+    },
+    {
+      "path": "/api/v1/auth/setup",
+      "handler": "authSetupHandler",
+      "handlerStatementCoverage": "23.1%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/auth/status",
+      "handler": "authStatusHandler",
+      "handlerStatementCoverage": "37.5%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/browser/classify",
+      "handler": "browserClassifyHandler",
+      "handlerStatementCoverage": "42.9%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/browser/external/open",
+      "handler": "browserExternalOpenHandler",
+      "handlerStatementCoverage": "30.0%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/browser/http/",
+      "handler": "browserHTTPProxyHandler",
+      "handlerStatementCoverage": "82.1%",
+      "prefix": true
+    },
+    {
+      "path": "/api/v1/catalog",
+      "handler": "catalogHandler",
+      "handlerStatementCoverage": "37.5%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/catalog/document",
+      "handler": "catalogDocumentHandler",
+      "handlerStatementCoverage": "37.5%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/catalog/options",
+      "handler": "catalogOptionsHandler",
+      "handlerStatementCoverage": "37.5%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/catalog/resource",
+      "handler": "catalogResourceHandler",
+      "handlerStatementCoverage": "20.0%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/catalog/resources",
+      "handler": "catalogResourcesHandler",
+      "handlerStatementCoverage": "27.3%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/catalog/versions",
+      "handler": "catalogVersionsHandler",
+      "handlerStatementCoverage": "37.5%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/checks",
+      "handler": "checksHandler",
+      "handlerStatementCoverage": "62.5%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/data/",
+      "handler": "dataHandler",
+      "handlerStatementCoverage": "70.4%",
+      "prefix": true
+    },
+    {
+      "path": "/api/v1/directories",
+      "handler": "directoryHandler",
+      "handlerStatementCoverage": "4.0%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/dsh/",
+      "handler": "dshHandler",
+      "handlerStatementCoverage": "27.1%",
+      "prefix": true
+    },
+    {
+      "path": "/api/v1/events",
+      "handler": "eventsHandler",
+      "handlerStatementCoverage": "65.8%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/events/diagnostics",
+      "handler": "eventsHandler",
+      "handlerStatementCoverage": "65.8%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/github/auth/client-id",
+      "handler": "githubAuthClientIDHandler",
+      "handlerStatementCoverage": "27.8%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/github/auth/device",
+      "handler": "githubAuthDeviceHandler",
+      "handlerStatementCoverage": "30.0%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/github/auth/logout",
+      "handler": "githubAuthLogoutHandler",
+      "handlerStatementCoverage": "33.3%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/github/auth/poll",
+      "handler": "githubAuthPollHandler",
+      "handlerStatementCoverage": "21.4%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/github/auth/status",
+      "handler": "githubAuthStatusHandler",
+      "handlerStatementCoverage": "30.0%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/github/auth/token",
+      "handler": "githubAuthTokenHandler",
+      "handlerStatementCoverage": "21.4%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/goals",
+      "handler": "listGoals",
+      "handlerStatementCoverage": "100.0%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/goals/download",
+      "handler": "downloadGoal",
+      "handlerStatementCoverage": "26.9%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/ops",
+      "handler": "opsHandler",
+      "handlerStatementCoverage": "22.5%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/ops/",
+      "handler": "opsHandler",
+      "handlerStatementCoverage": "22.5%",
+      "prefix": true
+    },
+    {
+      "path": "/api/v1/ops/events",
+      "handler": "opsEventsHandler",
+      "handlerStatementCoverage": "9.4%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/projects",
+      "handler": "projectsHandler",
+      "handlerStatementCoverage": "20.0%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/publish/git/prepare",
+      "handler": "gitBuildPrepareHandler",
+      "handlerStatementCoverage": "25.0%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/publish/git/publish",
+      "handler": "gitBuildPublishHandler",
+      "handlerStatementCoverage": "25.0%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/publish/git/refresh-branches",
+      "handler": "gitPublishRefreshBranchesHandler",
+      "handlerStatementCoverage": "25.0%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/publish/git/retry-tag",
+      "handler": "gitBuildRetryTagHandler",
+      "handlerStatementCoverage": "25.0%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/publish/git/status",
+      "handler": "gitPublishStatusHandler",
+      "handlerStatementCoverage": "37.5%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/publish/npm/pack",
+      "handler": "npmPackPreviewHandler",
+      "handlerStatementCoverage": "23.1%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/publish/npm/status",
+      "handler": "npmPublishStatusHandler",
+      "handlerStatementCoverage": "37.5%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/releases",
+      "handler": "releasesHandler",
+      "handlerStatementCoverage": "20.0%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/robot",
+      "handler": "robotHandler",
+      "handlerStatementCoverage": "30.0%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/robot/app-port",
+      "handler": "robotAppPortHandler",
+      "handlerStatementCoverage": "10.8%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/robot/app/",
+      "handler": "robotAppHandler",
+      "handlerStatementCoverage": "37.5%",
+      "prefix": true
+    },
+    {
+      "path": "/api/v1/robot/apps",
+      "handler": "robotAppsHandler",
+      "handlerStatementCoverage": "17.4%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/robot/chat/history",
+      "handler": "robotChatHistoryHandler",
+      "handlerStatementCoverage": "100.0%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/robot/chat/media",
+      "handler": "robotChatMediaHandler",
+      "handlerStatementCoverage": "83.3%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/robot/chat/summary",
+      "handler": "robotChatSummaryHandler",
+      "handlerStatementCoverage": "70.0%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/robot/console",
+      "handler": "robotConsoleHandler",
+      "handlerStatementCoverage": "53.8%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/robot/events",
+      "handler": "robotEventsHandler",
+      "handlerStatementCoverage": "5.0%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/robot/git",
+      "handler": "robotGitHandler",
+      "handlerStatementCoverage": "82.8%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/robot/git-clone",
+      "handler": "robotGitCloneHandler",
+      "handlerStatementCoverage": "9.4%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/robot/git-clone/auth-check",
+      "handler": "robotGitCloneAuthorizationHandler",
+      "handlerStatementCoverage": "37.5%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/robot/git-clone/branches",
+      "handler": "robotGitCloneBranchesHandler",
+      "handlerStatementCoverage": "37.5%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/robot/git-clone/check",
+      "handler": "robotGitCloneCheckHandler",
+      "handlerStatementCoverage": "25.0%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/robot/git-init",
+      "handler": "robotGitInitHandler",
+      "handlerStatementCoverage": "25.0%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/robot/git/commit",
+      "handler": "robotGitCommitHandler",
+      "handlerStatementCoverage": "75.0%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/robot/git/diff",
+      "handler": "robotGitDiffHandler",
+      "handlerStatementCoverage": "68.8%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/robot/live/",
+      "handler": "robotLiveHandler",
+      "handlerStatementCoverage": "68.4%",
+      "prefix": true
+    },
+    {
+      "path": "/api/v1/robot/live/upload",
+      "handler": "robotLiveUploadHandler",
+      "handlerStatementCoverage": "100.0%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/robot/login",
+      "handler": "robotLoginHandler",
+      "handlerStatementCoverage": "25.0%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/robot/manifest",
+      "handler": "robotManifestHandler",
+      "handlerStatementCoverage": "21.1%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/robot/master",
+      "handler": "robotMasterAuthorizationHandler",
+      "handlerStatementCoverage": "18.8%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/robot/onebot-sync",
+      "handler": "robotOneBotSyncHandler",
+      "handlerStatementCoverage": "44.4%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/robot/package-config",
+      "handler": "robotPackageConfigHandler",
+      "handlerStatementCoverage": "16.7%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/robot/package-configs",
+      "handler": "robotPackageConfigsHandler",
+      "handlerStatementCoverage": "27.3%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/robot/package-inventory",
+      "handler": "robotPackageInventoryHandler",
+      "handlerStatementCoverage": "75.0%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/robot/package-readme",
+      "handler": "robotPackageReadmeHandler",
+      "handlerStatementCoverage": "37.5%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/robot/package-versions",
+      "handler": "robotPackageVersionsHandler",
+      "handlerStatementCoverage": "25.0%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/robot/packages",
+      "handler": "robotPackagesHandler",
+      "handlerStatementCoverage": "75.0%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/robot/packages/changes",
+      "handler": "robotPackageChangesHandler",
+      "handlerStatementCoverage": "37.5%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/robot/packages/diff",
+      "handler": "robotPackageDiffHandler",
+      "handlerStatementCoverage": "37.5%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/robot/packages/folder",
+      "handler": "robotPackageFolderHandler",
+      "handlerStatementCoverage": "76.3%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/robot/packages/git-clone",
+      "handler": "robotPackageGitCloneHandler",
+      "handlerStatementCoverage": "9.7%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/robot/packages/git-clone/check",
+      "handler": "robotPackageGitCloneCheckHandler",
+      "handlerStatementCoverage": "25.0%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/robot/packages/stashes",
+      "handler": "robotPackageStashesHandler",
+      "handlerStatementCoverage": "37.5%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/robot/packages/status",
+      "handler": "robotPackageStatusHandler",
+      "handlerStatementCoverage": "56.2%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/robot/packages/upload",
+      "handler": "robotPackageUploadHandler",
+      "handlerStatementCoverage": "100.0%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/robot/pm2-logs",
+      "handler": "robotPM2LogsHandler",
+      "handlerStatementCoverage": "100.0%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/robot/pm2-logs/days",
+      "handler": "robotPM2LogDaysHandler",
+      "handlerStatementCoverage": "100.0%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/robot/pm2-logs/export",
+      "handler": "robotPM2LogExportHandler",
+      "handlerStatementCoverage": "100.0%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/robot/pm2-logs/stream",
+      "handler": "robotPM2LogStreamHandler",
+      "handlerStatementCoverage": "81.7%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/robot/pm2-processes",
+      "handler": "robotPM2ProcessesHandler",
+      "handlerStatementCoverage": "23.1%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/robot/pm2-processes/stream",
+      "handler": "robotPM2ProcessesStreamHandler",
+      "handlerStatementCoverage": "6.5%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/robot/pm2-registration",
+      "handler": "robotPM2RegistrationHandler",
+      "handlerStatementCoverage": "12.8%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/robot/pm2-status",
+      "handler": "robotPM2StatusHandler",
+      "handlerStatementCoverage": "37.5%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/robot/ports",
+      "handler": "robotPortsHandler",
+      "handlerStatementCoverage": "84.4%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/robot/projects",
+      "handler": "robotProjectsHandler",
+      "handlerStatementCoverage": "6.8%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/robot/qrcode",
+      "handler": "robotQRCodeHandler",
+      "handlerStatementCoverage": "13.0%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/robot/runtime",
+      "handler": "robotRuntimeHandler",
+      "handlerStatementCoverage": "37.5%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/robot/runtime/preflight",
+      "handler": "robotRuntimePreflightHandler",
+      "handlerStatementCoverage": "37.5%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/robot/runtime/repair",
+      "handler": "robotRuntimeRepairHandler",
+      "handlerStatementCoverage": "23.8%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/robot/scripts",
+      "handler": "robotScriptsHandler",
+      "handlerStatementCoverage": "8.6%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/robot/tasks",
+      "handler": "robotTasksHandler",
+      "handlerStatementCoverage": "16.1%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/robot/test-port",
+      "handler": "robotTestPortHandler",
+      "handlerStatementCoverage": "9.8%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/robot/test/",
+      "handler": "robotTestHandler",
+      "handlerStatementCoverage": "80.0%",
+      "prefix": true
+    },
+    {
+      "path": "/api/v1/robot/testone/chat",
+      "handler": "robotTestoneChatHandler",
+      "handlerStatementCoverage": "100.0%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/robot/testone/chat/index",
+      "handler": "robotTestoneChatIndexHandler",
+      "handlerStatementCoverage": "58.8%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/robot/testone/image",
+      "handler": "robotTestoneImageHandler",
+      "handlerStatementCoverage": "100.0%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/robot/testone/summary",
+      "handler": "robotTestoneSummaryHandler",
+      "handlerStatementCoverage": "70.0%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/robot/validate",
+      "handler": "robotValidateHandler",
+      "handlerStatementCoverage": "37.5%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/robot/webview/",
+      "handler": "botAppPageHandler",
+      "handlerStatementCoverage": "4.0%",
+      "prefix": true
+    },
+    {
+      "path": "/api/v1/robot/webviews",
+      "handler": "botAppPagesHandler",
+      "handlerStatementCoverage": "37.5%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/services",
+      "handler": "localServicesHandler",
+      "handlerStatementCoverage": "20.0%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/services/",
+      "handler": "localServiceProxyHandler",
+      "handlerStatementCoverage": "70.0%",
+      "prefix": true
+    },
+    {
+      "path": "/api/v1/services/dynamic/",
+      "handler": "dynamicLocalServiceProxyHandler",
+      "handlerStatementCoverage": "86.7%",
+      "prefix": true
+    },
+    {
+      "path": "/api/v1/setup/plugins",
+      "handler": "setupPluginsHandler",
+      "handlerStatementCoverage": "75.0%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/setup/plugins/",
+      "handler": "setupPluginActionHandler",
+      "handlerStatementCoverage": "20.7%",
+      "prefix": true
+    },
+    {
+      "path": "/api/v1/setup/plugins/cache",
+      "handler": "setupPluginCacheHandler",
+      "handlerStatementCoverage": "16.7%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/setup/plugins/development",
+      "handler": "setupPluginDevelopmentHandler",
+      "handlerStatementCoverage": "21.4%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/setup/plugins/development/",
+      "handler": "setupPluginDevelopmentHandler",
+      "handlerStatementCoverage": "21.4%",
+      "prefix": true
+    },
+    {
+      "path": "/api/v1/setup/plugins/events",
+      "handler": "setupPluginEventsHandler",
+      "handlerStatementCoverage": "75.0%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/setup/plugins/market",
+      "handler": "setupPluginMarketHandler",
+      "handlerStatementCoverage": "37.5%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/setup/plugins/releases/",
+      "handler": "setupPluginReleasesHandler",
+      "handlerStatementCoverage": "25.0%",
+      "prefix": true
+    },
+    {
+      "path": "/api/v1/setup/plugins/revision",
+      "handler": "setupPluginRevisionHandler",
+      "handlerStatementCoverage": "75.0%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/setup/plugins/upload",
+      "handler": "setupPluginUploadArchiveHandler",
+      "handlerStatementCoverage": "64.1%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/setup/plugins/web/",
+      "handler": "setupPluginWebHandler",
+      "handlerStatementCoverage": "5.4%",
+      "prefix": true
+    },
+    {
+      "path": "/api/v1/system/capabilities",
+      "handler": "systemCapabilitiesHandler",
+      "handlerStatementCoverage": "100.0%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/system/capabilities/clipboard",
+      "handler": "systemCapabilityClipboardHandler",
+      "handlerStatementCoverage": "20.8%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/system/capabilities/context",
+      "handler": "systemCapabilityContextHandler",
+      "handlerStatementCoverage": "73.1%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/system/capabilities/desktop/open",
+      "handler": "systemCapabilityDesktopOpenHandler",
+      "handlerStatementCoverage": "23.1%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/system/capabilities/finder",
+      "handler": "systemCapabilityFinderHandler",
+      "handlerStatementCoverage": "75.0%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/system/capabilities/info",
+      "handler": "systemCapabilityInfoHandler",
+      "handlerStatementCoverage": "100.0%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/system/capabilities/network/fetch",
+      "handler": "systemCapabilityNetworkFetchHandler",
+      "handlerStatementCoverage": "9.4%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/system/capabilities/notification",
+      "handler": "systemCapabilityNotificationHandler",
+      "handlerStatementCoverage": "23.1%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/system/capabilities/webview/open",
+      "handler": "systemCapabilityWebviewOpenHandler",
+      "handlerStatementCoverage": "82.2%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/system/context/robot",
+      "handler": "systemCurrentRobotHandler",
+      "handlerStatementCoverage": "11.1%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/system/dependency-sources",
+      "handler": "dependencySourcesHandler",
+      "handlerStatementCoverage": "33.3%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/system/environment/install",
+      "handler": "environmentInstallHandler",
+      "handlerStatementCoverage": "61.3%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/system/events",
+      "handler": "systemEventsHandler",
+      "handlerStatementCoverage": "9.7%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/system/mcp",
+      "handler": "systemMCPHandler",
+      "handlerStatementCoverage": "75.0%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/system/network",
+      "handler": "systemNetworkHandler",
+      "handlerStatementCoverage": "43.9%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/system/node/nvm",
+      "handler": "nodeNVMHandler",
+      "handlerStatementCoverage": "7.3%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/system/picker",
+      "handler": "systemPickerHandler",
+      "handlerStatementCoverage": "75.0%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/system/plugin-download",
+      "handler": "pluginDownloadBrokerHandler",
+      "handlerStatementCoverage": "50.0%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/system/plugin-download-cache",
+      "handler": "pluginDownloadCacheHandler",
+      "handlerStatementCoverage": "27.3%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/system/privileged/audit",
+      "handler": "privilegedAuditHandler",
+      "handlerStatementCoverage": "44.4%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/system/privileged/preflight",
+      "handler": "privilegedPreflightHandler",
+      "handlerStatementCoverage": "50.0%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/system/privileged/status",
+      "handler": "privilegedStatusHandler",
+      "handlerStatementCoverage": "50.0%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/system/python",
+      "handler": "pythonRuntimeHandler",
+      "handlerStatementCoverage": "21.6%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/system/redis",
+      "handler": "systemRedisHandler",
+      "handlerStatementCoverage": "78.8%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/system/service",
+      "handler": "systemServiceHandler",
+      "handlerStatementCoverage": "8.3%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/system/services/status",
+      "handler": "localServiceStatusHandler",
+      "handlerStatementCoverage": "70.6%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/system/ssh",
+      "handler": "sshHandler",
+      "handlerStatementCoverage": "16.7%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/terminal/sessions",
+      "handler": "terminalSessionsHandler",
+      "handlerStatementCoverage": "65.0%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/terminal/sessions/",
+      "handler": "terminalSessionHandler",
+      "handlerStatementCoverage": "34.8%",
+      "prefix": true
+    },
+    {
+      "path": "/api/v1/update",
+      "handler": "updateHandler",
+      "handlerStatementCoverage": "21.4%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/update/apply",
+      "handler": "applyUpdateHandler",
+      "handlerStatementCoverage": "6.8%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/update/download",
+      "handler": "downloadUpdateHandler",
+      "handlerStatementCoverage": "8.3%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/update/load",
+      "handler": "loadUpdateHandler",
+      "handlerStatementCoverage": "6.0%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/update/status",
+      "handler": "updateStatusHandler",
+      "handlerStatementCoverage": "83.3%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/workspace",
+      "handler": "workspaceHandler",
+      "handlerStatementCoverage": "87.5%",
+      "prefix": false
+    },
+    {
+      "path": "/api/v1/workspace/open",
+      "handler": "workspaceOpenHandler",
+      "handlerStatementCoverage": "56.0%",
+      "prefix": false
+    }
+  ]
+}

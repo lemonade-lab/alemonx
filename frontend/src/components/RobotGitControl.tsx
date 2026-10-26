@@ -1,3 +1,4 @@
+import { useNavigationState } from '../hooks/useNavigationState'
 import { useStoreState } from '../store/guideStore'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
@@ -110,7 +111,7 @@ export function RobotGitControl({
   onActivate: () => void
 }) {
   const root = project?.path ?? ''
-  const [tab, setTab] = useStoreState<Tab>('commit')
+  const [tab, setTab] = useNavigationState<Tab>('git.tab', [root], 'commit', tabItems.map(item => item.id))
   const [historyOffset, setHistoryOffset] = useStoreState(0)
   const [inspectedRemote, setInspectedRemote] = useStoreState('')
   const [identityOpen, setIdentityOpen] = useStoreState(false)

@@ -507,7 +507,7 @@ func switchLocalPackageVersion(root, packageName, version string, force bool) (R
 		if item.Name != packageName || !item.Valid {
 			continue
 		}
-		if output, gitErr := gitRun(item.Path, "rev-parse", "--is-inside-work-tree"); gitErr == nil && strings.TrimSpace(output) == "true" {
+		if isLocalPackageRepository(item.Path) {
 			status, statusErr := releaseGitStatus(item.Path)
 			if statusErr != nil {
 				return Result{}, statusErr

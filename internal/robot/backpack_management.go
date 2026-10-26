@@ -15,6 +15,7 @@ import (
 // LocalPackageStatus is a local, side-effect-free health snapshot. It never
 // fetches a remote: checking a backpack must not unexpectedly use the network.
 type LocalPackageStatus struct {
+	Current          string   `json:"current,omitempty"`
 	Name             string   `json:"name"`
 	Enabled          bool     `json:"enabled"`
 	Source           string   `json:"source"`
@@ -68,8 +69,7 @@ func (m Manager) ConfigureLocalPackageGit(root, name, raw string) (Result, error
 	if !isGitBranch(config.Branch) {
 		return Result{}, errors.New("请选择有效的 Git 分支")
 	}
-	inside, gitErr := gitRun(item.Path, "rev-parse", "--is-inside-work-tree")
-	newRepository := gitErr != nil || strings.TrimSpace(inside) != "true"
+	newRepository := !isLocalPackageRepository(item.Path)
 	if newRepository {
 		if output, initErr := gitRun(item.Path, "init"); initErr != nil {
 			return Result{Path: item.Path, Output: output}, fmt.Errorf("初始化插件 Git 工作区失败：%w", initErr)
@@ -156,10 +156,12 @@ func (m Manager) LocalPackageStatus(root, name string) (LocalPackageStatus, erro
 	if !status.WorkspaceEnabled {
 		status.Issues = append(status.Issues, "未启用 packages 工作空间")
 	}
-	if inside, gitErr := gitRun(item.Path, "rev-parse", "--is-inside-work-tree"); gitErr == nil && strings.TrimSpace(inside) == "true" {
+	if isLocalPackageRepository(item.Path) {
 		status.Source = "git"
 		branch, _ := gitRun(item.Path, "symbolic-ref", "--quiet", "--short", "HEAD")
 		status.Branch = strings.TrimSpace(branch)
+		head, _ := gitRun(item.Path, "rev-parse", "--short", "HEAD")
+		status.Current = strings.TrimSpace(head)
 		repository, _ := gitRun(item.Path, "remote", "get-url", "origin")
 		status.Repository = strings.TrimSpace(repository)
 		if !isGitBranch(status.Branch) {
@@ -206,8 +208,7 @@ func (m Manager) RefreshLocalPackageHistory(root, name string) (Result, error) {
 	if !item.Valid {
 		return Result{}, errors.New("背包插件缺少有效 package.json")
 	}
-	inside, gitErr := gitRun(item.Path, "rev-parse", "--is-inside-work-tree")
-	if gitErr != nil || strings.TrimSpace(inside) != "true" {
+	if !isLocalPackageRepository(item.Path) {
 		return Result{}, errors.New("该插件不是 Git 工作区")
 	}
 	branch, branchErr := gitRun(item.Path, "symbolic-ref", "--quiet", "--short", "HEAD")
@@ -279,7 +280,7 @@ func (m Manager) LocalPackageChanges(root, name string) ([]LocalPackageChange, e
 	if err != nil {
 		return nil, err
 	}
-	if inside, gitErr := gitRun(item.Path, "rev-parse", "--is-inside-work-tree"); gitErr != nil || strings.TrimSpace(inside) != "true" {
+	if !isLocalPackageRepository(item.Path) {
 		return nil, errors.New("该插件不是 Git 工作区")
 	}
 	output, err := backpackGitStatus(item.Path)
@@ -301,6 +302,9 @@ func (m Manager) LocalPackageDiff(root, name, changePath string) (GitDiffResult,
 	if err != nil {
 		return GitDiffResult{}, err
 	}
+	if !isLocalPackageRepository(item.Path) {
+		return GitDiffResult{}, errors.New("该插件不是独立 Git 工作区")
+	}
 	return gitDiffAtRepository(item.Path, changePath)
 }
 
@@ -308,6 +312,9 @@ func (m Manager) LocalPackageStashes(root, name string) ([]LocalPackageStash, er
 	item, err := m.localPackage(root, name)
 	if err != nil {
 		return nil, err
+	}
+	if !isLocalPackageRepository(item.Path) {
+		return nil, errors.New("该插件不是独立 Git 工作区")
 	}
 	output, err := gitRun(item.Path, "stash", "list", "--format=%gd%x1f%ct%x1f%s")
 	if err != nil {
@@ -330,6 +337,9 @@ func (m Manager) StashAndSyncLocalPackage(root, name, version string) (Result, e
 	item, err := m.localPackage(root, name)
 	if err != nil {
 		return Result{}, err
+	}
+	if !isLocalPackageRepository(item.Path) {
+		return Result{}, errors.New("该插件不是独立 Git 工作区")
 	}
 	status, err := releaseGitStatus(item.Path)
 	if err != nil {
@@ -363,6 +373,9 @@ func (m Manager) ApplyLocalPackageStash(root, name, ref string, drop bool) (Resu
 	if err != nil {
 		return Result{}, err
 	}
+	if !isLocalPackageRepository(item.Path) {
+		return Result{}, errors.New("该插件不是独立 Git 工作区")
+	}
 	if !stashRefValid(ref) {
 		return Result{}, errors.New("stash 标识无效")
 	}
@@ -381,6 +394,9 @@ func (m Manager) DropLocalPackageStash(root, name, ref string) (Result, error) {
 	item, err := m.localPackage(root, name)
 	if err != nil {
 		return Result{}, err
+	}
+	if !isLocalPackageRepository(item.Path) {
+		return Result{}, errors.New("该插件不是独立 Git 工作区")
 	}
 	if !stashRefValid(ref) {
 		return Result{}, errors.New("stash 标识无效")
@@ -433,4 +449,11 @@ func (m Manager) RemoveLocalPackageAndDisable(root, name string) (Result, error)
 		return Result{Path: staged}, fmt.Errorf("已取消启用，但无法删除插件目录；目录保留在 %s：%w", staged, err)
 	}
 	return Result{Path: item.Path, Output: "已从背包移除 " + name + "，并取消启用。"}, nil
+}
+
+// Git commands walk upward, so a plain packages/ child must never borrow the
+// robot repository's identity or allow checkout/stash operations against it.
+func isLocalPackageRepository(path string) bool {
+	root, err := gitRun(path, "rev-parse", "--show-toplevel")
+	return err == nil && sameWorkspacePath(path, strings.TrimSpace(root))
 }

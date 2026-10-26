@@ -1,3 +1,4 @@
+import { useNavigationState } from '../hooks/useNavigationState'
 import { useStoreState } from '../store/guideStore'
 import {
   CheckCircle2,
@@ -66,7 +67,7 @@ const updatePhaseLabels: Record<string, string> = {
 export function SetupUpdateButton({ embedded = false }: { embedded?: boolean }) {
   const [check, { data, isFetching, error }] = useLazySetupUpdateQuery()
   const [open, setOpen] = useStoreState(embedded)
-  const [mode, setMode] = useStoreState<'now' | 'manual'>('now')
+  const [mode, setMode] = useNavigationState<'now' | 'manual'>('update.mode', [], 'now', ['now', 'manual'])
   const [releaseURL, setReleaseURL] = useStoreState('')
   const [file, setFile] = useStoreState<File | null>(null)
   const [uploadProgress, setUploadProgress] = useStoreState<number | null>(null)

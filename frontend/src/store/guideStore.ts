@@ -1,3 +1,4 @@
+import { persistedNavigation } from './navigationStore'
 import {
   configureStore,
   createSlice,
@@ -109,6 +110,7 @@ export const store = configureStore({
     workspace: persistedWorkspace,
     dataPreferences: persistedDataPreferences,
     ui: uiSlice.reducer,
+    navigation: persistedNavigation,
     [workspaceApi.reducerPath]: workspaceApi.reducer
   },
   middleware: getDefault =>

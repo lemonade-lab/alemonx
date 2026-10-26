@@ -1,3 +1,4 @@
+import { useNavigationState } from '../hooks/useNavigationState'
 import { useStoreState } from '../store/guideStore'
 import { useEffect } from 'react'
 import { ClipboardList, FileText, Package } from 'lucide-react'
@@ -24,7 +25,7 @@ function withRegistry(content: string, registry: string) {
 }
 
 export function NpmrcConfigForm({ content, onChange }: Props) {
-  const [editor, setEditor] = useStoreState<'visual' | 'text'>('visual')
+  const [editor, setEditor] = useNavigationState<'visual' | 'text'>('npmrc.editor', [], 'visual', ['visual', 'text'])
   const [preset, setPreset] = useStoreState(officialRegistry)
   const [customRegistry, setCustomRegistry] = useStoreState('')
 

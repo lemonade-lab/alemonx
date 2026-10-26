@@ -4732,7 +4732,7 @@ func (s *server) robotPM2LogsHandler(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, result)
 		return
 	}
-	result, err := s.robots.PM2AuditLogs(root, query)
+	result, err := s.robots.PM2AuditLogsContext(r.Context(), root, query)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -4755,7 +4755,7 @@ func (s *server) robotPM2LogDaysHandler(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "日志参数编码无效或 root 重复")
 		return
 	}
-	days, err := s.robots.PM2LogDays(root)
+	days, err := s.robots.PM2LogDaysContext(r.Context(), root)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -8548,6 +8548,10 @@ func (s *server) robotPackageConfigHandler(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *server) robotPackageConfigsHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
+		return
+	}
 	root := r.URL.Query().Get("root")
 	items, err := s.robots.PackageConfigs(root)
 	if err != nil {
@@ -9150,6 +9154,10 @@ func (s *server) projectsHandler(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) spa() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			writeError(w, http.StatusNotFound, "接口不存在。")
+			return
+		}
 		if r.URL.Path != "/" {
 			if _, err := fs.Stat(s.assets, r.URL.Path[1:]); err == nil {
 				s.static.ServeHTTP(w, r)
@@ -9166,7 +9174,11 @@ func (s *server) health(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "version": s.version})
 }
 
-func (s *server) listGoals(w http.ResponseWriter, _ *http.Request) {
+func (s *server) listGoals(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
+		return
+	}
 	result := append([]goal(nil), goals...)
 	if s.network != nil {
 		for index := range result {

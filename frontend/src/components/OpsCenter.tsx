@@ -1,3 +1,4 @@
+import { useNavigationState } from '../hooks/useNavigationState'
 import { useCallback, useEffect, useState } from 'react'
 import {
   Activity,
@@ -180,7 +181,7 @@ export function OpsCenter({
   const [paused, setPaused] = useState(false)
   const [opsStatus, setOpsStatus] = useState<OpsStatus | null>(null)
   const [busy, setBusy] = useState(false)
-  const [activeSection, setActiveSection] = useState<OpsSection>('overview')
+  const [activeSection, setActiveSection] = useNavigationState<OpsSection>('ops.section', [root], 'overview', ['overview', 'events', 'policy', 'audit'])
   const [confirmStop, setConfirmStop] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState<Incident | null>(null)
   const [confirmDeleteTodo, setConfirmDeleteTodo] = useState<Todo | null>(null)
