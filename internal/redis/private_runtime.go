@@ -291,7 +291,14 @@ func restoreSnapshotToPrivateRedis(address, path string) error {
 		return err
 	}
 	defer connection.Close()
-	_ = connection.SetDeadline(time.Now().Add(20 * time.Second))
+	// 迁移是逐键同步往返，耗时随键数线性增长；固定 20 秒会让大数据集必然超时，
+	// 因此按键数追加预算，同时保留上限避免连接悬挂。
+	keyCount := 0
+	for _, database := range data.Databases {
+		keyCount += len(database.Keys)
+	}
+	budget := 20*time.Second + time.Duration(keyCount)*2*time.Millisecond
+	_ = connection.SetDeadline(time.Now().Add(budget))
 	reader := bufio.NewReader(connection)
 	for _, database := range data.Databases {
 		if err := redisRESPOn(connection, reader, []byte("SELECT"), []byte(strconv.Itoa(database.ID))); err != nil {
