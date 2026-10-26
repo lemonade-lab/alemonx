@@ -46,7 +46,7 @@ export const navigationKey = (area: NavigationArea, scope: readonly string[]) =>
     area,
     ...scope.map(value => {
       if (/^[a-zA-Z]:[\\/]/.test(value) || /^(?:\\\\|\/\/)/.test(value)) {
-        return value.replaceAll('\\', '/').replace(/\/+$/, '').toLowerCase()
+        return value.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
       }
       return value.startsWith('/') && value.length > 1
         ? value.replace(/\/+$/, '')
