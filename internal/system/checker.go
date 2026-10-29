@@ -496,7 +496,7 @@ func browserCanLaunchHeadless(path string) bool {
 		return false
 	}
 	defer os.RemoveAll(profile)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	for _, headless := range []string{"--headless=new", "--headless"} {
 		args := []string{
