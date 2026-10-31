@@ -13,10 +13,12 @@ type ConsolePayload = {
   startedAt?: string
 }
 type RobotTask = {
+  canCancel?: boolean
+  canRetry?: boolean
   id: string
   root: string
   action: string
-  status: 'running' | 'completed' | 'failed'
+  status: 'running' | 'completed' | 'failed' | 'cancelled'
   output?: string
   error?: string
   createdAt?: string
@@ -1143,6 +1145,13 @@ export const workspaceApi = createApi({
         { type: 'PackageManifest', id: root }
       ]
     }),
+    controlRobotTask: build.mutation<
+      { id?: string },
+      { id: string; action: 'cancel' | 'retry' }
+    >({
+      query: body => ({ url: 'robot/tasks/control', method: 'POST', body }),
+      invalidatesTags: ['OperationTasks']
+    }),
     robotTasks: build.query<RobotTask[], void>({
       query: () => 'robot/tasks',
       providesTags: ['OperationTasks']
@@ -1510,6 +1519,7 @@ export const {
   useLocalPackageStashesQuery,
   usePackageManifestQuery,
   useRobotTasksQuery,
+  useControlRobotTaskMutation,
   useLazyRobotTaskQuery,
   useLazyRobotConsoleQuery,
   useRobotRuntimeQuery,

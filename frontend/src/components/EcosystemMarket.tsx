@@ -189,7 +189,7 @@ function ResourceDetail({
     : ''
   const [tab, setTab] = useNavigationState<string>('market.tab', [root, id], 'overview', ['overview', 'document', 'config'])
   const [version, setVersion] = useState('')
-  const [branch, setBranch] = useState('')
+  const [branch, setBranch] = useState('release')
   const branchValid =
     !branch ||
     (/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(branch) && !branch.includes('..'))

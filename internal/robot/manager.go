@@ -224,7 +224,7 @@ func (m Manager) LocalPackageVersions(root, packageName string, page int) (Local
 			if !isGitBranch(status.Branch) {
 				return LocalPackageVersions{}, errors.New("当前插件未检出有效 Git 分支")
 			}
-			if _, fetchErr := gitRun(item.Path, "fetch", "origin", status.Branch); fetchErr != nil {
+			if _, fetchErr := gitRun(item.Path, "fetch", "origin", localPackageBranchRefspec(status.Branch)); fetchErr != nil {
 				return LocalPackageVersions{}, errors.New("无法读取当前分支提交")
 			}
 			commits, labels, hasMore, commitsErr := releaseCommits(item.Path, status.Branch, page)
@@ -2395,7 +2395,7 @@ func runWithOutput(root string, values map[string]string, combined bool, name st
 func runCommandOutput(root string, values map[string]string, combined, trim bool, name string, args ...string) (string, error) {
 	started := time.Now()
 	timeout := commandTimeout(name, args...)
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(operationContext(root), timeout)
 	defer cancel()
 	path := nodeToolPath(name)
 	cmd := exec.CommandContext(ctx, path, args...)
@@ -2404,6 +2404,7 @@ func runCommandOutput(root string, values map[string]string, combined, trim bool
 	applyNodeSiblingEnvironment(cmd, path)
 	applyManagedNodeEnvironment(cmd)
 	HideWindow(cmd)
+	configureCancellableCommand(cmd)
 	for key, value := range values {
 		prefix := key + "="
 		for index := len(cmd.Env) - 1; index >= 0; index-- {

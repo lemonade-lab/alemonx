@@ -82,13 +82,7 @@ func (m Manager) ConfigureLocalPackageGit(root, name, raw string) (Result, error
 	} else if output, addErr := gitRun(item.Path, "remote", "add", "origin", config.Repository); addErr != nil {
 		return Result{Path: item.Path, Output: output}, fmt.Errorf("保存插件 Git 地址失败：%w", addErr)
 	}
-	if !newRepository {
-		branch, _ := gitRun(item.Path, "symbolic-ref", "--quiet", "--short", "HEAD")
-		if isGitBranch(branch) && strings.TrimSpace(branch) != config.Branch {
-			return Result{}, errors.New("Git 地址已保存；现有 Git 插件请在版本页切换分支")
-		}
-	}
-	refspec := "+refs/heads/" + config.Branch + ":refs/remotes/origin/" + config.Branch
+	refspec := localPackageBranchRefspec(config.Branch)
 	output, fetchErr := gitRun(item.Path, "fetch", "origin", refspec)
 	if fetchErr != nil {
 		return Result{Path: item.Path, Output: output}, fmt.Errorf("Git 地址已保存，但无法拉取 %s 分支：%w", config.Branch, fetchErr)
@@ -100,6 +94,21 @@ func (m Manager) ConfigureLocalPackageGit(root, name, raw string) (Result, error
 		if headOutput, headErr := gitRun(item.Path, "symbolic-ref", "HEAD", "refs/heads/"+config.Branch); headErr != nil {
 			return Result{Path: item.Path, Output: headOutput}, fmt.Errorf("无法设置插件 Git 分支：%w", headErr)
 		}
+	}
+	if !newRepository {
+		branch, _ := gitRun(item.Path, "symbolic-ref", "--quiet", "--short", "HEAD")
+		if strings.TrimSpace(branch) != config.Branch {
+			args := []string{"checkout", config.Branch}
+			if _, err := gitRun(item.Path, "show-ref", "--verify", "--quiet", "refs/heads/"+config.Branch); err != nil {
+				args = []string{"checkout", "--no-track", "-b", config.Branch, "origin/" + config.Branch}
+			}
+			if output, err := gitRun(item.Path, args...); err != nil {
+				return Result{Path: item.Path, Output: output}, fmt.Errorf("无法切换插件分支（请先保存本地修改）：%w", err)
+			}
+		}
+	}
+	if !newRepository {
+		return Result{Path: item.Path, Output: "已保存 Git 地址并切换到 " + config.Branch + " 分支。可刷新提交列表并选择版本。"}, nil
 	}
 	return Result{Path: item.Path, Output: "已保存 Git 地址并拉取 " + config.Branch + " 分支。现有插件文件未被覆盖；请在版本页选择“切换”或“强制切换”后再替换代码。"}, nil
 }
@@ -220,10 +229,10 @@ func (m Manager) RefreshLocalPackageHistory(root, name string) (Result, error) {
 	if shallowErr != nil {
 		return Result{}, errors.New("无法读取插件 Git 浅克隆状态")
 	}
-	args := []string{"fetch", "origin", branch}
+	args := []string{"fetch", "origin", localPackageBranchRefspec(branch)}
 	output := ""
 	if strings.TrimSpace(shallow) == "true" {
-		args = []string{"fetch", "--unshallow", "origin", branch}
+		args = []string{"fetch", "--unshallow", "origin", localPackageBranchRefspec(branch)}
 		output = "已解除浅克隆限制并拉取完整提交记录。"
 	} else {
 		output = "已拉取当前分支的最新提交记录。"
@@ -456,4 +465,9 @@ func (m Manager) RemoveLocalPackageAndDisable(root, name string) (Result, error)
 func isLocalPackageRepository(path string) bool {
 	root, err := gitRun(path, "rev-parse", "--show-toplevel")
 	return err == nil && sameWorkspacePath(path, strings.TrimSpace(root))
+}
+
+// Explicitly update the ref read by history even in legacy single-branch clones.
+func localPackageBranchRefspec(branch string) string {
+	return "+refs/heads/" + branch + ":refs/remotes/origin/" + branch
 }

@@ -163,6 +163,12 @@ func (s *server) startRobotScript(root, script string) (operationTask, error) {
 		return operationTask{}, errors.New("该脚本已在运行。")
 	}
 	s.scriptProcesses[key] = scriptProcess{TaskID: created.ID, Root: root, Script: script, Command: command}
+	created.CanCancel, created.CanRetry = true, true
+	if s.taskControls == nil {
+		s.taskControls = map[string]*operationControl{}
+	}
+	s.taskControls[created.ID] = &operationControl{cancel: func() { _, _ = s.stopRobotScript(root, script) }, path: "script"}
+
 	s.mu.Unlock()
 	s.addOperation(created)
 	s.recordProcess(root, created.ID, processGroupID(command), created.Action)
@@ -216,6 +222,12 @@ func (s *server) watchRobotScript(key string, task operationTask, command *exec.
 		} else {
 			s.operations[index].Status = "completed"
 			s.operations[index].Output += "脚本执行完成。\n"
+		}
+		s.operations[index].CanCancel = false
+		if control := s.taskControls[task.ID]; control != nil && control.cancelling {
+			s.operations[index].Status = "cancelled"
+			s.operations[index].Error = ""
+			s.operations[index].Output += "\n任务已取消。"
 		}
 		snapshot = s.operations[index]
 		break

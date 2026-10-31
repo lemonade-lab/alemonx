@@ -208,6 +208,7 @@ import {
   useBotAppPagesQuery,
   useSetAppEnabledMutation,
   useRobotTasksQuery,
+  useControlRobotTaskMutation,
   useLazyRobotTaskQuery,
   useSaveRobotLoginMutation,
   useSetSetupPluginEnabledMutation,
@@ -1813,8 +1814,8 @@ export function Dashboard({
       ) => {
         if (task.status === 'running') return
         options.onTask?.(task)
-        if (task.status === 'failed') {
-          finish(new Error(task.error || '操作未完成。'))
+        if (task.status === 'failed' || task.status === 'cancelled') {
+          finish(new Error(task.error || (task.status === 'cancelled' ? '任务已取消。' : '操作未完成。')))
           return
         }
         if (options.appReady || options.testReady) {
@@ -2846,7 +2847,7 @@ export function Dashboard({
           ])
         )
       }
-      if (current.status === 'failed')
+      if (current.status === 'failed' || current.status === 'cancelled')
         throw new Error(current.error || current.output || '操作失败。')
       showOutput(current.output ?? '操作完成。')
       return true
@@ -4645,13 +4646,13 @@ function ProjectRail({
             : 'text-slate-600 hover:bg-slate-200/40 dark:text-slate-400 dark:hover:bg-slate-700/40'
         )}
         onClick={() => onFeature('tasks')}
-        aria-label="操作记录"
-        title="当前目录操作记录"
+        aria-label="任务"
+        title="当前目录任务"
       >
         <i className="inline-flex size-4 shrink-0 items-center justify-center not-italic">
           <ClipboardList className="size-4" />
         </i>
-        <span className="min-w-0 flex-1 truncate">日志</span>
+        <span className="min-w-0 flex-1 truncate">任务</span>
       </button>
       <button
         className={cn(
@@ -4843,7 +4844,7 @@ function GitCloneDialog({
   ) => Promise<GitCloneAttempt>
 }) {
   const [repository, setRepository] = useStoreState('')
-  const [branch, setBranch] = useStoreState('')
+  const [branch, setBranch] = useStoreState(mode === 'package' ? 'release' : '')
   const [branches, setBranches] = useStoreState<string[]>([])
   const [branchesLoading, setBranchesLoading] = useStoreState(false)
   const [name, setName] = useStoreState('')
@@ -4865,7 +4866,7 @@ function GitCloneDialog({
   useEffect(() => {
     if (open) {
       setRepository('')
-      setBranch('')
+      setBranch(mode === 'package' ? 'release' : '')
       setBranches([])
       setBranchesLoading(false)
       setName('')
@@ -5018,7 +5019,9 @@ function GitCloneDialog({
             if (mode === 'package')
               return availableBranches.includes(current)
                 ? current
-                : (data.defaultBranch ?? availableBranches[0] ?? '')
+                : availableBranches.includes('release')
+                  ? 'release'
+                  : (data.defaultBranch ?? availableBranches[0] ?? '')
             return availableBranches.includes(current)
               ? current
               : (data.defaultBranch ?? availableBranches[0] ?? '')
@@ -5956,6 +5959,20 @@ function OperationTasksPage({
     pollingInterval: 0,
     refetchOnMountOrArgChange: true
   })
+  const [controlTask, { isLoading: controlling }] =
+    useControlRobotTaskMutation()
+  const [controlError, setControlError] = useState('')
+  const [cancelling, setCancelling] = useState('')
+  const act = async (id: string, action: 'cancel' | 'retry') => {
+    setControlError('')
+    try {
+      const result = await controlTask({ id, action }).unwrap()
+      if (action === 'cancel') setCancelling(id)
+      else if (result.id) setSelected(result.id)
+    } catch (reason) {
+      setControlError(operationErrorMessage(reason, '任务操作失败，请重试。'))
+    }
+  }
   const tasks = (Array.isArray(data) ? data : []).filter(
     item => !root || !item.root || item.root === root
   )
@@ -5996,7 +6013,7 @@ function OperationTasksPage({
           </span>
           <div className="min-w-0 flex-1">
             <strong className="block text-sm font-semibold text-slate-900 dark:text-slate-100">
-              操作记录
+              任务
             </strong>
             <span className="block truncate text-xs text-slate-400 dark:text-slate-500">
               {root ? '当前机器人与系统操作' : '系统操作'}
@@ -6006,7 +6023,7 @@ function OperationTasksPage({
       )}
       {sidebarLayout && visibleTasks.length > 0 && (
         <SidebarWindowSectionNav>
-          <div className="sidebar-window-log-list" aria-label="日志列表">
+          <div className="sidebar-window-log-list" aria-label="任务列表">
             {visibleTasks.map(item => (
               <button
                 key={item.id}
@@ -6037,7 +6054,9 @@ function OperationTasksPage({
                       ? '进行中'
                       : item.status === 'failed'
                         ? '需要处理'
-                        : '已完成'}
+                        : item.status === 'cancelled'
+                          ? '已取消'
+                          : '已完成'}
                     {item.createdAt && ` · ${formatTaskTime(item.createdAt)}`}
                   </small>
                 </span>
@@ -6049,9 +6068,7 @@ function OperationTasksPage({
       {isFetching && !tasks.length ? (
         <p className="m-0 text-xs text-slate-500">正在读取任务…</p>
       ) : !tasks.length ? (
-        <p className="m-0 text-xs text-slate-500">
-          暂无与当前位置相关的操作记录。
-        </p>
+        <p className="m-0 text-xs text-slate-500">暂无与当前位置相关的任务。</p>
       ) : (
         <div className="grid gap-3">
           {!sidebarLayout && (
@@ -6089,7 +6106,9 @@ function OperationTasksPage({
                         ? '进行中'
                         : item.status === 'failed'
                           ? '需要处理'
-                          : '已完成'}
+                          : item.status === 'cancelled'
+                            ? '已取消'
+                            : '已完成'}
                     </small>
                   </span>
                   {item.createdAt && (
@@ -6116,11 +6135,48 @@ function OperationTasksPage({
                       ? '正在执行'
                       : current.status === 'failed'
                         ? '执行失败'
-                        : '已完成'}
+                        : current.status === 'cancelled'
+                          ? '已取消'
+                          : '已完成'}
                     {current.createdAt &&
                       ` · ${formatTaskTime(current.createdAt)}`}
                   </small>
                 </div>
+              )}
+              <div className="flex items-center gap-2">
+                {current.status === 'running' ? (
+                  <button
+                    className="secondary-button"
+                    disabled={
+                      controlling ||
+                      cancelling === current.id ||
+                      !current.canCancel
+                    }
+                    onClick={() => void act(current.id, 'cancel')}
+                  >
+                    {cancelling === current.id ? '正在取消…' : '取消任务'}
+                  </button>
+                ) : (
+                  <button
+                    className="secondary-button"
+                    disabled={controlling || !current.canRetry}
+                    onClick={() => void act(current.id, 'retry')}
+                  >
+                    重新执行
+                  </button>
+                )}
+                {!(current.status === 'running'
+                  ? current.canCancel
+                  : current.canRetry) && (
+                  <small className="text-xs text-slate-500">
+                    请到对应功能页面操作此任务
+                  </small>
+                )}
+              </div>
+              {controlError && (
+                <p role="alert" className="text-xs text-red-600">
+                  {controlError}
+                </p>
               )}
               <pre className="overflow-auto rounded-lg bg-slate-950 p-2 text-[11px] leading-5 text-slate-200">
                 {current.status === 'failed'
@@ -8794,7 +8850,8 @@ function BackpackPackageManager({
   } = useLocalPackageVersionsQuery(
     { root, package: item.name, page: commitPage },
     {
-      skip: !item.valid || tab !== 'version'
+      skip: !item.valid || tab !== 'version',
+      refetchOnMountOrArgChange: true
     }
   )
   const { data: status, refetch: refetchStatus } = useLocalPackageStatusQuery(
@@ -8855,7 +8912,7 @@ function BackpackPackageManager({
     )
     if (!refreshed) return
     setCommitPage(1)
-    await refetchVersions()
+    if (tab === 'version') await refetchVersions()
     void refetchStatus()
   }
   const configureGit = async () => {
@@ -8866,7 +8923,9 @@ function BackpackPackageManager({
     )
     if (!configured) return
     setCommitPage(1)
-    await Promise.all([refetchStatus(), refetchVersions()])
+    setVersion('')
+    await refetchStatus()
+    if (tab === 'version') await refetchVersions()
   }
   return (
     <RobotPanel
@@ -8891,7 +8950,14 @@ function BackpackPackageManager({
           </button>
           <button
             className="icon-button size-9 p-0"
-            onClick={onRefresh}
+            disabled={busy || versionsFetching}
+            onClick={() => {
+              onRefresh()
+              if (tab === 'version') {
+                if (status?.source === 'git') void refreshCommitHistory()
+                else void refetchVersions()
+              }
+            }}
             title="刷新背包"
           >
             <RefreshCw className="size-4" />
@@ -9142,7 +9208,7 @@ function BackpackPackageManager({
                 <strong className="text-slate-800">Git 版本源</strong>
                 <p className="m-0 text-xs leading-5 text-slate-500">
                   {status?.source === 'git'
-                    ? '修改远程地址后，可刷新当前分支的 commit 列表。'
+                    ? '保存仓库地址和分支后，可刷新该分支的 commit 列表。切换分支会更新插件文件。'
                     : '此插件目前不受 Git 管理。配置仓库后不会覆盖现有文件；请自行选择 commit 切换。'}
                 </p>
               </div>

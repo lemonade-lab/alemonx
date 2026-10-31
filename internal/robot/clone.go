@@ -383,7 +383,7 @@ func runCloneWithProgress(root string, onProgress func(CloneProgress), authoriza
 	// Clone-specific temporary Git config is placed before the clone subcommand,
 	// so infer the timeout from the operation rather than args[0].
 	timeout := commandTimeout("git", "clone")
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(operationContext(root), timeout)
 	defer cancel()
 	git, lookupErr := system.ResolveCommand("git")
 	if lookupErr != nil {
@@ -397,6 +397,7 @@ func runCloneWithProgress(root string, onProgress func(CloneProgress), authoriza
 	}
 	defer cleanupAuthorization()
 	HideWindow(command)
+	configureCancellableCommand(command)
 	var output bytes.Buffer
 	progressOutput := &cloneProgressWriter{output: &output, onProgress: onProgress}
 	command.Stdout = progressOutput

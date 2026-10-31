@@ -74,6 +74,8 @@ type operationTask struct {
 	Path       string          `json:"path,omitempty"`
 	Action     string          `json:"action"`
 	Status     string          `json:"status"`
+	CanCancel  bool            `json:"canCancel,omitempty"`
+	CanRetry   bool            `json:"canRetry,omitempty"`
 	Output     string          `json:"output,omitempty"`
 	Error      string          `json:"error,omitempty"`
 	Data       json.RawMessage `json:"data,omitempty"`
@@ -368,6 +370,7 @@ type server struct {
 	agentConfirms      *agentConfirmManager
 	mu                 sync.RWMutex
 	operations         []operationTask
+	taskControls       map[string]*operationControl
 	development        map[string]developmentProcess
 	scriptProcesses    map[string]scriptProcess
 	botAppPageRuntimes map[string]*botAppPageRuntime
@@ -1185,6 +1188,7 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	mux.HandleFunc("/api/v1/robot/runtime/preflight", s.robotRuntimePreflightHandler)
 	mux.HandleFunc("/api/v1/robot/runtime/repair", s.robotRuntimeRepairHandler)
 	mux.HandleFunc("/api/v1/robot/tasks", s.robotTasksHandler)
+	mux.HandleFunc("/api/v1/robot/tasks/control", s.operationControlHandler)
 	mux.HandleFunc("/api/v1/robot/events", s.robotEventsHandler)
 	mux.HandleFunc("/api/v1/robot/packages", s.robotPackagesHandler)
 	mux.HandleFunc("/api/v1/robot/packages/status", s.robotPackageStatusHandler)
@@ -2085,13 +2089,22 @@ func (s *server) setupPluginActionHandler(w http.ResponseWriter, r *http.Request
 		return
 	}
 	created := operationTask{ID: "setup-" + time.Now().Format("20060102150405.000000000"), Root: "", Action: "setup:" + parts[0] + ":" + input.Action, Status: "running", CreatedAt: time.Now()}
+	ctx, cancel := context.WithCancel(context.Background())
+	payload, _ := json.Marshal(input)
+	created.CanCancel, created.CanRetry = true, true
+	if s.taskControls == nil {
+		s.taskControls = map[string]*operationControl{}
+	}
+	s.taskControls[created.ID] = &operationControl{cancel: cancel, request: payload, path: r.URL.Path}
+
 	s.operations = append([]operationTask{created}, s.operations...)
 	if len(s.operations) > 40 {
 		s.operations = s.operations[:40]
 	}
 	s.mu.Unlock()
 	go func() {
-		result, err := s.plugins.RunResultWithProgress(parts[0], input.Action, input.Params, input.Confirm, func(event setupplugin.Progress) {
+		defer cancel()
+		result, err := s.plugins.RunResultWithContext(ctx, parts[0], input.Action, input.Params, input.Confirm, func(event setupplugin.Progress) {
 			s.updateOperation(created.ID, event.Percent, event.Message, "", false)
 		})
 		if err == nil {
@@ -5725,6 +5738,14 @@ func (s *server) robotTasksHandler(w http.ResponseWriter, r *http.Request) {
 			created.Output += "\n"
 		}
 		created.Output += map[bool]string{true: "开发模式已启动，正在等待进程输出…\n", false: "前台运行已启动，正在等待进程输出…\n"}[created.Action == "dev"]
+		payload, _ := json.Marshal(input)
+		created.CanCancel, created.CanRetry = true, input.Token == ""
+		s.mu.Lock()
+		if s.taskControls == nil {
+			s.taskControls = map[string]*operationControl{}
+		}
+		s.taskControls[created.ID] = &operationControl{cancel: func() { s.stopDevelopment(input.Root, "任务") }, request: payload}
+		s.mu.Unlock()
 		s.addOperation(created)
 		log.Printf("[ROBOT %s] 开始 action=%s root=%q", created.ID, input.Action, created.Root)
 		go s.watchDevelopmentTask(created.ID, input.Root, created.Action, command)
@@ -5743,9 +5764,26 @@ func (s *server) robotTasksHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	ctx, cancel := context.WithCancel(context.Background())
+	release, scopeErr := robot.BeginOperation(ctx, input.Root)
+	if scopeErr != nil {
+		cancel()
+		writeError(w, http.StatusConflict, scopeErr.Error())
+		return
+	}
+	payload, _ := json.Marshal(input)
+	created.CanCancel, created.CanRetry = true, input.Token == ""
+	s.mu.Lock()
+	if s.taskControls == nil {
+		s.taskControls = map[string]*operationControl{}
+	}
+	s.taskControls[created.ID] = &operationControl{cancel: cancel, request: payload}
+	s.mu.Unlock()
 	log.Printf("[ROBOT %s] 开始 action=%s root=%q", created.ID, created.Action, created.Root)
 	s.addOperation(created)
 	go func() {
+		defer cancel()
+		defer release()
 		var result robot.Result
 		var err error
 		// A user-initiated PM2 action is an ordinary robot runtime action. It
@@ -5755,6 +5793,7 @@ func (s *server) robotTasksHandler(w http.ResponseWriter, r *http.Request) {
 		if err == nil && strings.HasPrefix(input.Action, "pm2-") && input.Action != "pm2-stop" && input.Action != "pm2-delete" && input.Action != "pm2-process-stop" && input.Action != "pm2-process-delete" {
 			go s.watchRobotLoginEvents(input.Root, time.Now())
 		}
+		release()
 		finished := time.Now()
 		s.mu.Lock()
 		var snapshot operationTask
@@ -5767,6 +5806,12 @@ func (s *server) robotTasksHandler(w http.ResponseWriter, r *http.Request) {
 					s.operations[index].Status = "failed"
 					s.operations[index].Error = err.Error()
 				}
+				if ctx.Err() != nil {
+					s.operations[index].Status = "cancelled"
+					s.operations[index].Error = ""
+					s.operations[index].Output += "\n任务已取消。"
+				}
+				s.operations[index].CanCancel = false
 				snapshot = s.operations[index]
 				break
 			}
@@ -6469,6 +6514,12 @@ func (s *server) watchDevelopmentTask(id, root, action string, command *exec.Cmd
 			s.operations[index].Output += processName + "已正常退出。\n"
 			log.Printf("[ROBOT %s] %s正常退出", id, processName)
 		}
+		s.operations[index].CanCancel = false
+		if control := s.taskControls[id]; control != nil && control.cancelling {
+			s.operations[index].Status = "cancelled"
+			s.operations[index].Error = ""
+			s.operations[index].Output += "\n任务已取消。"
+		}
 		snapshot = s.operations[index]
 		break
 	}
@@ -6543,6 +6594,28 @@ func (s *server) reconcileRecoveredOperations() {
 	s.settleUnmanagedLocalOperations("", "工作台重启后，本机运行已结束。")
 	s.settleRecoveredSetupPluginOperations()
 	s.settleRecoveredDependencySourceOperations()
+	s.settleRecoveredRobotTasks()
+}
+
+func (s *server) settleRecoveredRobotTasks() {
+	s.mu.Lock()
+	updated := []operationTask{}
+	now := time.Now()
+	for i := range s.operations {
+		item := &s.operations[i]
+		item.CanCancel, item.CanRetry = false, false
+		if item.Status == "running" && (strings.HasPrefix(item.ID, "robot-") || strings.HasPrefix(item.ID, "script-") || strings.HasPrefix(item.ID, "clone-")) {
+			item.Status = "failed"
+			item.Error = "工作台重启，任务已中断；请到对应功能页面重新执行。"
+			item.FinishedAt = &now
+			updated = append(updated, *item)
+		}
+	}
+	s.mu.Unlock()
+	for _, item := range updated {
+		snapshot := item
+		s.publishRobotEvent(robotEvent{Type: "task", TaskID: item.ID, Task: &snapshot})
+	}
 }
 
 // settleRecoveredSetupPluginOperations marks interrupted setup-plugin runs as
@@ -8919,12 +8992,31 @@ func (s *server) robotGitCloneHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	created := operationTask{ID: "clone-" + time.Now().Format("20060102150405.000000000"), Root: destination, Path: target.Path, Action: "git-clone", Status: "running", Output: "正在启动 Git…", Progress: 0, CreatedAt: time.Now()}
+	ctx, cancel := context.WithCancel(context.Background())
+	release, scopeErr := robot.BeginOperation(ctx, destination)
+	if scopeErr != nil {
+		cancel()
+		writeError(w, http.StatusConflict, scopeErr.Error())
+		return
+	}
+	payload, _ := json.Marshal(input)
+	created.CanCancel, created.CanRetry = true, input.Authorization.Token == ""
+	s.mu.Lock()
+	if s.taskControls == nil {
+		s.taskControls = map[string]*operationControl{}
+	}
+	s.taskControls[created.ID] = &operationControl{cancel: cancel, request: payload, path: "clone"}
+	s.mu.Unlock()
+
 	s.addOperation(created)
 	go func() {
+		defer cancel()
+		defer release()
 		authorization := robot.HTTPSAuthorization{Username: strings.TrimSpace(input.Authorization.Username), Token: strings.TrimSpace(input.Authorization.Token)}
 		result, err := robot.CloneRepositoryWithAuthorization(destination, input.Repository, input.Branch, input.Name, input.Mirror, input.Depth, authorization, func(progress robot.CloneProgress) {
 			s.updateOperation(created.ID, progress.Percent, progress.Detail, "", false)
 		})
+		release()
 		if err != nil {
 			s.updateOperation(created.ID, 100, result.Output, err.Error(), true)
 			return
@@ -8969,10 +9061,16 @@ func (s *server) updateOperationData(id string, progress int, output, failure st
 		if finished {
 			now := time.Now()
 			s.operations[index].FinishedAt = &now
+			s.operations[index].CanCancel = false
 			s.operations[index].Status = "completed"
 			if failure != "" {
 				s.operations[index].Status = "failed"
 				s.operations[index].Error = failure
+			}
+			if control := s.taskControls[id]; control != nil && control.cancelling {
+				s.operations[index].Status = "cancelled"
+				s.operations[index].Error = ""
+				s.operations[index].Output += "\n任务已取消。"
 			}
 		}
 		snapshot = s.operations[index]
@@ -9084,12 +9182,31 @@ func (s *server) robotPackageGitCloneHandler(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	created := operationTask{ID: "clone-package-" + time.Now().Format("20060102150405.000000000"), Root: input.Root, Path: target.Path, Action: "git-clone-package", Status: "running", Output: "正在启动 Git…", Progress: 0, CreatedAt: time.Now()}
+	ctx, cancel := context.WithCancel(context.Background())
+	release, scopeErr := robot.BeginOperation(ctx, input.Root)
+	if scopeErr != nil {
+		cancel()
+		writeError(w, http.StatusConflict, scopeErr.Error())
+		return
+	}
+	payload, _ := json.Marshal(input)
+	created.CanCancel, created.CanRetry = true, input.Authorization.Token == ""
+	s.mu.Lock()
+	if s.taskControls == nil {
+		s.taskControls = map[string]*operationControl{}
+	}
+	s.taskControls[created.ID] = &operationControl{cancel: cancel, request: payload, path: "clone-package"}
+	s.mu.Unlock()
+
 	s.addOperation(created)
 	go func() {
+		defer cancel()
+		defer release()
 		authorization := robot.HTTPSAuthorization{Username: strings.TrimSpace(input.Authorization.Username), Token: strings.TrimSpace(input.Authorization.Token)}
 		result, err := robot.CloneLocalPackageWithAuthorization(input.Root, input.Repository, input.Branch, input.Name, input.Mirror, input.Depth, authorization, func(progress robot.CloneProgress) {
 			s.updateOperation(created.ID, progress.Percent, progress.Detail, "", false)
 		})
+		release()
 		if err != nil {
 			s.updateOperation(created.ID, 100, result.Output, err.Error(), true)
 			return

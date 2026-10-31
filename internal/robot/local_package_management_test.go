@@ -107,6 +107,42 @@ func TestRefreshLocalPackageHistoryUnshallowsCurrentBranch(t *testing.T) {
 	if len(versions.Versions) != 2 {
 		t.Fatalf("versions = %#v, want complete two-commit history", versions.Versions)
 	}
+	// A legacy shallow clone tracks release only. Saving another branch must
+	// make its history readable, including commits pushed after configuration.
+	if _, err := gitRun(seed, "checkout", "-b", "main"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gitRun(seed, "push", "origin", "main"); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(map[string]string{"repository": "file://" + remote, "branch": "main"})
+	if _, err := (Manager{}).ConfigureLocalPackageGit(root, "local-plugin", string(raw)); err != nil {
+		t.Fatal(err)
+	}
+	writeAppPageFixture(t, filepath.Join(seed, "history.txt"), "third\n")
+	for _, args := range [][]string{{"add", "."}, {"commit", "-m", "third"}, {"push", "origin", "main"}} {
+		if _, err := gitRun(seed, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	versions, err = (Manager{}).LocalPackageVersions(root, "local-plugin", 1)
+	if err != nil || versions.Branch != "main" || len(versions.Versions) != 3 {
+		t.Fatalf("new branch versions = %#v, %v", versions, err)
+	}
+	writeAppPageFixture(t, filepath.Join(seed, "history.txt"), "fourth\n")
+	for _, args := range [][]string{{"add", "."}, {"commit", "-m", "fourth"}, {"push", "origin", "main"}} {
+		if _, err := gitRun(seed, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := (Manager{}).RefreshLocalPackageHistory(root, "local-plugin"); err != nil {
+		t.Fatal(err)
+	}
+	commits, _, _, err := releaseCommits(plugin, "main", 1)
+	if err != nil || len(commits) != 4 {
+		t.Fatalf("refreshed history = %#v, %v", commits, err)
+	}
+
 }
 
 func TestConfigureLocalPackageGitPreservesExistingPluginFiles(t *testing.T) {

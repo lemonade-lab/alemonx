@@ -6,6 +6,7 @@
 package setupplugin
 
 import (
+	"alemonx/internal/processutil"
 	"archive/tar"
 	"archive/zip"
 	"bufio"
@@ -1064,6 +1065,10 @@ func (r *Registry) RunWithProgress(id, actionID string, params map[string]string
 // RunResultWithProgress keeps stdout reserved for the single plugin response
 // while exposing optional structured data to the authenticated web UI.
 func (r *Registry) RunResultWithProgress(id, actionID string, params map[string]string, confirmed bool, progress func(Progress)) (ActionResult, error) {
+	return r.RunResultWithContext(context.Background(), id, actionID, params, confirmed, progress)
+}
+
+func (r *Registry) RunResultWithContext(ctx context.Context, id, actionID string, params map[string]string, confirmed bool, progress func(Progress)) (ActionResult, error) {
 	plugin, err := r.Find(id)
 	if err != nil {
 		return ActionResult{}, err
@@ -1090,7 +1095,8 @@ func (r *Registry) RunResultWithProgress(id, actionID string, params map[string]
 		return ActionResult{}, err
 	}
 	program, args, environment, _ := system.PrepareDevelopmentCommandAt(plugin.Source, entry.name, entry.args)
-	command := exec.Command(program, args...)
+	command := exec.CommandContext(ctx, program, args...)
+	processutil.ConfigureCancellableCommand(command)
 	command.Dir = plugin.Source
 	runnerEnvironment, environmentErr := r.environmentForRunner(plugin, actionID)
 	if environmentErr != nil {

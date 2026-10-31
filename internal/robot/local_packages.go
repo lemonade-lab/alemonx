@@ -37,6 +37,9 @@ func installLocalPackage(root, source string) (Result, error) {
 		if ref != "" && !isGitBranch(ref) {
 			return Result{}, errors.New("背包插件引用必须是有效的 Git 分支")
 		}
+		if ref == "" {
+			ref = "release"
+		}
 		cloneRepository, mirrored := githubPackageMirror(repository)
 		args := []string{"clone", "--depth", "1"}
 		if ref != "" {
@@ -62,6 +65,11 @@ func installLocalPackage(root, source string) (Result, error) {
 		return Result{}, err
 	}
 	defer os.RemoveAll(temporary)
+	release, scopeErr := BeginOperation(operationContext(root), temporary)
+	if scopeErr != nil {
+		return Result{}, scopeErr
+	}
+	defer release()
 	output, err := runNPMJSON(temporary, "pack", source, "--json")
 	if err != nil {
 		return Result{Path: target, Output: output}, fmt.Errorf("下载 npm 插件包失败：%w", err)
@@ -515,7 +523,7 @@ func switchLocalPackageVersion(root, packageName, version string, force bool) (R
 			if !isGitBranch(status.Branch) {
 				return Result{}, errors.New("当前插件未检出有效 Git 分支")
 			}
-			if output, fetchErr := gitRun(item.Path, "fetch", "origin", status.Branch); fetchErr != nil {
+			if output, fetchErr := gitRun(item.Path, "fetch", "origin", localPackageBranchRefspec(status.Branch)); fetchErr != nil {
 				return Result{Path: item.Path, Output: output}, errors.New("无法获取插件发布分支")
 			}
 			status, statusErr = releaseGitStatus(item.Path)
