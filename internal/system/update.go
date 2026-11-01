@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"debug/elf"
 	"debug/macho"
@@ -19,13 +20,15 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"alemonx/internal/systemnetwork"
 )
 
 const maxUpdateSize int64 = 200 << 20
-const updateDownloadTimeout = 10 * time.Minute
+const updateDownloadTimeout = 60 * time.Minute
+const updateDownloadIdleTimeout = 2 * time.Minute
 
 var errUpdatePackageManifestMissing = errors.New("更新包缺少版本清单")
 
@@ -138,27 +141,84 @@ func DownloadUpdate(downloadURL, assetName, checksum, version string) (string, e
 		}
 		return path, nil
 	}
-	response, err := systemnetwork.DefaultClient(updateDownloadTimeout).Get(downloadURL)
+	partial := path + "." + strings.ToLower(checksum[:12]) + ".part"
+	if entries, err := os.ReadDir(filepath.Dir(path)); err == nil {
+		prefix := filepath.Base(path) + "."
+		for _, entry := range entries {
+			name := entry.Name()
+			if !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, ".part") {
+				continue
+			}
+			stale := filepath.Join(filepath.Dir(path), name)
+			if stale != partial {
+				_ = os.Remove(stale)
+			}
+		}
+	}
+	var offset int64
+	if info, err := os.Stat(partial); err == nil {
+		if info.Mode().IsRegular() && info.Size() > 0 && info.Size() < maxUpdateSize {
+			offset = info.Size()
+		} else {
+			_ = os.Remove(partial)
+		}
+	}
+	if offset > 0 && checksumFile(partial, checksum) {
+		if err := os.Rename(partial, path); err != nil {
+			return "", err
+		}
+		if err := savePendingUpdate(PendingUpdate{AssetName: assetName, SHA256: checksum, Version: version}); err != nil {
+			return "", err
+		}
+		return path, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), updateDownloadTimeout)
+	defer cancel()
+	guard := newUpdateStallGuard(updateDownloadIdleTimeout, cancel)
+	defer guard.stop()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("下载更新失败：%w", err)
+	}
+	if offset > 0 {
+		request.Header.Set("Range", fmt.Sprintf("bytes=%d-", offset))
+	}
+	response, err := systemnetwork.DefaultClient(0).Do(request)
 	if err != nil {
 		return "", fmt.Errorf("下载更新失败：%w", err)
 	}
 	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
+	switch {
+	case response.StatusCode == http.StatusPartialContent && offset > 0:
+	case response.StatusCode == http.StatusOK:
+		offset = 0
+	case response.StatusCode == http.StatusRequestedRangeNotSatisfiable && offset > 0:
+		_ = os.Remove(partial)
+		return "", errors.New("更新包续传位置无效，已重置")
+	default:
 		return "", fmt.Errorf("下载更新失败：服务器返回 %s", response.Status)
 	}
-	partial := path + ".part"
-	file, err := os.OpenFile(partial, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+	flags := os.O_CREATE | os.O_WRONLY
+	if offset > 0 {
+		flags |= os.O_APPEND
+	} else {
+		flags |= os.O_TRUNC
+	}
+	file, err := os.OpenFile(partial, flags, 0600)
 	if err != nil {
 		return "", err
 	}
-	_, copyErr := io.Copy(file, io.LimitReader(response.Body, maxUpdateSize+1))
+	_, copyErr := io.Copy(file, io.LimitReader(updateStallReader{Reader: response.Body, guard: guard}, maxUpdateSize-offset+1))
 	closeErr := file.Close()
-	if copyErr != nil || closeErr != nil {
-		_ = os.Remove(partial)
-		if copyErr != nil {
-			return "", copyErr
-		}
+	if copyErr != nil {
+		return "", copyErr
+	}
+	if closeErr != nil {
 		return "", closeErr
+	}
+	if info, err := os.Stat(partial); err == nil && info.Size() > maxUpdateSize {
+		_ = os.Remove(partial)
+		return "", errors.New("更新包超过预期大小")
 	}
 	if err := os.Rename(partial, path); err != nil {
 		return "", err
@@ -174,6 +234,46 @@ func DownloadUpdate(downloadURL, assetName, checksum, version string) (string, e
 		return "", err
 	}
 	return path, nil
+}
+
+type updateStallGuard struct {
+	timer    *time.Timer
+	interval time.Duration
+	mu       sync.Mutex
+	done     bool
+}
+
+func newUpdateStallGuard(interval time.Duration, cancel context.CancelFunc) *updateStallGuard {
+	return &updateStallGuard{timer: time.AfterFunc(interval, cancel), interval: interval}
+}
+
+func (g *updateStallGuard) touch() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.done {
+		return
+	}
+	g.timer.Reset(g.interval)
+}
+
+func (g *updateStallGuard) stop() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.done = true
+	g.timer.Stop()
+}
+
+type updateStallReader struct {
+	io.Reader
+	guard *updateStallGuard
+}
+
+func (r updateStallReader) Read(buffer []byte) (int, error) {
+	read, err := r.Reader.Read(buffer)
+	if read > 0 {
+		r.guard.touch()
+	}
+	return read, err
 }
 
 // CachedUpdate returns the persistent location for one release asset and

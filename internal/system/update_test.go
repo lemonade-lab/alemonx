@@ -2,16 +2,20 @@ package system
 
 import (
 	"archive/zip"
+	"bytes"
 	"crypto/sha256"
 	"debug/elf"
 	"debug/pe"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestExpectedBinaryMachinesCoverReleaseArchitectures(t *testing.T) {
@@ -65,6 +69,46 @@ func TestCachedUpdateRequiresExpectedSHA256(t *testing.T) {
 	checksum := fmt.Sprintf("%x", sha256.Sum256([]byte("tampered")))
 	if _, ready, err = CachedUpdate("alx-linux-amd64.zip", checksum); err != nil || !ready {
 		t.Fatalf("matching cache must be ready: ready=%v err=%v", ready, err)
+	}
+}
+
+func TestDownloadUpdateResumesExistingPartialArchive(t *testing.T) {
+	t.Setenv("ALX_TEST_CACHE_DIR", t.TempDir())
+	payload := bytes.Repeat([]byte("alemonx"), 4096)
+	checksum := fmt.Sprintf("%x", sha256.Sum256(payload))
+	assetName := "alx-windows-amd64.zip"
+
+	var ranged bool
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if strings.HasPrefix(request.Header.Get("Range"), "bytes=") {
+			ranged = true
+		}
+		http.ServeContent(writer, request, assetName, time.Now(), bytes.NewReader(payload))
+	}))
+	defer server.Close()
+
+	path, _, err := CachedUpdate(assetName, checksum)
+	if err != nil {
+		t.Fatal(err)
+	}
+	partial := path + "." + checksum[:12] + ".part"
+	if err := os.WriteFile(partial, payload[:len(payload)/2], 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	downloaded, err := DownloadUpdate(server.URL+"/"+assetName, assetName, checksum, "v9.9.9")
+	if err != nil {
+		t.Fatalf("DownloadUpdate: %v", err)
+	}
+	if !ranged {
+		t.Fatal("expected a Range request when a partial archive exists")
+	}
+	content, err := os.ReadFile(downloaded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(content, payload) {
+		t.Fatalf("resumed archive mismatch: got %d bytes, want %d", len(content), len(payload))
 	}
 }
 
