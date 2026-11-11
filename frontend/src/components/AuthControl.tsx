@@ -1,3 +1,4 @@
+import { Fragment } from 'react'
 import { useStoreState } from '../store/guideStore'
 import { useCallback, useEffect, type ReactNode } from 'react'
 import { LockKeyhole, LogOut, UserRound, X } from 'lucide-react'
@@ -103,7 +104,8 @@ export function AuthGate({ children }: { children: ReactNode }) {
         <span>正在读取身份认证状态…</span>
       </main>
     )
-  if (!status.enabled || status.authenticated) return <>{children}</>
+  if (!status.enabled || status.authenticated)
+    return <Fragment key={status.enabled ? `account:${status.account}` : 'local'}>{children}</Fragment>
   return (
     <main className="auth-gate flex min-h-screen items-center justify-center p-5">
       <section className="grid w-full max-w-90 gap-3 rounded-xl border border-slate-200 bg-white p-6 shadow-[0_18px_52px_rgb(28_26_23/0.12)]">

@@ -157,6 +157,16 @@ test('empty robot workspace opens the new robot wizard', async ({ page }) => {
       return route.fulfill({ json: { enabled: false, authenticated: false } })
     if (path === '/api/v1/checks')
       return route.fulfill({ json: { checks: [] } })
+    if (path === '/api/v1/workspace/robots')
+      return route.fulfill({
+        json: {
+          scope: 'local',
+          local: true,
+          initialized: false,
+          projects: [],
+          activeProjectID: ''
+        }
+      })
     if (path === '/api/v1/goals')
       return route.fulfill({
         json: [

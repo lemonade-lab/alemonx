@@ -1,12 +1,18 @@
 import { ArrowRight, FolderOpen, GitBranch, Plus } from 'lucide-react'
 
 type Props = {
+  onImport?: () => void
   onCreate: () => void
   onAdd: () => void
   onClone: () => void
 }
 
-export function WorkspaceWelcome({ onCreate, onAdd, onClone }: Props) {
+export function WorkspaceWelcome({
+  onCreate,
+  onAdd,
+  onClone,
+  onImport
+}: Props) {
   return (
     <section
       className="col-span-full flex min-h-full flex-col items-center justify-center gap-6 px-5 py-8"
@@ -76,6 +82,11 @@ export function WorkspaceWelcome({ onCreate, onAdd, onClone }: Props) {
           )
         )}
       </div>
+      {onImport && (
+        <button type="button" className="secondary-button" onClick={onImport}>
+          导入此浏览器以前的机器人列表
+        </button>
+      )}
     </section>
   )
 }

@@ -4,19 +4,23 @@ on:
   workflow_dispatch:
     inputs:
       tencent_registry:
-        description: 腾讯云 TCR/CCR 仓库域名
-        required: true
+        description: 腾讯云 TCR/CCR 仓库域名，例如 ccr.ccs.tencentyun.com
+        required: false
         default: ccr.ccs.tencentyun.com
         type: string
       namespace:
-        description: 腾讯云镜像命名空间
-        required: true
+        description: 腾讯云镜像命名空间，例如 ningmengchongshui
+        required: false
         default: ningmengchongshui
         type: string
       image_name:
-        description: 腾讯云镜像仓库名称
-        required: true
+        description: 腾讯云应用镜像仓库名称，例如 alemonx
+        required: false
         default: alemonx
+        type: string
+      version:
+        description: 应用镜像版本标签，留空使用 Git 提交 SHA，同时更新 latest
+        required: false
         type: string
       registry_username:
         description: 腾讯云镜像仓库登录账号
@@ -27,8 +31,8 @@ on:
         required: true
         type: string
       runtime_base:
-        description: Dockerfile 使用的腾讯云运行时基础镜像
-        required: true
+        description: 腾讯云运行时基础镜像，例如 ccr.ccs.tencentyun.com/ningmengchongshui/alemonbase:latest
+        required: false
         default: ccr.ccs.tencentyun.com/ningmengchongshui/alemonbase:latest
         type: string
 
@@ -39,20 +43,14 @@ jobs:
   build-and-push:
     name: 构建并发布
     runs-on: ubuntu-latest
-    env:
-      IMAGE: ${{ inputs.tencent_registry }}/${{ inputs.namespace }}/${{ inputs.image_name }}
-      DOCKER_PASSWORD: ${{ inputs.docker_password }}
     steps:
+      - name: 遮罩登录密码
+        uses: actions/github-script@v7
+        with:
+          script: core.setSecret(context.payload.inputs.docker_password)
+
       - name: 检出源码
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: 获取最新 Git 标签版本
-        id: version
-        run: |
-          version="$(git describe --tags --abbrev=0 2>/dev/null || git rev-parse --short HEAD)"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: 在 Runner 上构建前端
         uses: actions/setup-node@v4
@@ -62,11 +60,7 @@ jobs:
           cache-dependency-path: frontend/yarn.lock
 
       - name: 安装并构建前端
-        working-directory: frontend
-        run: |
-          corepack enable
-          yarn install --frozen-lockfile --non-interactive
-          yarn build
+        run: ./scripts/build-frontend.sh
 
       - name: 配置 QEMU
         uses: docker/setup-qemu-action@v3
@@ -74,15 +68,12 @@ jobs:
       - name: 配置 Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: 遮罩登录密码
-        run: echo "::add-mask::$DOCKER_PASSWORD"
-
       - name: 登录腾讯云镜像仓库
         uses: docker/login-action@v3
         with:
           registry: ${{ inputs.tencent_registry }}
           username: ${{ inputs.registry_username }}
-          password: ${{ env.DOCKER_PASSWORD }}
+          password: ${{ inputs.docker_password }}
 
       - name: 构建并发布多架构镜像
         uses: docker/build-push-action@v6
@@ -92,10 +83,10 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            ${{ env.IMAGE }}:latest
-            ${{ env.IMAGE }}:${{ steps.version.outputs.version }}
+            ${{ inputs.tencent_registry }}/${{ inputs.namespace }}/${{ inputs.image_name }}:latest
+            ${{ inputs.tencent_registry }}/${{ inputs.namespace }}/${{ inputs.image_name }}:${{ inputs.version || github.sha }}
           build-args: |
             ALX_RUNTIME_BASE=${{ inputs.runtime_base }}
-            VERSION=${{ steps.version.outputs.version }}
+            VERSION=${{ inputs.version || github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

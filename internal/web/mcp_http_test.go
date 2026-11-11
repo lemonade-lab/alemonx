@@ -31,7 +31,9 @@ func TestWorkbenchManagedMCPHTTP(t *testing.T) {
 	s := &server{
 		auth:      identity,
 		mcpEvents: newMCPEventHub(),
-		mcpHTTP:   managedMCP{port: port, handler: mcp.NewServer("test", nil).HTTPHandler},
+		mcpHTTP: managedMCP{port: port, accountHandler: func(token string, _ access.Status, _ string) http.Handler {
+			return mcp.NewServer("test", nil).HTTPHandler(token)
+		}},
 	}
 	t.Cleanup(s.shutdownMCP)
 	post := func(action, origin string, expected int) *httptest.ResponseRecorder {

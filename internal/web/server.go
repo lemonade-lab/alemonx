@@ -1078,7 +1078,17 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	if mcpWorkspace == "" {
 		mcpWorkspace = options.WorkspaceRoot
 	}
-	s.mcpHTTP.handler = mcp.NewServerWithPolicyAndWorkspace(version, mcpTemplates, options.MCPPolicy, mcpWorkspace).HTTPHandler
+	s.mcpHTTP.accountHandler = func(token string, identity access.Status, authToken string) http.Handler {
+		policy := s.accountMCPPolicy(options.MCPPolicy, mcpWorkspace, identity, authToken)
+		handler := mcp.NewServerWithPolicyAndWorkspace(version, mcpTemplates, policy, mcpWorkspace).HTTPHandler(token)
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !s.mcpAccountValid(identity, authToken) {
+				writeError(w, http.StatusUnauthorized, "MCP 工作台账户会话已失效，请重新启动 HTTP 服务。")
+				return
+			}
+			handler.ServeHTTP(w, r)
+		})
+	}
 	if startBackground {
 		s.startMCPStatusMonitor()
 	}
@@ -1155,6 +1165,7 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	mux.HandleFunc("/api/v1/system/privileged/audit", s.privilegedAuditHandler)
 	mux.HandleFunc("/api/v1/directories", s.directoryHandler)
 	mux.HandleFunc("/api/v1/workspace", s.workspaceHandler)
+	mux.HandleFunc("/api/v1/workspace/robots", s.robotListHandler)
 	mux.HandleFunc("/api/v1/workspace/open", s.workspaceOpenHandler)
 	mux.HandleFunc("/api/v1/catalog", s.catalogHandler)
 	mux.HandleFunc("/api/v1/catalog/resources", s.catalogResourcesHandler)
@@ -9242,6 +9253,11 @@ func (s *server) projectsHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "当前运行包未包含项目模板，无法创建项目。")
 		return
 	}
+	identity, err := s.auth.Status(s.authToken(r))
+	if err != nil || (identity.Enabled && !identity.Authenticated) {
+		writeError(w, http.StatusUnauthorized, "无法读取当前工作台账户。")
+		return
+	}
 	var input project.Config
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 		writeError(w, http.StatusBadRequest, "创建参数无法识别，请检查项目名称和保存位置。")
@@ -9250,6 +9266,12 @@ func (s *server) projectsHandler(w http.ResponseWriter, r *http.Request) {
 	created, err := s.creator.Create(input)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error(), "result": created})
+		return
+	}
+	if err := s.addCreatedRobot(s.robotListWorkspace(), identity.RobotScope, created.Path); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{
+			"error": "机器人已创建，但未能保存到账户列表。", "result": created,
+		})
 		return
 	}
 	writeJSON(w, http.StatusCreated, created)

@@ -44,6 +44,45 @@ export type WorkspaceProject = {
   name: string
   pinned?: boolean
 }
+const legacyRobotListKey = 'alemonx-legacy-robot-list'
+type LegacyRobots = { projects: WorkspaceProject[]; activeProjectID: string }
+
+export function readLegacyRobots(): LegacyRobots {
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(legacyRobotListKey) ?? '{}') as Partial<LegacyRobots>
+    return {
+      projects: Array.isArray(saved.projects) ? saved.projects.filter(item => typeof item?.path === 'string') : [],
+      activeProjectID: typeof saved.activeProjectID === 'string' ? saved.activeProjectID : ''
+    }
+  } catch {
+    return { projects: [], activeProjectID: '' }
+  }
+}
+
+export function clearLegacyRobots() {
+  window.localStorage.removeItem(legacyRobotListKey)
+}
+
+try {
+  const raw = window.localStorage.getItem(workspacePersistKey)
+  if (raw) {
+    const saved = JSON.parse(raw) as Record<string, string>
+    if (saved.projects || saved.activeProjectID) {
+      const projects = JSON.parse(saved.projects ?? '[]')
+      if (Array.isArray(projects) && projects.length && !window.localStorage.getItem(legacyRobotListKey)) {
+        window.localStorage.setItem(legacyRobotListKey, JSON.stringify({
+          projects, activeProjectID: JSON.parse(saved.activeProjectID ?? '""')
+        }))
+      }
+      delete saved.projects
+      delete saved.activeProjectID
+      window.localStorage.setItem(workspacePersistKey, JSON.stringify(saved))
+    }
+  }
+} catch {
+  // An unreadable legacy browser list must not block account data.
+}
+
 type WorkspaceState = {
   projects: WorkspaceProject[]
   activeProjectID: string
@@ -66,58 +105,9 @@ const workspaceSlice = createSlice({
   name: 'workspace',
   initialState,
   reducers: {
-    addProjects(state, action: PayloadAction<WorkspaceProject[]>) {
-      const known = new Set(state.projects.map(item => item.path))
-      const additions = action.payload.filter(item => !known.has(item.path))
-      state.projects.push(...additions)
-      if (additions[0]) state.activeProjectID = additions[0].id
-    },
-    selectProject(state, action: PayloadAction<string>) {
-      state.activeProjectID = action.payload
-    },
-    removeProject(state, action: PayloadAction<string>) {
-      const removed = state.projects.find(item => item.id === action.payload)
-      state.projects = state.projects.filter(item => item.id !== action.payload)
-      if (removed) delete state.robotConfigs[removed.path]
-      if (state.activeProjectID === action.payload)
-        state.activeProjectID = state.projects[0]?.id ?? ''
-    },
-    removeProjects(state, action: PayloadAction<string[]>) {
-      const removed = new Set(action.payload)
-      if (!removed.size) return
-      state.projects = state.projects.filter(item => {
-        if (!removed.has(item.id)) return true
-        delete state.robotConfigs[item.path]
-        return false
-      })
-      if (removed.has(state.activeProjectID))
-        state.activeProjectID = state.projects[0]?.id ?? ''
-    },
-    pinProject(state, action: PayloadAction<string>) {
-      const target = state.projects.find(item => item.id === action.payload)
-      if (!target) return
-      target.pinned = !target.pinned
-      state.projects = [...state.projects].sort((left, right) => {
-        if (left.pinned && !right.pinned) return -1
-        if (!left.pinned && right.pinned) return 1
-        return 0
-      })
-    },
-    reorderProjects(
-      state,
-      action: PayloadAction<{ sourceID: string; targetID: string }>
-    ) {
-      const sourceIndex = state.projects.findIndex(
-        item => item.id === action.payload.sourceID
-      )
-      if (sourceIndex < 0 || action.payload.sourceID === action.payload.targetID)
-        return
-      const [source] = state.projects.splice(sourceIndex, 1)
-      const targetIndex = state.projects.findIndex(
-        item => item.id === action.payload.targetID
-      )
-      if (!source || targetIndex < 0) return
-      state.projects.splice(targetIndex, 0, source)
+    replaceAccountRobots(state, action: PayloadAction<LegacyRobots>) {
+      state.projects = action.payload.projects
+      state.activeProjectID = action.payload.activeProjectID
     },
     setDraft(state, action: PayloadAction<{ key: string; content: string }>) {
       if (state.drafts[action.payload.key] === action.payload.content) return
@@ -164,7 +154,7 @@ export const persistedWorkspace = persistReducer(
   {
     key: 'alemonx-workspace',
     storage,
-    whitelist: ['projects', 'activeProjectID', 'drafts', 'developerMode'],
+    whitelist: ['drafts', 'developerMode'],
     transforms: [privateDraftsTransform],
     // A stored state written by an older release may hold null/undefined for
     // fields this build expects to be arrays. Never let that leak into the
@@ -181,12 +171,7 @@ export const persistedWorkspace = persistReducer(
   workspaceSlice.reducer
 )
 export const {
-  addProjects,
-  selectProject,
-  removeProject,
-  removeProjects,
-  pinProject,
-  reorderProjects,
+  replaceAccountRobots,
   setDraft,
   setRobotConfig,
   clearDraft,

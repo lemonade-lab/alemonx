@@ -4,11 +4,14 @@ ARG ALX_RUNTIME_BASE=ccr.ccs.tencentyun.com/ningmengchongshui/alemonbase:latest
 # Build-time Node matches the runtime-base contract, checked in the final image.
 FROM node:22.22.3 AS node-runtime
 
-# 资源准备阶段 - 安装 Yarn 依赖
+# 资源准备阶段 - 安装内置 Yarn 和 PM2
 FROM node-runtime AS resources
 WORKDIR /out
 COPY resources/packages/yarn/package.json resources/packages/yarn/package-lock.json ./yarn/
-RUN (cd yarn && npm ci --no-bin-links --ignore-scripts --no-audit --no-fund)
+COPY resources/packages/pm2/package.json resources/packages/pm2/package-lock.json ./pm2/
+RUN for package in yarn pm2; do \
+      (cd "$package" && npm ci --no-bin-links --ignore-scripts --no-audit --no-fund) || exit 1; \
+    done
 
 # DSH is an application-owned sidecar, never a user-global installation. The
 # lockfile is copied separately so changes to Go or the frontend do not bust

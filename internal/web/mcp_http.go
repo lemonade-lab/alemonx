@@ -12,17 +12,24 @@ import (
 	"sync"
 	"time"
 
+	"alemonx/internal/access"
 	"alemonx/internal/systemnetwork"
 )
 
 type managedMCP struct {
-	mu       sync.Mutex
-	port     string
-	handler  func(token string) http.Handler
-	server   *http.Server
-	listener net.Listener
-	token    string
-	closed   bool
+	mu             sync.Mutex
+	port           string
+	accountHandler func(string, access.Status, string) http.Handler
+	sessions       map[string]mcpAccountSession
+	server         *http.Server
+	listener       net.Listener
+	closed         bool
+}
+
+type mcpAccountSession struct {
+	token   string
+	handler http.Handler
+	valid   func() bool
 }
 
 type mcpHTTPStatus struct {
@@ -53,10 +60,16 @@ func (m *managedMCP) status() mcpHTTPStatus {
 
 func (s *server) systemMCPHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
+	authToken := s.authToken(r)
+	identity, err := s.auth.Status(authToken)
+	if err != nil || (identity.Enabled && !identity.Authenticated) {
+		writeError(w, http.StatusUnauthorized, "请先登录工作台。")
+		return
+	}
 	m := &s.mcpHTTP
 	if r.Method == http.MethodGet {
 		m.mu.Lock()
-		status := m.status()
+		status := m.accountStatus(identity.RobotScope)
 		m.mu.Unlock()
 		writeJSON(w, http.StatusOK, status)
 		return
@@ -65,11 +78,10 @@ func (s *server) systemMCPHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
 		return
 	}
-	if !s.allowMCPControl(r) {
-		writeError(w, http.StatusForbidden, "请从本机工作台操作，或登录具有系统管理权限的账户。")
+	if !s.allowMCPControl(r) || !s.mcpAccountValid(identity, authToken) {
+		writeError(w, http.StatusForbidden, "请从本机工作台操作，或登录具有系统及工作台管理权限的账户。")
 		return
 	}
-
 	var input struct {
 		Action string `json:"action"`
 	}
@@ -79,49 +91,97 @@ func (s *server) systemMCPHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.closed || m.handler == nil {
+	if m.closed || m.accountHandler == nil {
 		writeError(w, http.StatusServiceUnavailable, "MCP HTTP 服务当前不可用。")
 		return
 	}
+	account := identity.RobotScope
+	m.pruneSessions()
+	session, exists := m.sessions[account]
 	switch input.Action {
 	case "start":
-		if m.server == nil {
-			port, err := strconv.Atoi(m.port)
-			if err != nil || port < 1 || port > 65535 {
-				writeError(w, http.StatusBadRequest, "MCP 端口必须在 1 到 65535 之间。")
-				return
-			}
+		if !exists {
 			var secret [32]byte
 			if _, err := rand.Read(secret[:]); err != nil {
 				writeError(w, http.StatusInternalServerError, "无法生成 MCP 连接令牌。")
 				return
 			}
-			listener, err := net.Listen("tcp4", m.address())
-			if err != nil {
-				writeError(w, http.StatusConflict, "无法监听 MCP 端口，请检查端口是否已被占用。")
-				return
+			if m.server == nil {
+				port, err := strconv.Atoi(m.port)
+				if err != nil || port < 1 || port > 65535 {
+					writeError(w, http.StatusBadRequest, "MCP 端口必须在 1 到 65535 之间。")
+					return
+				}
+				listener, err := net.Listen("tcp4", m.address())
+				if err != nil {
+					writeError(w, http.StatusConflict, "无法监听 MCP 端口，请检查端口是否已被占用。")
+					return
+				}
+				server := &http.Server{Handler: http.HandlerFunc(m.serveAccount), ReadHeaderTimeout: 10 * time.Second}
+				m.server, m.listener = server, listener
+				m.sessions = make(map[string]mcpAccountSession)
+				go s.serveManagedMCP(server, listener)
 			}
-			m.token = base64.RawURLEncoding.EncodeToString(secret[:])
-			server := &http.Server{Handler: m.handler(m.token), ReadHeaderTimeout: 10 * time.Second}
-			m.server, m.listener = server, listener
-			go s.serveManagedMCP(server, listener)
+			token := base64.RawURLEncoding.EncodeToString(secret[:])
+			m.sessions[account] = mcpAccountSession{
+				token: token, handler: m.accountHandler(token, identity, authToken),
+				valid: func() bool { return s.mcpAccountValid(identity, authToken) },
+			}
 		}
 	case "stop":
-		m.stop()
+		delete(m.sessions, account)
+		if len(m.sessions) == 0 {
+			m.stop()
+		}
 	case "token":
-		if m.server == nil {
+		if !exists {
 			writeError(w, http.StatusConflict, "请先在工作台启动 MCP HTTP 服务。")
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]string{"token": m.token})
+		writeJSON(w, http.StatusOK, map[string]string{"token": session.token})
 		return
 	default:
 		writeError(w, http.StatusBadRequest, "MCP 服务操作无效。")
 		return
 	}
-	status := m.status()
-	s.publishMCPStatus(status.Running)
-	writeJSON(w, http.StatusOK, status)
+	s.publishMCPStatus(m.status().Running)
+	writeJSON(w, http.StatusOK, m.accountStatus(account))
+}
+
+func (m *managedMCP) accountStatus(account string) mcpHTTPStatus {
+	if m.server != nil {
+		session, ok := m.sessions[account]
+		running := ok && session.valid()
+		return mcpHTTPStatus{URL: "http://" + m.address() + "/mcp", Managed: running, Running: running}
+	}
+	return m.status()
+}
+
+func (m *managedMCP) pruneSessions() {
+	for account, session := range m.sessions {
+		if !session.valid() {
+			delete(m.sessions, account)
+		}
+	}
+}
+
+func (m *managedMCP) serveAccount(w http.ResponseWriter, r *http.Request) {
+	token, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	var handler http.Handler
+	m.mu.Lock()
+	for _, session := range m.sessions {
+		if session.token == token && session.valid() {
+			handler = session.handler
+			break
+		}
+	}
+	m.mu.Unlock()
+	if handler == nil {
+		w.Header().Set("Cache-Control", "no-store")
+		writeError(w, http.StatusUnauthorized, "MCP HTTP 认证失败")
+		return
+	}
+	handler.ServeHTTP(w, r)
 }
 
 func (s *server) allowMCPControl(r *http.Request) bool {
@@ -156,7 +216,7 @@ func (m *managedMCP) stop() {
 	if m.server != nil {
 		_ = m.server.Close()
 		_ = m.listener.Close()
-		m.server, m.listener, m.token = nil, nil, ""
+		m.server, m.listener, m.sessions = nil, nil, nil
 	}
 }
 
@@ -191,6 +251,10 @@ func (s *server) startMCPStatusMonitor() {
 		m.mu.Lock()
 		defer m.mu.Unlock()
 		if !m.closed {
+			m.pruneSessions()
+			if len(m.sessions) == 0 && m.server != nil {
+				m.stop()
+			}
 			s.publishMCPStatus(m.status().Running)
 		}
 	}

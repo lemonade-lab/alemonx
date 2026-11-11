@@ -32,13 +32,14 @@ var Permissions = []string{
 }
 
 type Account struct {
-	Account      string    `json:"account"`
-	PasswordHash string    `json:"passwordHash,omitempty"`
-	Roles        []string  `json:"roles"`
-	SuperAdmin   bool      `json:"superAdmin,omitempty"`
-	Enabled      bool      `json:"enabled"`
-	Created      time.Time `json:"created"`
-	Updated      time.Time `json:"updated"`
+	Account        string    `json:"account"`
+	PasswordHash   string    `json:"passwordHash,omitempty"`
+	Roles          []string  `json:"roles"`
+	SuperAdmin     bool      `json:"superAdmin,omitempty"`
+	Enabled        bool      `json:"enabled"`
+	Created        time.Time `json:"created"`
+	Updated        time.Time `json:"updated"`
+	LegacyRegistry bool      `json:"legacyRegistry,omitempty"`
 }
 
 type Role struct {
@@ -49,6 +50,7 @@ type Role struct {
 
 // Status deliberately contains no password material.
 type Status struct {
+	RobotScope    string   `json:"-"`
 	Enabled       bool     `json:"enabled"`
 	Authenticated bool     `json:"authenticated"`
 	Account       string   `json:"account,omitempty"`
@@ -121,7 +123,7 @@ func (m *Manager) reload() error {
 	}
 	if next.Enabled && len(next.Accounts) == 0 {
 		now := time.Now()
-		next.Accounts = []Account{{Account: next.Account, PasswordHash: next.PasswordHash, SuperAdmin: true, Enabled: true, Created: now, Updated: now}}
+		next.Accounts = []Account{{Account: next.Account, PasswordHash: next.PasswordHash, SuperAdmin: true, Enabled: true, Created: now, Updated: now, LegacyRegistry: true}}
 		// Persisting on the next write removes neither field, making migration
 		// safe even if an older binary is used once more.
 	}
@@ -232,6 +234,12 @@ func (m *Manager) Status(token string) (Status, error) {
 		return status, nil
 	}
 	status.Authenticated, status.Account = true, account.Account
+	// Include the account creation time so recreating a username cannot
+	// inherit a deleted account's saved robot list.
+	status.RobotScope = account.Account + "\x00" + account.Created.UTC().Format(time.RFC3339Nano)
+	if account.LegacyRegistry {
+		status.RobotScope = account.Account + "\x00legacy"
+	}
 	status.Roles = append([]string(nil), account.Roles...)
 	status.Permissions, status.SuperAdmin = permissionsFor(data, account), account.SuperAdmin
 	return status, nil

@@ -1,5 +1,6 @@
 import { BackpackPackageUpdate } from './BackpackPackageUpdate'
 import { RobotWorkspaceSplitter } from './RobotWorkspaceSplitter'
+import { useAccountRobots } from '../hooks/useAccountRobots'
 import { useNavigationState } from '../hooks/useNavigationState'
 import {
   ConnectionCatalog,
@@ -245,12 +246,6 @@ import {
   type SetupPluginDevelopment
 } from '../store/workspaceApi'
 import {
-  addProjects,
-  removeProject as removeWorkspaceProject,
-  removeProjects,
-  reorderProjects,
-  selectProject,
-  pinProject as pinWorkspaceProject,
   setDraft,
   setRobotConfig
 } from '../store/workspaceStore'
@@ -1356,8 +1351,6 @@ export function Dashboard({
       window.removeEventListener('alx:desktop-terminal-toggle', toggleTerminal)
   }, [activateFloatingWindow, consoleOpen, setConsoleMinimized, setConsoleOpen])
   const environmentChecked = useRef(false)
-  const pendingRootValidation = useRef<string | null>(null)
-  const removedProjectRoots = useRef<Set<string>>(new Set())
   const eventsRef = useRef<EventSource | null>(null)
   const opsRefreshTimer = useRef<number | null>(null)
   const [loginDialog, setLoginDialog] = useState<{
@@ -1384,6 +1377,10 @@ export function Dashboard({
       setLoginDialog(null)
     }
   }
+  const {
+    change: changeRobotList, ready: robotListReady, loading: robotListLoading,
+    error: robotListError, retry: retryRobotList, canImport, importLegacy
+  } = useAccountRobots()
   const rawProjects = useSelector(
     (state: RootState) => state.workspace.projects
   )
@@ -1403,34 +1400,6 @@ export function Dashboard({
   const activeProjectID = useSelector(
     (state: RootState) => state.workspace.activeProjectID
   )
-  const projectValidationSignature = projects
-    .map(project => project.path)
-    .join('\x00')
-  useEffect(() => {
-    if (!projectValidationSignature) return
-    let disposed = false
-    void (async () => {
-      const staleIDs: string[] = []
-      await Promise.all(
-        projects.map(async project => {
-          try {
-            const response = await fetch(
-              `/api/v1/robot/validate?${new URLSearchParams({ root: project.path })}`
-            )
-            const data = (await response.json()) as { valid?: boolean }
-            if (!response.ok || data.valid !== true) staleIDs.push(project.id)
-          } catch {
-            // Keep local project entries when the backend is briefly
-            // unreachable; a later successful validation can prune them.
-          }
-        })
-      )
-      if (!disposed && staleIDs.length) dispatch(removeProjects(staleIDs))
-    })()
-    return () => {
-      disposed = true
-    }
-  }, [dispatch, projectValidationSignature, projects])
   const developerMode = useSelector(
     (state: RootState) => state.workspace.developerMode
   )
@@ -1472,7 +1441,7 @@ export function Dashboard({
         dshOpen: false
       })
       if (search === location.search) {
-        dispatch(selectProject(id))
+        void changeRobotList({ action: 'select', id })
         return
       }
       navigate(
@@ -1483,7 +1452,7 @@ export function Dashboard({
     [
       buildMode,
       configEditor,
-      dispatch,
+      changeRobotList,
       location.hash,
       location.pathname,
       location.search,
@@ -2611,78 +2580,26 @@ export function Dashboard({
     }
   }, [dispatch, setLoginDialog])
 
-  // A root link may arrive during initial hydration, after a browser back/
-  // forward action, or from an edited address bar. Resolve it every time the
-  // query changes instead of treating it as a one-shot bootstrap parameter.
+  // The URL selects a saved robot. A URL left behind by another account
+  // cannot add a robot to the current account's list.
   useEffect(() => {
     const path = navigationFromURL.root
-    if (!path || path === root) {
-      pendingRootValidation.current = null
-      removedProjectRoots.current.clear()
+    if (!robotListReady || !path || path === root) return
+    const project = projects.find(item => item.path === path)
+    if (project) {
+      void changeRobotList({ action: 'select', id: project.id })
       return
     }
-    if (removedProjectRoots.current.has(path)) {
-      // The URL still references a directory the user just removed. Drop the
-      // parameter instead of re-adding it; the guard is pruned once the URL
-      // moves on, so a later explicit link can re-add the directory again.
-      pendingRootValidation.current = null
-      const parameters = new URLSearchParams(location.search)
-      parameters.delete('root')
-      const search = parameters.toString()
-      navigate(
-        {
-          pathname: location.pathname,
-          search: search ? `?${search}` : '',
-          hash: location.hash
-        },
-        { replace: true }
-      )
-      return
-    }
-    removedProjectRoots.current.clear()
-    if (projects.some(item => item.path === path)) {
-      dispatch(selectProject(projects.find(item => item.path === path)!.id))
-      return
-    }
-    if (pendingRootValidation.current === path) return
-    pendingRootValidation.current = path
-    void (async () => {
-      try {
-        const response = await fetch(
-          `/api/v1/robot/validate?${new URLSearchParams({ root: path })}`
-        )
-        const data = (await response.json()) as { valid?: boolean }
-        if (response.ok && data.valid === true) {
-          if (removedProjectRoots.current.has(path)) return
-          dispatch(addProjects([{ id: path, path, name: projectName(path) }]))
-          return
-        }
-      } catch {
-        // A missing/invalid directory must not break the dashboard render.
-      }
-      if (pendingRootValidation.current !== path) return
-      pendingRootValidation.current = null
-      const parameters = new URLSearchParams(location.search)
-      parameters.delete('root')
-      const search = parameters.toString()
-      navigate(
-        {
-          pathname: location.pathname,
-          search: search ? `?${search}` : '',
-          hash: location.hash
-        },
-        { replace: true }
-      )
-    })()
+    const parameters = new URLSearchParams(location.search)
+    parameters.delete('root')
+    const search = parameters.toString()
+    navigate(
+      { pathname: location.pathname, search: search ? `?${search}` : '', hash: location.hash },
+      { replace: true }
+    )
   }, [
-    dispatch,
-    location.hash,
-    location.pathname,
-    location.search,
-    navigate,
-    navigationFromURL.root,
-    projects,
-    root
+    changeRobotList, location.hash, location.pathname, location.search,
+    navigate, navigationFromURL.root, projects, robotListReady, root
   ])
   useEffect(() => {
     if (report || checking || environmentChecked.current) return
@@ -2956,7 +2873,7 @@ export function Dashboard({
     setDirectoryPickerOpen(true)
   }
   async function addSelectedDirectories(paths: string[]) {
-    if (!paths.length) return
+    if (!paths.length || !robotListReady) return
     const checks = await Promise.all(
       paths.map(async path => {
         try {
@@ -2972,12 +2889,23 @@ export function Dashboard({
     )
     const validPaths = checks.filter(item => item.valid).map(item => item.path)
     const invalid = checks.find(item => !item.valid)?.path
-    if (validPaths.length)
-      dispatch(
-        addProjects(
-          validPaths.map(path => ({ id: path, path, name: projectName(path) }))
-        )
-      )
+    if (validPaths.length) {
+      const saved = await changeRobotList({
+        action: 'add',
+        projects: validPaths.map(path => ({ id: path, path, name: projectName(path) }))
+      })
+      if (!saved) {
+        setDirectoryPickerOpen(false)
+        return
+      }
+      const active = saved.projects.find(item => item.id === saved.activeProjectID)
+      if (active) {
+        const search = writeDashboardNavigation(location.search, {
+          root: active.path, page: 'robot', section: 'runtime', buildMode, configEditor, dshOpen: false
+        })
+        navigate({ pathname: location.pathname, search, hash: location.hash })
+      }
+    }
     setDirectoryPickerOpen(false)
     if (invalid) {
       setInvalidDirectory(invalid)
@@ -3116,21 +3044,16 @@ export function Dashboard({
   }
 
   const pinProject = (id: string) => {
-    dispatch(pinWorkspaceProject(id))
+    void changeRobotList({ action: 'pin', id })
   }
 
   const reorderProject = (sourceID: string, targetID: string) => {
-    dispatch(reorderProjects({ sourceID, targetID }))
+    void changeRobotList({ action: 'reorder', id: sourceID, targetId: targetID })
   }
 
   function confirmRemoveProject() {
     if (!pendingProjectRemoval) return
-    const removedPath = pendingProjectRemoval
-    removedProjectRoots.current.add(removedPath)
-    if (pendingRootValidation.current === removedPath) {
-      pendingRootValidation.current = null
-    }
-    dispatch(removeWorkspaceProject(removedPath))
+    void changeRobotList({ action: 'remove', id: pendingProjectRemoval })
     setPendingProjectRemoval(null)
     setOutput('')
   }
@@ -3655,8 +3578,11 @@ export function Dashboard({
           />
         )}
       </>
-    ) : (
+    ) : robotListLoading ? (
+      <p role="status" className="p-5">正在读取账户机器人列表…</p>
+    ) : !robotListReady ? null : (
       <WorkspaceWelcome
+        onImport={canImport ? () => void importLegacy() : undefined}
         onCreate={onCreateRobot}
         onAdd={chooseDirectories}
         onClone={openRobotClone}
@@ -4094,6 +4020,12 @@ export function Dashboard({
             }
           >
             {workspace}
+            {robotListError && (
+              <div role="alert" className="p-3 text-sm">
+                {robotListError}{' '}
+                <Button onClick={retryRobotList}>重试读取</Button>
+              </div>
+            )}
             {error && <ErrorNotice message={error} onClose={onClearError} />}
           </RobotWorkspaceSplitter>
           {windowControls}

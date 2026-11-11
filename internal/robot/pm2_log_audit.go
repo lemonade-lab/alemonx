@@ -309,6 +309,11 @@ func pm2DiagnosticMask(text string) uint16 {
 	return mask
 }
 
+// RedactRuntimeLog masks known credential patterns in runtime log output.
+func RedactRuntimeLog(text string) string {
+	return redactPM2LogText(text)
+}
+
 func redactPM2LogText(text string) string {
 	if !pm2MayContainSensitiveData(text) {
 		return text

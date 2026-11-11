@@ -128,7 +128,7 @@ func main() {
 				log.Fatal("请设置 MCP_TOKEN 后再启动 HTTP MCP 服务")
 			}
 			templates, root := mcpTemplateSource(workspaceRoot)
-			serveMCPHTTP(mcpPort, token, mcpPolicy(), templates, root)
+			serveMCPHTTP(mcpPort, token, mcpAccountPolicy(root), templates, root)
 			return
 		case "mcp":
 			if len(arguments) != 1 {
@@ -136,7 +136,7 @@ func main() {
 				return
 			}
 			templates, root := mcpTemplateSource(workspaceRoot)
-			if err := mcp.NewServerWithPolicyAndWorkspace(Version, templates, mcpPolicy(), root).Serve(os.Stdin, os.Stdout); err != nil {
+			if err := mcp.NewServerWithPolicyAndWorkspace(Version, templates, mcpAccountPolicy(root), root).Serve(os.Stdin, os.Stdout); err != nil {
 				log.Printf("MCP 服务已停止：%v", err)
 			}
 			return
@@ -620,6 +620,41 @@ func mcpTemplateSource(workspaceRoot string) (fs.FS, string) {
 	}
 	resources.Init(resourcesRoot, layout)
 	return os.DirFS(layout.Templates()), layout.Root
+}
+
+func mcpAccountPolicy(root string) mcp.Policy {
+	manager, err := access.New()
+	if err != nil {
+		log.Fatal("无法读取工作台账户配置")
+	}
+	token := strings.TrimSpace(os.Getenv("ALX_AUTH_TOKEN"))
+	resolve := func() (string, error) {
+		status, err := manager.Status(token)
+		if err != nil {
+			return "", err
+		}
+		if !status.Enabled {
+			return "", nil
+		}
+		if !status.Authenticated || !manager.Authorize(token, "workbench.manage") {
+			return "", fmt.Errorf("请通过工作台启动 MCP HTTP，或使用有工作台管理权限的 ALX_AUTH_TOKEN")
+		}
+		return status.RobotScope, nil
+	}
+	account, err := resolve()
+	if err != nil {
+		log.Fatal(err)
+	}
+	return mcp.WithRobotAccount(mcpPolicy(), root, func() (string, error) {
+		current, err := resolve()
+		if err != nil {
+			return "", err
+		}
+		if current != account {
+			return "", fmt.Errorf("工作台账户已变更，请重新连接 MCP")
+		}
+		return current, nil
+	})
 }
 
 func mcpPolicy() mcp.Policy {
