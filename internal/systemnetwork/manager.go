@@ -49,10 +49,11 @@ const (
 var allRoutes = []Route{RouteGitHub, RouteGitee, RouteNPM, RouteNode, RoutePython, RouteCDN, RouteOfficial}
 
 const (
-	defaultGitHubMirror = "https://ghfast.top/{url}"
-	defaultNPMMirror    = "https://registry.npmmirror.com{path}"
-	defaultNodeMirror   = "https://npmmirror.com/mirrors/node{nodepath}"
-	defaultPythonMirror = "https://registry.npmmirror.com/-/binary/python{pythonpath}"
+	RouteGitHubAPI      Route = "github-api"
+	defaultGitHubMirror       = "https://ghfast.top/{url}"
+	defaultNPMMirror          = "https://registry.npmmirror.com{path}"
+	defaultNodeMirror         = "https://npmmirror.com/mirrors/node{nodepath}"
+	defaultPythonMirror       = "https://registry.npmmirror.com/-/binary/python{pythonpath}"
 )
 
 // MirrorPreset is a host-maintained template available for a system route.
@@ -68,6 +69,10 @@ type MirrorPreset struct {
 // system-content requests. Custom mirrors are always used alone: AlemonX must
 // not silently send a user's custom route to an unrelated service.
 var mirrorPresets = map[Route][]MirrorPreset{
+	RouteGitHubAPI: {
+		{Label: "GH-Proxy", Value: "https://gh-proxy.org/{url}"},
+		{Label: "GH-Proxy（备用域名）", Value: "https://gh-proxy.com/{url}"},
+	},
 	RouteGitHub: {
 		{Label: "GHFast（推荐）", Value: defaultGitHubMirror},
 		{Label: "gh-proxy", Value: "https://gh-proxy.com/{url}"},
@@ -210,6 +215,9 @@ func NewAt(path string) (*Manager, error) {
 		return nil, errors.New("网络配置无法读取")
 	}
 	if versioned.Version != 0 {
+		if versioned.MirrorDefaults == 0 {
+			seedGitHubAPIMirrors(&versioned)
+		}
 		if err := validateConfig(versioned); err != nil {
 			return nil, err
 		}
@@ -242,8 +250,8 @@ func SetDefault(manager *Manager) {
 }
 
 func DefaultClient(timeout time.Duration) *http.Client {
-	// A cold automatic group may need several bounded probe waves before
-	// the actual transfer begins. Caller contexts still cancel immediately.
+	// A cold automatic group may check several mirrors before the transfer
+	// begins. Caller contexts still cancel immediately.
 	if timeout > 0 {
 		timeout += 35 * time.Second
 	}

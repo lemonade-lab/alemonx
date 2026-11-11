@@ -20,6 +20,7 @@ type Config struct {
 	Mode             string      `json:"mode"`
 	Automatic        Automatic   `json:"automatic"`
 	Proxy            ProxyConfig `json:"proxy"`
+	MirrorDefaults   int         `json:"mirrorDefaults,omitempty"`
 	ConfirmMigration bool        `json:"confirmMigration,omitempty"`
 }
 type Automatic struct {
@@ -49,7 +50,7 @@ type LegacyProxy struct {
 }
 
 func defaultConfig() *Config {
-	c := &Config{Version: 2, Mode: "auto"}
+	c := &Config{Version: 2, Mode: "auto", MirrorDefaults: 1}
 	for _, def := range groupDefinitions {
 		g := GroupConfig{ID: def.ID, Candidates: []string{}}
 		for _, p := range MirrorPresets(def.Legacy) {
@@ -61,6 +62,55 @@ func defaultConfig() *Config {
 	}
 	return c
 }
+
+// Older files had no GitHub API defaults. Subsequent saves record the
+// defaults version so an explicitly cleared list stays empty.
+func seedGitHubAPIMirrors(c *Config) {
+	c.MirrorDefaults = 1
+	for i, group := range c.Automatic.Groups {
+		if group.ID == "github-api" && len(group.Candidates) == 0 {
+			c.Automatic.Groups[i] = groupConfig(*defaultConfig(), group.ID)
+		}
+	}
+}
+
+func normalizeGroupMirror(id, entry string) (string, error) {
+	entry = strings.TrimSpace(entry)
+	if !strings.ContainsAny(entry, "{}") {
+		base, err := url.Parse(entry)
+		if err != nil || base.Hostname() == "" || base.User != nil || base.RawQuery != "" || base.ForceQuery || base.Fragment != "" {
+			return "", errors.New("请输入有效的 HTTP 或 HTTPS 镜像地址")
+		}
+		marker := "{path}"
+		switch id {
+		case "node":
+			marker = "{nodepath}"
+		case "python":
+			marker = "{pythonpath}"
+		}
+		entry = strings.TrimSuffix(entry, "/") + marker
+	}
+	return entry, validateGroupMirror(id, entry)
+}
+
+func validateGroupMirror(id, entry string) error {
+	d, ok := groupDefinition(id)
+	if !ok || !d.Mirrors {
+		return errors.New("此分类不支持配置镜像")
+	}
+	u, err := rewriteMirrorURL(entry, mustURL(d.Probe))
+	if err != nil {
+		return err
+	}
+	if u.User != nil || u.Fragment != "" || u.Hostname() == "" {
+		return errors.New("镜像地址不能包含认证或片段")
+	}
+	if strings.Contains(entry, "{nodepath}") && id != "node" || strings.Contains(entry, "{pythonpath}") && id != "python" {
+		return errors.New("镜像模板与资源分类不匹配")
+	}
+	return nil
+}
+
 func cloneConfig(c Config) Config {
 	raw, _ := json.Marshal(c)
 	var next Config
@@ -78,6 +128,7 @@ func publicConfig(c Config) *Config {
 	next.Proxy.Password = ""
 	next.Proxy.Credentials = ""
 	next.ConfirmMigration = false
+	next.MirrorDefaults = 0
 	return &next
 }
 func validateConfig(c Config) error {
@@ -107,23 +158,16 @@ func validateConfig(c Config) error {
 		}
 		seen[g.ID] = true
 		if len(g.Candidates) > 16 || (!d.Mirrors && len(g.Candidates) > 0) {
-			return errors.New("此分组不支持这些候选入口")
+			return errors.New("此分类的镜像数量无效")
 		}
 		urls := map[string]bool{}
 		for _, candidate := range g.Candidates {
 			if len(candidate) > 2048 || urls[candidate] {
-				return errors.New("候选入口重复或过长")
+				return errors.New("镜像地址重复或过长")
 			}
 			urls[candidate] = true
-			if err := validateMirrorURL(candidate); err != nil {
+			if err := validateGroupMirror(g.ID, candidate); err != nil {
 				return err
-			}
-			u, e := rewriteMirrorURL(candidate, mustURL(d.Probe))
-			if e != nil || u.User != nil || u.Fragment != "" {
-				return errors.New("候选入口不能包含认证或片段")
-			}
-			if strings.Contains(candidate, "{nodepath}") && g.ID != "node" || strings.Contains(candidate, "{pythonpath}") && g.ID != "python" {
-				return errors.New("入口模板与分组用途不匹配")
 			}
 		}
 	}
@@ -245,6 +289,16 @@ func (m *Manager) prepareConfig(next Config) (Config, error) {
 	}
 	next.Proxy = ProxyConfig{URL: strings.TrimSuffix(p.String(), "/")}
 	next.ConfirmMigration = false
+	next.MirrorDefaults = 1
+	for i, group := range next.Automatic.Groups {
+		for j, entry := range group.Candidates {
+			value, err := normalizeGroupMirror(group.ID, entry)
+			if err != nil {
+				return Config{}, err
+			}
+			next.Automatic.Groups[i].Candidates[j] = value
+		}
+	}
 	if err := validateConfig(next); err != nil {
 		return Config{}, err
 	}

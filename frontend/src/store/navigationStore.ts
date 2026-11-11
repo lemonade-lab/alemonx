@@ -11,6 +11,7 @@ export type NavigationArea =
   | 'market.tab'
   | 'market.page'
   | 'settings.section'
+  | 'workbench.splitter'
   | 'ops.section'
   | 'git.tab'
   | 'environment.section'
@@ -30,6 +31,7 @@ const areas: NavigationArea[] = [
   'market.tab',
   'market.page',
   'settings.section',
+  'workbench.splitter',
   'ops.section',
   'git.tab',
   'environment.section',

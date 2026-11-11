@@ -22,9 +22,15 @@ export function networkError(error: unknown) {
 export function groupStatus(state?: SystemNetworkGroupState) {
   if (!state || state.state === 'idle') return '待检测'
   if (state.state === 'checking') return '检测中…'
-  if (state.state === 'unavailable') return '没有可用入口'
+  if (state.state === 'unavailable') return '没有可用镜像'
   return `可用 · ${state.latencyMs} ms`
 }
 export function entryLabel(entry?: string) {
-  return entry === 'official' ? '官方地址' : entry || '尚未选择'
+  if (!entry) return '尚未选择'
+  if (entry === 'official') return '官方源'
+  try {
+    return new URL(entry.replace(/\{[^}]+\}/g, '/')).host
+  } catch {
+    return entry
+  }
 }

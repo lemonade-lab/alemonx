@@ -7,7 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -22,20 +22,20 @@ type GroupDefinition struct {
 	Mirrors bool   `json:"mirrors"`
 }
 
-var ErrNoCandidate = errors.New("此资源没有可用入口")
+var ErrNoCandidate = errors.New("此资源没有可用镜像")
 
 var groupDefinitions = []GroupDefinition{
-	{"github-api", "GitHub API", "https://api.github.com/", "github", "", true},
+	{"github-api", "GitHub API", "https://api.github.com/repos/lemonade-lab/alemonx/releases?per_page=30", "github", RouteGitHubAPI, true},
 	{"github-download", "GitHub 发布下载", "https://github.com/lemonade-lab/alemonx/releases/latest/download/redis-runtime-index.json", "runtime-index", RouteGitHub, true},
 	{"github-raw", "GitHub 原始文件", "https://raw.githubusercontent.com/nodejs/node/main/LICENSE", "license", RouteGitHub, true},
 	{"github-archive", "GitHub 源码归档", "https://codeload.github.com/octocat/Hello-World/tar.gz/refs/heads/master", "gzip", RouteGitHub, true},
-	{"gitee", "Gitee", "https://gitee.com/api/v5/version", "json", RouteGitee, true},
+	{"gitee", "Gitee API", "https://gitee.com/api/v5/version", "json", RouteGitee, true},
 	{"npm", "NPM", "https://registry.npmjs.org/npm/latest", "npm", RouteNPM, true},
 	{"node", "Node.js", "https://nodejs.org/dist/index.json", "node", RouteNode, true},
-	{"python", "Python", "https://www.python.org/ftp/python/", "python", RoutePython, true},
+	{"python", "Python 安装包", "https://www.python.org/ftp/python/", "python", RoutePython, true},
 	{"pypi", "PyPI", "https://pypi.org/simple/pip/", "pypi", "", true},
-	{"cdn", "CDN", "https://cdn.jsdelivr.net/npm/npm/package.json", "npm", RouteCDN, true},
-	{"official", "官方下载", "https://download.alemonjs.com/application/alemonapp/app-universal-release.apk", "zip", RouteOfficial, true},
+	{"cdn", "jsDelivr CDN", "https://cdn.jsdelivr.net/npm/npm/package.json", "npm", RouteCDN, true},
+	{"official", "ALemonX 下载", "https://download.alemonjs.com/application/alemonapp/app-universal-release.apk", "zip", RouteOfficial, true},
 }
 
 func GroupDefinitions() []GroupDefinition { return append([]GroupDefinition(nil), groupDefinitions...) }
@@ -167,18 +167,17 @@ func (m *Manager) launchDetection(c Config, g GroupConfig, force bool) *selectio
 	done := make(chan struct{})
 	s.done = done
 	s.value.State = "checking"
-	previous := s.value.Current
 	cooldown := map[string]time.Time{}
 	for k, v := range s.cooldown {
 		cooldown[k] = v
 	}
 	s.mu.Unlock()
 	go func() {
-		state := probeGroupWith(g, cooldown, previous, m.probe)
+		state := probeGroupWith(g, cooldown, m.probe)
 		s.mu.Lock()
 		s.value = state
 		s.expires = time.Now().Add(10 * time.Minute)
-		if state.State == "unavailable" {
+		if state.State == "unavailable" || state.Current == "official" && len(g.Candidates) > 0 {
 			s.expires = time.Now().Add(60 * time.Second)
 		}
 		s.done = nil
@@ -214,58 +213,26 @@ func (m *Manager) failCandidate(c Config, g GroupConfig, entry string) {
 	s.expires = time.Time{}
 	s.mu.Unlock()
 }
-func probeGroup(g GroupConfig, cooldown map[string]time.Time, previous string) GroupState {
-	return probeGroupWith(g, cooldown, previous, nil)
-}
-func probeGroupWith(g GroupConfig, cooldown map[string]time.Time, previous string, probe func(GroupDefinition, string) CandidateState) GroupState {
+func probeGroupWith(g GroupConfig, cooldown map[string]time.Time, probe func(GroupDefinition, string) CandidateState) GroupState {
 	if probe == nil {
 		probe = probeCandidate
 	}
 	d, _ := groupDefinition(g.ID)
-	entries := append([]string{"official"}, g.Candidates...)
-	results := make([]CandidateState, len(entries))
-	sem := make(chan struct{}, 3)
-	var wg sync.WaitGroup
-	for i, entry := range entries {
-		wg.Add(1)
-		go func(i int, entry string) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			if time.Now().Before(cooldown[entry]) {
-				results[i] = CandidateState{URL: entry, Message: "冷却中"}
-				return
-			}
-			results[i] = probe(d, entry)
-		}(i, entry)
-	}
-	wg.Wait()
-	good := []CandidateState{}
-	for _, r := range results {
-		if r.OK {
-			good = append(good, r)
+	entries := append(append([]string(nil), g.Candidates...), "official")
+	state := GroupState{ID: g.ID, State: "unavailable"}
+	for _, entry := range entries {
+		if time.Now().Before(cooldown[entry]) {
+			state.Candidates = append(state.Candidates, CandidateState{URL: entry, Message: "冷却中"})
+			continue
 		}
-	}
-	state := GroupState{ID: g.ID, State: "unavailable", Candidates: results, CheckedAt: time.Now()}
-	if len(good) == 0 {
-		return state
-	}
-	sort.SliceStable(good, func(i, j int) bool { return good[i].LatencyMS < good[j].LatencyMS })
-	chosen := good[0]
-	for _, r := range good {
-		if r.URL == "official" && float64(r.LatencyMS) <= float64(chosen.LatencyMS)*1.1 {
-			chosen = r
-		}
-	}
-	for _, r := range good {
-		if r.URL == previous {
-			chosen = r
+		result := probe(d, entry)
+		state.Candidates = append(state.Candidates, result)
+		if result.OK {
+			state.State, state.Current, state.LatencyMS = "ready", entry, result.LatencyMS
 			break
 		}
 	}
-	state.State = "ready"
-	state.Current = chosen.URL
-	state.LatencyMS = chosen.LatencyMS
+	state.CheckedAt = time.Now()
 	return state
 }
 func directTransport() *http.Transport {
@@ -274,6 +241,9 @@ func directTransport() *http.Transport {
 	return t
 }
 func probeCandidate(d GroupDefinition, entry string) CandidateState {
+	return probeCandidateContext(context.Background(), d, entry)
+}
+func probeCandidateContext(ctx context.Context, d GroupDefinition, entry string) CandidateState {
 	result := CandidateState{URL: entry, Message: "不可用"}
 	target := mustURL(d.Probe)
 	if entry != "official" {
@@ -283,26 +253,47 @@ func probeCandidate(d GroupDefinition, entry string) CandidateState {
 			return result
 		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	request, _ := http.NewRequestWithContext(ctx, "GET", target.String(), nil)
+	if d.Kind == "github" {
+		request.Header.Set("Accept", "application/vnd.github+json")
+	}
 	if d.Kind == "zip" || d.Kind == "gzip" {
 		request.Header.Set("Range", "bytes=0-1023")
 	}
 	t := directTransport()
 	defer t.CloseIdleConnections()
-	client := &http.Client{Transport: t, Timeout: 5 * time.Second}
+	client := &http.Client{Transport: t, CheckRedirect: func(request *http.Request, via []*http.Request) error {
+		if len(via) >= 10 {
+			return errors.New("重定向次数过多")
+		}
+		if entry != "official" && groupFor(request.URL) == d.ID {
+			return http.ErrUseLastResponse
+		}
+		return nil
+	}}
 	started := time.Now()
 	response, err := client.Do(request)
 	if err != nil {
+		result.Message = "连接失败"
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			result.Message = "连接超时"
+		}
 		return result
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		result.Message = "HTTP " + strconv.Itoa(response.StatusCode)
 		return result
 	}
 	body, err := io.ReadAll(io.LimitReader(response.Body, 2<<20))
-	if err != nil || !validProbe(d.Kind, body) {
+	if err != nil {
+		result.Message = "读取测试响应失败"
+		return result
+	}
+	if !validProbe(d.Kind, body) {
+		result.Message = "返回内容与测试资源不匹配"
 		return result
 	}
 	result.OK = true
@@ -313,8 +304,10 @@ func probeCandidate(d GroupDefinition, entry string) CandidateState {
 func validProbe(kind string, body []byte) bool {
 	switch kind {
 	case "github":
-		var v map[string]any
-		return json.Unmarshal(body, &v) == nil && v["current_user_url"] != nil
+		var releases []struct {
+			Tag string `json:"tag_name"`
+		}
+		return json.Unmarshal(body, &releases) == nil && len(releases) > 0 && releases[0].Tag != ""
 	case "npm":
 		var v struct {
 			Name    string

@@ -75,3 +75,108 @@ test('operation menu stays collapsed at all widths and opens nested tools', asyn
   await trigger.click()
   await expect(panel).toBeHidden()
 })
+
+test('settings shortcuts open SSH and manage HTTP MCP with developer mode off', async ({
+  page
+}) => {
+  let managed = false
+  await page.route('**/api/v1/**', route => {
+    const request = route.request()
+    const path = new URL(request.url()).pathname
+    switch (path) {
+      case '/api/v1/auth/status':
+        return route.fulfill({ json: { enabled: false, authenticated: false } })
+      case '/api/v1/goals':
+        return route.fulfill({ json: [] })
+      case '/api/v1/system/ssh':
+        return route.fulfill({
+          json: {
+            keys: [{ name: 'id_ed25519.pub', value: 'ssh-ed25519 example' }]
+          }
+        })
+      case '/api/v1/system/mcp':
+        if (request.method() === 'POST') {
+          const { action } = request.postDataJSON() as { action: string }
+          if (action === 'token')
+            return route.fulfill({ json: { token: 'test-token' } })
+          managed = action === 'start'
+        }
+        return route.fulfill({
+          json: { running: managed, managed, url: 'http://127.0.0.1:17391/mcp' }
+        })
+      default:
+        return route.fulfill({
+          status: 503,
+          json: { error: '测试中未启用其他服务' }
+        })
+    }
+  })
+  await page.goto('/dashboard/robot')
+  const menuTrigger = page.getByRole('button', { name: '操作', exact: true })
+  const menu = page.getByRole('region', { name: '操作菜单' })
+  const shortcut = async (name: string) => {
+    await menuTrigger.click()
+    await menu.getByRole('button', { name, exact: true }).click()
+    await expect(menu).toBeHidden()
+  }
+
+  await shortcut('通用')
+  await expect(
+    page.getByRole('checkbox', { name: /开发模式/ })
+  ).not.toBeChecked()
+  await page.getByRole('button', { name: '关闭设置', exact: true }).click()
+  await shortcut('SSH 管理')
+  await expect(page.getByRole('heading', { name: 'SSH 管理' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '复制公钥' })).toBeVisible()
+  await page.getByRole('button', { name: '关闭设置', exact: true }).click()
+  await shortcut('MCP')
+  await expect(
+    page.getByRole('heading', { name: 'MCP', exact: true })
+  ).toBeVisible()
+  await page.getByRole('button', { name: '启动 HTTP 服务' }).click()
+  await expect(
+    page.getByText('MCP HTTP 服务正在运行', { exact: true })
+  ).toBeVisible()
+  await page.getByRole('button', { name: '显示连接令牌' }).click()
+  await expect(
+    page.getByRole('textbox', { name: '连接令牌', exact: true })
+  ).toHaveValue('test-token')
+  await page.getByRole('button', { name: '停止 HTTP 服务' }).click()
+  await expect(
+    page.getByText('MCP HTTP 服务已停止', { exact: true })
+  ).toBeVisible()
+  await expect(
+    page.getByRole('textbox', { name: '连接令牌', exact: true })
+  ).toBeHidden()
+})
+
+test('empty robot workspace opens the new robot wizard', async ({ page }) => {
+  await page.route('**/api/v1/**', route => {
+    const path = new URL(route.request().url()).pathname
+    if (path === '/api/v1/auth/status')
+      return route.fulfill({ json: { enabled: false, authenticated: false } })
+    if (path === '/api/v1/checks')
+      return route.fulfill({ json: { checks: [] } })
+    if (path === '/api/v1/goals')
+      return route.fulfill({
+        json: [
+          {
+            id: 'install',
+            title: '安装机器人',
+            description: '用推荐默认配置创建机器人',
+            steps: ['环境检查', '机器人名称与位置', '确认安装']
+          }
+        ]
+      })
+    return route.fulfill({ status: 503, json: { error: '测试中未启用此服务' } })
+  })
+  await page.goto('/dashboard/robot')
+  await expect(
+    page.getByRole('heading', { name: '开始管理你的机器人' })
+  ).toBeVisible()
+  await page.getByRole('button', { name: '立即全新创建' }).click()
+  await expect(page).toHaveURL(/\/guide\/install\/step\/1$/)
+  await expect(
+    page.getByRole('heading', { name: '你的环境都准备好了吗' })
+  ).toBeVisible()
+})

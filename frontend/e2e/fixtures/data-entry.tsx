@@ -14,6 +14,7 @@ createRoot(document.getElementById('root')!).render(
         checking={false}
         error=""
         defaultPage="robot"
+        onCreateRobot={noop}
         onOpenGuide={noop}
         onOpenSettings={noop}
         onClearError={noop}

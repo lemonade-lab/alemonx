@@ -260,7 +260,7 @@ This is a deliberate security boundary: every modifying operation requires your 
 
 **Q16: Codex cannot connect to MCP?**
 
-First run `command -v alx` to confirm `alx` is on PATH. For stdio, use launch command `alx` with arguments `mcp`; for Streamable HTTP, set `MCP_TOKEN` and start `alx mcp-http`, then use `http://127.0.0.1:17391/mcp`. Optionally set `MCP_ALLOWED_ROOTS` to limit manageable directories.
+Open **Settings → MCP** to start the Streamable HTTP service and copy the connection address and Bearer token. For STDIO, enter the command `alx` and argument `mcp` so the client can start the process. Optionally set `MCP_ALLOWED_ROOTS` to limit manageable directories.
 
 **Q17: What can the AI do to my robots, and what not?**
 

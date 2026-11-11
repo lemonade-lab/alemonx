@@ -1,6 +1,5 @@
-import { useStoreState } from '../store/guideStore'
 import { Moon, Sun } from 'lucide-react'
-import { useEffect } from 'react'
+import { useSyncExternalStore } from 'react'
 import { Button } from './Button'
 
 type Theme = 'light' | 'dark'
@@ -14,17 +13,32 @@ function preferredTheme(): Theme {
     : 'light'
 }
 
-export function ThemeToggle({ menuItem = false }: { menuItem?: boolean }) {
-  const [theme, setTheme] = useStoreState<Theme>(() => preferredTheme())
-  useEffect(() => {
-    document.documentElement.dataset.theme = theme
-    document.documentElement.style.colorScheme = theme
-    window.localStorage.setItem(key, theme)
-  }, [theme])
+const themeEvent = 'alx:theme-changed'
+
+function subscribeToTheme(onChange: () => void) {
+  window.addEventListener(themeEvent, onChange)
+  return () => window.removeEventListener(themeEvent, onChange)
+}
+
+function setTheme(theme: Theme) {
+  document.documentElement.dataset.theme = theme
+  document.documentElement.style.colorScheme = theme
+  window.localStorage.setItem(key, theme)
+  window.dispatchEvent(new Event(themeEvent))
+}
+
+export function ThemeToggle({
+  menuItem = false,
+  embedded = false
+}: {
+  menuItem?: boolean
+  embedded?: boolean
+}) {
+  const theme = useSyncExternalStore(subscribeToTheme, preferredTheme)
   const next = theme === 'dark' ? 'light' : 'dark'
   return (
     <Button
-      variant="icon"
+      variant={embedded ? 'secondary' : 'icon'}
       className={menuItem ? 'workbench-action-item' : undefined}
       onClick={() => setTheme(next)}
       aria-label={`切换到${next === 'dark' ? '暗色' : '亮色'}主题`}
@@ -35,7 +49,7 @@ export function ThemeToggle({ menuItem = false }: { menuItem?: boolean }) {
       ) : (
         <Moon className="size-4" />
       )}
-      {menuItem && (
+      {(menuItem || embedded) && (
         <span>{`切换到${next === 'dark' ? '暗色' : '亮色'}主题`}</span>
       )}
     </Button>

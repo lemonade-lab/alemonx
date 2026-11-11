@@ -320,7 +320,7 @@ func main() {
 	if err := system.ConfigurePrivilegedMode(host, strings.EqualFold(strings.TrimSpace(os.Getenv("ALX_DEPLOYMENT")), "production")); err != nil {
 		log.Fatal(err)
 	}
-	serve(host, port, redisPort, redisOff, workspaceRoot)
+	serve(host, port, redisPort, mcpPort, redisOff, workspaceRoot)
 }
 
 func authCommand(arguments []string, confirmed bool, account, password, confirmation string, passwordStdin bool) {
@@ -484,8 +484,8 @@ func redisCommand(arguments []string, workbenchPort, account, password string) {
 	fmt.Printf("Redis：%s\n地址：%s\n%s\n", state, result.Address, result.Message)
 }
 
-func serve(host, port, redisPort string, redisOff bool, workspaceRoot string) {
-	options := web.ServerOptions{RedisDisabled: redisOff, WorkspaceRoot: workspaceRoot, FrontendBuild: FrontendBuild}
+func serve(host, port, redisPort, mcpPort string, redisOff bool, workspaceRoot string) {
+	options := web.ServerOptions{RedisDisabled: redisOff, WorkspaceRoot: workspaceRoot, FrontendBuild: FrontendBuild, MCPPort: mcpPort, MCPPolicy: mcpPolicy()}
 	if strings.TrimSpace(redisPort) != "" {
 		if value, err := strconv.Atoi(strings.TrimSpace(redisPort)); err == nil {
 			options.RedisPort = value

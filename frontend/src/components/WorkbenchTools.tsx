@@ -3,7 +3,11 @@ import { MoreHorizontal } from 'lucide-react'
 import { useStoreState } from '../store/guideStore'
 import { useViewportPopoverPosition } from '../hooks/useViewportPopoverPosition'
 
-export function WorkbenchTools({ children }: { children: ReactNode }) {
+export function WorkbenchTools({
+  children
+}: {
+  children: ReactNode | ((close: () => void) => ReactNode)
+}) {
   const [open, setOpen] = useStoreState(false)
   const id = useId()
   const root = useRef<HTMLDivElement>(null)
@@ -55,7 +59,11 @@ export function WorkbenchTools({ children }: { children: ReactNode }) {
         aria-label="操作菜单"
         hidden={!open}
         style={style}
-        className="workbench-tools-menu"
+        className={
+          typeof children === 'function'
+            ? 'workbench-tools-menu workbench-settings-menu'
+            : 'workbench-tools-menu'
+        }
         onKeyDown={event => {
           if (event.key !== 'Escape' || event.defaultPrevented) return
           const expanded = menu.current?.querySelector<HTMLButtonElement>(
@@ -74,7 +82,7 @@ export function WorkbenchTools({ children }: { children: ReactNode }) {
           }
         }}
       >
-        {children}
+        {typeof children === 'function' ? open && children(close) : children}
       </div>
     </div>
   )

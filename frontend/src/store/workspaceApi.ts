@@ -579,6 +579,8 @@ export type PythonRuntimeStatus = {
   activeVersion?: string
 }
 
+type SystemMcpStatus = { running: boolean; managed: boolean; url: string }
+
 export const workspaceApi = createApi({
   reducerPath: 'workspaceApi',
   baseQuery: fetchBaseQuery({ baseUrl: '/api/v1/' }),
@@ -598,7 +600,8 @@ export const workspaceApi = createApi({
     'EnvironmentReport',
     'SystemNetwork',
     'DependencySources',
-    'SystemRedis'
+    'SystemRedis',
+    'SystemMcp'
   ],
   endpoints: build => ({
     openDSHWeb: build.mutation<{ url: string }, string>({
@@ -821,8 +824,13 @@ export const workspaceApi = createApi({
       },
       invalidatesTags: ['SetupPlugins']
     }),
-    systemMcp: build.query<{ running: boolean }, void>({
-      query: () => 'system/mcp'
+    systemMcp: build.query<SystemMcpStatus, void>({
+      query: () => 'system/mcp',
+      providesTags: ['SystemMcp']
+    }),
+    controlSystemMcp: build.mutation<SystemMcpStatus, 'start' | 'stop'>({
+      query: action => ({ url: 'system/mcp', method: 'POST', body: { action } }),
+      invalidatesTags: ['SystemMcp']
     }),
     nvmNodeStatus: build.query<NVMNodeStatus, void>({
       query: () => 'system/node/nvm',
@@ -932,14 +940,14 @@ export const workspaceApi = createApi({
         method: 'POST'
       })
     }),
-    previewSystemNetwork: build.mutation<
-      { task: string },
-      { target: string; settings: SystemNetworkSettings }
+    testSystemNetworkMirror: build.mutation<
+      { ok: boolean; latencyMs: number; message: string },
+      { target: string; mirror: string }
     >({
-      query: ({ target, settings }) => ({
-        url: `system/network?${new URLSearchParams({ action: 'preview', target })}`,
+      query: body => ({
+        url: 'system/network?action=test-mirror',
         method: 'POST',
-        body: networkConfigBody(settings)
+        body
       })
     }),
     testSystemNetwork: build.mutation<
@@ -1472,6 +1480,7 @@ export const {
   useLazySetupPluginDevelopmentLogsQuery,
   useUploadSetupPluginArchiveMutation,
   useSystemMcpQuery,
+  useControlSystemMcpMutation,
   useNvmNodeStatusQuery,
   useManageNVMNodeMutation,
   usePythonRuntimeStatusQuery,
@@ -1487,7 +1496,7 @@ export const {
   useTestSystemNetworkMutation,
   useSystemNetworkStatusQuery,
   useDetectSystemNetworkMutation,
-  usePreviewSystemNetworkMutation,
+  useTestSystemNetworkMirrorMutation,
   useControlSystemRedisMutation,
   useSaveSystemRedisConfigMutation,
   useSetSystemCurrentRobotMutation,

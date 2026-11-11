@@ -11,13 +11,21 @@ import {
 import { useCallback, useEffect } from 'react'
 import { ConfirmDialog } from './ConfirmDialog'
 import { Button } from './Button'
+import { SettingsCard, SettingsMessage, SettingsPage } from './SettingsCard'
 import { useWorkbenchSubmenu } from './WorkbenchTools'
 
 type SSHKey = { name: string; value: string }
 
-export function SSHControl({ menuItem = false }: { menuItem?: boolean }) {
+export function SSHControl({
+  menuItem = false,
+  embedded = false
+}: {
+  menuItem?: boolean
+  embedded?: boolean
+}) {
   const [open, setOpen] = useStoreState(false)
   const submenu = useWorkbenchSubmenu(menuItem, open)
+  const [loadError, setLoadError] = useStoreState('')
   const [keys, setKeys] = useStoreState<SSHKey[]>([])
   const [loading, setLoading] = useStoreState(false)
   const [busy, setBusy] = useStoreState(false)
@@ -25,6 +33,7 @@ export function SSHControl({ menuItem = false }: { menuItem?: boolean }) {
   const [confirmGenerate, setConfirmGenerate] = useStoreState(false)
   const load = useCallback(async () => {
     setLoading(true)
+    setLoadError('')
     try {
       const response = await fetch('/api/v1/system/ssh')
       const data = (await response.json()) as {
@@ -35,16 +44,16 @@ export function SSHControl({ menuItem = false }: { menuItem?: boolean }) {
       setKeys(data.keys ?? [])
       setMessage('')
     } catch (reason) {
-      setMessage(
+      setLoadError(
         reason instanceof Error ? reason.message : '无法读取 SSH 公钥。'
       )
     } finally {
       setLoading(false)
     }
-  }, [setKeys, setLoading, setMessage])
+  }, [setKeys, setLoadError, setLoading, setMessage])
   useEffect(() => {
-    if (open) void load()
-  }, [open, load])
+    if (open || embedded) void load()
+  }, [embedded, open, load])
   useEffect(() => {
     const closeWhenAnotherToolOpens = (event: Event) => {
       if ((event as CustomEvent<string>).detail !== 'ssh') setOpen(false)
@@ -76,6 +85,151 @@ export function SSHControl({ menuItem = false }: { menuItem?: boolean }) {
     } catch {
       setMessage('复制失败，请手动复制公钥。')
     }
+  }
+  const content = (
+    <div className="grid gap-2.5">
+      {loading ? (
+        <p className="m-0 text-xs text-(--theme-text-muted)">
+          正在读取 SSH 公钥…
+        </p>
+      ) : loadError ? (
+        <SettingsMessage tone="error">{loadError}</SettingsMessage>
+      ) : keys.length ? (
+        <div className="grid gap-2">
+          {keys.map(key => (
+            <article
+              className="grid min-w-0 gap-2 rounded-lg border border-(--theme-border-default) bg-(--theme-surface-panel) p-2.5"
+              key={key.name}
+            >
+              <strong className="text-xs text-(--theme-text-primary)">
+                {key.name}
+              </strong>
+              <input
+                aria-label={`${key.name} 公钥`}
+                className="min-w-0 rounded border border-(--theme-border-default) bg-(--theme-surface-panel) p-2 font-mono text-xs"
+                value={key.value}
+                readOnly
+                onFocus={event => event.target.select()}
+              />
+              <Button
+                variant="secondary"
+                className="gap-1.5 justify-self-end"
+                onClick={() => void copy(key.value)}
+              >
+                <Copy className="size-3.5" />
+                复制公钥
+              </Button>
+            </article>
+          ))}
+        </div>
+      ) : (
+        <section className="grid gap-1.5 rounded-lg border border-dashed border-(--theme-border-default) bg-(--theme-surface-panel) p-3.5 text-center">
+          <strong className="text-xs text-(--theme-text-primary)">
+            还没有 SSH 公钥
+          </strong>
+          <span className="text-[11px] leading-4 text-(--theme-text-muted)">
+            生成后可添加到 GitHub、Gitee 等代码托管平台。
+          </span>
+          <Button
+            variant="primary"
+            className="gap-1.5 justify-self-end"
+            disabled={busy}
+            onClick={() => setConfirmGenerate(true)}
+          >
+            <Plus className="size-3.5" />
+            生成 Ed25519 密钥
+          </Button>
+        </section>
+      )}
+      <section
+        className="grid gap-1.5 border-t border-(--theme-border-default) pt-2.5"
+        aria-label="添加 SSH 公钥教程"
+      >
+        <strong className="text-xs text-(--theme-text-primary)">
+          下一步：添加公钥到代码平台
+        </strong>
+        <span className="text-[11px] leading-4 text-(--theme-text-muted)">
+          粘贴公钥并保存后，即可使用 SSH 克隆和推送。
+        </span>
+        <div className="flex gap-2">
+          <a
+            className="inline-flex items-center gap-1 text-[11px] font-semibold text-brand-600 hover:underline"
+            href="https://github.com/settings/keys"
+            target="_blank"
+            rel="noreferrer"
+          >
+            GitHub 添加公钥 <ExternalLink className="size-3" />
+          </a>
+          <a
+            className="text-[11px] font-semibold text-brand-600 hover:underline"
+            href="https://docs.github.com/en/authentication/connecting-to-github-with-ssh/adding-a-new-ssh-key-to-your-github-account"
+            target="_blank"
+            rel="noreferrer"
+          >
+            教程
+          </a>
+        </div>
+        <div className="flex gap-2">
+          <a
+            className="inline-flex items-center gap-1 text-[11px] font-semibold text-brand-600 hover:underline"
+            href="https://gitee.com/profile/sshkeys"
+            target="_blank"
+            rel="noreferrer"
+          >
+            Gitee 添加公钥 <ExternalLink className="size-3" />
+          </a>
+          <a
+            className="text-[11px] font-semibold text-brand-600 hover:underline"
+            href="https://gitee.com/help/articles/4181"
+            target="_blank"
+            rel="noreferrer"
+          >
+            教程
+          </a>
+        </div>
+      </section>
+      {message && (
+        <small
+          className={`text-[11px] ${message.includes('失败') || message.includes('无法') ? 'text-orange-700' : 'text-(--theme-text-muted)'}`}
+        >
+          {message}
+        </small>
+      )}
+      <footer className="flex justify-end border-t border-(--theme-border-default) pt-2">
+        <Button
+          variant="icon"
+          onClick={() => void load()}
+          disabled={loading || busy}
+          aria-label="刷新 SSH 公钥"
+          title="刷新"
+        >
+          <RefreshCw className="size-4" />
+        </Button>
+      </footer>
+    </div>
+  )
+  const confirmation = (
+    <ConfirmDialog
+      open={confirmGenerate}
+      title="生成 SSH 密钥"
+      subtitle="将只在本机生成一对 Ed25519 密钥。私钥不会上传、展示或写入项目。"
+      message="生成后请复制公钥并添加到 GitHub、Gitee 等代码托管平台，才能使用 SSH 地址拉取或推送仓库。"
+      confirmLabel="生成密钥"
+      busy={busy}
+      onCancel={() => setConfirmGenerate(false)}
+      onConfirm={() => {
+        setConfirmGenerate(false)
+        void generate()
+      }}
+    />
+  )
+  if (embedded) {
+    return (
+      <SettingsPage title="SSH 管理">
+        <SettingsCard title="本机 SSH 公钥">{content}</SettingsCard>
+        {confirmation}
+      </SettingsPage>
+    )
   }
   return (
     <div className="relative" ref={submenu.root}>
@@ -130,126 +284,10 @@ export function SSHControl({ menuItem = false }: { menuItem?: boolean }) {
               <X className="size-4" />
             </Button>
           </header>
-          {loading ? (
-            <p className="m-0 text-xs text-slate-500">正在读取 SSH 公钥…</p>
-          ) : keys.length ? (
-            <div className="grid gap-2">
-              {keys.map(key => (
-                <article
-                  className="flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 p-2.5"
-                  key={key.name}
-                >
-                  <strong className="text-xs text-slate-700">{key.name}</strong>
-                  <Button
-                    variant="secondary"
-                    className="gap-1.5 justify-self-end"
-                    onClick={() => void copy(key.value)}
-                  >
-                    <Copy className="size-3.5" />
-                    复制公钥
-                  </Button>
-                </article>
-              ))}
-            </div>
-          ) : (
-            <section className="grid gap-1.5 rounded-lg border border-dashed border-slate-300 bg-slate-50 p-3.5 text-center">
-              <strong className="text-xs text-slate-700">
-                还没有 SSH 公钥
-              </strong>
-              <span className="text-[11px] leading-4 text-slate-500">
-                生成后可添加到 GitHub、Gitee 等代码托管平台。
-              </span>
-              <Button
-                variant="primary"
-                className="gap-1.5 justify-self-end"
-                disabled={busy}
-                onClick={() => setConfirmGenerate(true)}
-              >
-                <Plus className="size-3.5" />
-                生成 Ed25519 密钥
-              </Button>
-            </section>
-          )}
-          <section
-            className="grid gap-1.5 border-t border-slate-100 pt-2.5"
-            aria-label="添加 SSH 公钥教程"
-          >
-            <strong className="text-xs text-slate-700">
-              下一步：添加公钥到代码平台
-            </strong>
-            <span className="text-[11px] leading-4 text-slate-500">
-              粘贴公钥并保存后，即可使用 SSH 克隆和推送。
-            </span>
-            <div className="flex gap-2">
-              <a
-                className="inline-flex items-center gap-1 text-[11px] font-semibold text-brand-600 hover:underline"
-                href="https://github.com/settings/keys"
-                target="_blank"
-                rel="noreferrer"
-              >
-                GitHub 添加公钥 <ExternalLink className="size-3" />
-              </a>
-              <a
-                className="text-[11px] font-semibold text-brand-600 hover:underline"
-                href="https://docs.github.com/en/authentication/connecting-to-github-with-ssh/adding-a-new-ssh-key-to-your-github-account"
-                target="_blank"
-                rel="noreferrer"
-              >
-                教程
-              </a>
-            </div>
-            <div className="flex gap-2">
-              <a
-                className="inline-flex items-center gap-1 text-[11px] font-semibold text-brand-600 hover:underline"
-                href="https://gitee.com/profile/sshkeys"
-                target="_blank"
-                rel="noreferrer"
-              >
-                Gitee 添加公钥 <ExternalLink className="size-3" />
-              </a>
-              <a
-                className="text-[11px] font-semibold text-brand-600 hover:underline"
-                href="https://gitee.com/help/articles/4181"
-                target="_blank"
-                rel="noreferrer"
-              >
-                教程
-              </a>
-            </div>
-          </section>
-          {message && (
-            <small
-              className={`text-[11px] ${message.includes('失败') || message.includes('无法') ? 'text-orange-700' : 'text-slate-500'}`}
-            >
-              {message}
-            </small>
-          )}
-          <footer className="flex justify-end border-t border-slate-100 pt-2">
-            <Button
-              variant="icon"
-              onClick={() => void load()}
-              disabled={loading}
-              aria-label="刷新 SSH 公钥"
-              title="刷新"
-            >
-              <RefreshCw className="size-4" />
-            </Button>
-          </footer>
+          {content}
         </section>
       )}
-      <ConfirmDialog
-        open={confirmGenerate}
-        title="生成 SSH 密钥"
-        subtitle="将只在本机生成一对 Ed25519 密钥。私钥不会上传、展示或写入项目。"
-        message="生成后请复制公钥并添加到 GitHub、Gitee 等代码托管平台，才能使用 SSH 地址拉取或推送仓库。"
-        confirmLabel="生成密钥"
-        busy={busy}
-        onCancel={() => setConfirmGenerate(false)}
-        onConfirm={() => {
-          setConfirmGenerate(false)
-          void generate()
-        }}
-      />
+      {confirmation}
     </div>
   )
 }

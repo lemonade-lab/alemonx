@@ -8,7 +8,7 @@ const definitions = [
   {
     id: 'github-api',
     label: 'GitHub API',
-    probe: 'https://api.github.com/',
+    probe: 'https://api.github.com/repos/lemonade-lab/alemonx/releases?per_page=30',
     mirrors: true
   },
   {
@@ -28,7 +28,15 @@ const defaults = (): SystemNetworkSettings => ({
   version: 2,
   revision: 0,
   mode: 'auto',
-  automatic: { groups: definitions.map(d => ({ id: d.id, candidates: [] })) },
+  automatic: {
+    groups: definitions.map(d => ({
+      id: d.id,
+      candidates:
+        d.id === 'github-api'
+          ? ['https://gh-proxy.org/{url}', 'https://gh-proxy.com/{url}']
+          : []
+    }))
+  },
   proxy: { url: '' }
 })
 
@@ -37,8 +45,7 @@ async function openNetwork(page: Page, initial = defaults()) {
   let fail = false
   let checks = 0
   let pending = false
-  let preview = false
-  let draft = initial
+  const mirrorTests: { target: string; mirror: string }[] = []
   const writes: SystemNetworkSettings[] = []
   const status = (config = state): SystemNetworkStatus => ({
     revision: config.revision,
@@ -85,19 +92,19 @@ async function openNetwork(page: Page, initial = defaults()) {
         pending = true
         return route.fulfill({ status: 202, json: status() })
       }
-      if (url.searchParams.get('action') === 'preview') {
-        preview = true
-        pending = true
-        draft = req.postDataJSON()
-        return route.fulfill({ status: 202, json: { task: 'draft' } })
+      if (url.searchParams.get('action') === 'test-mirror') {
+        mirrorTests.push(req.postDataJSON())
+        return route.fulfill({
+          json: { ok: true, message: '可用', latencyMs: 25 }
+        })
       }
       return route.fulfill({
         json: { ok: true, message: '连接正常', latencyMs: 12 }
       })
     }
-    if (url.searchParams.has('view') || url.searchParams.has('task')) {
+    if (url.searchParams.has('view')) {
       checks++
-      const value = status(url.searchParams.has('task') ? draft : state)
+      const value = status()
       pending = false
       return route.fulfill({ json: value })
     }
@@ -119,7 +126,7 @@ async function openNetwork(page: Page, initial = defaults()) {
       fail = true
     },
     checks: () => checks,
-    preview: () => preview
+    mirrorTests
   }
 }
 
@@ -196,28 +203,36 @@ test('proxy credentials are transient and save failures retain inline inputs', a
   await expect(dialog.getByLabel('密码', { exact: true })).toHaveValue('')
 })
 
-test('candidate preview is asynchronous, does not save, and updates inside its dialog', async ({
+test('tests one draft mirror and saves the chosen order independently', async ({
   page
 }) => {
   const calls = await openNetwork(page)
-  await page.getByRole('button', { name: '配置 NPM', exact: true }).click()
-  const dialog = page.getByRole('dialog', { name: '配置 NPM' })
-  await expect(dialog.getByText('官方地址 · 固定')).toBeVisible()
-  await dialog.getByRole('button', { name: '添加入口' }).click()
+  await page
+    .getByRole('button', { name: '配置 GitHub API', exact: true })
+    .click()
+  const dialog = page.getByRole('dialog', { name: '配置 GitHub API' })
+  await expect(dialog.getByText('官方源 · 最后回退')).toBeVisible()
+  await expect(
+    dialog.getByRole('textbox', { name: '镜像 1', exact: true })
+  ).toHaveValue('https://gh-proxy.org/{url}')
+  await dialog.getByRole('button', { name: '上移镜像 2' }).click()
   await dialog
-    .getByRole('textbox', { name: '候选入口 1', exact: true })
-    .fill('https://mirror.example/{path}')
-  await dialog.getByRole('button', { name: '测试候选' }).click()
-  await expect.poll(calls.preview).toBeTruthy()
-  await expect(dialog.getByRole('status').last()).toContainText('可用', {
-    timeout: 6000
-  })
+    .getByRole('textbox', { name: '镜像 2', exact: true })
+    .fill('https://mirror.example')
+  await dialog.getByRole('button', { name: '测试镜像 2' }).click()
+  await expect(
+    dialog.getByRole('group', { name: '镜像 2' }).getByRole('status')
+  ).toContainText('可用')
+  expect(calls.mirrorTests).toEqual([
+    { target: 'github-api', mirror: 'https://mirror.example' }
+  ])
   expect(calls.writes).toHaveLength(0)
   await dialog.getByRole('button', { name: '保存并应用' }).click()
   await expect(dialog).toHaveCount(0)
   expect(
-    calls.writes[0].automatic.groups.find(g => g.id === 'npm')?.candidates
-  ).toEqual(['https://mirror.example/{path}'])
+    calls.writes[0].automatic.groups.find(g => g.id === 'github-api')
+      ?.candidates
+  ).toEqual(['https://gh-proxy.com/{url}', 'https://mirror.example'])
 })
 
 test('detection feedback stays on the group and polling stops when complete', async ({
@@ -225,7 +240,7 @@ test('detection feedback stays on the group and polling stops when complete', as
 }) => {
   const calls = await openNetwork(page)
   const row = page.getByRole('group', { name: 'NPM', exact: true })
-  await row.getByRole('button', { name: '重新检测 NPM' }).click()
+  await row.getByRole('button', { name: '重新选路 NPM' }).click()
   await expect(row.getByRole('status')).toContainText('检测中')
   await expect(row.getByRole('status')).toContainText('可用', { timeout: 6000 })
   const checks = calls.checks()
@@ -298,7 +313,7 @@ test('saving a proxy switches the global mode and editing clears obsolete test f
     'localhost'
   )
   await expect(dialog.getByLabel('端口', { exact: true })).toHaveValue('7891')
-  await expect(page.getByRole('region', { name: '自动选路' })).toHaveCount(0)
+  await expect(page.getByRole('region', { name: '镜像配置' })).toHaveCount(0)
   expect(calls.writes[0].mode).toBe('proxy')
 })
 

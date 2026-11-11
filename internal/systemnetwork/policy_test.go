@@ -146,18 +146,18 @@ func TestV2DetectionSingleflightCacheStabilityCooldown(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			state, err := m.selected(context.Background(), c, g)
-			if err != nil || state.Current != "official" {
-				t.Error("official tie preference", state, err)
+			if err != nil || state.Current != g.Candidates[0] {
+				t.Error("configured order", state, err)
 			}
 		}()
 	}
 	wg.Wait()
-	if calls.Load() != 4 || maximum.Load() > 3 {
+	if calls.Load() != 1 || maximum.Load() > 3 {
 		t.Fatal("duplicate/unbounded probes", calls.Load(), maximum.Load())
 	}
-	m.failCandidate(c, g, "official")
+	m.failCandidate(c, g, g.Candidates[0])
 	state, err := m.selected(context.Background(), c, g)
-	if err != nil || state.Current == "official" {
+	if err != nil || state.Current != g.Candidates[1] {
 		t.Fatal("cooldown ignored", state, err)
 	}
 	stable := state.Current
@@ -218,14 +218,14 @@ func TestV2AutoFailsOverButNeverMirrorsPrivateOrWrites(t *testing.T) {
 	var hosts []string
 	transport := &snapshotTransport{manager: m, config: c, base: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		hosts = append(hosts, r.URL.Hostname())
-		if r.URL.Hostname() == "registry.npmjs.org" {
-			return responseFor(r, 503), nil
+		if r.URL.Hostname() == "mirror.test" {
+			return responseFor(r, 403), nil
 		}
 		return responseFor(r, 200), nil
 	})}
 	req, _ := http.NewRequest("GET", "https://registry.npmjs.org/npm", nil)
 	response, err := transport.RoundTrip(req)
-	if err != nil || response.StatusCode != 200 || strings.Join(hosts, ",") != "registry.npmjs.org,mirror.test" {
+	if err != nil || response.StatusCode != 200 || strings.Join(hosts, ",") != "mirror.test,registry.npmjs.org" {
 		t.Fatal(hosts, err)
 	}
 	response.Body.Close()
@@ -259,6 +259,88 @@ func TestV2AutoFailsOverButNeverMirrorsPrivateOrWrites(t *testing.T) {
 	broken := &Manager{config: &c, probe: func(_ GroupDefinition, e string) CandidateState { return CandidateState{URL: e} }}
 	if _, err = broken.selected(context.Background(), c, groupConfig(c, "npm")); err == nil {
 		t.Fatal("all failure silently succeeded")
+	}
+}
+
+func TestPublicGitHubPaginationUsesOrderedMirrors(t *testing.T) {
+	c := testConfig("auto")
+	for i, group := range c.Automatic.Groups {
+		if group.ID == "github-api" {
+			c.Automatic.Groups[i].Candidates = []string{"https://one.test{path}", "https://two.test/{url}"}
+		}
+	}
+	m := &Manager{config: &c, probe: goodProbe}
+	var hosts []string
+	transport := &snapshotTransport{manager: m, config: c, base: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		host := r.URL.Hostname()
+		hosts = append(hosts, host)
+		if host == "api.github.com" {
+			return responseFor(r, 200), nil
+		}
+		if r.URL.Query().Get("per_page") != "30" {
+			t.Fatalf("pagination lost at %s", host)
+		}
+		return responseFor(r, 403), nil
+	})}
+	req, _ := http.NewRequest("GET", "https://api.github.com/repos/cli/cli/releases?per_page=30", nil)
+	req.Header.Set("Cache-Control", "no-cache")
+	req.Header.Set("Pragma", "no-cache")
+	res, err := transport.RoundTrip(req)
+	if err != nil || strings.Join(hosts, ",") != "one.test,two.test,api.github.com" {
+		t.Fatal(hosts, err)
+	}
+	res.Body.Close()
+	hosts = nil
+	req.URL.RawQuery = "per_page=30&access_token=secret"
+	res, err = transport.RoundTrip(req)
+	if err != nil || strings.Join(hosts, ",") != "api.github.com" {
+		t.Fatal(hosts, err)
+	}
+	res.Body.Close()
+}
+
+func TestGitHubMirrorDefaultsAndSingleMirrorTest(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "network.json")
+	legacy := testConfig("auto")
+	legacy.MirrorDefaults = 0
+	raw, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	m, err := NewAt(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := m.Settings().Config
+	if len(groupConfig(*settings, "github-api").Candidates) < 2 {
+		t.Fatal("existing empty GitHub API configuration was not seeded")
+	}
+	var tested []string
+	m.probe = func(_ GroupDefinition, mirror string) CandidateState {
+		tested = append(tested, mirror)
+		return CandidateState{URL: mirror, OK: true}
+	}
+	result, err := m.TestMirror(context.Background(), "github-api", "https://mirror.test/api/")
+	if err != nil || !result.OK || strings.Join(tested, ",") != "https://mirror.test/api{path}" {
+		t.Fatal(tested, result, err)
+	}
+	for i, group := range settings.Automatic.Groups {
+		if group.ID == "github-api" {
+			settings.Automatic.Groups[i].Candidates = []string{}
+		}
+	}
+	if _, err := m.Save(Settings{Config: settings}); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := NewAt(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(groupConfig(*reloaded.ConfigSnapshot(), "github-api").Candidates) != 0 {
+		t.Fatal("explicitly cleared mirror list was repopulated")
 	}
 }
 

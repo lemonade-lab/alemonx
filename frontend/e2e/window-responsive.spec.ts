@@ -207,3 +207,86 @@ test('phone shell preserves reachable controls and localizes overflow', async ({
   // even when a platform-specific screenshot baseline is not available yet.
   expect((await fixture.screenshot()).byteLength).toBeGreaterThan(1_000)
 })
+
+test('robot workbench resizes both sides and restores their widths after reload', async ({
+  page
+}) => {
+  await page.setViewportSize({ width: 1280, height: 820 })
+  await page.route('**/robot-splitter-regression', route =>
+    route.fulfill({
+      contentType: 'text/html; charset=utf-8',
+      body: `<div id="root" style="container:workbench-window / inline-size; display:flex; height:600px"></div><script type="module">
+      import '/src/styles.css';
+      import RefreshRuntime from '/@react-refresh';
+      RefreshRuntime.injectIntoGlobalHook(window);
+      window.$RefreshReg$ = () => {};
+      window.$RefreshSig$ = () => type => type;
+      window.__vite_plugin_react_preamble_installed__ = true;
+      const { default: React } = await import('/node_modules/.vite/deps/react.js');
+      const { default: ReactDOM } = await import('/node_modules/.vite/deps/react-dom_client.js');
+      const { Provider } = await import('/node_modules/.vite/deps/react-redux.js');
+      const { store } = await import('/src/store/guideStore.ts');
+      const { RobotWorkspaceSplitter } = await import('/src/components/RobotWorkspaceSplitter.tsx');
+      ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(Provider, {store},
+        React.createElement(RobotWorkspaceSplitter, {list: '机器人列表', controls: '机器人面板'}, '工作区')));
+    </script>`
+    })
+  )
+  await page.goto('/robot-splitter-regression')
+  const width = async (label: string) =>
+    page
+      .getByText(label, { exact: true })
+      .evaluate(node => node.getBoundingClientRect().width)
+  const left = page.getByRole('separator', { name: '调整机器人列表宽度' })
+  const right = page.getByRole('separator', { name: '调整机器人面板宽度' })
+  const beforeList = await width('机器人列表')
+  const beforeControls = await width('机器人面板')
+  const beforeWorkspace = await width('工作区')
+  const drag = async (separator: typeof left, offset: number) => {
+    const handle = await separator
+      .locator('.ant-splitter-bar-dragger')
+      .boundingBox()
+    if (!handle) throw new Error('分隔条未渲染')
+    const x = handle.x + handle.width / 2
+    const y = handle.y + handle.height / 2
+    await page.mouse.move(x, y)
+    await page.mouse.down()
+    await page.mouse.move(x + offset, y, { steps: 5 })
+    await page.mouse.up()
+  }
+  await drag(left, 65)
+  await expect.poll(() => width('机器人列表')).toBeGreaterThan(beforeList + 40)
+  await expect.poll(() => width('工作区')).toBeLessThan(beforeWorkspace - 40)
+  await drag(right, -65)
+  await expect
+    .poll(() => width('机器人面板'))
+    .toBeGreaterThan(beforeControls + 40)
+  const draggedControls = await width('机器人面板')
+  await right.press('ArrowRight')
+  await expect
+    .poll(() => width('机器人面板'))
+    .toBeLessThan(draggedControls - 10)
+  const resizedList = await width('机器人列表')
+  const resizedControls = await width('机器人面板')
+  await expect
+    .poll(() => page.evaluate(() => JSON.stringify(localStorage)))
+    .toContain('workbench.splitter')
+  await page.reload()
+  await expect.poll(() => width('机器人列表')).toBe(resizedList)
+  await expect.poll(() => width('机器人面板')).toBe(resizedControls)
+
+  await page.setViewportSize({ width: 390, height: 820 })
+  await expect(left).toBeHidden()
+  await expect(right).toBeHidden()
+  const listBox = await page
+    .getByText('机器人列表', { exact: true })
+    .boundingBox()
+  const controlsBox = await page
+    .getByText('机器人面板', { exact: true })
+    .boundingBox()
+  const workspaceBox = await page
+    .getByText('工作区', { exact: true })
+    .boundingBox()
+  expect(listBox!.y).toBeLessThan(controlsBox!.y)
+  expect(controlsBox!.y).toBeLessThan(workspaceBox!.y)
+})

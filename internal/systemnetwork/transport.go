@@ -3,8 +3,11 @@ package systemnetwork
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/url"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -88,13 +91,67 @@ type snapshotTransport struct {
 func sensitiveRequest(r *http.Request) bool {
 	for name := range r.Header {
 		switch http.CanonicalHeaderKey(name) {
-		case "Accept", "Accept-Encoding", "User-Agent", "Range", "If-None-Match", "If-Modified-Since":
+		case "Accept", "Accept-Encoding", "User-Agent", "Range", "If-None-Match", "If-Modified-Since", "Cache-Control", "Pragma":
 		default:
 			return true
 		}
 	}
-	return r.Method != "GET" && r.Method != "HEAD" || r.Body != nil && r.Body != http.NoBody || r.Header.Get("Authorization") != "" || r.Header.Get("Cookie") != "" || r.URL.User != nil || r.URL.RawQuery != ""
+	return r.Method != "GET" && r.Method != "HEAD" || r.Body != nil && r.Body != http.NoBody || r.Header.Get("Authorization") != "" || r.Header.Get("Cookie") != "" || r.URL.User != nil || !publicQuery(r.URL)
 }
+
+// Only known numeric pagination on public GitHub API reads can leave the origin.
+func publicQuery(target *url.URL) bool {
+	if target.RawQuery == "" {
+		return true
+	}
+	if groupFor(target) != "github-api" {
+		return false
+	}
+	query, err := url.ParseQuery(target.RawQuery)
+	if err != nil {
+		return false
+	}
+	for key, values := range query {
+		if (key != "page" && key != "per_page") || len(values) != 1 {
+			return false
+		}
+		if value, err := strconv.ParseUint(values[0], 10, 32); err != nil || value == 0 {
+			return false
+		}
+	}
+	return true
+}
+
+type mirrorResponseBody struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (b mirrorResponseBody) Close() error {
+	defer b.cancel()
+	return b.ReadCloser.Close()
+}
+
+func roundTripMirror(base http.RoundTripper, request *http.Request) (*http.Response, error) {
+	ctx, cancel := context.WithCancel(request.Context())
+	// Limit the wait for a mirror to begin responding, while allowing a
+	// successful download to stream under the original caller deadline.
+	timer := time.AfterFunc(6*time.Second, cancel)
+	response, err := base.RoundTrip(request.WithContext(ctx))
+	if !timer.Stop() || err != nil {
+		cancel()
+		if response != nil {
+			response.Body.Close()
+		}
+		if err == nil {
+			err = context.DeadlineExceeded
+		}
+		return nil, err
+	}
+	response.Body = mirrorResponseBody{ReadCloser: response.Body, cancel: cancel}
+	return response, nil
+}
+
 func (t *snapshotTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	if t.config.Mode != "auto" || bypassProxy(r.URL) || sensitiveRequest(r) {
 		return t.base.RoundTrip(r)
@@ -105,27 +162,36 @@ func (t *snapshotTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	}
 	g := groupConfig(t.config, id)
 	// One bounded retry per eligible entry; writes and credentials never enter here.
-	for attempt := 0; attempt <= len(g.Candidates)+1; attempt++ {
+	for attempt := 0; attempt <= len(g.Candidates); attempt++ {
 		selected, err := t.manager.selected(r.Context(), t.config, g)
-		if err != nil {
+		if err != nil && !errors.Is(err, ErrNoCandidate) {
 			return nil, err
 		}
+		if err != nil || selected.Current == "official" {
+			return t.base.RoundTrip(r)
+		}
 		copy := r.Clone(r.Context())
-		if selected.Current != "official" {
-			copy.URL, err = rewriteMirrorURL(selected.Current, r.URL)
-			if err != nil {
-				return nil, err
-			}
-			copy.Host = ""
+		copy.URL, err = rewriteMirrorURL(selected.Current, r.URL)
+		if err != nil {
+			t.manager.failCandidate(t.config, g, selected.Current)
+			continue
 		}
-		response, err := t.base.RoundTrip(copy)
-		if response != nil && selected.Current != "official" && response.Header.Get("Location") != "" {
-			if location, e := copy.URL.Parse(response.Header.Get("Location")); e == nil {
-				response.Header.Set("Location", location.String())
+		copy.Host = ""
+		response, err := roundTripMirror(t.base, copy)
+		if err == nil {
+			code := response.StatusCode
+			usable := code >= 200 && code < 300 || code == http.StatusNotModified
+			if code >= 300 && code < 400 && code != http.StatusNotModified {
+				if value := response.Header.Get("Location"); value != "" {
+					if location, err := copy.URL.Parse(value); err == nil && groupFor(location) != id {
+						response.Header.Set("Location", location.String())
+						usable = true
+					}
+				}
 			}
-		}
-		if err == nil && response.StatusCode < 500 && response.StatusCode != 429 {
-			return response, nil
+			if usable && !(id == "github-api" && strings.Contains(response.Header.Get("Content-Type"), "text/html")) {
+				return response, nil
+			}
 		}
 		if response != nil {
 			response.Body.Close()
@@ -135,7 +201,7 @@ func (t *snapshotTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 		}
 		t.manager.failCandidate(t.config, g, selected.Current)
 	}
-	return nil, ErrNoCandidate
+	return t.base.RoundTrip(r)
 }
 func (m *Manager) PreviewConfig(ctx context.Context, input Config, target string) (CheckResult, error) {
 	prepared, err := m.saveConfig(input, true)
@@ -143,12 +209,13 @@ func (m *Manager) PreviewConfig(ctx context.Context, input Config, target string
 		return CheckResult{}, err
 	}
 	draft := &Manager{config: prepared.Config}
-	if d, ok := groupDefinition(target); ok {
+	if _, ok := groupDefinition(target); ok {
 		if prepared.Mode == "auto" {
-			state := probeGroup(groupConfig(*prepared.Config, target), nil, "")
-			return CheckResult{OK: state.State == "ready", Target: target, LatencyMS: state.LatencyMS, Message: map[bool]string{true: "连接正常", false: "没有可用入口"}[state.State == "ready"]}, nil
+			state := probeGroupWith(groupConfig(*prepared.Config, target), nil, func(d GroupDefinition, entry string) CandidateState {
+				return probeCandidateContext(ctx, d, entry)
+			})
+			return CheckResult{OK: state.State == "ready", Target: target, LatencyMS: state.LatencyMS, Message: map[bool]string{true: "连接正常", false: "没有可用镜像"}[state.State == "ready"]}, nil
 		}
-		_ = d
 	}
 	address := "https://api.github.com/"
 	if d, ok := groupDefinition(target); ok {
@@ -170,4 +237,26 @@ func (m *Manager) PreviewConfig(ctx context.Context, input Config, target string
 		result.Message = "连接正常"
 	}
 	return result, nil
+}
+
+// TestMirror checks exactly one draft mirror without changing routing state.
+func (m *Manager) TestMirror(ctx context.Context, id, entry string) (CandidateState, error) {
+	d, ok := groupDefinition(id)
+	if !ok {
+		return CandidateState{}, errors.New("请选择资源分类")
+	}
+	if entry != "official" {
+		if len(entry) > 2048 {
+			return CandidateState{}, errors.New("镜像地址过长")
+		}
+		var err error
+		entry, err = normalizeGroupMirror(id, entry)
+		if err != nil {
+			return CandidateState{}, err
+		}
+	}
+	if m.probe != nil {
+		return m.probe(d, entry), nil
+	}
+	return probeCandidateContext(ctx, d, entry), nil
 }

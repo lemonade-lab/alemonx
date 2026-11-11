@@ -30,20 +30,14 @@ ALemonX supports both standard MCP transports: **stdio** and **Streamable HTTP**
 
 ### Streamable HTTP
 
-For clients with a graphical "Streamable HTTP" form, first set a random `MCP_TOKEN` and start the protected loopback service:
-
-```bash
-MCP_TOKEN='<strong-random-value>' alx --mcp-port 17391 mcp-http
-```
-
-Fill in the form:
+In the ALemonX workbench, open **Settings → MCP**, choose **Start HTTP Service**, then **Show Connection Token**. On the computer running ALemonX, enter the displayed address and token in the client’s Streamable HTTP form. The listener stops when the workbench process exits and generates a new token each time it starts.
 
 | Field | Value |
 | --- | --- |
 | Name | `alemonx` |
 | Type | Streamable HTTP |
 | URL | `http://127.0.0.1:17391/mcp` |
-| Auth | `Bearer <MCP_TOKEN>` |
+| Auth | `Bearer <connection token>` |
 
 The endpoint implements the Streamable HTTP `POST /mcp` request/response mode; standalone SSE push streams do not apply to this control plane and `GET /mcp` is rejected with `405` per the spec. It validates `Origin`, protocol version, and the Bearer token, and never listens on LAN or public addresses.
 

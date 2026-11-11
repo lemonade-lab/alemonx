@@ -41,6 +41,7 @@ import (
 	"alemonx/internal/dsh"
 	"alemonx/internal/githubauth"
 	"alemonx/internal/logging"
+	"alemonx/internal/mcp"
 	"alemonx/internal/project"
 	"alemonx/internal/redis"
 	"alemonx/internal/releases"
@@ -389,6 +390,7 @@ type server struct {
 	eventGateway          *eventGateway
 	operationEvents       *OperationEventStore
 	opsEvents             *opsEventHub
+	mcpHTTP               managedMCP
 	mcpEvents             *mcpEventHub
 	mcpMonitorStop        chan struct{}
 	pluginEventsStop      chan struct{}
@@ -578,6 +580,7 @@ func (r *ServerRuntime) Shutdown(ctx context.Context) error {
 		if s.pluginDevelopment != nil {
 			s.pluginDevelopment.close()
 		}
+		s.shutdownMCP()
 		if s.mcpMonitorStop != nil {
 			select {
 			case <-s.mcpMonitorStop:
@@ -712,6 +715,9 @@ type ServerOptions struct {
 	// FrontendBuild identifies the web assets embedded in this binary. It is
 	// compared by the browser with its own compile-time marker after upgrades.
 	FrontendBuild string
+	// MCPPort and MCPPolicy apply to the workbench-managed loopback listener.
+	MCPPort   string
+	MCPPolicy mcp.Policy
 }
 
 func NewServerRuntime(version string, staticFiles fs.FS, templateFiles ...fs.FS) *ServerRuntime {
@@ -1031,7 +1037,6 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 			s.pluginWatcher = s.plugins.StartWatch(time.Minute)
 		}
 		s.startPluginEventBridge()
-		s.startMCPStatusMonitor()
 		s.startUpdateStatusMonitor()
 		if redisStatus := s.redisManager.Status(); redisStatus.AutoStart && !redisStatus.Disabled {
 			go func() {
@@ -1041,6 +1046,7 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 			}()
 		}
 	}
+	var mcpTemplates fs.FS
 	if len(templateFiles) > 0 {
 		// The embedded resources root contains the directory named "resources"
 		// itself, so templates live at "resources/templates".
@@ -1052,15 +1058,29 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 		if resourcesErr != nil {
 			panic(resourcesErr)
 		}
+		mcpTemplates = templates
 		layout, workspaceErr := workspace.Ensure(options.WorkspaceRoot, templates)
 		if workspaceErr != nil {
 			log.Printf("工作区初始化失败，项目模板回退为内嵌只读模板：%v", workspaceErr)
 			s.creator = project.NewCreator(templates)
 		} else {
 			s.workspace = layout
+			mcpTemplates = os.DirFS(layout.Templates())
 			resources.Init(resourcesRoot, layout)
 			s.creator = project.NewCreatorForWorkspace(os.DirFS(layout.Templates()), layout.Bots())
 		}
+	}
+	s.mcpHTTP.port = options.MCPPort
+	if s.mcpHTTP.port == "" {
+		s.mcpHTTP.port = "17391"
+	}
+	mcpWorkspace := s.workspace.Root
+	if mcpWorkspace == "" {
+		mcpWorkspace = options.WorkspaceRoot
+	}
+	s.mcpHTTP.handler = mcp.NewServerWithPolicyAndWorkspace(version, mcpTemplates, options.MCPPolicy, mcpWorkspace).HTTPHandler
+	if startBackground {
+		s.startMCPStatusMonitor()
 	}
 	s.workspaceRequested = options.WorkspaceRoot
 	s.dshRuntimes = newDSHRegistry(options.WorkspaceRoot)
@@ -2642,59 +2662,6 @@ func (s *server) sshHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// systemMCPHandler reports whether the local HTTP MCP server is actually
-// running, so the header control shows a real status instead of pretending the
-// service is always up. MCP is started manually via `alx mcp-http`.
-func (s *server) systemMCPHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"running": probeMCPRunning()})
-}
-
-// probeMCPRunning probes the default Streamable HTTP MCP endpoint. Any HTTP
-// response (even 401/404) means a server is listening; only a connection error
-// means the service is not running.
-func probeMCPRunning() bool {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1:17391/mcp", nil)
-	if err != nil {
-		return false
-	}
-	response, err := systemnetwork.DefaultClient(0).Do(request)
-	if err != nil {
-		return false
-	}
-	defer response.Body.Close()
-	return true
-}
-
-// startMCPStatusMonitor centralizes the unavoidable probe for an externally
-// started HTTP MCP process. Browsers receive changes through SSE instead of
-// each independently polling the endpoint.
-func (s *server) startMCPStatusMonitor() {
-	running := probeMCPRunning()
-	s.mcpEvents.set(running)
-	_, _ = s.publishEvent("system", "mcp.changed", map[string]any{"type": "mcp.changed", "running": running}, nil)
-	go func() {
-		ticker := time.NewTicker(5 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-s.mcpMonitorStop:
-				return
-			case <-ticker.C:
-				running := probeMCPRunning()
-				if s.mcpEvents.set(running) {
-					_, _ = s.publishEvent("system", "mcp.changed", map[string]any{"type": "mcp.changed", "running": running}, nil)
-				}
-			}
-		}
-	}()
-}
-
 // isManifestPasswordOperation identifies an installed system plugin's fixed
 // native operation. The manifest carries semantics; the host still owns the
 // password prompt, intent, timeout, process execution and audit lifecycle.
@@ -3655,6 +3622,25 @@ func (s *server) systemNetworkHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, 202, s.network.Status())
+		return
+	}
+	if r.Method == http.MethodPost && r.URL.Query().Get("action") == "test-mirror" {
+		var input struct {
+			Target string `json:"target"`
+			Mirror string `json:"mirror"`
+		}
+		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<10))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&input); err != nil {
+			writeError(w, 400, "镜像测试请求无效")
+			return
+		}
+		result, err := s.network.TestMirror(r.Context(), input.Target, input.Mirror)
+		if err != nil {
+			writeError(w, 400, err.Error())
+			return
+		}
+		writeJSON(w, 200, result)
 		return
 	}
 	var input systemnetwork.Config

@@ -12,6 +12,7 @@ import {
 import { useDispatch, useSelector } from 'react-redux'
 import { useLocation, useNavigate } from 'react-router-dom'
 import {
+  store,
   setDeveloper,
   setProject,
   toggleCapability as toggleCapabilityAction,
@@ -19,6 +20,8 @@ import {
 } from './store/guideStore'
 import { Dashboard } from './components/Dashboard'
 import { AppSettingsPanel } from './components/AppSettingsPanel'
+import type { SettingsSection } from './components/settingsSections'
+import { navigationKey, setNavigationValue } from './store/navigationStore'
 import { isWindowHeaderInteractiveTarget } from './components/desktopWindowInteraction'
 import { registerDesktopWindowShortcut } from './components/desktopWindowShortcuts'
 import { EnvironmentFixDialog } from './components/EnvironmentFixDialog'
@@ -225,7 +228,15 @@ export default function App() {
     )
   }
 
-  function openSettings() {
+  function openSettings(section?: SettingsSection) {
+    if (section) {
+      store.dispatch(
+        setNavigationValue({
+          key: navigationKey('settings.section', []),
+          value: section
+        })
+      )
+    }
     const layer = ++nextWindowLayer.current
     setSettingsLayer(layer)
     setSettingsOpen(true)
@@ -759,6 +770,11 @@ export default function App() {
                   return
                 }
                 navigate(`/guide/${id}/step/1`)
+                setError('')
+              }}
+              onCreateRobot={() => {
+                navigate('/guide/install/step/1')
+                setCreation(null)
                 setError('')
               }}
               onOpenGuide={openGuide}

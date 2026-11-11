@@ -1,11 +1,12 @@
-import { ArrowRight, FolderOpen, GitBranch } from 'lucide-react'
+import { ArrowRight, FolderOpen, GitBranch, Plus } from 'lucide-react'
 
 type Props = {
+  onCreate: () => void
   onAdd: () => void
   onClone: () => void
 }
 
-export function WorkspaceWelcome({ onAdd, onClone }: Props) {
+export function WorkspaceWelcome({ onCreate, onAdd, onClone }: Props) {
   return (
     <section
       className="col-span-full flex min-h-full flex-col items-center justify-center gap-6 px-5 py-8"
@@ -19,11 +20,19 @@ export function WorkspaceWelcome({ onAdd, onClone }: Props) {
           开始管理你的机器人
         </h1>
         <p className="mb-0 mt-3 text-sm leading-6 text-(--theme-text-secondary)">
-          添加一个机器人项目，集中管理运行状态、配置与插件。
+          创建或导入机器人，集中管理运行状态、配置与插件。
         </p>
       </div>
       <div className="grid w-full max-w-2xl gap-3 sm:grid-cols-2">
         {[
+          {
+            title: '创建新机器人',
+            description: '使用推荐模板，按引导设置机器人名称和保存位置。',
+            action: '立即全新创建',
+            icon: Plus,
+            onClick: onCreate,
+            featured: true
+          },
           {
             title: '已有本地项目',
             description:
@@ -40,30 +49,32 @@ export function WorkspaceWelcome({ onAdd, onClone }: Props) {
             icon: GitBranch,
             onClick: onClone
           }
-        ].map(({ title, description, action, icon: Icon, onClick }) => (
-          <button
-            key={title}
-            type="button"
-            onClick={onClick}
-            className="group flex min-w-0 flex-col items-start gap-3 rounded-xl border border-(--theme-border-default) bg-(--theme-surface-panel) p-5 text-left transition hover:border-(--theme-accent) hover:bg-(--theme-accent-soft)"
-            aria-label={action}
-          >
-            <Icon
-              className="size-6 text-(--theme-accent-text)"
-              aria-hidden="true"
-            />
-            <span className="text-base font-semibold text-(--theme-text-strong)">
-              {title}
-            </span>
-            <span className="text-sm leading-6 text-(--theme-text-secondary)">
-              {description}
-            </span>
-            <span className="mt-auto flex items-center gap-2 pt-2 text-sm font-semibold text-(--theme-accent-text)">
-              {action}
-              <ArrowRight className="size-4" aria-hidden="true" />
-            </span>
-          </button>
-        ))}
+        ].map(
+          ({ title, description, action, icon: Icon, onClick, featured }) => (
+            <button
+              key={title}
+              type="button"
+              onClick={onClick}
+              className={`group flex min-w-0 flex-col items-start gap-3 rounded-xl border border-(--theme-border-default) bg-(--theme-surface-panel) p-5 text-left transition hover:border-(--theme-accent) hover:bg-(--theme-surface-hover) focus-visible:ring-2 focus-visible:ring-(--theme-accent) ${featured ? 'sm:col-span-2' : ''}`}
+              aria-label={action}
+            >
+              <Icon
+                className="size-6 text-(--theme-accent-text)"
+                aria-hidden="true"
+              />
+              <span className="text-base font-semibold text-(--theme-text-strong)">
+                {title}
+              </span>
+              <span className="text-sm leading-6 text-(--theme-text-secondary)">
+                {description}
+              </span>
+              <span className="mt-auto flex items-center gap-2 pt-2 text-sm font-semibold text-(--theme-accent-text)">
+                {action}
+                <ArrowRight className="size-4" aria-hidden="true" />
+              </span>
+            </button>
+          )
+        )}
       </div>
     </section>
   )

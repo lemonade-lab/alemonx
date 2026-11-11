@@ -30,20 +30,14 @@ ALemonX 同时支持 MCP 的两种标准传输：**stdio** 和 **Streamable HTTP
 
 ### 流式 HTTP
 
-对于使用图形化“流式 HTTP”表单的客户端，先设置随机的 `MCP_TOKEN` 并启动受保护的 loopback 服务：
-
-```bash
-MCP_TOKEN='生成的高强度随机值' alx --mcp-port 17391 mcp-http
-```
-
-在表单中填写：
+在 ALemonX 工作台打开「设置 → MCP」，点击「启动 HTTP 服务」，再点击「显示连接令牌」。在运行 ALemonX 的电脑上，将连接地址和令牌填入客户端的流式 HTTP 表单。服务随工作台进程退出，每次重新启动 HTTP 服务都会生成新的令牌。
 
 | 字段 | 值 |
 | --- | --- |
 | 名称 | `alemonx` |
 | 类型 | `流式 HTTP` |
 | 地址 | `http://127.0.0.1:17391/mcp` |
-| 认证 | `Bearer <MCP_TOKEN>` |
+| 认证 | `Bearer <连接令牌>` |
 
 端点实现 Streamable HTTP 的 `POST /mcp` 请求/响应模式；独立 SSE 推送流不适用于此控制面，会按规范以 `405` 拒绝 `GET /mcp`。它校验 `Origin`、协议版本与 Bearer Token，且绝不监听局域网或公网地址。
 

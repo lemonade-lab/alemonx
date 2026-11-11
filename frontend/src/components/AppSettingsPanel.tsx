@@ -1,78 +1,35 @@
 import { useNavigationState } from '../hooks/useNavigationState'
 import { useEffect, useState } from 'react'
-import {
-  KeyRound,
-  Network,
-  Power,
-  RefreshCw,
-  Server,
-  Boxes,
-  UsersRound
-} from 'lucide-react'
+import { Power } from 'lucide-react'
+import { useDispatch, useSelector } from 'react-redux'
+import type { RootState } from '../store/guideStore'
+import { setDeveloperMode } from '../store/workspaceStore'
 import { AccountManagementPage } from './AccountManagement'
 import { AuthControl } from './AuthControl'
 import { SetupUpdateButton } from './SetupUpdateButton'
 import { NetworkSettingsPanel } from './NetworkSettingsPanel'
 import { GithubSettingsPanel } from './GithubSettingsPanel'
-import { GithubMark } from './GithubMark'
 import { ServiceControlCard } from './ServiceControlCard'
 import { ConfirmDialog } from './ConfirmDialog'
 import { DependencySourcesPanel } from './DependencySourcesPanel'
-import { SidebarWindow, type SidebarWindowItem } from './SidebarWindow'
+import { SidebarWindow } from './SidebarWindow'
+import { SettingsCard, SettingsPage, SettingsSwitch } from './SettingsCard'
+import { ThemeToggle } from './ThemeToggle'
+import { SSHControl } from './SSHControl'
+import { McpSettingsPanel } from './McpSettingsPanel'
+import { settingsSections, type SettingsSection } from './settingsSections'
 import { useDependencySourcesQuery } from '../store/workspaceApi'
 import type { DesktopWindowProps } from './DesktopWindow'
-
-type SettingsSection =
-  | 'auth'
-  | 'accounts'
-  | 'github'
-  | 'network'
-  | 'update'
-  | 'service'
-  | 'dependency-sources'
-
-const sections: SidebarWindowItem<SettingsSection>[] = [
-  {
-    id: 'auth',
-    label: '认证',
-    icon: KeyRound
-  },
-  {
-    id: 'accounts',
-    label: '账户',
-    icon: UsersRound
-  },
-  {
-    id: 'github',
-    label: 'GitHub',
-    icon: GithubMark
-  },
-  {
-    id: 'network',
-    label: '网络',
-    icon: Network
-  },
-  {
-    id: 'update',
-    label: '更新',
-    icon: RefreshCw
-  },
-  {
-    id: 'service',
-    label: '服务',
-    icon: Server
-  },
-  {
-    id: 'dependency-sources',
-    label: '依赖源',
-    icon: Boxes
-  }
-]
 
 export function AppSettingsPanel({
   ...windowProps
 }: Omit<DesktopWindowProps, 'children'>) {
-  const [active, setActive] = useNavigationState<SettingsSection>('settings.section', [], 'auth', sections.map(item => item.id))
+  const [active, setActive] = useNavigationState<SettingsSection>(
+    'settings.section',
+    [],
+    'general',
+    settingsSections.map(item => item.id)
+  )
   const [stopBusy, setStopBusy] = useState(false)
   const [stopConfirm, setStopConfirm] = useState(false)
   const [stopMessage, setStopMessage] = useState('')
@@ -80,7 +37,11 @@ export function AppSettingsPanel({
     skip: !windowProps.open
   })
   useEffect(() => {
-    if (dependencySources && !dependencySources.supported && active === 'dependency-sources') {
+    if (
+      dependencySources &&
+      !dependencySources.supported &&
+      active === 'dependency-sources'
+    ) {
       setActive('auth')
     }
   }, [active, dependencySources, setActive])
@@ -112,9 +73,11 @@ export function AppSettingsPanel({
     <SidebarWindow
       {...windowProps}
       activeItem={active}
-      items={dependencySources?.supported
-        ? sections
-        : sections.filter(item => item.id !== 'dependency-sources')}
+      items={
+        dependencySources?.supported
+          ? settingsSections
+          : settingsSections.filter(item => item.id !== 'dependency-sources')
+      }
       onActiveItemChange={setActive}
       sidebarAriaLabel="设置页面"
       sidebarFooter={
@@ -138,6 +101,9 @@ export function AppSettingsPanel({
         </>
       }
     >
+      {active === 'general' && <GeneralSettings />}
+      {active === 'ssh' && <SSHControl embedded />}
+      {active === 'mcp' && <McpSettingsPanel />}
       {active === 'update' && <SetupUpdateButton embedded />}
       {active === 'network' && <NetworkSettingsPanel />}
       {active === 'github' && <GithubSettingsPanel />}
@@ -158,5 +124,25 @@ export function AppSettingsPanel({
         }}
       />
     </SidebarWindow>
+  )
+}
+
+function GeneralSettings() {
+  const dispatch = useDispatch()
+  const developerMode = useSelector(
+    (state: RootState) => state.workspace.developerMode
+  )
+  return (
+    <SettingsPage title="通用">
+      <SettingsCard title="外观" actions={<ThemeToggle embedded />} />
+      <SettingsCard title="工作台">
+        <SettingsSwitch
+          label="开发模式"
+          hint="显示源码、终端与发布工具。"
+          checked={developerMode}
+          onChange={enabled => dispatch(setDeveloperMode(enabled))}
+        />
+      </SettingsCard>
+    </SettingsPage>
   )
 }

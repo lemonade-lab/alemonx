@@ -12,7 +12,7 @@ import {
 import { Button } from './Button'
 import { SettingsMessage, SettingsPage } from './SettingsCard'
 import { NetworkConnectionForm } from './network/NetworkConnectionForm'
-import { NetworkCandidatesDialog } from './network/NetworkCandidatesDialog'
+import { NetworkMirrorsDialog } from './network/NetworkMirrorsDialog'
 import {
   networkError,
   networkModes,
@@ -137,11 +137,11 @@ export function NetworkSettingsPanel() {
         </div>
         {note('mode')}
         {visibleMode === 'auto' && (
-          <section className="mt-4" aria-label="自动选路">
+          <section className="mt-4" aria-label="镜像配置">
             <header className="flex items-center justify-between">
-              <h3 className="text-sm font-medium">自动选路</h3>
+              <h3 className="text-sm font-medium">镜像配置</h3>
               <Button disabled={polling} onClick={() => void redetect()}>
-                全部检测
+                重新选择全部
               </Button>
             </header>
             {status.isError && (
@@ -151,48 +151,76 @@ export function NetworkSettingsPanel() {
               </div>
             )}
             {status.isLoading && <p role="status">加载分组…</p>}
-            <div className="mt-2 divide-y divide-(--theme-border-default)">
-              {status.currentData?.definitions.map(group => {
-                const state = states?.find(item => item.id === group.id)
-                return (
-                  <div
-                    key={group.id}
-                    role="group"
-                    aria-label={group.label}
-                    className="flex min-w-0 flex-wrap items-center justify-between gap-3 py-3"
-                  >
-                    <div className="min-w-0 flex-1">
-                      <h4 className="text-sm font-medium">{group.label}</h4>
-                      <p
-                        className="mt-1 truncate text-xs text-(--theme-text-muted)"
-                        title={state?.current}
-                      >
-                        {entryLabel(state?.current)}
-                      </p>
-                      <p role="status" className="mt-1 text-xs">
-                        {groupStatus(state)}
-                      </p>
-                      {note(group.id)}
-                    </div>
-                    <div className="flex gap-2">
-                      <Button
-                        disabled={state?.state === 'checking'}
-                        aria-label={`重新检测 ${group.label}`}
-                        onClick={() => void redetect(group.id)}
-                      >
-                        重新检测
-                      </Button>
-                      <Button
-                        aria-label={`配置 ${group.label}`}
-                        onClick={() => setEditor({ settings: data, group })}
-                      >
-                        配置
-                      </Button>
-                    </div>
+            {(
+              [
+                ['GitHub', true],
+                ['其他资源', false]
+              ] as const
+            ).map(([label, github]) => {
+              const groups = status.currentData?.definitions.filter(
+                group => group.id.startsWith('github-') === github
+              )
+              if (!groups?.length) return null
+              return (
+                <section key={label} className="mt-4">
+                  <h4 className="text-xs font-semibold text-(--theme-text-muted)">
+                    {label}
+                  </h4>
+                  <div className="divide-y divide-(--theme-border-default)">
+                    {groups.map(group => {
+                      const state = states?.find(item => item.id === group.id)
+                      const mirrors =
+                        data.automatic.groups.find(item => item.id === group.id)
+                          ?.candidates ?? []
+                      return (
+                        <div
+                          key={group.id}
+                          role="group"
+                          aria-label={group.label}
+                          className="flex min-w-0 flex-wrap items-center justify-between gap-3 py-3"
+                        >
+                          <div className="min-w-0 flex-1">
+                            <h5 className="text-sm font-medium">
+                              {group.label}
+                            </h5>
+                            <p
+                              className="mt-1 truncate text-xs text-(--theme-text-muted)"
+                              title={state?.current}
+                            >
+                              {mirrors.length
+                                ? `${mirrors.length} 个镜像`
+                                : '仅官方源'}{' '}
+                              · 当前 {entryLabel(state?.current)}
+                            </p>
+                            <p role="status" className="mt-1 text-xs">
+                              {groupStatus(state)}
+                            </p>
+                            {note(group.id)}
+                          </div>
+                          <div className="flex gap-2">
+                            <Button
+                              disabled={state?.state === 'checking'}
+                              aria-label={`重新选路 ${group.label}`}
+                              onClick={() => void redetect(group.id)}
+                            >
+                              重新选路
+                            </Button>
+                            <Button
+                              aria-label={`配置 ${group.label}`}
+                              onClick={() =>
+                                setEditor({ settings: data, group })
+                              }
+                            >
+                              配置
+                            </Button>
+                          </div>
+                        </div>
+                      )
+                    })}
                   </div>
-                )
-              })}
-            </div>
+                </section>
+              )
+            })}
           </section>
         )}
         {visibleMode === 'proxy' && (
@@ -225,7 +253,7 @@ export function NetworkSettingsPanel() {
         />
       )}
       {editor && (
-        <NetworkCandidatesDialog
+        <NetworkMirrorsDialog
           settings={editor.settings}
           group={editor.group}
           onSave={persist}

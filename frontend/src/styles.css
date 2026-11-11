@@ -2650,175 +2650,6 @@ button {
   justify-content: center;
   justify-self: end;
 }
-.mcp-control {
-  position: relative;
-}
-.mcp-control-button {
-  align-items: center;
-  background: var(--theme-info-soft);
-  border: 1px solid var(--theme-info);
-  border-radius: 7px;
-  color: var(--theme-info-text);
-  cursor: pointer;
-  display: inline-flex;
-  font:
-    700 0.74rem/1 Inter,
-    sans-serif;
-  gap: 5px;
-  min-height: 28px;
-  padding: 0 8px;
-}
-.mcp-control-button i {
-  align-items: center;
-  background: var(--theme-surface-panel);
-  border-radius: 50%;
-  display: inline-flex;
-  font-size: 0.64rem;
-  font-style: normal;
-  height: 16px;
-  justify-content: center;
-  width: 16px;
-}
-.mcp-control-button strong {
-  color: var(--theme-info-text);
-  font-size: 0.68rem;
-}
-.mcp-popover {
-  background: var(--theme-surface-panel);
-  border: 1px solid var(--theme-info);
-  border-radius: 10px;
-  box-shadow: 0 14px 34px rgb(28 26 23 / 0.15);
-  display: grid;
-  gap: 9px;
-  padding: 13px;
-  position: absolute;
-  right: 0;
-  top: 36px;
-  width: min(390px, calc(100vw - 32px));
-  z-index: 22;
-}
-.mcp-popover header {
-  align-items: flex-start;
-  display: flex;
-  justify-content: space-between;
-}
-.mcp-popover header div {
-  display: grid;
-  gap: 2px;
-}
-.mcp-popover header strong {
-  color: var(--theme-text-strong);
-  font-size: 0.84rem;
-}
-.mcp-popover header small {
-  color: var(--theme-info-text);
-  font-size: 0.7rem;
-  font-weight: 700;
-}
-.mcp-popover header button {
-  background: transparent;
-  border: 0;
-  color: var(--theme-text-muted);
-  cursor: pointer;
-  font-size: 1.1rem;
-  line-height: 1;
-}
-.mcp-popover p {
-  color: var(--theme-text-secondary);
-  font-size: 0.76rem;
-  line-height: 1.55;
-  margin: 0;
-}
-.mcp-popover p strong {
-  color: var(--theme-info-text);
-}
-.mcp-popover code {
-  background: var(--theme-info-soft);
-  border-radius: 3px;
-  color: var(--theme-info-text);
-  font-size: 0.72rem;
-  padding: 1px 4px;
-}
-.mcp-copy-button {
-  background: var(--theme-info);
-  border: 0;
-  border-radius: 6px;
-  color: var(--theme-text-invert);
-  cursor: pointer;
-  font:
-    700 0.74rem/1 Inter,
-    sans-serif;
-  justify-self: start;
-  padding: 8px 10px;
-}
-.mcp-note {
-  color: var(--theme-text-muted);
-  font-size: 0.7rem;
-  line-height: 1.45;
-}
-.mcp-transport-tabs {
-  background: var(--theme-info-soft);
-  border-radius: 7px;
-  display: grid;
-  gap: 3px;
-  grid-template-columns: 1fr 1fr;
-  padding: 3px;
-}
-.mcp-transport-tabs button {
-  background: transparent;
-  border: 0;
-  border-radius: 5px;
-  color: var(--theme-text-secondary);
-  cursor: pointer;
-  font:
-    700 0.72rem/1.2 Inter,
-    sans-serif;
-  padding: 7px 4px;
-}
-.mcp-transport-tabs button.active {
-  background: var(--theme-surface-panel);
-  box-shadow: 0 1px 3px rgb(28 26 23 / 0.15);
-  color: var(--theme-info-text);
-}
-.mcp-transport-tabs small {
-  color: var(--theme-text-muted);
-  font-size: 0.62rem;
-  font-weight: 700;
-  margin-left: 2px;
-}
-.mcp-form-guide {
-  border: 1px solid var(--theme-border-default);
-  border-radius: 7px;
-  margin: 0;
-  overflow: hidden;
-}
-.mcp-form-guide div {
-  align-items: flex-start;
-  border-bottom: 1px solid var(--theme-border-default);
-  display: grid;
-  gap: 8px;
-  grid-template-columns: 92px minmax(0, 1fr);
-  padding: 7px 9px;
-}
-.mcp-form-guide div:last-child {
-  border-bottom: 0;
-}
-.mcp-form-guide dt {
-  color: var(--theme-text-muted);
-  font-size: 0.72rem;
-  font-weight: 700;
-}
-.mcp-form-guide dd {
-  color: var(--theme-text-strong);
-  font-size: 0.74rem;
-  line-height: 1.35;
-  margin: 0;
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-.mcp-form-guide code {
-  white-space: normal;
-}
 .environment-control.warning {
   background: var(--theme-warning-soft);
   border-color: var(--theme-accent-soft-border);
@@ -6378,8 +6209,7 @@ textarea:hover {
   border-radius: var(--radius-control);
 }
 .environment-panel,
-.operation-tasks-popover,
-.mcp-popover {
+.operation-tasks-popover {
   border-color: var(--line);
   border-radius: var(--radius-surface);
   box-shadow: 0 18px 42px rgb(28 26 23 / 0.13);
@@ -7111,11 +6941,6 @@ textarea:hover {
 }
 .setup-plugin-action-row .primary-button {
   flex: 0 0 auto;
-}
-
-/* Contextual copy is the primary action for MCP setup, so it belongs right. */
-.mcp-copy-button {
-  justify-self: end;
 }
 
 /* Desktop resilience pass: content is sized inside its grid cell, and the
@@ -8058,9 +7883,6 @@ button > svg,
   gap: 10px;
   padding: 12px !important;
 }
-.topbar-popover.mcp-popover:not([data-workbench-submenu]) {
-  top: calc(100% + 8px) !important;
-}
 .topbar-popover-close {
   align-items: center;
   background: transparent;
@@ -8627,16 +8449,14 @@ button > svg,
   .topbar-popover,
   .environment-panel,
   .operation-tasks-popover,
-  .agent-composer-popup,
-  .mcp-popover {
+  .agent-composer-popup {
     max-height: calc(100dvh - 24px);
     max-width: calc(100vw - 24px);
     overflow: auto;
   }
 
   .operation-tasks-popover,
-  .agent-composer-popup,
-  .mcp-popover {
+  .agent-composer-popup {
     max-height: min(70dvh, 520px);
     overflow: auto;
   }
@@ -8901,7 +8721,6 @@ button > svg,
   }
 }
 
-/* Keep the three header actions visible at every window width. */
 .workbench-tools-menu {
   z-index: 60;
   width: 190px;
@@ -8910,6 +8729,10 @@ button > svg,
   border-radius: 10px;
   background: var(--theme-surface-panel);
   box-shadow: var(--theme-shadow-pop);
+}
+.workbench-settings-menu {
+  max-height: min(410px, calc(100dvh - 5rem));
+  overflow-y: auto;
 }
 .workbench-tools-menu[hidden] { display: none; }
 .workbench-tools-menu .workbench-action-item {
@@ -9732,5 +9555,95 @@ button > svg,
   .wizard-steps span {
     flex: 0 0 26px;
     font-size: 0.72rem;
+  }
+}
+
+.robot-workspace {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+.robot-workspace > .robot-workspace-splitter {
+  color: inherit;
+  font: inherit;
+}
+.robot-workspace-splitter > .ant-splitter-panel {
+  min-width: 0;
+  scrollbar-width: thin;
+}
+.robot-workspace-splitter > .robot-workspace-list,
+.robot-workspace-splitter > .robot-workspace-content {
+  display: flex;
+}
+.robot-workspace-list > .project-rail,
+.robot-workspace-content > .console-page {
+  flex: 1;
+  min-width: 0;
+}
+.robot-workspace-splitter > .robot-workspace-hidden,
+.robot-workspace-list.robot-workspace-hidden + .ant-splitter-bar,
+.robot-workspace-splitter:has(> .robot-workspace-controls.robot-workspace-hidden) > .robot-workspace-content + .ant-splitter-bar {
+  display: none;
+}
+.robot-workspace-splitter .ant-splitter-bar-dragger {
+  touch-action: none;
+}
+.robot-workspace-splitter .ant-splitter-bar-dragger::after {
+  background: var(--theme-text-muted);
+}
+.robot-workspace-splitter .ant-splitter-bar:is(:focus-visible, :hover) .ant-splitter-bar-dragger::before,
+.robot-workspace-splitter .ant-splitter-bar-dragger-active::before {
+  background: var(--theme-accent);
+}
+
+@container workbench-window (max-width: 940px) {
+  .robot-workspace > .robot-workspace-splitter {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 248px);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  .robot-workspace-splitter > .ant-splitter-bar {
+    display: none;
+  }
+  .robot-workspace-splitter > .robot-workspace-list {
+    grid-column: 1 / -1;
+    grid-row: 1;
+    max-height: 40dvh;
+  }
+  .robot-workspace-list > .project-rail {
+    border-bottom: 1px solid var(--theme-border-default);
+    border-right: 0;
+  }
+  .robot-workspace-splitter > .robot-workspace-content {
+    grid-column: 1;
+    grid-row: 2;
+  }
+  .robot-workspace-splitter > .robot-workspace-controls {
+    grid-column: 2;
+    grid-row: 2;
+  }
+  .robot-workspace-splitter:has(> .robot-workspace-controls.robot-workspace-hidden) > .robot-workspace-content {
+    grid-column: 1 / -1;
+  }
+}
+
+@container workbench-window (max-width: 700px) {
+  .robot-workspace > .robot-workspace-splitter {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto minmax(0, 1fr);
+  }
+  .robot-workspace-splitter > .robot-workspace-controls {
+    grid-column: 1;
+    max-height: 36dvh;
+  }
+  .robot-workspace-controls > .control-dock {
+    padding: 12px 16px 0;
+    position: static;
+  }
+  .robot-workspace-controls .control-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .robot-workspace-splitter > .robot-workspace-content {
+    grid-row: 3;
   }
 }

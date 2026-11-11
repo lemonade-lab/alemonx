@@ -281,7 +281,7 @@ Docker 部署也默认启用 Redis；它仅监听容器内 `127.0.0.1`，不会�
 
 **Q16：Codex 连不上 MCP？**
 
-先 `command -v alx` 确认 `alx` 在 PATH；stdio 方式填启动命令 `alx`、参数 `mcp`；流式 HTTP 需要先设置 `MCP_TOKEN` 并启动 `alx mcp-http`，地址 `http://127.0.0.1:17391/mcp`。可选设置 `MCP_ALLOWED_ROOTS` 限制可管理目录。
+在「设置 → MCP」中启动流式 HTTP 服务，复制连接地址与 Bearer Token。STDIO 方式由客户端启动，填写命令 `alx` 和参数 `mcp`。可选设置 `MCP_ALLOWED_ROOTS` 限制可管理目录。
 
 **Q17：AI 能对我的机器人做什么，不能做什么？**
 

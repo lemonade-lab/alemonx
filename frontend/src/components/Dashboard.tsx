@@ -1,4 +1,5 @@
 import { BackpackPackageUpdate } from './BackpackPackageUpdate'
+import { RobotWorkspaceSplitter } from './RobotWorkspaceSplitter'
 import { useNavigationState } from '../hooks/useNavigationState'
 import {
   ConnectionCatalog,
@@ -64,8 +65,6 @@ import {
   Cable,
   Check,
   CheckCircle2,
-  CircleCheckBig,
-  Info,
   CircleQuestionMark,
   ChevronRight,
   Circle,
@@ -119,7 +118,6 @@ import {
   type LucideIcon
 } from 'lucide-react'
 import { RobotConfigForm } from './RobotConfigForm'
-import { ThemeToggle } from './ThemeToggle'
 import { Button } from './Button'
 import { ErrorBoundary } from './ErrorBoundary'
 import { dataNavigation } from './data/dataNavigation'
@@ -139,7 +137,9 @@ import { ErrorNotice } from './ErrorNotice'
 import { EmptyState } from './EmptyState'
 import { WorkspaceWelcome } from './WorkspaceWelcome'
 import { BackpackFolderInstall } from './BackpackFolderInstall'
-import { WorkbenchTools, useWorkbenchSubmenu } from './WorkbenchTools'
+import { WorkbenchTools } from './WorkbenchTools'
+import { SettingsShortcuts } from './SettingsShortcuts'
+import type { SettingsSection } from './settingsSections'
 import { ProjectNavigation } from './ProjectNavigation'
 import { ConfirmDialog } from './ConfirmDialog'
 import { DownloadProgress } from './DownloadProgress'
@@ -167,10 +167,8 @@ import {
   SidebarWindowSectionNav
 } from './SidebarWindow'
 import { qqChatWindowStorageKey } from './qqChatStorage'
-import { SSHControl } from './SSHControl'
 import { NodeNVMPanel } from './NodeNVMPanel'
 import { PythonRuntimePanel } from './PythonRuntimePanel'
-import { GitHubAuthControl } from './GitHubAuthControl'
 import { ConfigFieldsEditor, ConfigSourceLinks } from './PackageConfigFields'
 import { sameConfigValues } from './configFieldUtils'
 import {
@@ -230,7 +228,6 @@ import {
   useLazySetupPluginDevelopmentLogsQuery,
   useUploadSetupPluginArchiveMutation,
   useSetSystemCurrentRobotMutation,
-  useSystemMcpQuery,
   useLazySetupPluginMarketQuery,
   useSetupPluginsQuery,
   useStartRobotTaskMutation,
@@ -254,7 +251,6 @@ import {
   reorderProjects,
   selectProject,
   pinProject as pinWorkspaceProject,
-  setDeveloperMode,
   setDraft,
   setRobotConfig
 } from '../store/workspaceStore'
@@ -295,8 +291,9 @@ type Props = {
   checking: boolean
   error: string
   defaultPage: string
+  onCreateRobot: () => void
   onOpenGuide: () => void
-  onOpenSettings: () => void
+  onOpenSettings: (section?: SettingsSection) => void
   onClearError: () => void
   onCheck: () => void
   onFix: (check: Check) => void
@@ -1109,6 +1106,7 @@ export function Dashboard({
   checking,
   error,
   defaultPage,
+  onCreateRobot,
   onOpenGuide,
   onOpenSettings,
   onClearError,
@@ -3658,7 +3656,11 @@ export function Dashboard({
         )}
       </>
     ) : (
-      <WorkspaceWelcome onAdd={chooseDirectories} onClone={openRobotClone} />
+      <WorkspaceWelcome
+        onCreate={onCreateRobot}
+        onAdd={chooseDirectories}
+        onClone={openRobotClone}
+      />
     )
 
   const environmentWarning = Boolean(
@@ -3739,7 +3741,7 @@ export function Dashboard({
             <div className="flex min-w-0 flex-1 items-center gap-1.5">
               <Button
                 variant="icon"
-                onClick={onOpenSettings}
+                onClick={() => onOpenSettings()}
                 aria-label="打开设置"
                 title="设置"
               >
@@ -3769,30 +3771,14 @@ export function Dashboard({
             </div>
             <div className="ml-auto flex shrink-0 items-center gap-1">
               <WorkbenchTools>
-                <ThemeToggle menuItem />
-                {developerMode && <McpControl menuItem />}
-                {developerMode && <SSHControl menuItem />}
-                <Button
-                  variant="secondary"
-                  className={cn(
-                    'workbench-action-item gap-1.5 px-2',
-                    developerMode
-                      ? 'border-blue-400 bg-slate-100 '
-                      : 'border-slate-200 bg-white  hover:bg-slate-50'
-                  )}
-                  onClick={() => dispatch(setDeveloperMode(!developerMode))}
-                  aria-pressed={developerMode}
-                  aria-label={developerMode ? '关闭开发模式' : '开启开发模式'}
-                  title={
-                    developerMode
-                      ? '关闭开发模式，收起源码与发布工具'
-                      : '开启开发模式，显示源码、终端与发布工具'
-                  }
-                >
-                  <Code2 className="size-4" />
-                  <span>开发模式</span>
-                </Button>
-                <GitHubAuthControl menuItem />
+                {close => (
+                  <SettingsShortcuts
+                    onSelect={section => {
+                      close()
+                      onOpenSettings(section)
+                    }}
+                  />
+                )}
               </WorkbenchTools>
               <Button
                 variant="icon"
@@ -4031,85 +4017,85 @@ export function Dashboard({
                 : cloneRobotRepository
             }
           />
-          <section
-            className={cn('console-layout', {
-              'sidebar-collapsed': sidebarCollapsed
-            })}
+          <RobotWorkspaceSplitter
+            listHidden={sidebarCollapsed}
+            list={
+              <ProjectRail
+                feature={systemWindowFeature}
+                setupPlugins={setupPlugins}
+                projects={projects}
+                activeID={activeProjectID}
+                checking={checking}
+                environmentWarning={environmentWarning}
+                onFeature={feature => {
+                  selectSystemFeature(feature)
+                  if (feature === 'environment') onCheck()
+                }}
+                onPinProject={pinProject}
+                onReorderProject={reorderProject}
+                onAdd={chooseDirectories}
+                onClone={openRobotClone}
+                onSelect={id => {
+                  openProject(id)
+                  setSystemFeature(null)
+                  setOutput('')
+                }}
+                onRemove={removeProject}
+              />
+            }
+            controls={
+              !robotNavigationHidden &&
+              !systemFeature &&
+              activeProject &&
+              !invalidProject ? (
+                <ControlCard
+                  page={page}
+                  section={section}
+                  project={activeProject}
+                  buildMode={buildMode}
+                  catalog={catalog}
+                  catalogTitle={catalogTitle}
+                  catalogLoading={catalogLoading}
+                  developerMode={developerMode}
+                  dshOpen={aiOpen}
+                  onOpenConsole={() => {
+                    setConsoleOpen(true)
+                    setConsoleMinimized(false)
+                    activateFloatingWindow('terminal')
+                  }}
+                  onOpenAI={openAI}
+                  onOpenOps={() => {
+                    setOpsOpen(true)
+                    setOpsMinimized(false)
+                    activateFloatingWindow('ops')
+                  }}
+                  appLaunching={appLaunching}
+                  onOpenApp={() => void openApp()}
+                  testLaunching={testLaunching}
+                  onOpenTest={() => void openTest()}
+                  onOpenLive={() => void openLive()}
+                  onPage={selectPage}
+                  onSection={openSection}
+                  onBuildMode={mode => {
+                    markUserNavigation()
+                    setBuildMode(mode)
+                    setOutput('')
+                  }}
+                  onCatalog={title => {
+                    setCatalogTitle(title)
+                  }}
+                  onGit={() => {
+                    setGitProject(activeProject)
+                    setGitMinimized(false)
+                    activateFloatingWindow('git')
+                  }}
+                />
+              ) : null
+            }
           >
-            <ProjectRail
-              feature={systemWindowFeature}
-              setupPlugins={setupPlugins}
-              projects={projects}
-              activeID={activeProjectID}
-              checking={checking}
-              environmentWarning={environmentWarning}
-              onFeature={feature => {
-                selectSystemFeature(feature)
-                if (feature === 'environment') onCheck()
-              }}
-              onPinProject={pinProject}
-              onReorderProject={reorderProject}
-              onAdd={chooseDirectories}
-              onClone={openRobotClone}
-              onSelect={id => {
-                openProject(id)
-                setSystemFeature(null)
-                setOutput('')
-              }}
-              onRemove={removeProject}
-            />
-            <section className="console-page">
-              {workspace}
-              {error && <ErrorNotice message={error} onClose={onClearError} />}
-              {!robotNavigationHidden &&
-                !systemFeature &&
-                activeProject &&
-                !invalidProject && (
-                  <ControlCard
-                    page={page}
-                    section={section}
-                    project={activeProject}
-                    buildMode={buildMode}
-                    catalog={catalog}
-                    catalogTitle={catalogTitle}
-                    catalogLoading={catalogLoading}
-                    developerMode={developerMode}
-                    dshOpen={aiOpen}
-                    onOpenConsole={() => {
-                      setConsoleOpen(true)
-                      setConsoleMinimized(false)
-                      activateFloatingWindow('terminal')
-                    }}
-                    onOpenAI={openAI}
-                    onOpenOps={() => {
-                      setOpsOpen(true)
-                      setOpsMinimized(false)
-                      activateFloatingWindow('ops')
-                    }}
-                    appLaunching={appLaunching}
-                    onOpenApp={() => void openApp()}
-                    testLaunching={testLaunching}
-                    onOpenTest={() => void openTest()}
-                    onOpenLive={() => void openLive()}
-                    onPage={selectPage}
-                    onSection={openSection}
-                    onBuildMode={mode => {
-                      markUserNavigation()
-                      setBuildMode(mode)
-                      setOutput('')
-                    }}
-                    onCatalog={title => {
-                      setCatalogTitle(title)
-                    }}
-                    onGit={() => {
-                      setGitProject(activeProject)
-                      setGitMinimized(false)
-                      activateFloatingWindow('git')
-                    }}
-                  />
-                )}
-            </section>
-          </section>
+            {workspace}
+            {error && <ErrorNotice message={error} onClose={onClearError} />}
+          </RobotWorkspaceSplitter>
           {windowControls}
         </section>
       </main>
@@ -5199,7 +5185,7 @@ function GitCloneDialog({
                   className="truncate text-[11px] text-slate-500"
                   title={
                     connection === 'ssh' && !sshLoading && !sshKeys.length
-                      ? '未配置 SSH 密钥；请在顶部 SSH 管理中生成并添加公钥，或改用 HTTPS。'
+                      ? '未配置 SSH 密钥；请在「设置 → SSH 管理」中生成并添加公钥，或改用 HTTPS。'
                       : connection === 'https'
                         ? 'HTTPS 可直接使用；访问私有仓库时，需要在代码平台完成在线授权。'
                         : undefined
@@ -5683,268 +5669,6 @@ function ProjectItem({
         </div>
       )}
     </article>
-  )
-}
-function McpControl({ menuItem = false }: { menuItem?: boolean }) {
-  const [open, setOpen] = useStoreState(false)
-  const submenu = useWorkbenchSubmenu(menuItem, open)
-  const [transport, setTransport] = useStoreState<'stdio' | 'http'>('stdio')
-  const [copied, setCopied] = useStoreState(false)
-  const { data: mcpStatus, refetch: refetchMCP } = useSystemMcpQuery()
-  const mcpRunning = mcpStatus?.running ?? false
-  const stdioConfig =
-    '{\n  "mcpServers": {\n    "alemonx": {\n      "command": "alx",\n      "args": ["mcp"]\n    }\n  }\n}'
-  const httpCommand =
-    "MCP_TOKEN='请生成高强度随机值' alx --mcp-port 17391 mcp-http"
-  const copy = async (value: string) => {
-    try {
-      await navigator.clipboard.writeText(value)
-      setCopied(true)
-      window.setTimeout(() => setCopied(false), 1800)
-    } catch {
-      setCopied(false)
-    }
-  }
-  const http = transport === 'http'
-  useEffect(() => {
-    const onSystemEvent = (event: Event) => {
-      try {
-        const envelope = (
-          event as CustomEvent<{ topic?: string; data?: unknown }>
-        ).detail
-        if (envelope?.topic !== 'system') return
-        const payload = envelope.data as { type?: string; running?: boolean }
-        if (
-          payload.type === 'mcp.changed' &&
-          typeof payload.running === 'boolean'
-        )
-          void refetchMCP()
-      } catch {
-        // A malformed application event does not affect the last known state.
-      }
-    }
-    window.addEventListener('alx:unified-event', onSystemEvent)
-    return () => window.removeEventListener('alx:unified-event', onSystemEvent)
-  }, [refetchMCP])
-  useEffect(() => {
-    const closeWhenAnotherToolOpens = (event: Event) => {
-      if ((event as CustomEvent<string>).detail !== 'mcp') setOpen(false)
-    }
-    window.addEventListener('alx:top-tool-open', closeWhenAnotherToolOpens)
-    return () =>
-      window.removeEventListener('alx:top-tool-open', closeWhenAnotherToolOpens)
-  }, [setOpen])
-  return (
-    <div className="mcp-control relative" ref={submenu.root}>
-      <button
-        className={cn(
-          menuItem && 'workbench-action-item',
-          'mcp-control-button inline-flex min-h-8 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-semibold transition',
-          mcpRunning
-            ? 'border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 dark:border-blue-900 dark:bg-blue-950/40 dark:text-blue-300 dark:hover:bg-blue-950/70'
-            : 'border-slate-200 bg-slate-100 text-slate-500 hover:bg-slate-200 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-400 dark:hover:bg-slate-700'
-        )}
-        onClick={() =>
-          setOpen(value => {
-            const next = !value
-            if (next) {
-              void refetchMCP()
-              window.dispatchEvent(
-                new CustomEvent('alx:top-tool-open', { detail: 'mcp' })
-              )
-            }
-            return next
-          })
-        }
-        aria-haspopup="dialog"
-        aria-expanded={open}
-        title={
-          mcpRunning
-            ? '本机 MCP HTTP 服务正在运行'
-            : '本机 MCP HTTP 服务未运行；点击查看连接方式'
-        }
-      >
-        <i className="inline-flex size-4 items-center justify-center rounded-full bg-white text-[10px] not-italic dark:bg-slate-900">
-          {mcpRunning ? (
-            <CircleCheckBig className="size-3.5" />
-          ) : (
-            <Info className="size-3.5" />
-          )}
-        </i>
-        <span>MCP</span>
-        {menuItem && (
-          <ChevronRight className="ml-auto size-4" aria-hidden="true" />
-        )}
-      </button>
-      {open && (
-        <section
-          ref={submenu.panel}
-          style={submenu.style}
-          data-workbench-submenu={menuItem || undefined}
-          className="topbar-popover mcp-popover absolute right-0 top-[calc(100%+8px)] z-50 grid w-[min(390px,calc(100vw-32px))] gap-2.5 rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-900"
-          role="dialog"
-          aria-label="连接 MCP"
-        >
-          <header className="flex items-start justify-between gap-3">
-            <div className="grid gap-0.5">
-              <strong className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                连接 Codex / 自定义 MCP
-              </strong>
-              <small className="text-xs font-semibold text-blue-600 dark:text-blue-400">
-                两种标准传输均可用
-              </small>
-            </div>
-            <button
-              className="topbar-popover-close size-7"
-              onClick={() => setOpen(false)}
-              aria-label="关闭 MCP 说明"
-            >
-              <X className="size-4" />
-            </button>
-          </header>
-          <div
-            className={cn(
-              'mcp-status-line m-0 flex items-center gap-1.5 rounded-lg border px-2.5 py-2 text-xs',
-              mcpRunning
-                ? 'border-blue-100 bg-blue-50 text-blue-700 dark:border-blue-900 dark:bg-blue-950/40 dark:text-blue-300'
-                : 'border-slate-200 bg-slate-50 text-slate-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-400'
-            )}
-          >
-            <div
-              className={cn(
-                'inline-block size-1.5 shrink-0 rounded-full',
-                mcpRunning ? 'bg-blue-500' : 'bg-slate-400'
-              )}
-            />
-            <div>
-              <div className="flex-1">
-                {mcpRunning
-                  ? '本机 MCP HTTP 服务正在运行（端口 17391）'
-                  : '本机 MCP HTTP 服务未运行'}
-              </div>
-              <div>{mcpRunning ? '' : '本机 MCP HTTP 不会随后台自动常驻'}</div>
-            </div>
-            <button
-              type="button"
-              className="ml-auto text-xs font-semibold text-blue-600 hover:underline dark:text-blue-400"
-              onClick={() => void refetchMCP()}
-            >
-              刷新
-            </button>
-          </div>
-          <Tabs
-            ariaLabel="MCP 接入类型"
-            className="mcp-transport-tabs"
-            items={[
-              { id: 'stdio', label: 'STDIO', meta: '推荐' },
-              { id: 'http', label: '流式 HTTP', meta: '本机' }
-            ]}
-            onChange={transport => setTransport(transport)}
-            value={http ? 'http' : 'stdio'}
-            variant="segmented"
-          />
-          {http ? (
-            <>
-              <p className="m-0 text-xs leading-5 text-slate-600 dark:text-slate-300">
-                先在终端启动受 Token 保护的服务；随后在 Codex 的“连接至自定义
-                MCP”中选择<strong> 流式 HTTP</strong>，填写地址与 Bearer Token。
-              </p>
-              <dl className="mcp-form-guide m-0 overflow-hidden rounded-lg border border-blue-100 dark:border-blue-900">
-                <div className="grid grid-cols-[92px_minmax(0,1fr)] gap-2 border-b border-blue-100 px-2 py-2 last:border-b-0 dark:border-blue-900">
-                  <dt className="text-xs font-semibold text-slate-500">名称</dt>
-                  <dd className="m-0 min-w-0 wrap-break-word text-xs text-slate-700 dark:text-slate-200">
-                    alemonx
-                  </dd>
-                </div>
-                <div className="grid grid-cols-[92px_minmax(0,1fr)] gap-2 border-b border-blue-100 px-2 py-2 last:border-b-0 dark:border-blue-900">
-                  <dt className="text-xs font-semibold text-slate-500">类型</dt>
-                  <dd className="m-0 min-w-0 wrap-break-word text-xs text-slate-700 dark:text-slate-200">
-                    流式 HTTP
-                  </dd>
-                </div>
-                <div className="grid grid-cols-[92px_minmax(0,1fr)] gap-2 border-b border-blue-100 px-2 py-2 last:border-b-0 dark:border-blue-900">
-                  <dt className="text-xs font-semibold text-slate-500">地址</dt>
-                  <dd className="m-0 min-w-0 wrap-break-word text-xs text-slate-700 dark:text-slate-200">
-                    <code>http://127.0.0.1:17391/mcp</code>
-                  </dd>
-                </div>
-                <div className="grid grid-cols-[92px_minmax(0,1fr)] gap-2 border-b border-blue-100 px-2 py-2 last:border-b-0 dark:border-blue-900">
-                  <dt className="text-xs font-semibold text-slate-500">认证</dt>
-                  <dd className="m-0 min-w-0 wrap-break-word text-xs text-slate-700 dark:text-slate-200">
-                    Bearer Token：<code>&lt;MCP_TOKEN&gt;</code>
-                  </dd>
-                </div>
-                <div className="grid grid-cols-[92px_minmax(0,1fr)] gap-2 border-b border-blue-100 px-2 py-2 last:border-b-0 dark:border-blue-900">
-                  <dt className="text-xs font-semibold text-slate-500">
-                    启动命令
-                  </dt>
-                  <dd className="m-0 min-w-0 wrap-break-word text-xs text-slate-700 dark:text-slate-200">
-                    <code>{httpCommand}</code>
-                  </dd>
-                </div>
-              </dl>
-              <button
-                className="mcp-copy-button justify-self-end rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-blue-700"
-                onClick={() => void copy(httpCommand)}
-              >
-                {copied ? '已复制启动命令' : '复制启动命令'}
-              </button>
-              <small className="mcp-note text-xs leading-5 text-slate-500">
-                服务仅绑定 127.0.0.1；不要把地址、Token
-                或端口转发到局域网和公网。流式 HTTP 兼容 MCP 的 POST
-                请求，服务不提供独立 SSE 推送流。
-              </small>
-            </>
-          ) : (
-            <>
-              <p className="m-0 text-xs leading-5 text-slate-600 dark:text-slate-300">
-                在 Codex 的“连接至自定义 MCP”中选择<strong> STDIO</strong>
-                ，把下列字段逐行填入。Codex 会直接启动本机 <code>alx</code>
-                ，无需额外开启端口。
-              </p>
-              <dl className="mcp-form-guide m-0 overflow-hidden rounded-lg border border-blue-100 dark:border-blue-900">
-                <div>
-                  <dt>名称</dt>
-                  <dd>alemonx</dd>
-                </div>
-                <div>
-                  <dt>类型</dt>
-                  <dd>STDIO</dd>
-                </div>
-                <div>
-                  <dt>启动命令</dt>
-                  <dd>
-                    <code>alx</code>
-                  </dd>
-                </div>
-                <div>
-                  <dt>参数</dt>
-                  <dd>
-                    <code>mcp</code>
-                  </dd>
-                </div>
-                <div>
-                  <dt>环境变量（可选）</dt>
-                  <dd>
-                    <code>MCP_ALLOWED_ROOTS=/你的/机器人目录</code>
-                  </dd>
-                </div>
-              </dl>
-              <button
-                className="mcp-copy-button"
-                onClick={() => void copy(stdioConfig)}
-              >
-                {copied ? '已复制 JSON 配置' : '复制 JSON 配置'}
-              </button>
-              <small className="mcp-note">
-                涉及安装、构建、写入或执行脚本时，助手仍必须取得你的本次确认；密钥、.env、.npmrc、Git
-                元数据与依赖目录不开放。
-              </small>
-            </>
-          )}
-        </section>
-      )}
-    </div>
   )
 }
 function OperationTasksPage({
