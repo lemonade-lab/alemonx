@@ -30,7 +30,7 @@ ALemonX 同时支持 MCP 的两种标准传输：**stdio** 和 **Streamable HTTP
 
 ### 流式 HTTP
 
-在 ALemonX 工作台打开「设置 → MCP」，点击「启动 HTTP 服务」，再点击「显示连接令牌」。在运行 ALemonX 的电脑上，将连接地址和令牌填入客户端的流式 HTTP 表单。服务随工作台进程退出，每次重新启动 HTTP 服务都会生成新的令牌。
+在 ALemonX 工作台打开「设置 → MCP」，点击「启动 HTTP 服务」，再点击「显示连接令牌」。在运行 ALemonX 的电脑上，将连接地址和令牌填入客户端的流式 HTTP 表单。令牌对应启动服务时登录的工作台账户。每个账户可独立启动或停止自己的 MCP 连接。
 
 | 字段 | 值 |
 | --- | --- |
@@ -48,6 +48,24 @@ MCP_ALLOWED_ROOTS='/Users/me/robots:/Users/me/workspaces' alx mcp
 ```
 
 一旦配置，项目读写、任务操作与新项目创建都会在服务端验证目录是否位于这些根路径内。
+
+## 从机器人列表开始
+
+工作台在服务端按账户保存机器人目录、置顶顺序和当前选择。重新登录或换浏览器时会读取该账户的列表。旧版本仅保存在浏览器里的列表可在工作台空白页导入一次。未启用账户认证时，使用当前工作区的本机列表。
+
+MCP 连接使用同一份列表。启用账户认证后，CLI 启动的 STDIO 或 HTTP 服务需通过环境变量 `ALX_AUTH_TOKEN` 提供有工作台管理权限的账户会话。项目工具使用列表中的机器人路径，配置了 `MCP_ALLOWED_ROOTS` 时还会验证目录范围。
+
+| 要做的事 | 工具 |
+| --- | --- |
+| 找到我的机器人和当前选择 | `alemonjs_list_robots` |
+| 查看某个机器人的背包版本和启用状态 | `alemonjs_list_robot_backpack` |
+| 安装官方 Git 插件或卸载背包插件 | `alemonjs_manage_robot_plugin` |
+| 启用或停用背包插件 | `alemonjs_set_robot_plugin_enabled` |
+| 查看可用启动模式、启用插件和后台状态 | `alemonjs_get_robot_run_options` |
+| 启动或停止机器人 | `alemonjs_control_robot_runtime` |
+| 查看本机运行日志、后台日志和诊断 | `alemonjs_get_robot_logs` |
+
+工作台 HTTP 连接的运行操作与界面共用启动检查和任务记录，支持开发、前台和 PM2 后台模式。CLI 连接支持开发与 PM2，开发日志来自该 MCP 进程启动的开发任务。后台日志支持关键词和分页。启用或停用插件会修改加载配置，在下一次启动时生效。
 
 ## 能力模型
 

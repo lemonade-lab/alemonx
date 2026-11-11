@@ -49,6 +49,14 @@ MCP_ALLOWED_ROOTS='/Users/me/robots:/Users/me/workspaces' alx mcp
 
 Once configured, project read/write, task operations, and new project creation are all validated server-side to be inside these roots.
 
+## Account robot list
+
+The workbench stores each account's robot folders, pinned order, and current selection on the server. An older browser list can be imported from the empty workspace screen. When account authentication is disabled, the workbench uses a local list for the current workspace.
+
+Use `alemonjs_list_robots` to find a robot, then `alemonjs_list_robot_backpack` for its packages and `alemonjs_get_robot_run_options` for launch modes and enabled plugins. Use `alemonjs_manage_robot_plugin` to install official Git plugins or uninstall a backpack package, and `alemonjs_set_robot_plugin_enabled` to change what loads at the next startup. `alemonjs_control_robot_runtime` starts or stops the robot, and `alemonjs_get_robot_logs` returns local or PM2 logs.
+
+Workbench HTTP tokens are scoped to the account that starts the connection. Workbench HTTP shares runtime state with the UI and supports development, foreground, and PM2. CLI connections support development and PM2 and require `ALX_AUTH_TOKEN` with workbench management permissions when account authentication is enabled.
+
 ## Capability model
 
 | Layer | MCP capability | Purpose |

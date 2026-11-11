@@ -154,6 +154,16 @@ func TestAccountRobotsAndMCPUseIsolatedLists(t *testing.T) {
 	if output := call(aliceMCP, "alemonjs_set_robot_plugin_enabled", map[string]any{"root": robotPath, "package": "demo", "enabled": true, "confirm": true}, 200); !strings.Contains(output, `"enabled":true`) {
 		t.Fatal(output)
 	}
+	s.mu.Lock()
+	s.operations = []operationTask{{ID: "robot-test-log", Root: robotPath, Action: "app", Status: "running", Output: "robot ready\npassword=demo-secret\n"}}
+	s.mu.Unlock()
+	logArgs := map[string]any{"root": robotPath, "mode": "local"}
+	if output := call(aliceMCP, "alemonjs_get_robot_logs", logArgs, 200); !strings.Contains(output, "robot ready") || strings.Contains(output, "demo-secret") {
+		t.Fatal("MCP did not return redacted workbench logs")
+	}
+	if output := call(bobMCP, "alemonjs_get_robot_logs", logArgs, 200); !strings.Contains(output, `"isError":true`) {
+		t.Fatal("MCP returned logs from another account")
+	}
 	request(s.systemMCPHandler, http.MethodPost, bob, map[string]string{"action": "stop"}, 200)
 	call(bobMCP, "alemonjs_list_robots", nil, 401)
 	call(aliceMCP, "alemonjs_list_robots", nil, 200)

@@ -10,6 +10,7 @@ import (
 
 	"alemonx/internal/access"
 	"alemonx/internal/mcp"
+	"alemonx/internal/robot"
 	"alemonx/internal/workspace"
 )
 
@@ -60,7 +61,14 @@ func (s *server) controlMCPRobot(root, mode, action string) (string, error) {
 		}
 		return "", errors.New("机器人运行操作失败。")
 	}
-	return recorder.Body.String(), nil
+	var task operationTask
+	if err := json.Unmarshal(recorder.Body.Bytes(), &task); err != nil {
+		return "", errors.New("无法读取机器人任务状态。")
+	}
+	task.Output = robot.RedactRuntimeLog(task.Output)
+	task.Error = robot.RedactRuntimeLog(task.Error)
+	result, err := json.Marshal(task)
+	return string(result), err
 }
 
 func (s *server) localMCPRobotLogs(root, query string) (string, error) {

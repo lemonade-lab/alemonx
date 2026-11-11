@@ -117,7 +117,7 @@ func UpdateRobots(root, account string, change RobotListChange) (RobotList, erro
 	switch change.Action {
 	case "add", "import":
 		if change.Action == "import" && list.Initialized {
-			return list, nil
+			return list, errors.New("当前账户已有机器人列表，请刷新后继续。")
 		}
 		selectedNew := false
 		for _, item := range change.Projects {

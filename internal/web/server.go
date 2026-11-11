@@ -1080,14 +1080,7 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	}
 	s.mcpHTTP.accountHandler = func(token string, identity access.Status, authToken string) http.Handler {
 		policy := s.accountMCPPolicy(options.MCPPolicy, mcpWorkspace, identity, authToken)
-		handler := mcp.NewServerWithPolicyAndWorkspace(version, mcpTemplates, policy, mcpWorkspace).HTTPHandler(token)
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if !s.mcpAccountValid(identity, authToken) {
-				writeError(w, http.StatusUnauthorized, "MCP 工作台账户会话已失效，请重新启动 HTTP 服务。")
-				return
-			}
-			handler.ServeHTTP(w, r)
-		})
+		return mcp.NewServerWithPolicyAndWorkspace(version, mcpTemplates, policy, mcpWorkspace).HTTPHandler(token)
 	}
 	if startBackground {
 		s.startMCPStatusMonitor()
@@ -1366,6 +1359,7 @@ func (s *server) authLogoutHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
 		return
 	}
+	s.revokeMCPForSession(s.authToken(r))
 	http.SetCookie(w, &http.Cookie{Name: authCookieName, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteStrictMode})
 	writeJSON(w, http.StatusOK, map[string]bool{"authenticated": false})
 }

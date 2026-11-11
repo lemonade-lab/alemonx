@@ -27,9 +27,10 @@ type managedMCP struct {
 }
 
 type mcpAccountSession struct {
-	token   string
-	handler http.Handler
-	valid   func() bool
+	token          string
+	handler        http.Handler
+	valid          func() bool
+	workbenchToken string
 }
 
 type mcpHTTPStatus struct {
@@ -124,7 +125,7 @@ func (s *server) systemMCPHandler(w http.ResponseWriter, r *http.Request) {
 			}
 			token := base64.RawURLEncoding.EncodeToString(secret[:])
 			m.sessions[account] = mcpAccountSession{
-				token: token, handler: m.accountHandler(token, identity, authToken),
+				token: token, handler: m.accountHandler(token, identity, authToken), workbenchToken: authToken,
 				valid: func() bool { return s.mcpAccountValid(identity, authToken) },
 			}
 		}
@@ -182,6 +183,27 @@ func (m *managedMCP) serveAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	handler.ServeHTTP(w, r)
+}
+
+func (s *server) revokeMCPForSession(token string) {
+	if token == "" {
+		return
+	}
+	identity, err := s.auth.Status(token)
+	if err != nil || !identity.Authenticated {
+		return
+	}
+	m := &s.mcpHTTP
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	session, ok := m.sessions[identity.RobotScope]
+	if !ok || session.workbenchToken != token {
+		return
+	}
+	delete(m.sessions, identity.RobotScope)
+	if len(m.sessions) == 0 {
+		m.stop()
+	}
 }
 
 func (s *server) allowMCPControl(r *http.Request) bool {

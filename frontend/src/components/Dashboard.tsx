@@ -1378,8 +1378,13 @@ export function Dashboard({
     }
   }
   const {
-    change: changeRobotList, ready: robotListReady, loading: robotListLoading,
-    error: robotListError, retry: retryRobotList, canImport, importLegacy
+    change: changeRobotList,
+    ready: robotListReady,
+    loading: robotListLoading,
+    error: robotListError,
+    retry: retryRobotList,
+    canImport,
+    importLegacy
   } = useAccountRobots()
   const rawProjects = useSelector(
     (state: RootState) => state.workspace.projects
@@ -2594,12 +2599,23 @@ export function Dashboard({
     parameters.delete('root')
     const search = parameters.toString()
     navigate(
-      { pathname: location.pathname, search: search ? `?${search}` : '', hash: location.hash },
+      {
+        pathname: location.pathname,
+        search: search ? `?${search}` : '',
+        hash: location.hash
+      },
       { replace: true }
     )
   }, [
-    changeRobotList, location.hash, location.pathname, location.search,
-    navigate, navigationFromURL.root, projects, robotListReady, root
+    changeRobotList,
+    location.hash,
+    location.pathname,
+    location.search,
+    navigate,
+    navigationFromURL.root,
+    projects,
+    robotListReady,
+    root
   ])
   useEffect(() => {
     if (report || checking || environmentChecked.current) return
@@ -2892,7 +2908,11 @@ export function Dashboard({
     if (validPaths.length) {
       const saved = await changeRobotList({
         action: 'add',
-        projects: validPaths.map(path => ({ id: path, path, name: projectName(path) }))
+        projects: validPaths.map(path => ({
+          id: path,
+          path,
+          name: projectName(path)
+        }))
       })
       if (!saved) {
         setDirectoryPickerOpen(false)
@@ -2901,7 +2921,12 @@ export function Dashboard({
       const active = saved.projects.find(item => item.id === saved.activeProjectID)
       if (active) {
         const search = writeDashboardNavigation(location.search, {
-          root: active.path, page: 'robot', section: 'runtime', buildMode, configEditor, dshOpen: false
+          root: active.path,
+          page: 'robot',
+          section: 'runtime',
+          buildMode,
+          configEditor,
+          dshOpen: false
         })
         navigate({ pathname: location.pathname, search, hash: location.hash })
       }

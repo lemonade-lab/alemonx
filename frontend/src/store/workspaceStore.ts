@@ -49,10 +49,15 @@ type LegacyRobots = { projects: WorkspaceProject[]; activeProjectID: string }
 
 export function readLegacyRobots(): LegacyRobots {
   try {
-    const saved = JSON.parse(window.localStorage.getItem(legacyRobotListKey) ?? '{}') as Partial<LegacyRobots>
+    const saved = JSON.parse(
+      window.localStorage.getItem(legacyRobotListKey) ?? '{}'
+    ) as Partial<LegacyRobots>
     return {
-      projects: Array.isArray(saved.projects) ? saved.projects.filter(item => typeof item?.path === 'string') : [],
-      activeProjectID: typeof saved.activeProjectID === 'string' ? saved.activeProjectID : ''
+      projects: Array.isArray(saved.projects)
+        ? saved.projects.filter(item => typeof item?.path === 'string')
+        : [],
+      activeProjectID:
+        typeof saved.activeProjectID === 'string' ? saved.activeProjectID : ''
     }
   } catch {
     return { projects: [], activeProjectID: '' }
@@ -69,10 +74,18 @@ try {
     const saved = JSON.parse(raw) as Record<string, string>
     if (saved.projects || saved.activeProjectID) {
       const projects = JSON.parse(saved.projects ?? '[]')
-      if (Array.isArray(projects) && projects.length && !window.localStorage.getItem(legacyRobotListKey)) {
-        window.localStorage.setItem(legacyRobotListKey, JSON.stringify({
-          projects, activeProjectID: JSON.parse(saved.activeProjectID ?? '""')
-        }))
+      if (
+        Array.isArray(projects) &&
+        projects.length &&
+        !window.localStorage.getItem(legacyRobotListKey)
+      ) {
+        window.localStorage.setItem(
+          legacyRobotListKey,
+          JSON.stringify({
+            projects,
+            activeProjectID: JSON.parse(saved.activeProjectID ?? '""')
+          })
+        )
       }
       delete saved.projects
       delete saved.activeProjectID

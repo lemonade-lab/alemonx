@@ -121,7 +121,9 @@ func (s *Server) robotTool(name string, arguments []byte) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if !slices.ContainsFunc(packages, func(item robot.LocalPackage) bool { return item.Valid && item.Name == input.Package }) {
+		if !slices.ContainsFunc(packages, func(item robot.LocalPackage) bool {
+			return item.Name == input.Package && (!*input.Enabled || item.Valid)
+		}) {
 			return "", fmt.Errorf("请先从背包列表选择有效插件")
 		}
 		result, err := s.robots.SetAppEnabled(root, input.Package, *input.Enabled)
@@ -196,6 +198,7 @@ func (s *Server) robotRunOptions(root string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	preflight, preflightErr := s.robots.RuntimePreflight(root)
 	background, pm2Err := s.robotBackgroundProcesses(root)
 	available := make([]string, 0, 3)
 	if status.HasDevScript {
@@ -211,6 +214,7 @@ func (s *Server) robotRunOptions(root string) (string, error) {
 		"robot": filepath.Base(root), "enabledPlugins": enabled, "project": status,
 		"availableModes": available, "startTool": "alemonjs_control_robot_runtime",
 		"backgroundProcesses": background, "backgroundStatusAvailable": pm2Err == nil,
+		"preflight": preflight, "preflightAvailable": preflightErr == nil,
 	})
 }
 

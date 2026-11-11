@@ -172,11 +172,11 @@ var pm2LogTimeLayouts = []string{
 }
 
 var (
-	pm2SensitiveFieldNames = `token|access_token|refresh_token|cookie|authorization|aid|mid|account_name|email|unmasked_email|mobile|safe_mobile|rebind_mobile|identity_code|realname|union_id|sub_union_id|nickname`
+	pm2SensitiveFieldNames = `token|access_token|refresh_token|cookie|authorization|password|passwd|api_key|client_secret|aid|mid|account_name|email|unmasked_email|mobile|safe_mobile|rebind_mobile|identity_code|realname|union_id|sub_union_id|nickname`
 	pm2SensitiveJSONField  = regexp.MustCompile(`(?i)("(?:` + pm2SensitiveFieldNames + `)"\s*:\s*")([^"]*)(")`)
 	pm2SensitiveJSField    = regexp.MustCompile(`(?i)('(?:` + pm2SensitiveFieldNames + `)'\s*:\s*')([^']*)(')`)
-	pm2SensitiveTokenPair  = regexp.MustCompile(`(?i)((?:authorization|cookie|access[_-]?token|refresh[_-]?token)\s*[:=]\s*(?:bearer\s+)?)([A-Za-z0-9._~+/\-=]{8,})`)
-	pm2SensitiveDataPair   = regexp.MustCompile(`(?i)((?:aid|mid|account_name|email|unmasked_email|mobile|safe_mobile|rebind_mobile|identity_code|realname|union_id|sub_union_id|nickname)\s*[:=]\s*)([^,\s}\]]+)`)
+	pm2SensitiveTokenPair  = regexp.MustCompile(`(?i)((?:authorization|cookie|access[_-]?token|refresh[_-]?token|token)\s*[:=]\s*(?:bearer\s+)?)([A-Za-z0-9._~+/\-=]{8,})`)
+	pm2SensitiveDataPair   = regexp.MustCompile(`(?i)((?:password|passwd|api[_-]?key|client[_-]?secret|aid|mid|account_name|email|unmasked_email|mobile|safe_mobile|rebind_mobile|identity_code|realname|union_id|sub_union_id|nickname)\s*[:=]\s*)([^,\s}\]]+)`)
 	pm2MissingModulePath   = regexp.MustCompile(`(?i)Cannot find module\s+['"]([^'"]+)['"]`)
 )
 

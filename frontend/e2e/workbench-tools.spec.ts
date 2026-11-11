@@ -190,3 +190,51 @@ test('empty robot workspace opens the new robot wizard', async ({ page }) => {
     page.getByRole('heading', { name: '你的环境都准备好了吗' })
   ).toBeVisible()
 })
+
+test('saved robots reopen from the account and stale URLs cannot register robots', async ({
+  page
+}) => {
+  const saved = '/test/robots/saved-robot'
+  const stale = '/test/robots/previous-account'
+  const writes: string[] = []
+  await page.route('**/api/v1/**', route => {
+    const request = route.request()
+    const path = new URL(request.url()).pathname
+    if (path === '/api/v1/auth/status')
+      return route.fulfill({
+        json: { enabled: true, authenticated: true, account: 'robot-owner' }
+      })
+    if (path === '/api/v1/goals') return route.fulfill({ json: [] })
+    if (path === '/api/v1/checks')
+      return route.fulfill({ json: { checks: [] } })
+    if (path === '/api/v1/workspace/robots') {
+      if (request.method() === 'POST')
+        writes.push(request.postDataJSON().action)
+      return route.fulfill({
+        json: {
+          scope: 'robot-owner',
+          local: false,
+          initialized: true,
+          projects: [
+            { id: saved, name: 'saved-robot', path: saved, pinned: true }
+          ],
+          activeProjectID: saved
+        }
+      })
+    }
+    if (path === '/api/v1/robot/validate')
+      return route.fulfill({ json: { valid: true } })
+    return route.fulfill({ status: 503, json: { error: '测试中未启用此服务' } })
+  })
+  await page.goto(`/dashboard/robot?root=${encodeURIComponent(stale)}`)
+  const savedRobot = page
+    .locator('.project-rail')
+    .getByText('saved-robot', { exact: true })
+  await expect(savedRobot).toBeVisible()
+  await expect
+    .poll(() => new URL(page.url()).searchParams.get('root'))
+    .toBe(saved)
+  await page.reload()
+  await expect(savedRobot).toBeVisible()
+  expect(writes).toEqual([])
+})

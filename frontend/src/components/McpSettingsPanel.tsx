@@ -182,8 +182,8 @@ export function McpSettingsPanel() {
       >
         <p>
           在 MCP 客户端选择 STDIO，由客户端启动本机的 <code>alx mcp</code>。
-          工作台开启账户认证后，可在客户端环境中配置 <code>ALX_AUTH_TOKEN</code>，
-          或在本页使用流式 HTTP 连接。
+          工作台开启账户认证后，可在客户端环境中配置 <code>ALX_AUTH_TOKEN</code>
+          ， 或在本页使用流式 HTTP 连接。
         </p>
         <pre className="overflow-x-auto">{stdioConfig}</pre>
       </SettingsCard>
