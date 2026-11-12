@@ -5181,14 +5181,6 @@ function GitCloneDialog({
               <label className="grid gap-1 text-xs font-semibold text-slate-600">
                 <span className="flex min-w-0 items-center justify-between gap-2">
                   <span>仓库地址</span>
-                  {usesSSH && !sshLoading && !sshKeys.length && (
-                    <small
-                      className="truncate font-normal text-red-700"
-                      title="请先配置 SSH 密钥，或改用 HTTPS 地址。"
-                    >
-                      未配置 SSH 密钥
-                    </small>
-                  )}
                 </span>
                 <input
                   className="h-9 rounded-md border border-slate-300 bg-white px-2.5 text-sm font-normal text-slate-800 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
@@ -5250,9 +5242,6 @@ function GitCloneDialog({
                         </option>
                       ))}
                     </select>
-                    <small className="font-normal leading-5 text-slate-500">
-                      选择此插件要跟踪和运行的分支；后续版本列表只显示该分支的提交。
-                    </small>
                   </label>
                 ) : (
                   <label className="grid gap-1 text-xs font-semibold text-slate-600">
