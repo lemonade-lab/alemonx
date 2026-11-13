@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Provider } from 'react-redux'
 import { App as AntApp, ConfigProvider, theme as antdTheme } from 'antd'
-import '@testone/testone.scss'
 import { store as testoneStore } from '@testone/store'
 import { setTestoneWsUrl } from '@testone/config'
 import { wsConnectRequest, wsCancel } from '@testone/store/slices/socketSlice'
