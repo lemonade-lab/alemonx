@@ -2,6 +2,7 @@ import { useStoreState } from '../store/guideStore'
 import { Fragment, useCallback, useEffect, type ReactNode } from 'react'
 import { LockKeyhole, LogOut, UserRound, X } from 'lucide-react'
 import { Button } from './Button'
+import { desktopPlatform } from './nativeWindow'
 import { SettingsCard, SettingsMessage, SettingsPage } from './SettingsCard'
 
 type AuthStatus = { enabled: boolean; authenticated: boolean; account?: string }
@@ -26,6 +27,11 @@ async function authRequest(path: string, init?: RequestInit) {
 
 function notifyAuthChanged() {
   window.dispatchEvent(new Event('alx:auth-changed'))
+  if (desktopPlatform) {
+    const channel = new BroadcastChannel('alx-native-auth')
+    channel.postMessage('changed')
+    channel.close()
+  }
 }
 
 async function readStatus() {
@@ -56,8 +62,18 @@ export function AuthGate({ children }: { children: ReactNode }) {
   useEffect(() => {
     refresh()
     window.addEventListener('alx:auth-changed', refresh)
-    return () => window.removeEventListener('alx:auth-changed', refresh)
-  }, [refresh])
+    const channel = desktopPlatform ? new BroadcastChannel('alx-native-auth') : null
+    if (channel) {
+      channel.onmessage = () => {
+        setStatus(null)
+        window.dispatchEvent(new Event('alx:auth-changed'))
+      }
+    }
+    return () => {
+      channel?.close()
+      window.removeEventListener('alx:auth-changed', refresh)
+    }
+  }, [refresh, setStatus])
   const login = async () => {
     setBusy(true)
     setError('')

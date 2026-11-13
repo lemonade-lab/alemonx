@@ -101,8 +101,10 @@ export function RobotGitControl({
   onMinimize,
   minimized,
   zIndex,
-  onActivate
+  onActivate,
+  native = false
 }: {
+  native?: boolean
   project: Project | null
   onClose: () => void
   onMinimize: () => void
@@ -704,6 +706,7 @@ export function RobotGitControl({
             : remotePanel
   return (
     <DesktopWindow
+      native={native}
       id="git"
       open
       minimized={minimized}

@@ -1,4 +1,5 @@
 import { BackpackPackageUpdate } from './BackpackPackageUpdate'
+import { RobotDirectoryTree } from './RobotDirectoryTree'
 import { RobotWorkspaceSplitter } from './RobotWorkspaceSplitter'
 import { useAccountRobots } from '../hooks/useAccountRobots'
 import { useNavigationState } from '../hooks/useNavigationState'
@@ -79,6 +80,7 @@ import {
   FileText,
   FlaskConical,
   Folder,
+  FolderGit2,
   FolderOpen,
   Gamepad2,
   GitBranch,
@@ -130,6 +132,8 @@ import { EnvConfigForm } from './EnvConfigForm'
 import { RobotPanel } from './RobotPanel'
 import { EcosystemMarket } from './EcosystemMarket'
 import meLogo from '../assets/images/me.png'
+import { EnvironmentFixDialog } from './EnvironmentFixDialog'
+import type { Report } from '../features/guide/types'
 import { OpsCenter } from './OpsCenter'
 import { OpsOverview } from './OpsOverview'
 import { NpmPublishPanel } from './NpmPublishPanel'
@@ -140,6 +144,8 @@ import { EmptyState } from './EmptyState'
 import { WorkspaceWelcome } from './WorkspaceWelcome'
 import { BackpackFolderInstall } from './BackpackFolderInstall'
 import { WorkbenchTools } from './WorkbenchTools'
+import { openNativeWindow, bridge, markNativeRuntimeReady, type AuxiliaryWindowName } from './nativeWindow'
+import { WorkbenchHeader } from './WorkbenchHeader'
 import { SettingsShortcuts } from './SettingsShortcuts'
 import type { SettingsSection } from './settingsSections'
 import { ProjectNavigation } from './ProjectNavigation'
@@ -177,6 +183,7 @@ import {
   workspaceApi,
   useCatalogQuery,
   useGitStatusQuery,
+  useLazyEnvironmentReportQuery,
   useGitWorkspaceQuery,
   useLazyRobotConsoleQuery,
   useLazyRobotFileQuery,
@@ -1338,20 +1345,6 @@ export function Dashboard({
     liveContentOpen,
     liveMinimized
   ])
-  useEffect(() => {
-    const toggleTerminal = () => {
-      activateFloatingWindow('terminal')
-      if (!consoleOpen) {
-        setConsoleOpen(true)
-        setConsoleMinimized(false)
-      } else {
-        setConsoleMinimized(value => !value)
-      }
-    }
-    window.addEventListener('alx:desktop-terminal-toggle', toggleTerminal)
-    return () =>
-      window.removeEventListener('alx:desktop-terminal-toggle', toggleTerminal)
-  }, [activateFloatingWindow, consoleOpen, setConsoleMinimized, setConsoleOpen])
   const environmentChecked = useRef(false)
   const eventsRef = useRef<EventSource | null>(null)
   const opsRefreshTimer = useRef<number | null>(null)
@@ -1412,6 +1405,21 @@ export function Dashboard({
   )
   const activeProject = projects.find(item => item.id === activeProjectID)
   const root = activeProject?.path ?? ''
+  useEffect(() => {
+    const toggleTerminal = () => {
+      if (openNativeRobotTool('terminal', root)) return
+      activateFloatingWindow('terminal')
+      if (!consoleOpen) {
+        setConsoleOpen(true)
+        setConsoleMinimized(false)
+      } else {
+        setConsoleMinimized(value => !value)
+      }
+    }
+    window.addEventListener('alx:desktop-terminal-toggle', toggleTerminal)
+    return () =>
+      window.removeEventListener('alx:desktop-terminal-toggle', toggleTerminal)
+  }, [activateFloatingWindow, consoleOpen, root, setConsoleMinimized, setConsoleOpen])
   const [setSystemCurrentRobot] = useSetSystemCurrentRobotMutation()
   useEffect(() => {
     void setSystemCurrentRobot({ root })
@@ -1467,6 +1475,17 @@ export function Dashboard({
       projects
     ]
   )
+
+  useEffect(() => {
+    if (!bridge) return
+    const select = (event: Event) => openProject((event as CustomEvent<string>).detail)
+    window.addEventListener('alx:native-open-project', select)
+    return () => window.removeEventListener('alx:native-open-project', select)
+  }, [openProject])
+
+  useEffect(() => {
+    markNativeRuntimeReady()
+  }, [])
 
   // URL is the durable source for navigation only. Effects triggered by a
   // browser back/forward action update state first; the following state-to-URL
@@ -1658,7 +1677,28 @@ export function Dashboard({
   // Details are reserved for operations whose command output is useful for
   // diagnosis. Form validation and ordinary save/status feedback belongs in a
   // transient notification, never in a draggable log window.
+  const nativeOperationOutput = useRef({ output: '', failed: false })
+  const operationOutputChannel = useRef<BroadcastChannel | null>(null)
+  useEffect(() => {
+    if (!bridge) return
+    const channel = new BroadcastChannel('alx-native-operation-log')
+    operationOutputChannel.current = channel
+    channel.onmessage = ({ data }) => {
+      if (data === 'request') channel.postMessage(nativeOperationOutput.current)
+    }
+    return () => {
+      operationOutputChannel.current = null
+      channel.close()
+    }
+  }, [])
   const showOperationDetail = (message: string, failed = false) => {
+    if (bridge) {
+      const shouldOpen = !nativeOperationOutput.current.output || failed
+      nativeOperationOutput.current = { output: message, failed }
+      operationOutputChannel.current?.postMessage(nativeOperationOutput.current)
+      openNativeWindow('operation-log', shouldOpen ? '' : 'update')
+      return
+    }
     setOutput(message)
     setOutputFailed(failed)
     setOperationLogMinimized(false)
@@ -2079,6 +2119,7 @@ export function Dashboard({
       // If the sandbox service is already serving, open the test center
       // instead of starting another dev/app process.
       if (await checkTestReachable()) {
+        if (openNativeRobotTool('test', root)) return
         setTestContentOpen(true)
         setTestMinimized(false)
         activateFloatingWindow('test')
@@ -2097,6 +2138,7 @@ export function Dashboard({
           'warning',
           '端口已调整'
         )
+      if (openNativeRobotTool('test', root)) return
       setTestContentOpen(true)
       setTestMinimized(false)
       activateFloatingWindow('test')
@@ -2138,6 +2180,7 @@ export function Dashboard({
       // unreachable. Its own connection state explains what is wrong, while
       // attempting to start again here conflicts with an existing robot
       // process and prevents the user from seeing the chat window at all.
+      if (openNativeRobotTool('live', root)) return
       setLiveContentOpen(true)
       setLiveMinimized(false)
       activateFloatingWindow('live')
@@ -2173,6 +2216,7 @@ export function Dashboard({
   }
   useEffect(() => {
     const toggleGit = () => {
+      if (activeProject && openNativeGit(activeProject)) return
       activateFloatingWindow('git')
       if (!gitProject && activeProject) {
         setGitProject(activeProject)
@@ -2210,6 +2254,7 @@ export function Dashboard({
       openLiveRef.current()
     }
     const togglePM2Logs = () => {
+      if (openNativeRobotTool('pm2-logs', root)) return
       activateFloatingWindow('pm2Logs')
       if (!pm2LogsOpen) {
         setPM2LogsOpen(true)
@@ -2219,6 +2264,7 @@ export function Dashboard({
       setPM2LogsMinimized(value => !value)
     }
     const toggleForegroundLogs = () => {
+      if (openNativeRobotTool('foreground-logs', root)) return
       activateFloatingWindow('foregroundLogs')
       if (!foregroundLogsOpen) {
         setForegroundLogsOpen(true)
@@ -2228,6 +2274,7 @@ export function Dashboard({
       setForegroundLogsMinimized(value => !value)
     }
     const togglePM2Status = () => {
+      if (openNativeRobotTool('pm2-processes', root)) return
       activateFloatingWindow('pm2Status')
       if (!pm2ProcessesOpen) {
         setPM2ProcessesOpen(true)
@@ -2237,6 +2284,7 @@ export function Dashboard({
       setPM2ProcessesMinimized(value => !value)
     }
     const toggleOps = () => {
+      if (openNativeRobotTool('ops', root)) return
       activateFloatingWindow('ops')
       if (!opsOpen) {
         setOpsOpen(true)
@@ -2303,6 +2351,7 @@ export function Dashboard({
     pm2LogsOpen,
     foregroundLogsOpen,
     pm2ProcessesOpen,
+    root,
     setPM2LogsMinimized,
     setPM2LogsOpen,
     setForegroundLogsOpen,
@@ -2715,9 +2764,11 @@ export function Dashboard({
         // Starting a robot should surface its supervised output in the
         // dedicated foreground-log window. The interactive terminal is a
         // separate user tool and must never open as a side effect of launch.
-        setForegroundLogsOpen(true)
-        setForegroundLogsMinimized(false)
-        activateFloatingWindow('foregroundLogs')
+        if (!openNativeRobotTool('foreground-logs', data.root)) {
+          setForegroundLogsOpen(true)
+          setForegroundLogsMinimized(false)
+          activateFloatingWindow('foregroundLogs')
+        }
         return true
       }
       if (
@@ -3144,6 +3195,14 @@ export function Dashboard({
     nextFeature: SystemFeature,
     resetBrowserHome = nextFeature === 'browser'
   ) {
+    if (nextFeature === 'data' || nextFeature === 'browser' ||
+        nextFeature === 'plugins' || nextFeature === 'ops-overview') {
+      if (openNativeWindow(nextFeature)) return
+    }
+    if (nextFeature === 'environment' || nextFeature === 'tasks') {
+      if (openNativeRobotTool(nextFeature, root)) return
+    }
+    if (nextFeature.startsWith('setup:') && openNativePlugin(nextFeature.slice(6))) return
     closeTemporaryContentPage()
     setSystemFeature(null)
     if (nextFeature === 'browser' && resetBrowserHome) {
@@ -3165,15 +3224,9 @@ export function Dashboard({
     newTab = false,
     preserveCurrentFeature = false
   ) {
-    const source = isWorkbenchBrowserPageURL(url) ? 'workbench' : 'address'
-    setBrowserRequestedURL({
-      id: `browser-command-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      kind: 'open',
-      source,
-      url,
-      tabID,
-      newTab
-    })
+    const command = browserOpenCommand(url, tabID, newTab)
+    if (sendNativeBrowserCommand(command)) return
+    setBrowserRequestedURL(command)
     if (preserveCurrentFeature) {
       // A system-plugin URL is delegated to the browser, but its panel must
       // remain mounted so ALXHost keeps its lifecycle and close(id) handle.
@@ -3190,22 +3243,15 @@ export function Dashboard({
   // Workbench routes are application documents, not user-entered URLs. They
   // must bypass URL completion, LAN/public classification and HTTP proxying.
   function openWorkbenchBrowserPage(path: string, tabID?: string) {
-    setBrowserRequestedURL({
-      id: `browser-command-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      kind: 'open',
-      source: 'workbench',
-      url: path,
-      tabID,
-      newTab: true
-    })
+    if (openNativeRobotApp(path)) return
+    const command = { ...browserOpenCommand(path, tabID, true), source: 'workbench' as const }
+    if (sendNativeBrowserCommand(command)) return
+    setBrowserRequestedURL(command)
     selectSystemFeature('browser', false)
   }
   function closeMiniBrowserTab(tabID: string) {
-    setBrowserRequestedURL({
-      id: `browser-command-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      kind: 'close',
-      tabID
-    })
+    const command = browserCloseCommand(tabID)
+    if (!sendNativeBrowserCommand(command)) setBrowserRequestedURL(command)
   }
 
   const currentCatalog =
@@ -3272,6 +3318,7 @@ export function Dashboard({
             })
           }
           onOpenLogs={() => {
+            if (openNativeRobotTool('foreground-logs', root)) return
             setForegroundLogsOpen(true)
             setForegroundLogsMinimized(false)
             activateFloatingWindow('foregroundLogs')
@@ -3368,23 +3415,28 @@ export function Dashboard({
             void refetchPM2Status()
           }}
           onOpenPM2Logs={() => {
+          if (openNativeRobotTool('pm2-logs', root)) return
             setPM2LogsOpen(true)
             setPM2LogsMinimized(false)
             activateFloatingWindow('pm2Logs')
           }}
           onOpenForegroundLogs={() => {
+          if (openNativeRobotTool('foreground-logs', root)) return
             setForegroundLogTask(null)
             setForegroundLogsOpen(true)
             setForegroundLogsMinimized(false)
             activateFloatingWindow('foregroundLogs')
           }}
           onOpenScriptLogs={task => {
+            if (openNativeRobotTool('foreground-logs', root, task.id, task.name)) return
             setForegroundLogTask(task)
             setForegroundLogsOpen(true)
             setForegroundLogsMinimized(false)
             activateFloatingWindow('foregroundLogs')
           }}
           onClearOperationLog={() => {
+            nativeOperationOutput.current = { output: '', failed: false }
+            operationOutputChannel.current?.postMessage(nativeOperationOutput.current)
             setOutput('')
             setOutputFailed(false)
             setOperationLogMinimized(false)
@@ -3697,7 +3749,7 @@ export function Dashboard({
           style={windowStyle}
           data-window-container="workbench"
         >
-          <header className="topbar flex min-h-11 min-w-0 flex-wrap items-center justify-between gap-x-2 border-b border-(--theme-border-default) bg-(--theme-surface-panel) px-3 py-1">
+          <WorkbenchHeader className="topbar flex min-h-11 min-w-0 flex-wrap items-center justify-between gap-x-2 border-b border-(--theme-border-default) bg-(--theme-surface-panel) px-3 py-1">
             <div className="flex min-w-0 flex-1 items-center gap-1.5">
               <Button
                 variant="icon"
@@ -3766,7 +3818,7 @@ export function Dashboard({
                 <CircleQuestionMark className="size-4" />
               </button>
             </div>
-          </header>
+          </WorkbenchHeader>
           <ConfirmDialog
             open={Boolean(pendingBackpackRemoval)}
             title="从背包移除插件"
@@ -3989,7 +4041,7 @@ export function Dashboard({
                 environmentWarning={environmentWarning}
                 onFeature={feature => {
                   selectSystemFeature(feature)
-                  if (feature === 'environment') onCheck()
+                  if (feature === 'environment' && !bridge) onCheck()
                 }}
                 onPinProject={pinProject}
                 onReorderProject={reorderProject}
@@ -4019,18 +4071,24 @@ export function Dashboard({
                   developerMode={developerMode}
                   dshOpen={aiOpen}
                   onOpenConsole={() => {
+                    if (openNativeRobotTool('terminal', root)) return
                     setConsoleOpen(true)
                     setConsoleMinimized(false)
                     activateFloatingWindow('terminal')
                   }}
                   onOpenAI={openAI}
                   onOpenOps={() => {
+                    if (openNativeRobotTool('ops', root)) return
                     setOpsOpen(true)
                     setOpsMinimized(false)
                     activateFloatingWindow('ops')
                   }}
                   appLaunching={appLaunching}
                   onOpenApp={() => void openApp()}
+                  appPages={botAppPages}
+                  onOpenAppPage={id => {
+                    openWorkbenchBrowserPage(`/api/v1/robot/webview/${robotAppToken(root)}/${encodeURIComponent(id)}/`)
+                  }}
                   testLaunching={testLaunching}
                   onOpenTest={() => void openTest()}
                   onOpenLive={() => void openLive()}
@@ -4045,6 +4103,7 @@ export function Dashboard({
                     setCatalogTitle(title)
                   }}
                   onGit={() => {
+                    if (openNativeGit(activeProject)) return
                     setGitProject(activeProject)
                     setGitMinimized(false)
                     activateFloatingWindow('git')
@@ -4217,6 +4276,7 @@ export function Dashboard({
         root={root}
         zIndex={windowLayers.pm2Status}
         onOpenLogs={() => {
+          if (openNativeRobotTool('pm2-logs', root)) return
           setPM2LogsOpen(true)
           setPM2LogsMinimized(false)
           activateFloatingWindow('pm2Logs')
@@ -4505,31 +4565,35 @@ function ProjectRail({
   )
   const robotList = (
     <div
-      className="grid content-start h-full gap-1.5 overflow-auto px-1.5 pb-2"
+      className="min-h-0 flex-1 overflow-auto overscroll-contain px-2 pb-2"
       onPointerUp={finishProjectDrag}
       onPointerCancel={finishProjectDrag}
     >
-      {projects.map(project => (
-        <ProjectItem
-          active={project.id === activeID}
-          dragging={project.id === draggingProjectID}
-          dragTarget={
-            project.id === dragTargetID && project.id !== draggingProjectID
-          }
-          key={project.id}
-          project={project}
-          onSelect={id => {
-            if (!ignoreProjectSelect.current) onSelect(id)
-          }}
-          onRemove={onRemove}
-          onPin={onPinProject}
-          onDragStart={startProjectDrag}
-          onDragTarget={id => {
-            if (draggingProjectID && id !== draggingProjectID)
-              setDragTargetID(id)
-          }}
+      {projects.length > 0 && (
+        <RobotDirectoryTree
+          robots={projects}
+          renderRobot={project => (
+            <ProjectItem
+              active={project.id === activeID}
+              dragging={project.id === draggingProjectID}
+              dragTarget={
+                project.id === dragTargetID && project.id !== draggingProjectID
+              }
+              project={project}
+              onSelect={id => {
+                if (!ignoreProjectSelect.current) onSelect(id)
+              }}
+              onRemove={onRemove}
+              onPin={onPinProject}
+              onDragStart={startProjectDrag}
+              onDragTarget={id => {
+                if (draggingProjectID && id !== draggingProjectID)
+                  setDragTargetID(id)
+              }}
+            />
+          )}
         />
-      ))}
+      )}
       {!projects.length && (
         <p className="px-2 py-4 text-center text-xs text-slate-400">
           添加机器人目录开始管理
@@ -5509,7 +5573,8 @@ function ProjectItem({
       )}
     >
       <button
-        className="flex w-full items-center gap-2 py-1.5 pl-2 pr-12 text-left"
+        className="flex w-full min-w-0 items-center gap-2 pr-9 text-left"
+        aria-current={active ? 'page' : undefined}
         onClick={() => onSelect(project.id)}
         onPointerDown={event => onDragStart(event, project.id)}
         onPointerEnter={() => onDragTarget(project.id)}
@@ -5520,7 +5585,8 @@ function ProjectItem({
         }}
         title={invalid ? data.error || project.path : project.path}
       >
-        <Bot
+        <FolderGit2
+          aria-hidden="true"
           className={cn(
             'size-3.5 shrink-0',
             invalid ? 'text-amber-500' : 'text-slate-400 dark:text-slate-500'
@@ -5528,7 +5594,7 @@ function ProjectItem({
         />
         <span
           className={cn(
-            'min-w-0 flex-1 truncate text-xs',
+            'min-w-0 flex-1 truncate text-xs font-semibold',
             invalid
               ? 'text-amber-700 dark:text-amber-400'
               : active
@@ -7450,12 +7516,18 @@ function SetupPluginCenter({
       const id = (event as CustomEvent<{ id?: string }>).detail?.id
       if (typeof id === 'string') browserWebviewIDs.current.delete(id)
     }
+    const channel = bridge ? new BroadcastChannel('alx-native-browser') : null
+    channel?.addEventListener('message', event => {
+      if (typeof event.data?.id === 'string') browserWebviewIDs.current.delete(event.data.id)
+    })
     window.addEventListener('alx-browser-tab-closed', forgetClosedBrowserTab)
-    return () =>
+    return () => {
+      channel?.close()
       window.removeEventListener(
         'alx-browser-tab-closed',
         forgetClosedBrowserTab
       )
+    }
   }, [])
   useEffect(() => {
     setActiveModalBusy(false)
@@ -11653,8 +11725,10 @@ function MiniBrowserWindow({
   onClose,
   onMinimize,
   onActivate,
-  onCommandConsumed
+  onCommandConsumed,
+  native = false
 }: {
+  native?: boolean
   minimized: boolean
   browserCommand: BrowserCommand | null
   zIndex: number
@@ -11721,6 +11795,11 @@ function MiniBrowserWindow({
         // The only tab was a provisional HTTP tab that has been classified for
         // the system browser. Do not leave an empty embedded browser behind.
         window.setTimeout(onClose, 0)
+        if (native) {
+          const home = createBrowserHomeTab()
+          setActiveTabID(home.id)
+          return [home]
+        }
         return remaining
       }
       if (activeTabID === id) setActiveTabID(remaining.at(-1)?.id ?? '')
@@ -12071,12 +12150,19 @@ function MiniBrowserWindow({
   }, [tabs])
   const closeTab = (id: string) => {
     const index = tabs.findIndex(tab => tab.id === id)
+    if (index < 0) return
     const remaining = tabs.filter(tab => tab.id !== id)
-    if (index >= 0)
-      window.dispatchEvent(
-        new CustomEvent('alx-browser-tab-closed', { detail: { id } })
-      )
+    window.dispatchEvent(
+      new CustomEvent('alx-browser-tab-closed', { detail: { id } })
+    )
     if (remaining.length === 0) {
+      if (native) {
+        const home = createBrowserHomeTab()
+        setTabs([home])
+        setActiveTabID(home.id)
+        setHomeQuery('')
+        setError('')
+      }
       onClose()
       return
     }
@@ -12093,6 +12179,7 @@ function MiniBrowserWindow({
   }
   return (
     <DesktopWindow
+      native={native}
       id="mini-browser"
       open
       minimized={minimized}
@@ -12490,8 +12577,10 @@ function TestCenterWindow({
   zIndex,
   onClose,
   onMinimize,
-  onActivate
+  onActivate,
+  native = false
 }: {
+  native?: boolean
   root: string
   minimized: boolean
   zIndex: number
@@ -12501,6 +12590,7 @@ function TestCenterWindow({
 }) {
   return (
     <DesktopWindow
+      native={native}
       id="test"
       open
       minimized={minimized}
@@ -12528,8 +12618,10 @@ function LiveChatWindow({
   zIndex,
   onClose,
   onMinimize,
-  onActivate
+  onActivate,
+  native = false
 }: {
+  native?: boolean
   root: string
   minimized: boolean
   zIndex: number
@@ -12539,6 +12631,7 @@ function LiveChatWindow({
 }) {
   return (
     <DesktopWindow
+      native={native}
       id="live"
       open
       minimized={minimized}
@@ -12572,6 +12665,8 @@ function ControlCard({
   developerMode,
   dshOpen,
   appLaunching,
+  appPages,
+  onOpenAppPage,
   testLaunching,
   onOpenConsole,
   onOpenAI,
@@ -12595,6 +12690,8 @@ function ControlCard({
   developerMode: boolean
   dshOpen: boolean
   appLaunching: boolean
+  appPages: Array<{ id: string; name: string }>
+  onOpenAppPage: (id: string) => void
   testLaunching: boolean
   onOpenConsole: () => void
   onOpenAI: () => void
@@ -12777,6 +12874,21 @@ function ControlCard({
             </button>
           )}
         </ProjectNavigation>
+        {project && appPages.length > 0 && (
+            <label className="mt-2 grid gap-1 text-xs text-(--theme-text-secondary)">
+              机器人应用页
+              <select
+                className="min-w-0 rounded border border-(--theme-border-default) bg-(--theme-surface-panel) px-2 py-1"
+                value=""
+                onChange={event => {
+                  if (event.target.value) onOpenAppPage(event.target.value)
+                }}
+              >
+                <option value="">选择应用页</option>
+                {appPages.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
+              </select>
+            </label>
+        )}
         {project && (
           <footer
             className="control-quick-actions mt-2 grid grid-cols-5 gap-1 border-t border-slate-100 pt-2 dark:border-slate-700"
@@ -12905,8 +13017,10 @@ function ReadonlyConsoleContent({
   onToggleMasterAuthorization,
   onOpenService,
   zIndex,
-  onActivate
+  onActivate,
+  native = false
 }: {
+  native?: boolean
   open: boolean
   terminalOnly?: boolean
   logsOnly?: boolean
@@ -13102,7 +13216,36 @@ function ReadonlyConsoleContent({
     setLiveOutput
   ])
   useEffect(() => {
-    if (!open) return
+    if (!native || !open || !root) return
+    const query = new URLSearchParams(taskId ? { taskId } : {})
+    const source = new EventSource(`/api/v1/robot/events?${query}`)
+    let timer: number | undefined
+    let disposed = false
+    const refresh = () => {
+      if (timer !== undefined) return
+      timer = window.setTimeout(() => {
+        void load({ root, taskId }).then(result => {
+          if (!disposed && result.data) setLiveOutput(result.data.output ?? '')
+        }).finally(() => { timer = undefined })
+      }, 350)
+    }
+    source.onopen = refresh
+    source.onmessage = event => {
+      try {
+        const payload = JSON.parse(event.data) as { type?: string }
+        if (payload.type === 'output' || payload.type === 'task') refresh()
+      } catch {
+        // Ignore malformed frames.
+      }
+    }
+    return () => {
+      disposed = true
+      source.close()
+      window.clearTimeout(timer)
+    }
+  }, [load, native, open, root, setLiveOutput, taskId])
+  useEffect(() => {
+    if (!open || native) return
     const handler = (event: Event) => {
       const detail = (
         event as CustomEvent<{
@@ -13132,6 +13275,7 @@ function ReadonlyConsoleContent({
     window.addEventListener('alx:robot-output', handler)
     return () => window.removeEventListener('alx:robot-output', handler)
   }, [
+    native,
     open,
     taskId,
     setExpandedForegroundRepeats,
@@ -13298,6 +13442,10 @@ function ReadonlyConsoleContent({
   }
   const foregroundLogActionLabel = (item: ForegroundLogItem) => {
     if (!item.action) return ''
+    if (native && item.action === 'manage-master' && !onToggleMasterAuthorization) return ''
+    if (native && (item.action === 'open-runtime' || item.action === 'install-dependencies') && !onOpenRuntime) return ''
+    if (native && item.action === 'open-config' && !onOpenConfig) return ''
+    if (native && item.action === 'open-environment' && !onOpenEnvironment) return ''
     const labels: Record<NonNullable<ForegroundLogAction>, string> = {
       'install-dependencies': '自动同步依赖',
       'open-runtime': '查看运行',
@@ -13415,6 +13563,7 @@ function ReadonlyConsoleContent({
   if (!open) return null
   return (
     <DesktopWindow
+      native={native}
       id={logsOnly ? 'foreground-logs' : 'terminal'}
       open={open}
       minimized={minimized}
@@ -13675,7 +13824,7 @@ function ReadonlyConsoleContent({
                             )}
                           </span>
                           <span className="smart-log-line-actions">
-                            {item.action &&
+                            {foregroundLogActionLabel(item) &&
                               item.action !== 'install-dependencies' && (
                                 <button
                                   onClick={() => runForegroundLogAction(item)}
@@ -13813,8 +13962,10 @@ function FullTerminal({
   onClose,
   onMinimize,
   zIndex,
-  onActivate
+  onActivate,
+  native = false
 }: {
+  native?: boolean
   open: boolean
   minimized: boolean
   root: string
@@ -13829,9 +13980,12 @@ function FullTerminal({
   const fitRef = useRef<FitAddon | null>(null)
   const writtenRef = useRef(0)
   const creatingRef = useRef(false)
+  const restoredStorage = useRef('')
   const [sessions, setSessions] = useState<LocalTerminal[]>([])
   const [activeID, setActiveID] = useState('')
   const active = sessions.find(item => item.id === activeID)
+  const activeOutputRef = useRef('')
+  useEffect(() => { activeOutputRef.current = active?.output ?? '' }, [active?.output])
 
   const headersFor = (item: LocalTerminal) => ({
     'Content-Type': 'application/json',
@@ -13847,28 +14001,32 @@ function FullTerminal({
   const createTerminal = useCallback(async () => {
     if (creatingRef.current) return
     creatingRef.current = true
-    const response = await fetch('/api/v1/terminal/sessions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ cwd: root })
-    })
-    const result = await response.json()
-    if (!response.ok || typeof result.id !== 'string') {
-      window.alert(result.error || '无法创建终端。')
+    try {
+      const response = await fetch('/api/v1/terminal/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cwd: root })
+      })
+      const result = await response.json()
+      if (!response.ok || typeof result.id !== 'string') {
+        window.alert(result.error || '无法创建终端。')
+        return
+      }
+      const item: LocalTerminal = {
+        id: result.id,
+        key: result.key,
+        cwd: result.cwd,
+        shell: result.shell,
+        label: `终端 ${sessions.length + 1}`,
+        output: ''
+      }
+      setSessions(current => [...current, item])
+      setActiveID(item.id)
+    } catch {
+      window.alert('无法连接终端服务。')
+    } finally {
       creatingRef.current = false
-      return
     }
-    const item: LocalTerminal = {
-      id: result.id,
-      key: result.key,
-      cwd: result.cwd,
-      shell: result.shell,
-      label: `终端 ${sessions.length + 1}`,
-      output: ''
-    }
-    setSessions(current => [...current, item])
-    setActiveID(item.id)
-    creatingRef.current = false
   }, [root, sessions.length])
   const closeTerminal = useCallback(
     (item: LocalTerminal) => {
@@ -13878,19 +14036,23 @@ function FullTerminal({
       })
       setSessions(current => {
         const next = current.filter(candidate => candidate.id !== item.id)
-        if (next.length === 0) onClose()
+        if (next.length === 0) {
+          sessionStorage.removeItem(storageKey)
+          if (!native) onClose()
+        }
         return next
       })
       setActiveID(current => (current === item.id ? '' : current))
     },
-    [onClose]
+    [native, onClose, storageKey]
   )
 
   // Restore only descriptors, never credentials in long-lived storage. The
   // daemon keeps the PTY alive across a browser refresh and validates every
   // descriptor before it becomes visible again.
   useEffect(() => {
-    if (!open || sessions.length) return
+    if (!open || restoredStorage.current === storageKey) return
+    restoredStorage.current = storageKey
     const saved = sessionStorage.getItem(storageKey)
     if (!saved) {
       void createTerminal()
@@ -13924,9 +14086,10 @@ function FullTerminal({
         setSessions(items)
         setActiveID(items[0].id)
       } else void createTerminal()
-    })
-  }, [createTerminal, open, sessions.length, storageKey])
+    }).catch(() => {})
+  }, [createTerminal, open, storageKey])
   useEffect(() => {
+    if (!sessions.length) return
     sessionStorage.setItem(
       storageKey,
       JSON.stringify(sessions.map(({ id, key, label }) => ({ id, key, label })))
@@ -14019,6 +14182,10 @@ function FullTerminal({
       }
       if (payload.truncated)
         updateSession(active.id, item => ({ ...item, truncated: true }))
+      if (payload.snapshot && typeof payload.text === 'string' && !payload.text.startsWith(activeOutputRef.current.slice(0, writtenRef.current))) {
+        xtermRef.current?.reset()
+        writtenRef.current = 0
+      }
       if (payload.text)
         updateSession(active.id, item => ({
           ...item,
@@ -14059,6 +14226,7 @@ function FullTerminal({
   }
   return (
     <DesktopWindow
+      native={native}
       id="terminal"
       open={open}
       minimized={minimized}
@@ -14095,6 +14263,14 @@ function FullTerminal({
               />
             </button>
           ))}
+          <button
+            className="readonly-console-tab-add"
+            onClick={() => void createTerminal()}
+            aria-label="添加终端"
+            title="添加终端"
+          >
+            <Plus className="size-4" />
+          </button>
         </nav>
       }
       actions={
@@ -14197,8 +14373,10 @@ function OpsWindow({
   onClose,
   onMinimize,
   zIndex,
-  onActivate
+  onActivate,
+  native = false
 }: {
+  native?: boolean
   open: boolean
   minimized: boolean
   root: string
@@ -14209,6 +14387,7 @@ function OpsWindow({
 }) {
   return (
     <SidebarWindow
+      native={native}
       id="ops"
       open={open}
       minimized={minimized}
@@ -14240,8 +14419,12 @@ function PM2ProcessesPanel({
   onOpenLogs,
   onRun,
   zIndex,
-  onActivate
+  onActivate,
+  native = false,
+  actionError
 }: {
+  native?: boolean
+  actionError?: string
   open: boolean
   root: string
   minimized: boolean
@@ -14309,6 +14492,7 @@ function PM2ProcessesPanel({
   }
   return (
     <DesktopWindow
+      native={native}
       id="pm2Status"
       open
       minimized={minimized}
@@ -14334,7 +14518,8 @@ function PM2ProcessesPanel({
         </button>
       }
     >
-      <section className="grid min-h-0 grid-rows-[minmax(0,1fr)_auto] overflow-hidden">
+      <section className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden">
+        <div>{actionError && <p className="px-3 py-2 text-sm text-red-600" role="alert">{actionError}</p>}</div>
         <header className="hidden">
           <div className="flex min-w-0 items-center gap-2">
             <Terminal className="size-4 shrink-0 text-brand-600 dark:text-brand-200" />
@@ -14615,8 +14800,10 @@ function OperationLog({
   minimized,
   onMinimize,
   onRestore,
-  onClose
+  onClose,
+  native = false
 }: {
+  native?: boolean
   output: string
   failed: boolean
   minimized: boolean
@@ -14638,6 +14825,7 @@ function OperationLog({
     )
   return (
     <DesktopWindow
+      native={native}
       id="operation-log"
       open
       minimized={minimized}
@@ -15300,5 +15488,308 @@ function GitReleasePanelNext({
         </>
       )}
     </RobotPanel>
+  )
+}
+
+type RobotWindowName = 'terminal' | 'foreground-logs' | 'pm2-logs' | 'robot-app' | 'git' | 'pm2-processes' | 'test' | 'live' | 'ops'
+type SystemWindowName = Exclude<AuxiliaryWindowName, RobotWindowName | 'settings' | 'data'>
+
+function openNativeRobotTool(
+  name: Exclude<RobotWindowName, 'robot-app' | 'git'> | 'environment' | 'tasks',
+  root: string,
+  taskId?: string,
+  taskName?: string
+) {
+  const query = new URLSearchParams({ root })
+  if (taskId) query.set('taskId', taskId)
+  if (taskName) query.set('taskName', taskName)
+  return openNativeWindow(name, query.toString())
+}
+
+function openNativeGit(project?: Project) {
+  return project && openNativeWindow('git', new URLSearchParams({
+    root: project.path,
+    name: project.name
+  }).toString())
+}
+
+function openNativePlugin(id: string) {
+  return openNativeWindow('plugin', new URLSearchParams({ id }).toString())
+}
+
+function browserOpenCommand(url: string, tabID?: string, newTab = false): BrowserCommand {
+  return {
+    id: createRandomID(),
+    kind: 'open',
+    source: isWorkbenchBrowserPageURL(url) ? 'workbench' : 'address',
+    url,
+    tabID,
+    newTab
+  }
+}
+
+function browserCloseCommand(tabID: string): BrowserCommand {
+  return { id: createRandomID(), kind: 'close', tabID }
+}
+
+function sendNativeBrowserCommand(command: BrowserCommand) {
+  return openNativeWindow('browser', JSON.stringify(command))
+}
+
+function openNativeRobotApp(path: string) {
+  if (!/^\/api\/v1\/robot\/(app|webview)\/[\w-]+\//.test(path)) return false
+  return openNativeWindow('robot-app', new URLSearchParams({ path }).toString())
+}
+
+function closeNativeRobotWindow() {
+  bridge?.postMessage('alx:window:close')
+}
+
+const nativeRobotWindowProps = {
+  native: true,
+  open: true,
+  minimized: false,
+  zIndex: 100,
+  onActivate: () => {},
+  onMinimize: () => {},
+  onClose: closeNativeRobotWindow
+}
+
+export function NativeRobotWindow({ name }: { name: RobotWindowName | SystemWindowName }) {
+  const query = new URLSearchParams(window.location.search)
+  const root = query.get('root') ?? ''
+  if (name === 'terminal') {
+    return <FullTerminal {...nativeRobotWindowProps} root={root} />
+  }
+  if (name === 'pm2-logs') {
+    return <PM2LogsPanel {...nativeRobotWindowProps} root={root} />
+  }
+  if (name === 'foreground-logs') {
+    const taskName = query.get('taskName')
+    return (
+      <ReadonlyConsoleContent
+        {...nativeRobotWindowProps}
+        logsOnly
+        root={root}
+        taskId={query.get('taskId') ?? undefined}
+        logTitle={taskName ? taskName + ' 日志' : '前台日志'}
+        onOpenService={value => {
+          if (!openNativeRobotApp(value))
+            void fetch('/api/v1/browser/external/open', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ url: value })
+            })
+        }}
+      />
+    )
+  }
+  if (name === 'git') {
+    return <RobotGitControl {...nativeRobotWindowProps} project={{ path: root, name: query.get('name') || projectName(root) }} />
+  }
+  if (name === 'test') return <TestCenterWindow {...nativeRobotWindowProps} root={root} />
+  if (name === 'live') return <LiveChatWindow {...nativeRobotWindowProps} root={root} />
+  if (name === 'ops') return <OpsWindow {...nativeRobotWindowProps} root={root} />
+  if (name === 'pm2-processes') return <NativePM2ProcessesWindow root={root} />
+  if (name === 'browser') return <NativeBrowserWindow />
+  if (name === 'operation-log') return <NativeOperationLog />
+  if (name !== 'robot-app') return <NativeSystemWindow name={name} root={root} pluginID={query.get('id') ?? ''} />
+  const path = query.get('path') ?? ''
+  if (!/^\/api\/v1\/robot\/(app|webview)\/[\w-]+\//.test(path)) return null
+  return (
+    <MiniBrowserWindow
+      {...nativeRobotWindowProps}
+      browserCommand={{ id: 'native-robot-app', kind: 'open', source: 'workbench', url: path, newTab: true }}
+      onCommandConsumed={() => {}}
+    />
+  )
+}
+
+function NativeBrowserWindow() {
+  const [command, setCommand] = useState<BrowserCommand | null>(() => {
+    const encoded = new URLSearchParams(window.location.hash.slice(1)).get('command')
+    if (!encoded) return null
+    try {
+      return JSON.parse(encoded) as BrowserCommand
+    } catch {
+      return null
+    }
+  })
+  const [pending, setPending] = useState<BrowserCommand[]>([])
+  useEffect(() => {
+    const channel = new BroadcastChannel('alx-native-browser')
+    const receive = (event: Event) => {
+      const next = (event as CustomEvent<BrowserCommand>).detail
+      setPending(queue => [...queue, next])
+    }
+    const closeTab = (event: Event) =>
+      channel.postMessage((event as CustomEvent<{ id: string }>).detail)
+    window.addEventListener('alx:native-browser-command', receive)
+    window.addEventListener('alx-browser-tab-closed', closeTab)
+    if (window.location.hash)
+      history.replaceState(history.state, '', window.location.pathname)
+    markNativeRuntimeReady()
+    return () => {
+      window.removeEventListener('alx:native-browser-command', receive)
+      window.removeEventListener('alx-browser-tab-closed', closeTab)
+      channel.close()
+    }
+  }, [])
+  useEffect(() => {
+    if (!command && pending.length) {
+      setCommand(pending[0])
+      setPending(queue => queue.slice(1))
+    }
+  }, [command, pending])
+  return (
+    <MiniBrowserWindow
+      {...nativeRobotWindowProps}
+      browserCommand={command}
+      onCommandConsumed={id => setCommand(current => current?.id === id ? null : current)}
+    />
+  )
+}
+
+function NativePM2ProcessesWindow({ root }: { root: string }) {
+  const [startTask] = useStartRobotTaskMutation()
+  const [loadTask] = useLazyRobotTaskQuery()
+  const [actionError, setActionError] = useState('')
+  const run = async (action: string, message?: string) => {
+    setActionError('')
+    try {
+      if (!root) throw new Error('请先在工作台选择机器人。')
+      let task = await startTask({ root, action, ...(message ? { message } : {}) }).unwrap()
+      if (action === 'pm2-process-stop' && task.status === 'running') return true
+      const deadline = Date.now() + 60_000
+      while (task.status === 'running' && Date.now() < deadline) {
+        await new Promise(resolve => window.setTimeout(resolve, 600))
+        task = await loadTask(task.id).unwrap()
+      }
+      if (task.status === 'running') throw new Error('请在任务记录中查看操作进度。')
+      if (task.status !== 'completed') throw new Error(task.error || task.output || 'PM2 操作未完成。')
+      return true
+    } catch (reason) {
+      setActionError(operationErrorMessage(reason, 'PM2 操作未完成。'))
+      return false
+    }
+  }
+  return (
+    <PM2ProcessesPanel
+      {...nativeRobotWindowProps}
+      root={root}
+      actionError={actionError}
+      onOpenLogs={() => openNativeRobotTool('pm2-logs', root)}
+      onRun={run}
+    />
+  )
+}
+
+function NativeOpsOverview() {
+  useAccountRobots()
+  const projects = useSelector((state: RootState) => state.workspace.projects)
+  return (
+    <OpsOverview
+      projects={projects.map(project => ({ ...project, name: projectName(project.path) }))}
+      sidebarLayout
+      onOpenProject={id => openNativeWindow('main-project', new URLSearchParams({ id }).toString())}
+    />
+  )
+}
+
+function NativeEnvironment() {
+  const dispatch = useDispatch()
+  const [loadReport, { data, isFetching, error }] = useLazyEnvironmentReportQuery()
+  const [repairCheck, setRepairCheck] = useState<Check | null>(null)
+  const report = (data as Report | undefined) ?? null
+  const refresh = useCallback(() => {
+    const goalId = 'install'
+    const variant = ''
+    dispatch(workspaceApi.util.invalidateTags([{ type: 'EnvironmentReport', id: `${goalId}:${variant}` }]))
+    void loadReport({ goalId, variant })
+  }, [dispatch, loadReport])
+  useEffect(refresh, [refresh])
+  return (
+    <>
+      <EnvironmentPage report={report} checking={isFetching} sidebarLayout onRefresh={refresh} onFix={setRepairCheck} />
+      {error && <p role="alert" className="px-4 py-2 text-sm text-red-600">{operationErrorMessage(error, '环境检查未完成。')}</p>}
+      {repairCheck && (
+        <EnvironmentFixDialog
+          check={repairCheck}
+          platform={report?.platform}
+          onInstalled={refresh}
+          onClose={() => setRepairCheck(null)}
+        />
+      )}
+    </>
+  )
+}
+
+function NativeSystemWindow({ name, root, pluginID }: {
+  name: Exclude<SystemWindowName, 'browser' | 'operation-log'>
+  root: string
+  pluginID: string
+}) {
+  const { data, isFetching, isError, refetch } = useSetupPluginsQuery(undefined, {
+    skip: name !== 'plugins' && name !== 'plugin',
+    refetchOnMountOrArgChange: true
+  })
+  const plugins = Array.isArray(data) ? data : []
+  const plugin = plugins.find(item => item.id === pluginID)
+  const title = name === 'plugin'
+    ? plugin?.name ?? '插件页面'
+    : systemFeatureLabel(name, plugins)
+  const props = { ...nativeRobotWindowProps, id: `system:${name}`, title, icon: null }
+  if (name === 'plugin') {
+    return (
+      <DesktopWindow {...props}>
+        {plugin ? (
+          <SetupPluginCenter
+            plugin={plugin}
+            onOpenBrowserTab={(url, tabID) => sendNativeBrowserCommand(browserOpenCommand(url, tabID, true))}
+            onCloseBrowserTab={tabID => sendNativeBrowserCommand(browserCloseCommand(tabID))}
+          />
+        ) : (
+          <p className="p-4 text-sm" role="status">
+            {isFetching ? '正在加载插件…' : isError ? '无法读取插件列表。' : '找不到该插件。'}
+          </p>
+        )}
+      </DesktopWindow>
+    )
+  }
+  return (
+    <SidebarWindow {...props} sidebarAriaLabel="系统功能">
+      {name === 'ops-overview' && <NativeOpsOverview />}
+      {name === 'tasks' && <OperationTasksPage root={root} sidebarLayout />}
+      {name === 'environment' && <NativeEnvironment />}
+      {name === 'plugins' && (
+        <SystemPluginCenter
+          plugins={plugins}
+          pluginsLoading={isFetching}
+          sidebarLayout
+          onOpen={openNativePlugin}
+          onRefresh={() => void refetch()}
+        />
+      )}
+    </SidebarWindow>
+  )
+}
+
+function NativeOperationLog() {
+  const [result, setResult] = useState({ output: '', failed: false })
+  useEffect(() => {
+    const channel = new BroadcastChannel('alx-native-operation-log')
+    channel.onmessage = ({ data }) => {
+      if (typeof data?.output === 'string' && typeof data?.failed === 'boolean')
+        setResult(data)
+    }
+    channel.postMessage('request')
+    return () => channel.close()
+  }, [])
+  return (
+    <OperationLog
+      {...nativeRobotWindowProps}
+      {...result}
+      onRestore={() => {}}
+    />
   )
 }

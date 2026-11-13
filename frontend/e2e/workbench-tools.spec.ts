@@ -216,7 +216,9 @@ test('saved robots reopen from the account and stale URLs cannot register robots
           local: false,
           initialized: true,
           projects: [
-            { id: saved, name: 'saved-robot', path: saved, pinned: true }
+            { id: saved, name: 'saved-robot', path: saved, pinned: true },
+            { id: 'alpha', name: 'alpha', path: '/test/robots/team/alpha' },
+            { id: 'beta', name: 'beta', path: '/test/robots/team/beta' }
           ],
           activeProjectID: saved
         }
@@ -231,6 +233,17 @@ test('saved robots reopen from the account and stale URLs cannot register robots
     .locator('.project-rail')
     .getByText('saved-robot', { exact: true })
   await expect(savedRobot).toBeVisible()
+  const list = page.getByRole('navigation', { name: '机器人列表' })
+  await expect(list.getByRole('region', { name: '已置顶机器人' })).toContainText('saved-robot')
+  const folder = list.getByRole('button', { name: '目录 /test/robots/team' })
+  const alpha = list.getByRole('button', { name: 'alpha', exact: true })
+  await expect(alpha).toBeVisible()
+  await folder.click()
+  await expect(folder).toHaveAttribute('aria-expanded', 'false')
+  await expect(alpha).toBeHidden()
+  await expect(savedRobot).toBeVisible()
+  await folder.click()
+  await expect(alpha).toBeVisible()
   await expect
     .poll(() => new URL(page.url()).searchParams.get('root'))
     .toBe(saved)

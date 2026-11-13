@@ -231,6 +231,7 @@ func terminalSummary(session *terminalSession) map[string]any {
 }
 
 func (s *server) readTerminalSession(session *terminalSession) {
+	defer session.cmd.Wait()
 	buffer := make([]byte, 32*1024)
 	for {
 		n, err := session.pty.Read(buffer)

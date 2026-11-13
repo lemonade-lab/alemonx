@@ -30,6 +30,21 @@ export function AppSettingsPanel({
     'general',
     settingsSections.map(item => item.id)
   )
+  useEffect(() => {
+    if (!windowProps.native) return
+    const selectRequestedSection = () => {
+      const requested = new URLSearchParams(window.location.hash.slice(1)).get('section')
+      const section = settingsSections.find(item => item.id === requested)
+      if (section) {
+        setActive(section.id)
+        // Clear the request so the same shortcut can select this tab again.
+        window.history.replaceState(window.history.state, '', window.location.pathname)
+      }
+    }
+    selectRequestedSection()
+    window.addEventListener('hashchange', selectRequestedSection)
+    return () => window.removeEventListener('hashchange', selectRequestedSection)
+  }, [setActive, windowProps.native])
   const [stopBusy, setStopBusy] = useState(false)
   const [stopConfirm, setStopConfirm] = useState(false)
   const [stopMessage, setStopMessage] = useState('')

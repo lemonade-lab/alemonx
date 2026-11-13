@@ -330,6 +330,7 @@ type runtimePortState struct {
 }
 
 type server struct {
+	disableSelfUpdate  bool
 	version            string
 	frontendBuild      string
 	assets             fs.FS
@@ -559,6 +560,7 @@ func (r *ServerRuntime) Shutdown(ctx context.Context) error {
 	var shutdownErr error
 	r.once.Do(func() {
 		s := r.server
+		s.closeTerminalSessions()
 		// Legacy maintenance records can still exist while the read-only archive
 		// migration is in progress. Preserve their checkpoints on shutdown rather
 		// than leaving an in-flight task marked running.
@@ -705,6 +707,8 @@ func NewServer(version string, staticFiles fs.FS, templateFiles ...fs.FS) http.H
 // ServerOptions carries process-level overrides that are applied once at
 // startup, such as command-line Redis settings.
 type ServerOptions struct {
+	// DisableSelfUpdate delegates executable replacement to the desktop installer.
+	DisableSelfUpdate bool
 	// RedisPort overrides the temporary Redis port when non-zero.
 	RedisPort int
 	// RedisDisabled forbids starting the temporary Redis.
@@ -1037,7 +1041,9 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 			s.pluginWatcher = s.plugins.StartWatch(time.Minute)
 		}
 		s.startPluginEventBridge()
-		s.startUpdateStatusMonitor()
+		if !options.DisableSelfUpdate {
+			s.startUpdateStatusMonitor()
+		}
 		if redisStatus := s.redisManager.Status(); redisStatus.AutoStart && !redisStatus.Disabled {
 			go func() {
 				if err := s.redisManager.Start(); err != nil {
@@ -1109,6 +1115,7 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	mux.HandleFunc("/api/v1/releases", s.releasesHandler)
 	mux.HandleFunc("/api/v1/update", s.updateHandler)
 	mux.HandleFunc("/api/v1/update/status", s.updateStatusHandler)
+	s.disableSelfUpdate = options.DisableSelfUpdate
 	mux.HandleFunc("/api/v1/update/download", s.downloadUpdateHandler)
 	mux.HandleFunc("/api/v1/update/apply", s.applyUpdateHandler)
 	mux.HandleFunc("/api/v1/update/load", s.loadUpdateHandler)
@@ -3548,6 +3555,10 @@ func (s *server) updateHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
 		return
 	}
+	if s.disableSelfUpdate {
+		writeJSON(w, http.StatusOK, updateResponse{Update: releases.Update{Current: s.version}})
+		return
+	}
 	status := s.currentUpdateStatus()
 	if r.URL.Query().Get("refresh") == "1" {
 		status = s.refreshUpdateStatus(true)
@@ -3567,6 +3578,10 @@ func (s *server) updateHandler(w http.ResponseWriter, r *http.Request) {
 func (s *server) updateStatusHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
+		return
+	}
+	if s.disableSelfUpdate {
+		writeJSON(w, http.StatusOK, map[string]any{"phase": "idle"})
 		return
 	}
 	s.confirmUpdateStartup()
@@ -3978,6 +3993,9 @@ func (s *server) systemServiceHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) confirmUpdateStartup() {
+	if s.disableSelfUpdate {
+		return
+	}
 	transaction, healthy, transactionErr := system.MarkUpdateHealthy(s.version)
 	if transactionErr != nil {
 		log.Printf("更新状态确认失败：%v", transactionErr)
@@ -4065,6 +4083,10 @@ func (s *server) downloadUpdateHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
 		return
 	}
+	if s.disableSelfUpdate {
+		writeError(w, http.StatusForbidden, "请使用新版桌面安装包更新 AlemonX。")
+		return
+	}
 	if !s.updateMu.TryLock() {
 		writeError(w, http.StatusConflict, "已有更新任务正在进行，请等待完成。")
 		return
@@ -4111,6 +4133,10 @@ func (s *server) downloadUpdateHandler(w http.ResponseWriter, r *http.Request) {
 func (s *server) applyUpdateHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
+		return
+	}
+	if s.disableSelfUpdate {
+		writeError(w, http.StatusForbidden, "请使用新版桌面安装包更新 AlemonX。")
 		return
 	}
 	var input struct {
@@ -4196,6 +4222,10 @@ func updateRequestPort(r *http.Request) string {
 func (s *server) loadUpdateHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
+		return
+	}
+	if s.disableSelfUpdate {
+		writeError(w, http.StatusForbidden, "请使用新版桌面安装包更新 AlemonX。")
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 200<<20)

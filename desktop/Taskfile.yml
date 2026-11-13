@@ -1,0 +1,19 @@
+version: '3'
+
+tasks:
+  package:
+    desc: 构建当前 Mac 架构的 AlemonX Desktop
+    platforms: [darwin]
+    cmds:
+      - sh build/darwin/package.sh
+
+  package:windows:
+    desc: 构建 Windows x64 桌面程序及 NSIS 安装包
+    cmds:
+      - sh build/windows/package.sh
+
+  package:linux:
+    desc: 构建当前 Linux 架构的 AlemonX Desktop 便携包
+    platforms: [linux]
+    cmds:
+      - sh build/linux/package.sh

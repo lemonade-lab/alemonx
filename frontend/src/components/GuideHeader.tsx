@@ -1,7 +1,7 @@
-import { ArrowLeft, Settings, X } from 'lucide-react'
+import { ArrowLeft, LayoutDashboard, Settings } from 'lucide-react'
 import { ThemeToggle } from './ThemeToggle'
+import { WorkbenchHeader } from './WorkbenchHeader'
 import { Button } from './Button'
-import { GitHubAuthControl } from './GitHubAuthControl'
 
 type GuideHeaderProps = {
   onBack: () => void
@@ -17,7 +17,7 @@ export function GuideHeader({
   showBack
 }: GuideHeaderProps) {
   return (
-    <header className="topbar relative flex min-h-11 shrink-0 items-center justify-between gap-2 border-b border-slate-200 bg-white/90 px-3 dark:border-slate-700">
+    <WorkbenchHeader className="topbar relative flex min-h-11 shrink-0 items-center justify-between gap-2 border-b border-slate-200 bg-white/90 px-3 dark:border-slate-700">
       <div className="flex min-w-0 flex-1 items-center gap-1.5">
         <Button
           variant="icon"
@@ -36,7 +36,6 @@ export function GuideHeader({
           ALemonX
         </a>
         <ThemeToggle />
-        <GitHubAuthControl />
         {showBack && (
           <Button
             variant="icon"
@@ -51,12 +50,12 @@ export function GuideHeader({
       <Button
         variant="icon"
         className="focus:outline-none focus:ring-2 focus:ring-brand-200"
-        aria-label="关闭引导"
-        title="关闭引导"
+        aria-label="返回工作台"
+        title="返回工作台"
         onClick={onClose}
       >
-        <X className="size-4" />
+        <LayoutDashboard className="size-4" />
       </Button>
-    </header>
+    </WorkbenchHeader>
   )
 }

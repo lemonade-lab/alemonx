@@ -13,7 +13,9 @@ test('responsive breakpoint contract keeps viewport and container responsibiliti
   expect(TABLET_WINDOW_QUERY).toBe('(max-width: 1024px)')
 })
 
-test('narrow workbench, Git, and operations windows respond to their own width', async ({ page }) => {
+test('narrow workbench, Git, and operations windows respond to their own width', async ({
+  page
+}) => {
   await page.setViewportSize({ width: 1280, height: 900 })
   await page.goto('/')
 
@@ -59,44 +61,63 @@ test('narrow workbench, Git, and operations windows respond to their own width',
     document.body.append(fixture)
   })
 
-  const result = await page.locator('#window-responsive-fixture').evaluate(node => {
-    const workbench = node.querySelector<HTMLElement>('.dashboard-window')!
-    const rail = node.querySelector<HTMLElement>('.project-rail')!
-    const consolePage = node.querySelector<HTMLElement>('.console-page')!
-    const gitTagForm = node.querySelector<HTMLElement>('.git-tag-form')!
-    const opsPanel = node.querySelector<HTMLElement>('.ops-panel')!
-    const opsMetrics = node.querySelector<HTMLElement>('.ops-metrics')!
-    const opsEventGrid = node.querySelector<HTMLElement>('.ops-event-grid')!
-    const opsPolicyFields = node.querySelector<HTMLElement>('.ops-policy-fields')!
-    const testone = node.querySelector<HTMLElement>('.testone-window')!
-    const testoneChannelRail = testone.querySelector<HTMLElement>('.testone-channel-rail')!
-    const testoneTaskRail = testone.querySelector<HTMLElement>('.testone-task-rail')!
-    const testoneMobileUser = testone.querySelector<HTMLElement>('.testone-mobile-user')!
-    const testoneTimerTip = testone.querySelector<HTMLElement>('.testone-timer-tip')!
-    const testoneEvents = testone.querySelector<HTMLElement>('.testone-special-events')!
-    const testoneMedium = node.querySelector<HTMLElement>('.testone-medium-fixture')!
-    const testoneMediumChannelRail = testoneMedium.querySelector<HTMLElement>('.testone-channel-rail')!
-    const testoneMediumTaskRail = testoneMedium.querySelector<HTMLElement>('.testone-task-rail')!
-    return {
-      workbenchContainer: getComputedStyle(workbench).containerName,
-      railBorderRight: getComputedStyle(rail).borderRightWidth,
-      railBorderBottom: getComputedStyle(rail).borderBottomWidth,
-      consoleColumns: getComputedStyle(consolePage).gridTemplateColumns,
-      gitTagColumns: getComputedStyle(gitTagForm).gridTemplateColumns,
-      opsContainer: getComputedStyle(opsPanel).containerName,
-      opsMetricColumns: getComputedStyle(opsMetrics).gridTemplateColumns,
-      opsEventColumns: getComputedStyle(opsEventGrid).gridTemplateColumns,
-      opsPolicyColumns: getComputedStyle(opsPolicyFields).gridTemplateColumns,
-      testoneContainer: getComputedStyle(testone).containerName,
-      testoneChannelDisplay: getComputedStyle(testoneChannelRail).display,
-      testoneTaskDisplay: getComputedStyle(testoneTaskRail).display,
-      testoneMobileUserDisplay: getComputedStyle(testoneMobileUser).display,
-      testoneTimerTipDisplay: getComputedStyle(testoneTimerTip).display,
-      testoneEventColumns: getComputedStyle(testoneEvents).gridTemplateColumns,
-      testoneMediumChannelDisplay: getComputedStyle(testoneMediumChannelRail).display,
-      testoneMediumTaskDisplay: getComputedStyle(testoneMediumTaskRail).display
-    }
-  })
+  const result = await page
+    .locator('#window-responsive-fixture')
+    .evaluate(node => {
+      const workbench = node.querySelector<HTMLElement>('.dashboard-window')!
+      const rail = node.querySelector<HTMLElement>('.project-rail')!
+      const consolePage = node.querySelector<HTMLElement>('.console-page')!
+      const gitTagForm = node.querySelector<HTMLElement>('.git-tag-form')!
+      const opsPanel = node.querySelector<HTMLElement>('.ops-panel')!
+      const opsMetrics = node.querySelector<HTMLElement>('.ops-metrics')!
+      const opsEventGrid = node.querySelector<HTMLElement>('.ops-event-grid')!
+      const opsPolicyFields =
+        node.querySelector<HTMLElement>('.ops-policy-fields')!
+      const testone = node.querySelector<HTMLElement>('.testone-window')!
+      const testoneChannelRail = testone.querySelector<HTMLElement>(
+        '.testone-channel-rail'
+      )!
+      const testoneTaskRail =
+        testone.querySelector<HTMLElement>('.testone-task-rail')!
+      const testoneMobileUser = testone.querySelector<HTMLElement>(
+        '.testone-mobile-user'
+      )!
+      const testoneTimerTip =
+        testone.querySelector<HTMLElement>('.testone-timer-tip')!
+      const testoneEvents = testone.querySelector<HTMLElement>(
+        '.testone-special-events'
+      )!
+      const testoneMedium = node.querySelector<HTMLElement>(
+        '.testone-medium-fixture'
+      )!
+      const testoneMediumChannelRail = testoneMedium.querySelector<HTMLElement>(
+        '.testone-channel-rail'
+      )!
+      const testoneMediumTaskRail =
+        testoneMedium.querySelector<HTMLElement>('.testone-task-rail')!
+      return {
+        workbenchContainer: getComputedStyle(workbench).containerName,
+        railBorderRight: getComputedStyle(rail).borderRightWidth,
+        railBorderBottom: getComputedStyle(rail).borderBottomWidth,
+        consoleColumns: getComputedStyle(consolePage).gridTemplateColumns,
+        gitTagColumns: getComputedStyle(gitTagForm).gridTemplateColumns,
+        opsContainer: getComputedStyle(opsPanel).containerName,
+        opsMetricColumns: getComputedStyle(opsMetrics).gridTemplateColumns,
+        opsEventColumns: getComputedStyle(opsEventGrid).gridTemplateColumns,
+        opsPolicyColumns: getComputedStyle(opsPolicyFields).gridTemplateColumns,
+        testoneContainer: getComputedStyle(testone).containerName,
+        testoneChannelDisplay: getComputedStyle(testoneChannelRail).display,
+        testoneTaskDisplay: getComputedStyle(testoneTaskRail).display,
+        testoneMobileUserDisplay: getComputedStyle(testoneMobileUser).display,
+        testoneTimerTipDisplay: getComputedStyle(testoneTimerTip).display,
+        testoneEventColumns:
+          getComputedStyle(testoneEvents).gridTemplateColumns,
+        testoneMediumChannelDisplay: getComputedStyle(testoneMediumChannelRail)
+          .display,
+        testoneMediumTaskDisplay: getComputedStyle(testoneMediumTaskRail)
+          .display
+      }
+    })
 
   expect(result.workbenchContainer).toBe('workbench-window')
   expect(result.railBorderRight).toBe('0px')
@@ -122,7 +143,9 @@ for (const phone of [
   { width: 375, height: 667, theme: 'dark' },
   { width: 390, height: 844, theme: 'light' }
 ]) {
-  test(`phone window chrome fills ${phone.width}px without horizontal overflow`, async ({ page }) => {
+  test(`phone window chrome fills ${phone.width}px without horizontal overflow`, async ({
+    page
+  }) => {
     await page.setViewportSize({ width: phone.width, height: phone.height })
     await page.goto('/')
     await page.evaluate(theme => {
@@ -153,7 +176,9 @@ for (const phone of [
   })
 }
 
-test('phone shell preserves reachable controls and localizes overflow', async ({ page }) => {
+test('phone shell preserves reachable controls and localizes overflow', async ({
+  page
+}) => {
   await page.setViewportSize({ width: 320, height: 568 })
   await page.goto('/')
   await page.evaluate(() => {
@@ -177,12 +202,20 @@ test('phone shell preserves reachable controls and localizes overflow', async ({
   const fixture = page.locator('#mobile-contract-fixture')
   const result = await fixture.evaluate(node => {
     const windowRect = (node as HTMLElement).getBoundingClientRect()
-    const close = node.querySelector<HTMLElement>('[aria-label="关闭智能日志"]')!
-    const nav = node.querySelector<HTMLElement>('[data-sidebar-window-nav] > button')!
+    const close = node.querySelector<HTMLElement>(
+      '[aria-label="关闭智能日志"]'
+    )!
+    const nav = node.querySelector<HTMLElement>(
+      '[data-sidebar-window-nav] > button'
+    )!
     const popover = node.querySelector<HTMLElement>('.operation-tasks-popover')!
     const pre = node.querySelector<HTMLElement>('pre')!
     return {
-      windowRect: { left: windowRect.left, right: windowRect.right, height: windowRect.height },
+      windowRect: {
+        left: windowRect.left,
+        right: windowRect.right,
+        height: windowRect.height
+      },
       closeHeight: close.getBoundingClientRect().height,
       navHeight: nav.getBoundingClientRect().height,
       popoverWidth: popover.getBoundingClientRect().width,
@@ -208,7 +241,7 @@ test('phone shell preserves reachable controls and localizes overflow', async ({
   expect((await fixture.screenshot()).byteLength).toBeGreaterThan(1_000)
 })
 
-test('robot workbench resizes both sides and restores their widths after reload', async ({
+test('robot workbench resizes the left rail and keeps the right card fixed', async ({
   page
 }) => {
   await page.setViewportSize({ width: 1280, height: 820 })
@@ -243,7 +276,8 @@ test('robot workbench resizes both sides and restores their widths after reload'
       .getByText(label, { exact: true })
       .evaluate(node => node.getBoundingClientRect().width)
   const left = page.getByRole('separator', { name: '调整机器人列表宽度' })
-  const right = page.getByRole('separator', { name: '调整机器人面板宽度' })
+  const right = page.locator('.robot-workspace-content + .ant-splitter-bar')
+  await expect(right).toBeHidden()
   const menu = page.getByRole('navigation', { name: '机器人功能' })
   const footer = page.getByText('快捷操作', { exact: true })
   const footerTop = (await footer.boundingBox())!.y
@@ -271,23 +305,15 @@ test('robot workbench resizes both sides and restores their widths after reload'
   await drag(left, 65)
   await expect.poll(() => width('机器人列表')).toBeGreaterThan(beforeList + 40)
   await expect.poll(() => width('工作区')).toBeLessThan(beforeWorkspace - 40)
-  await drag(right, -65)
-  await expect
-    .poll(() => width('机器人面板'))
-    .toBeGreaterThan(beforeControls + 40)
-  const draggedControls = await width('机器人面板')
-  await right.press('ArrowRight')
-  await expect
-    .poll(() => width('机器人面板'))
-    .toBeLessThan(draggedControls - 10)
+  await left.press('ArrowLeft')
+  await expect.poll(() => width('机器人面板')).toBe(beforeControls)
   const resizedList = await width('机器人列表')
-  const resizedControls = await width('机器人面板')
   await expect
     .poll(() => page.evaluate(() => JSON.stringify(localStorage)))
     .toContain('workbench.splitter')
   await page.reload()
   await expect.poll(() => width('机器人列表')).toBe(resizedList)
-  await expect.poll(() => width('机器人面板')).toBe(resizedControls)
+  await expect.poll(() => width('机器人面板')).toBe(beforeControls)
 
   await page.setViewportSize({ width: 390, height: 820 })
   await expect(left).toBeHidden()
@@ -303,4 +329,152 @@ test('robot workbench resizes both sides and restores their widths after reload'
     .boundingBox()
   expect(listBox!.y).toBeLessThan(controlsBox!.y)
   expect(controlsBox!.y).toBeLessThan(workspaceBox!.y)
+})
+
+for (const platform of ['mac', 'windows', 'linux'] as const) {
+  test(`native ${platform} header fits the minimum workbench width`, async ({
+    page
+  }) => {
+    await page.setViewportSize({ width: 640, height: 480 })
+    await page.addInitScript(platform => {
+      Object.defineProperty(navigator, 'platform', {
+        value: platform === 'linux' ? 'Linux x86_64' : 'MacIntel'
+      })
+      const messages: string[] = []
+      const postMessage = (message: string) => messages.push(message)
+      Object.assign(window, { captionMessages: messages })
+      if (platform === 'windows') {
+        Object.assign(window.chrome, { webview: { postMessage } })
+      } else {
+        Object.assign(window, {
+          webkit: { messageHandlers: { external: { postMessage } } }
+        })
+      }
+    }, platform)
+    await page.route('**/api/v1/auth/status', route =>
+      route.fulfill({ json: { enabled: false, authenticated: false } })
+    )
+    await page.goto('/dashboard/robot')
+    const header = page.locator('.native-workbench-header:not([data-fallback])')
+    await expect(header).toBeVisible()
+    await expect(page.locator('.native-workbench-header:visible')).toHaveCount(
+      1
+    )
+    const content = page.locator('.dashboard-window')
+    const bounds = await header.boundingBox()
+    expect(bounds?.width).toBe(640)
+    expect((await content.boundingBox())?.y).toBe(bounds?.height)
+    const scrollPosition = () => page.evaluate(() => ({
+      x: window.scrollX,
+      y: window.scrollY,
+      overscroll: getComputedStyle(document.documentElement).overscrollBehavior
+    }))
+    await page.mouse.move(320, 440)
+    await page.mouse.wheel(500, 600)
+    await expect.poll(scrollPosition).toEqual({ x: 0, y: 0, overscroll: 'none' })
+    expect((await header.boundingBox())?.y).toBe(0)
+    await header.locator('.native-workbench-drag').dblclick()
+    if (platform === 'windows') {
+      await header.getByRole('button', { name: '最小化窗口' }).click()
+      await header.getByRole('button', { name: '关闭窗口' }).click()
+    }
+    const messages = await page.evaluate(() =>
+      Reflect.get(window, 'captionMessages')
+    )
+    expect(messages.filter((message: string) => message !== 'wails:runtime:ready')).toEqual(
+      platform === 'windows'
+        ? [
+            'alx:window:toggle-maximise',
+            'alx:window:minimise',
+            'alx:window:close'
+          ]
+        : platform === 'mac' ? ['wails:drag:doubleclick'] : []
+    )
+  })
+}
+
+test('desktop settings sends a native request and opens a standalone settings page', async ({
+  page
+}) => {
+  await page.addInitScript(() => {
+    Object.assign(window, {
+      webkit: {
+        messageHandlers: {
+          external: {
+            postMessage: (message: string) => {
+              document.documentElement.dataset.lastNativeMessage = message
+            }
+          }
+        }
+      }
+    })
+  })
+  await page.route('**/api/v1/auth/status', route =>
+    route.fulfill({ json: { enabled: false, authenticated: false } })
+  )
+  await page.goto('/dashboard/robot')
+  await page.getByRole('button', { name: '打开设置', exact: true }).click()
+  await expect(page.locator('html')).toHaveAttribute(
+    'data-last-native-message',
+    'alx:open-window:settings:'
+  )
+  await page.goto('/desktop-window/settings#section=network')
+  await expect(
+    page.getByRole('tab', { name: '网络', exact: true })
+  ).toHaveAttribute('aria-selected', 'true')
+  await expect(page.locator('.native-auxiliary-content')).toBeVisible()
+  await expect(page.locator('.workbench-stage')).toHaveCount(0)
+})
+
+test('native terminal restores its session and robot application embeds the existing route', async ({
+  page
+}) => {
+  await page.addInitScript(() => {
+    Object.assign(window, {
+      webkit: { messageHandlers: { external: { postMessage: () => {} } } }
+    })
+    if (!sessionStorage.getItem('alx-terminal-sessions:/fixture')) {
+      sessionStorage.setItem(
+        'alx-terminal-sessions:/fixture',
+        JSON.stringify([
+          { id: 'existing', key: 'fixture-key', label: '已有终端' }
+        ])
+      )
+    }
+  })
+  await page.route('**/api/v1/auth/status', route =>
+    route.fulfill({ json: { enabled: false, authenticated: false } })
+  )
+  let created = 0
+  await page.route('**/api/v1/terminal/sessions', route => {
+    created++
+    return route.fulfill({ status: 500 })
+  })
+  await page.route('**/api/v1/terminal/sessions/existing', route =>
+    route.fulfill({
+      json: { cwd: '/fixture', shell: '/bin/sh', output: 'hello' }
+    })
+  )
+  await page.route('**/api/v1/terminal/sessions/existing/**', route =>
+    route.fulfill({ contentType: 'text/event-stream', body: ': fixture\n\n' })
+  )
+  await page.goto('/desktop-window/terminal?root=%2Ffixture')
+  await expect(page.getByRole('button', { name: '已有终端' })).toBeVisible()
+  await page.reload()
+  await expect(page.getByRole('button', { name: '已有终端' })).toBeVisible()
+  expect(created).toBe(0)
+
+  const appPath = '/api/v1/robot/app/L2ZpeHR1cmU/'
+  await page.route('**' + appPath, route =>
+    route.fulfill({
+      contentType: 'text/html',
+      body: '<main>机器人应用内容</main>'
+    })
+  )
+  await page.goto(
+    '/desktop-window/robot-app?' + new URLSearchParams({ path: appPath })
+  )
+  await expect(
+    page.frameLocator('iframe').getByText('机器人应用内容')
+  ).toBeVisible()
 })

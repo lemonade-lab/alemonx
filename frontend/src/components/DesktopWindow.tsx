@@ -1,3 +1,4 @@
+import { WorkbenchHeader } from './WorkbenchHeader'
 import {
   useCallback,
   useEffect,
@@ -65,6 +66,7 @@ export type DesktopWindowProps = {
   width?: number
   height?: number
   storageKey?: string
+  native?: boolean
   children: ReactNode
 }
 
@@ -85,6 +87,7 @@ export function DesktopWindow({
   width = 860,
   height = 620,
   storageKey,
+  native = false,
   children
 }: DesktopWindowProps) {
   const [windowRect, setWindowRect] = useState(() => ({
@@ -307,7 +310,7 @@ export function DesktopWindow({
   }, [isPadView, maximized])
 
   useEffect(() => {
-    if (!open) return
+    if (!open || native) return
     return registerDesktopWindowShortcut({
       id,
       zIndex,
@@ -318,12 +321,23 @@ export function DesktopWindow({
       onMinimize: isPhoneView ? undefined : onMinimize,
       onToggleMaximize: isPhoneView ? undefined : toggleMaximize
     })
-  }, [id, isPhoneView, minimized, onClose, onMinimize, open, toggleMaximize, zIndex])
+  }, [id, isPhoneView, minimized, native, onClose, onMinimize, open, toggleMaximize, zIndex])
 
   // A persisted window must not paint at its fallback coordinates first. Read
   // its saved geometry before the browser paints, otherwise users see a brief
   // jump from the default top-left position to the restored position.
   if (!open || !layoutReady) return null
+  if (native) return (
+    <>
+      <WorkbenchHeader>
+        <div className="flex min-w-0 items-center gap-2 overflow-x-auto">
+          {headerLeft ?? <span className="truncate text-sm font-semibold">{title}</span>}
+        </div>
+        <div className="flex shrink-0 items-center">{actions}</div>
+      </WorkbenchHeader>
+      <main className="native-auxiliary-content flex min-h-0 flex-col">{children}</main>
+    </>
+  )
   return (
     <Modal
       open

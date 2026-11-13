@@ -2,13 +2,11 @@ import { Splitter } from 'antd'
 import { useEffect, useRef, type KeyboardEvent, type ReactNode } from 'react'
 import { useNavigationState } from '../hooks/useNavigationState'
 
-const widthLimits = {
-  list: { min: 17, max: 35, initial: 20 },
-  controls: { min: 21, max: 35, initial: 23 }
-}
+const listLimits = { min: 17, max: 35, initial: 20 }
+const controlsWidthPercent = 23
 
-function clampWidth(value: number, limits: { min: number; max: number }) {
-  return Math.max(limits.min, Math.min(limits.max, Math.round(value)))
+function clampListWidth(value: number) {
+  return Math.max(listLimits.min, Math.min(listLimits.max, Math.round(value)))
 }
 
 export function RobotWorkspaceSplitter({
@@ -26,69 +24,38 @@ export function RobotWorkspaceSplitter({
   const [listPreference, setListPreference] = useNavigationState(
     'workbench.splitter',
     ['list'],
-    widthLimits.list.initial
+    listLimits.initial
   )
-  const [controlsPreference, setControlsPreference] = useNavigationState(
-    'workbench.splitter',
-    ['controls'],
-    widthLimits.controls.initial
-  )
-  const listWidth = listHidden
-    ? 0
-    : clampWidth(listPreference, widthLimits.list)
-  const controlsWidth = controls
-    ? clampWidth(controlsPreference, widthLimits.controls)
-    : 0
+  const listWidth = listHidden ? 0 : clampListWidth(listPreference)
+  const controlsWidth = controls ? controlsWidthPercent : 0
 
   useEffect(() => {
-    // Ant Design 5 provides separator semantics and pointer dragging.
-    // Add focus and names to its handles so the same dividers work by keyboard.
-    const bars = root.current?.querySelectorAll<HTMLElement>(
-      '.robot-workspace-splitter > [role="separator"]'
+    const bar = root.current?.querySelector<HTMLElement>(
+      '.robot-workspace-list + [role="separator"]'
     )
-    bars?.forEach((bar, index) => {
-      bar.tabIndex = 0
-      bar.setAttribute('aria-orientation', 'vertical')
-      bar.setAttribute(
-        'aria-label',
-        index === 0 ? '调整机器人列表宽度' : '调整机器人面板宽度'
-      )
-    })
-  }, [])
+    if (!bar) return
+    bar.tabIndex = listHidden ? -1 : 0
+    bar.setAttribute('aria-orientation', 'vertical')
+    bar.setAttribute('aria-label', '调整机器人列表宽度')
+  }, [listHidden])
 
   const saveWidths = (sizes: number[]) => {
     const total = sizes.reduce((sum, size) => sum + size, 0)
-    if (total <= 0) return
-    if (!listHidden)
-      setListPreference(clampWidth((sizes[0] * 100) / total, widthLimits.list))
-    if (controls)
-      setControlsPreference(
-        clampWidth((sizes[2] * 100) / total, widthLimits.controls)
-      )
+    if (!listHidden && total > 0)
+      setListPreference(clampListWidth((sizes[0] * 100) / total))
   }
 
   const resizeWithKeyboard = (event: KeyboardEvent<HTMLDivElement>) => {
     if (
+      listHidden ||
       !(event.target instanceof HTMLElement) ||
-      event.target.getAttribute('role') !== 'separator' ||
-      !event.target.parentElement?.classList.contains(
-        'robot-workspace-splitter'
-      )
+      !event.target.matches('.robot-workspace-list + [role="separator"]')
     )
       return
     const delta =
       event.key === 'ArrowLeft' ? -2 : event.key === 'ArrowRight' ? 2 : 0
     if (!delta) return
-    const listHandle = event.target.previousElementSibling?.classList.contains(
-      'robot-workspace-list'
-    )
-    if (listHandle && !listHidden) {
-      setListPreference(clampWidth(listWidth + delta, widthLimits.list))
-    } else if (!listHandle && controls) {
-      setControlsPreference(
-        clampWidth(controlsWidth - delta, widthLimits.controls)
-      )
-    }
+    setListPreference(clampListWidth(listWidth + delta))
     event.preventDefault()
   }
 
@@ -103,8 +70,8 @@ export function RobotWorkspaceSplitter({
         <Splitter.Panel
           className={`robot-workspace-list${listHidden ? ' robot-workspace-hidden' : ''}`}
           size={`${listWidth}%`}
-          min={listHidden ? 0 : `${widthLimits.list.min}%`}
-          max={`${widthLimits.list.max}%`}
+          min={listHidden ? 0 : `${listLimits.min}%`}
+          max={`${listLimits.max}%`}
           resizable={!listHidden}
         >
           {list}
@@ -119,9 +86,7 @@ export function RobotWorkspaceSplitter({
         <Splitter.Panel
           className={`robot-workspace-controls${controls ? '' : ' robot-workspace-hidden'}`}
           size={`${controlsWidth}%`}
-          min={controls ? `${widthLimits.controls.min}%` : 0}
-          max={`${widthLimits.controls.max}%`}
-          resizable={Boolean(controls)}
+          resizable={false}
         >
           {controls}
         </Splitter.Panel>

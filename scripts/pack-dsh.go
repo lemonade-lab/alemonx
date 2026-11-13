@@ -30,10 +30,15 @@ func pack() error {
 			return err
 		}
 	}
-	if err := os.MkdirAll("resources/dsh", 0755); err != nil {
+	output := os.Getenv("ALX_DSH_ARCHIVE")
+	if output == "" {
+		output = "resources/dsh/runtime.zip"
+	}
+	directory := filepath.Dir(output)
+	if err := os.MkdirAll(directory, 0755); err != nil {
 		return err
 	}
-	file, err := os.CreateTemp("resources/dsh", ".runtime-*.zip")
+	file, err := os.CreateTemp(directory, ".runtime-*.zip")
 	if err != nil {
 		return err
 	}
@@ -111,5 +116,5 @@ func pack() error {
 	if closeErr != nil {
 		return closeErr
 	}
-	return os.Rename(file.Name(), "resources/dsh/runtime.zip")
+	return os.Rename(file.Name(), output)
 }

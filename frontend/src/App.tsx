@@ -1,3 +1,4 @@
+import { desktopPlatform, openNativeWindow } from './components/nativeWindow'
 import { OfficialExtensionChoices } from './components/OfficialResources'
 import { useResourceOptionsQuery } from './store/workspaceApi'
 import { useStoreState } from './store/guideStore'
@@ -229,6 +230,7 @@ export default function App() {
   }
 
   function openSettings(section?: SettingsSection) {
+    if (openNativeWindow('settings', section)) return
     if (section) {
       store.dispatch(
         setNavigationValue({
@@ -457,7 +459,7 @@ export default function App() {
   useLayoutEffect(() => {
     const media = window.matchMedia(WORKBENCH_DOCK_BREAKPOINT)
     const applyWorkbenchLayout = () => {
-      const responsive = !media.matches
+      const responsive = Boolean(desktopPlatform) || !media.matches
       setIsResponsiveWorkbench(responsive)
       if (responsive) {
         wasResponsiveWorkbench.current = true
@@ -590,17 +592,19 @@ export default function App() {
       setMainWindowHidden(false)
   }, [])
 
-  const windowStyle = {
-    position: 'fixed' as const,
-    left: workbenchRect.left,
-    top: workbenchRect.top,
-    width: workbenchRect.width,
-    height: workbenchRect.height,
-    maxWidth: 'none',
-    maxHeight: 'none'
-  }
+  const windowStyle = desktopPlatform
+    ? undefined
+    : {
+        position: 'fixed' as const,
+        left: workbenchRect.left,
+        top: workbenchRect.top,
+        width: workbenchRect.width,
+        height: workbenchRect.height,
+        maxWidth: 'none',
+        maxHeight: 'none'
+      }
   const workbenchWindowControls =
-    workbenchMaximized || isResponsiveWorkbench ? null : (
+    desktopPlatform || workbenchMaximized || isResponsiveWorkbench ? null : (
       <>
         {(['nw', 'ne', 'sw', 'se'] as ResizeCorner[]).map(corner => (
           <button

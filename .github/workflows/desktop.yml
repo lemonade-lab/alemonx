@@ -1,0 +1,89 @@
+name: AlemonX Desktop
+
+on:
+  push:
+    branches:
+      - 'codex/wails3-desktop'
+    tags:
+      - 'desktop-v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: macos-arm64
+            script: darwin
+          - runner: macos-15
+            target: windows-amd64
+            script: windows
+          - runner: ubuntu-24.04
+            target: linux-amd64
+            script: linux
+          - runner: ubuntu-24.04-arm
+            target: linux-arm64
+            script: linux
+    runs-on: ${{ matrix.runner }}
+    env:
+      ALX_DESKTOP_VERSION: ${{ startsWith(github.ref, 'refs/tags/desktop-v') && github.ref_name || github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: yarn
+          cache-dependency-path: frontend/yarn.lock
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: desktop/go.mod
+          cache-dependency-path: |
+            go.sum
+            desktop/go.sum
+      - run: corepack enable
+      - run: yarn --cwd frontend install --frozen-lockfile --non-interactive
+      - name: Install Linux build dependencies
+        if: matrix.script == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libgtk-4-dev libwebkitgtk-6.0-dev
+      - name: Install Windows packaging tools
+        if: matrix.script == 'windows'
+        run: |
+          brew install nsis
+          go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0
+      - run: sh desktop/build/${{ matrix.script }}/package.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: alemonx-desktop-${{ matrix.target }}
+          if-no-files-found: error
+          path: |
+            desktop/bin/alemonx-desktop-*.zip
+            desktop/bin/alemonx-desktop-*.exe
+            desktop/bin/alemonx-desktop-*.tar.gz
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/desktop-v')
+    needs: package
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: alemonx-desktop-*
+          path: release
+          merge-multiple: true
+      - name: Publish desktop release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd release
+          sha256sum alemonx-desktop-* > alemonx-desktop-SHA256SUMS
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --prerelease --latest=false \
+            --title "AlemonX Desktop ${GITHUB_REF_NAME#desktop-}" --generate-notes ./*

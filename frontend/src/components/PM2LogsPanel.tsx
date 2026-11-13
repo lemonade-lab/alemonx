@@ -28,8 +28,10 @@ export function PM2LogsPanel({
   onClose,
   onMinimize,
   zIndex,
-  onActivate
+  onActivate,
+  native = false
 }: {
+  native?: boolean
   open: boolean
   root: string
   minimized: boolean
@@ -403,6 +405,7 @@ export function PM2LogsPanel({
   return (
     <DesktopWindow
       id="pm2Logs"
+      native={native}
       open
       minimized={minimized}
       title="PM2 运行日志"

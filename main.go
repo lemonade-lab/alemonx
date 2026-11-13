@@ -56,6 +56,7 @@ func main() {
 	logging.ConfigureStandardLogger(os.Stderr)
 	defer robot.CleanupGitBuildSessions()
 	arguments := normalizeArgs(os.Args[1:])
+	desktop, arguments := flagPresent(arguments, "--desktop")
 	port, arguments, err := option(arguments, "--port", env("PORT", "17390"))
 	if err != nil {
 		log.Fatal(err)
@@ -317,10 +318,13 @@ func main() {
 			fmt.Println("请执行 alx auth enable，或启动后在引导页创建管理员账户。")
 		}
 	}
+	if desktop && host != "127.0.0.1" {
+		log.Fatal("桌面版仅支持监听 127.0.0.1")
+	}
 	if err := system.ConfigurePrivilegedMode(host, strings.EqualFold(strings.TrimSpace(os.Getenv("ALX_DEPLOYMENT")), "production")); err != nil {
 		log.Fatal(err)
 	}
-	serve(host, port, redisPort, mcpPort, redisOff, workspaceRoot)
+	serve(host, port, redisPort, mcpPort, redisOff, workspaceRoot, desktop)
 }
 
 func authCommand(arguments []string, confirmed bool, account, password, confirmation string, passwordStdin bool) {
@@ -484,18 +488,18 @@ func redisCommand(arguments []string, workbenchPort, account, password string) {
 	fmt.Printf("Redis：%s\n地址：%s\n%s\n", state, result.Address, result.Message)
 }
 
-func serve(host, port, redisPort, mcpPort string, redisOff bool, workspaceRoot string) {
-	options := web.ServerOptions{RedisDisabled: redisOff, WorkspaceRoot: workspaceRoot, FrontendBuild: FrontendBuild, MCPPort: mcpPort, MCPPolicy: mcpPolicy()}
+func serve(host, port, redisPort, mcpPort string, redisOff bool, workspaceRoot string, desktop bool) {
+	options := web.ServerOptions{RedisDisabled: redisOff, WorkspaceRoot: workspaceRoot, FrontendBuild: FrontendBuild, MCPPort: mcpPort, MCPPolicy: mcpPolicy(), DisableSelfUpdate: desktop}
 	if strings.TrimSpace(redisPort) != "" {
 		if value, err := strconv.Atoi(strings.TrimSpace(redisPort)); err == nil {
 			options.RedisPort = value
 		}
 	}
-	runtime := web.NewServerRuntimeWithOptions(Version, staticFiles, options, resourceFiles)
 	listener, err := net.Listen("tcp", host+":"+port)
 	if err != nil {
 		log.Fatal(err)
 	}
+	runtime := web.NewServerRuntimeWithOptions(Version, staticFiles, options, resourceFiles)
 	brokerListener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		_ = listener.Close()
@@ -527,6 +531,25 @@ func serve(host, port, redisPort, mcpPort string, redisOff bool, workspaceRoot s
 	}
 	stopCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if desktop {
+		// The launcher owns stdin. EOF also shuts down the service if the
+		// launcher crashes or is terminated by the operating system.
+		go func() {
+			_, _ = io.Copy(io.Discard, os.Stdin)
+			stop()
+		}()
+		server.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Host != listener.Addr().String() {
+				http.Error(w, "无效的工作台地址", http.StatusForbidden)
+				return
+			}
+			if origin := r.Header.Get("Origin"); origin != "" && origin != "http://"+listener.Addr().String() {
+				http.Error(w, "无效的工作台请求来源", http.StatusForbidden)
+				return
+			}
+			runtime.Handler.ServeHTTP(w, r)
+		})
+	}
 	go func() {
 		select {
 		case <-stopCtx.Done():
@@ -545,6 +568,9 @@ func serve(host, port, redisPort, mcpPort string, redisOff bool, workspaceRoot s
 		fmt.Printf("\n  注意：已监听 %s，局域网或公网可直接访问。\n  强烈建议先执行 alx auth enable 开启身份认证，并配合防火墙限制访问来源。\n", host)
 	}
 	prepareDevelopmentDSH(stopCtx)
+	if desktop {
+		fmt.Printf("ALX_DESKTOP_READY=%s\n", listener.Addr())
+	}
 	if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}

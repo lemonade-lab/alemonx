@@ -69,3 +69,28 @@ func jsonString(t *testing.T, value string) string {
 	}
 	return string(encoded)
 }
+
+func TestRuntimeShutdownClosesOpenTerminal(t *testing.T) {
+	s := &server{terminalSessions: newTerminalSessionStore()}
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/terminal/sessions", strings.NewReader(`{"shell":"/bin/sh"}`))
+	response := httptest.NewRecorder()
+	s.terminalSessionsHandler(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("create status=%d body=%s", response.Code, response.Body.String())
+	}
+	var session struct{ ID, Key string }
+	if err := json.Unmarshal(response.Body.Bytes(), &session); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &ServerRuntime{server: s}
+	if err := runtime.Shutdown(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	request = httptest.NewRequest(http.MethodGet, "/api/v1/terminal/sessions/"+session.ID, nil)
+	request.Header.Set("X-ALX-Terminal-Key", session.Key)
+	response = httptest.NewRecorder()
+	s.terminalSessionHandler(response, request)
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("terminal survived shutdown: status=%d", response.Code)
+	}
+}
