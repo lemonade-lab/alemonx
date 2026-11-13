@@ -10,17 +10,17 @@
 yarn --cwd frontend install --frozen-lockfile
 cd desktop
 sh build/darwin/package.sh
-open "bin/AlemonX Desktop.app"
+open "bin/ALemonX Desktop.app"
 ```
 
-如果已经安装 Wails 3 CLI，也可以在 `desktop/` 下运行 `wails3 task package`。构建脚本会打包当前 Mac 架构，并用临时签名生成供本机验证的 `bin/AlemonX Desktop.app`。
+如果已经安装 Wails 3 CLI，也可以在 `desktop/` 下运行 `wails3 task package`。构建脚本会打包当前 Mac 架构，并用临时签名生成供本机验证的 `bin/ALemonX Desktop.app`。
 
 ## 运行
 
 工作台监听 `127.0.0.1:17392`，默认工作区位于 `~/Library/Application Support/AlemonX Desktop/workspace`。可通过 `ALX_WORKSPACE` 或启动参数选用已有工作区：
 
 ```sh
-open "bin/AlemonX Desktop.app" --args --workspace "/path/to/workspace" --port 17392
+open "bin/ALemonX Desktop.app" --args --workspace "/path/to/workspace" --port 17392
 ```
 
 固定端口能保留同一来源下的 WebView 本地设置。关闭窗口会收起工作台，从菜单栏打开可恢复窗口。选择「退出 AlemonX」会关闭工作台服务。macOS 和 Windows 可通过托盘恢复收起的工作台。通过替换完整应用包更新桌面版，工作区位于应用包外。
@@ -34,7 +34,7 @@ cd desktop
 wails3 task package:windows
 ```
 
-产物位于 `desktop/bin/`。便携 ZIP 解压后双击 `AlemonX Desktop.exe`，并保留同目录的 `alx.exe`。NSIS 安装包按当前用户安装，缺少 WebView2 时会通过 Microsoft 引导程序下载安装。两个产物均为 Windows x64，默认工作区为 `%APPDATA%\AlemonX Desktop\workspace`。
+产物位于 `desktop/bin/`。便携 ZIP 解压后双击 `ALemonX Desktop.exe`，并保留同目录的 `alx.exe`。NSIS 安装包按当前用户安装，缺少 WebView2 时会通过 Microsoft 引导程序下载安装。两个产物均为 Windows x64，默认工作区为 `%APPDATA%\AlemonX Desktop\workspace`。
 
 ## 构建 Linux
 
@@ -50,4 +50,4 @@ sh desktop/build/linux/package.sh
 
 ## 桌面发布
 
-在 Actions 中手动运行 **AlemonX Desktop** 可以生成构建产物。推送 `desktop-vX.Y.Z` 标签会发布独立的桌面预发行版本，资源名称以 `alemonx-desktop-` 开头。Web 版继续使用 `vX.Y.Z` 和原有的更新索引。
+在 Actions 中手动运行 **ALemonX Desktop** 可以生成构建产物。推送常规 `vX.Y.Z` 标签时，现有 CI 将桌面包附加到同一个 GitHub Release。桌面产物使用 `alemonx-desktop-` 前缀，Web 更新索引仍只收录原有产物。

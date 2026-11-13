@@ -1,7 +1,7 @@
 Unicode true
 RequestExecutionLevel user
-Name "AlemonX Desktop"
-InstallDir "$LOCALAPPDATA\Programs\AlemonX Desktop"
+Name "ALemonX Desktop"
+InstallDir "$LOCALAPPDATA\Programs\ALemonX Desktop"
 OutFile "${INSTALLER}"
 SetCompressor /SOLID lzma
 Icon "alemonx.ico"
@@ -37,21 +37,21 @@ Section
     ${EndIf}
   ${EndIf}
   SetOutPath "$INSTDIR"
-  File "${PAYLOAD}/AlemonX Desktop.exe"
+  File "${PAYLOAD}/ALemonX Desktop.exe"
   File "${PAYLOAD}/alx.exe"
-  CreateShortcut "$SMPROGRAMS\AlemonX Desktop.lnk" "$INSTDIR\AlemonX Desktop.exe"
-  CreateShortcut "$DESKTOP\AlemonX Desktop.lnk" "$INSTDIR\AlemonX Desktop.exe"
+  CreateShortcut "$SMPROGRAMS\ALemonX Desktop.lnk" "$INSTDIR\ALemonX Desktop.exe"
+  CreateShortcut "$DESKTOP\ALemonX Desktop.lnk" "$INSTDIR\ALemonX Desktop.exe"
   WriteUninstaller "$INSTDIR\Uninstall.exe"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\AlemonX Desktop" "DisplayName" "AlemonX Desktop"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\AlemonX Desktop" "UninstallString" '"$INSTDIR\Uninstall.exe"'
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\ALemonX Desktop" "DisplayName" "ALemonX Desktop"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\ALemonX Desktop" "UninstallString" '"$INSTDIR\Uninstall.exe"'
 SectionEnd
 
 Section "Uninstall"
-  Delete "$INSTDIR\AlemonX Desktop.exe"
+  Delete "$INSTDIR\ALemonX Desktop.exe"
   Delete "$INSTDIR\alx.exe"
   Delete "$INSTDIR\Uninstall.exe"
-  Delete "$SMPROGRAMS\AlemonX Desktop.lnk"
-  Delete "$DESKTOP\AlemonX Desktop.lnk"
-  DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\AlemonX Desktop"
+  Delete "$SMPROGRAMS\ALemonX Desktop.lnk"
+  Delete "$DESKTOP\ALemonX Desktop.lnk"
+  DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\ALemonX Desktop"
   RMDir "$INSTDIR"
 SectionEnd

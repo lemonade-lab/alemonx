@@ -1,12 +1,11 @@
-name: AlemonX Desktop
+name: ALemonX Desktop
 
 on:
   push:
     branches:
       - 'codex/wails3-desktop'
-    tags:
-      - 'desktop-v*'
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
@@ -31,7 +30,7 @@ jobs:
             script: linux
     runs-on: ${{ matrix.runner }}
     env:
-      ALX_DESKTOP_VERSION: ${{ startsWith(github.ref, 'refs/tags/desktop-v') && github.ref_name || github.sha }}
+      ALX_DESKTOP_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || github.sha }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -66,24 +65,3 @@ jobs:
             desktop/bin/alemonx-desktop-*.zip
             desktop/bin/alemonx-desktop-*.exe
             desktop/bin/alemonx-desktop-*.tar.gz
-
-  release:
-    if: startsWith(github.ref, 'refs/tags/desktop-v')
-    needs: package
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: alemonx-desktop-*
-          path: release
-          merge-multiple: true
-      - name: Publish desktop release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          cd release
-          sha256sum alemonx-desktop-* > alemonx-desktop-SHA256SUMS
-          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --prerelease --latest=false \
-            --title "AlemonX Desktop ${GITHUB_REF_NAME#desktop-}" --generate-notes ./*

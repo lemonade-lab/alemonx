@@ -23,7 +23,7 @@ func main() {
 	var workbenchURL string
 	var auxiliary auxiliaryWindows
 	app := application.New(application.Options{
-		Name:        "AlemonX Desktop",
+		Name:        "ALemonX Desktop",
 		Description: "AlemonX 工作台",
 		RawMessageHandler: func(source application.Window, message string, origin *application.OriginInfo) {
 			if !isWorkbenchMessage(origin, workbenchURL) {
@@ -61,7 +61,7 @@ func main() {
 	workbenchURL = backend.url
 
 	window = app.Window.NewWithOptions(application.WebviewWindowOptions{
-		Title:     "AlemonX Desktop",
+		Title:     "ALemonX Desktop",
 		Width:     1280,
 		Height:    800,
 		MinWidth:  640,
@@ -85,12 +85,12 @@ func main() {
 		window.Show()
 		window.Focus()
 	})
-	menu.Add("退出 AlemonX Desktop").OnClick(func(*application.Context) {
+	menu.Add("退出 ALemonX Desktop").OnClick(func(*application.Context) {
 		app.Quit()
 	})
 	tray := app.SystemTray.New()
 	tray.SetIcon(trayIcon)
-	tray.SetTooltip("AlemonX Desktop")
+	tray.SetTooltip("ALemonX Desktop")
 	tray.SetMenu(menu)
 
 	app.OnShutdown(backend.stop)

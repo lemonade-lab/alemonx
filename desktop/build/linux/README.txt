@@ -1,4 +1,4 @@
-AlemonX Desktop
+ALemonX Desktop
 
 Ubuntu 24.04:
   sudo apt install libgtk-4-1 libwebkitgtk-6.0-4

@@ -28,8 +28,8 @@ mkdir "$stage/launcher/assets"
 cp assets/tray.png "$stage/launcher/assets/"
 wails3 generate syso -arch amd64 -icon build/windows/alemonx.ico -manifest build/windows/wails.exe.manifest -out "$stage/launcher/windows_amd64.syso"
 cd "$stage/launcher"
-GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -tags production -trimpath -ldflags "-s -w -H windowsgui" -o "$stage/payload/AlemonX Desktop.exe" .
-(cd "$stage/payload" && zip -q "$stage/alemonx-desktop-windows-amd64.zip" "AlemonX Desktop.exe" alx.exe)
+GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -tags production -trimpath -ldflags "-s -w -H windowsgui" -o "$stage/payload/ALemonX Desktop.exe" .
+(cd "$stage/payload" && zip -q "$stage/alemonx-desktop-windows-amd64.zip" "ALemonX Desktop.exe" alx.exe)
 mv "$stage/alemonx-desktop-windows-amd64.zip" "$output/"
 printf '%s\n' "$output/alemonx-desktop-windows-amd64.zip"
 

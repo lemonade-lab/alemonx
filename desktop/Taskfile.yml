@@ -2,7 +2,7 @@ version: '3'
 
 tasks:
   package:
-    desc: 构建当前 Mac 架构的 AlemonX Desktop
+    desc: 构建当前 Mac 架构的 ALemonX Desktop
     platforms: [darwin]
     cmds:
       - sh build/darwin/package.sh
@@ -13,7 +13,7 @@ tasks:
       - sh build/windows/package.sh
 
   package:linux:
-    desc: 构建当前 Linux 架构的 AlemonX Desktop 便携包
+    desc: 构建当前 Linux 架构的 ALemonX Desktop 便携包
     platforms: [linux]
     cmds:
       - sh build/linux/package.sh

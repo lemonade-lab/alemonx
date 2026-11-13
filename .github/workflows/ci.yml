@@ -116,9 +116,12 @@ jobs:
           name: ${{ matrix.bundle }}
           path: release/
 
+  desktop:
+    uses: ./.github/workflows/desktop.yml
+
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: package
+    needs: [package, desktop]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -126,7 +129,13 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
+          pattern: alx-*.zip
           path: release
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: alemonx-desktop-*
+          path: desktop-release
           merge-multiple: true
       - run: |
           release_base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}"
@@ -157,7 +166,8 @@ jobs:
           done
           printf ',{"name":"SHA256SUMS","url":"%s/SHA256SUMS"}]}' "$release_base" >> release/alx-update-index.json
           rm release/*.sha256
-          gh release create "${GITHUB_REF_NAME}" release/* --generate-notes
+          (cd desktop-release && sha256sum alemonx-desktop-* > alemonx-desktop-SHA256SUMS)
+          gh release create "${GITHUB_REF_NAME}" release/* desktop-release/* --generate-notes
         env:
           GH_TOKEN: ${{ github.token }}
       # Keep a permanent `latest` git tag pointing at the newest release so
