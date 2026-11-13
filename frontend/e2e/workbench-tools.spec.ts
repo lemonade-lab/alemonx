@@ -76,10 +76,12 @@ test('operation menu stays collapsed at all widths and opens nested tools', asyn
   await expect(panel).toBeHidden()
 })
 
-test('settings shortcuts open SSH and manage HTTP MCP with developer mode off', async ({
+test('settings navigation opens SSH and manages HTTP MCP with developer mode off', async ({
   page
 }) => {
   let managed = false
+  let networkMode = 'auto'
+  let githubLogin = ''
   await page.route('**/api/v1/**', route => {
     const request = route.request()
     const path = new URL(request.url()).pathname
@@ -104,6 +106,24 @@ test('settings shortcuts open SSH and manage HTTP MCP with developer mode off', 
         return route.fulfill({
           json: { running: managed, managed, url: 'http://127.0.0.1:17391/mcp' }
         })
+      case '/api/v1/github/auth/device':
+        return route.fulfill({ json: {
+          flowId: 'mock', userCode: 'ABCD-1234', verificationUri: 'https://github.com/login/device',
+          expiresIn: 900, interval: 5
+        } })
+      case '/api/v1/github/auth/poll':
+        githubLogin = 'test-user'
+        return route.fulfill({ json: { status: 'ok', login: 'test-user' } })
+      case '/api/v1/github/auth/status':
+        return route.fulfill({ json: { loggedIn: Boolean(githubLogin), login: githubLogin } })
+      case '/api/v1/system/network':
+        if (request.method() === 'PUT') networkMode = request.postDataJSON().mode
+        return route.fulfill({
+          json: {
+            version: 2, revision: 1, mode: networkMode,
+            automatic: { groups: [] }, proxy: { url: 'http://127.0.0.1:7890' }
+          }
+        })
       default:
         return route.fulfill({
           status: 503,
@@ -112,24 +132,73 @@ test('settings shortcuts open SSH and manage HTTP MCP with developer mode off', 
     }
   })
   await page.goto('/dashboard/robot')
-  const menuTrigger = page.getByRole('button', { name: '操作', exact: true })
-  const menu = page.getByRole('region', { name: '操作菜单' })
-  const shortcut = async (name: string) => {
-    await menuTrigger.click()
-    await menu.getByRole('button', { name, exact: true }).click()
-    await expect(menu).toBeHidden()
+  const trigger = page.getByRole('button', { name: '操作', exact: true })
+  const quickActions = page.getByRole('region', { name: '操作菜单' })
+  await trigger.click()
+  const initialTheme = await page.locator('html').getAttribute('data-theme')
+  const theme = quickActions.getByRole('button', { name: /切换到(亮色|暗色)/ })
+  await theme.click()
+  await expect(page.locator('html')).toHaveAttribute('data-theme', initialTheme === 'dark' ? 'light' : 'dark')
+  await theme.click()
+  const developer = quickActions.getByRole('button', { name: '开发模式' })
+  await developer.click()
+  await expect(developer).toHaveAttribute('aria-pressed', 'true')
+  await developer.click()
+  await expect(developer).toHaveAttribute('aria-pressed', 'false')
+  await quickActions.getByRole('button', { name: '启动 MCP HTTP' }).click()
+  await expect(quickActions.getByRole('button', { name: '停止 MCP HTTP' })).toBeEnabled()
+  await quickActions.getByRole('button', { name: '停止 MCP HTTP' }).click()
+  await page.context().route('https://github.com/login/device', route =>
+    route.fulfill({ body: 'GitHub device fixture' })
+  )
+  const deviceURL = '**/api/v1/github/auth/device'
+  await page.route(deviceURL, route =>
+    route.fulfill({ status: 503, json: { error: 'GitHub 暂时不可用' } })
+  )
+  const menuHeight = (await quickActions.boundingBox())!.height
+  await quickActions.getByRole('button', { name: '登录 GitHub' }).click()
+  const errorIcon = quickActions.getByRole('button', { name: '查看 GitHub 登录错误' })
+  await expect(errorIcon).toBeVisible()
+  const errorDetails = quickActions.getByText('GitHub 暂时不可用', { exact: true })
+  await expect(errorDetails).toBeHidden()
+  await errorIcon.click()
+  await expect(errorDetails).toBeVisible()
+  expect((await quickActions.boundingBox())!.height).toBe(menuHeight)
+  await errorIcon.press('Escape')
+  await expect(errorDetails).toBeHidden()
+  await page.unroute(deviceURL)
+  const popup = page.waitForEvent('popup')
+  await quickActions.getByRole('button', { name: '登录 GitHub' }).click()
+  const authorization = await popup
+  await expect(authorization).toHaveURL('https://github.com/login/device')
+  await expect(quickActions.getByText('ABCD-1234')).toBeVisible()
+  await expect(page.getByRole('dialog', { name: 'GitHub 授权' })).toHaveCount(0)
+  await authorization.close()
+  await quickActions.getByRole('button', { name: /^网络/ }).click()
+  const modes = quickActions.getByRole('group', { name: '网络模式' })
+  for (const mode of ['直连', '代理', '自动']) {
+    const option = modes.getByRole('button', { name: mode, exact: true })
+    await option.click()
+    await expect(option).toHaveAttribute('aria-pressed', 'true')
   }
+  await expect(page.getByRole('tab', { name: '通用', exact: true })).toHaveCount(0)
+  await trigger.click()
+  await expect.poll(() => githubLogin, { timeout: 7000 }).toBe('test-user')
+  await trigger.click()
+  await expect(quickActions.getByRole('button', { name: 'test-user' })).toBeDisabled()
+  await trigger.click()
+  await page.getByRole('button', { name: '打开设置', exact: true }).click()
+  const selectSetting = (name: string) =>
+    page.getByRole('tab', { name, exact: true }).click()
 
-  await shortcut('通用')
+  await selectSetting('通用')
   await expect(
     page.getByRole('checkbox', { name: /开发模式/ })
   ).not.toBeChecked()
-  await page.getByRole('button', { name: '关闭设置', exact: true }).click()
-  await shortcut('SSH 管理')
+  await selectSetting('SSH 管理')
   await expect(page.getByRole('heading', { name: 'SSH 管理' })).toBeVisible()
   await expect(page.getByRole('button', { name: '复制公钥' })).toBeVisible()
-  await page.getByRole('button', { name: '关闭设置', exact: true }).click()
-  await shortcut('MCP')
+  await selectSetting('MCP')
   await expect(
     page.getByRole('heading', { name: 'MCP', exact: true })
   ).toBeVisible()
@@ -184,6 +253,7 @@ test('empty robot workspace opens the new robot wizard', async ({ page }) => {
   await expect(
     page.getByRole('heading', { name: '开始管理你的机器人' })
   ).toBeVisible()
+  await expect(page.getByRole('button', { name: /^(显示|隐藏)机器人导航$/ })).toHaveCount(0)
   await page.getByRole('button', { name: '立即全新创建' }).click()
   await expect(page).toHaveURL(/\/guide\/install\/step\/1$/)
   await expect(
@@ -233,6 +303,12 @@ test('saved robots reopen from the account and stale URLs cannot register robots
     .locator('.project-rail')
     .getByText('saved-robot', { exact: true })
   await expect(savedRobot).toBeVisible()
+  const menu = page.getByRole('complementary', { name: '目录操作' })
+  await expect(menu).toBeVisible()
+  await page.getByRole('button', { name: '隐藏机器人导航' }).click()
+  await expect(menu).toHaveCount(0)
+  await page.getByRole('button', { name: '显示机器人导航' }).click()
+  await expect(menu).toBeVisible()
   const list = page.getByRole('navigation', { name: '机器人列表' })
   await expect(list.getByRole('region', { name: '已置顶机器人' })).toContainText('saved-robot')
   const folder = list.getByRole('button', { name: '目录 /test/robots/team' })
@@ -250,4 +326,18 @@ test('saved robots reopen from the account and stale URLs cannot register robots
   await page.reload()
   await expect(savedRobot).toBeVisible()
   expect(writes).toEqual([])
+
+  const git = page.getByRole('button', { name: '管理 saved-robot 的 Git' })
+  const gitWindow = page.getByRole('dialog', { name: 'saved-robot · Git' })
+  await git.evaluate(button => {
+    for (let index = 0; index < 10; index++) (button as HTMLButtonElement).click()
+  })
+  await expect(gitWindow).toHaveCount(1)
+  await gitWindow.getByRole('button', { name: '最小化saved-robot · Git' }).click()
+  await expect(gitWindow).toBeHidden()
+  await git.click()
+  await expect(gitWindow).toBeVisible()
+  await expect(gitWindow).toHaveCount(1)
+  await gitWindow.getByRole('button', { name: '关闭saved-robot · Git' }).click()
+  await expect(gitWindow).toHaveCount(0)
 })

@@ -4,9 +4,11 @@ import { useStoreState } from '../store/guideStore'
 import { useViewportPopoverPosition } from '../hooks/useViewportPopoverPosition'
 
 export function WorkbenchTools({
-  children
+  children,
+  keepMounted = false
 }: {
-  children: ReactNode | ((close: () => void) => ReactNode)
+  children: ReactNode | ((close: () => void, open: boolean) => ReactNode)
+  keepMounted?: boolean
 }) {
   const [open, setOpen] = useStoreState(false)
   const id = useId()
@@ -67,7 +69,7 @@ export function WorkbenchTools({
         onKeyDown={event => {
           if (event.key !== 'Escape' || event.defaultPrevented) return
           const expanded = menu.current?.querySelector<HTMLButtonElement>(
-            'button[aria-expanded="true"]'
+            'button[aria-haspopup="dialog"][aria-expanded="true"]'
           )
           event.preventDefault()
           event.stopPropagation()
@@ -82,7 +84,7 @@ export function WorkbenchTools({
           }
         }}
       >
-        {typeof children === 'function' ? open && children(close) : children}
+        {typeof children === 'function' ? (open || keepMounted) && children(close, open) : children}
       </div>
     </div>
   )

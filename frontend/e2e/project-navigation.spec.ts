@@ -7,7 +7,8 @@ test('primary navigation stays reachable while switching sections', async ({
   await page.route('**/project-navigation-regression', route =>
     route.fulfill({
       contentType: 'text/html; charset=utf-8',
-      body: `<div id="root"></div><script type="module">
+      body: `<div id="root" style="width:240px;margin-left:auto"></div><script type="module">
+      import '/src/styles.css';
       import RefreshRuntime from '/@react-refresh';
       RefreshRuntime.injectIntoGlobalHook(window);
       window.$RefreshReg$ = () => {};
@@ -26,8 +27,8 @@ test('primary navigation stays reachable while switching sections', async ({
         return React.createElement(ProjectNavigation, {activeID: active, items: [
           {id:'runtime', label:'运行', onSelect: () => setActive('runtime')},
           {id:'config', label:'配置', onSelect: () => {setActive('config');setSection('robot')}, children: [
-            {id:'robot', label:'机器人配置', active:section === 'robot', onSelect: () => setSection('robot')},
-            {id:'env', label:'环境变量', active:section === 'env', onSelect: () => setSection('env')}
+            {id:'robot', label:'机器人配置', active:active === 'config' && section === 'robot', onSelect: () => {setActive('config');setSection('robot')}},
+            {id:'env', label:'环境变量', active:active === 'config' && section === 'env', onSelect: () => {setActive('config');setSection('env')}}
           ]}
         ]});
       }
@@ -38,21 +39,24 @@ test('primary navigation stays reachable while switching sections', async ({
   await page.goto('/project-navigation-regression')
   const running = page.getByRole('button', { name: '运行', exact: true })
   await expect(running).toHaveAttribute('aria-current', 'page')
-  await page.getByRole('button', { name: '配置', exact: true }).click()
-  await expect(running).toBeVisible()
-  await expect(
-    page.getByRole('button', { name: '机器人配置', exact: true })
-  ).toHaveAttribute('aria-current', 'page')
+  const config = page.getByRole('button', { name: '配置', exact: true })
+  const nav = page.getByRole('navigation', { name: '机器人功能' })
+  const menu = page.getByRole('group', { name: '配置子菜单' })
+  const before = (await nav.boundingBox())!
+  await config.click()
+  await expect(menu).toBeVisible()
+  expect((await nav.boundingBox())!.height).toBe(before.height)
+  const menuBounds = (await menu.boundingBox())!
+  expect(menuBounds.x + menuBounds.width).toBeLessThan(before.x)
   await page.getByRole('button', { name: '环境变量', exact: true }).click()
-  await expect(
-    page.getByRole('button', { name: '环境变量', exact: true })
-  ).toHaveAttribute('aria-current', 'page')
+  await expect(menu).toHaveCount(0)
+  await expect(config).toHaveAttribute('aria-current', 'page')
+  await config.click()
+  await expect(menu.getByRole('button', { name: '环境变量', exact: true }))
+    .toHaveAttribute('aria-current', 'page')
+  await config.press('Escape')
+  await expect(menu).toHaveCount(0)
   await running.click()
   await expect(running).toHaveAttribute('aria-current', 'page')
-  await expect(
-    page.getByRole('button', { name: '环境变量', exact: true })
-  ).toHaveCount(0)
-  await expect(
-    page.getByRole('button', { name: '配置', exact: true })
-  ).toBeVisible()
+  await expect(config).toBeVisible()
 })

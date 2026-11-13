@@ -79,7 +79,7 @@ async function mount(page: Page) {
   await page.route('**/market-regression', route =>
     route.fulfill({
       contentType: 'text/html; charset=utf-8',
-      body: `<div id="root"></div><script type="module">
+      body: `<div id="root" style="height: 540px"></div><script type="module">
     import '/src/styles.css';
     import RefreshRuntime from '/@react-refresh';
     RefreshRuntime.injectIntoGlobalHook(window);
@@ -96,6 +96,10 @@ async function mount(page: Page) {
     })
   )
   await page.goto('/market-regression')
+  const footer = page.locator('.ecosystem-market-list footer')
+  await expect(footer).toBeVisible()
+  const bounds = (await footer.boundingBox())!
+  expect(bounds.y + bounds.height).toBeCloseTo(524, 0)
   return requests
 }
 

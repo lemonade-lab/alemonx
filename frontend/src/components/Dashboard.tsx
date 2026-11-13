@@ -1,4 +1,5 @@
 import { BackpackPackageUpdate } from './BackpackPackageUpdate'
+import { WorkbenchQuickActions } from './WorkbenchQuickActions'
 import { RobotDirectoryTree } from './RobotDirectoryTree'
 import { RobotWorkspaceSplitter } from './RobotWorkspaceSplitter'
 import { useAccountRobots } from '../hooks/useAccountRobots'
@@ -143,10 +144,8 @@ import { ErrorNotice } from './ErrorNotice'
 import { EmptyState } from './EmptyState'
 import { WorkspaceWelcome } from './WorkspaceWelcome'
 import { BackpackFolderInstall } from './BackpackFolderInstall'
-import { WorkbenchTools } from './WorkbenchTools'
 import { openNativeWindow, bridge, markNativeRuntimeReady, type AuxiliaryWindowName } from './nativeWindow'
 import { WorkbenchHeader } from './WorkbenchHeader'
-import { SettingsShortcuts } from './SettingsShortcuts'
 import type { SettingsSection } from './settingsSections'
 import { ProjectNavigation } from './ProjectNavigation'
 import { ConfirmDialog } from './ConfirmDialog'
@@ -3562,6 +3561,7 @@ export function Dashboard({
   const invalidProject = Boolean(
     activeProject && projectValidation && !projectValidation.valid
   )
+  const robotNavigationProject = !systemFeature && !invalidProject ? activeProject : undefined
   const workspace =
     systemFeature === 'ops-overview' ? (
       <OpsOverview
@@ -3782,33 +3782,26 @@ export function Dashboard({
               </Button>
             </div>
             <div className="ml-auto flex shrink-0 items-center gap-1">
-              <WorkbenchTools>
-                {close => (
-                  <SettingsShortcuts
-                    onSelect={section => {
-                      close()
-                      onOpenSettings(section)
-                    }}
-                  />
-                )}
-              </WorkbenchTools>
-              <Button
-                variant="icon"
-                onClick={() => setRobotNavigationHidden(value => !value)}
-                aria-label={
-                  robotNavigationHidden ? '显示机器人导航' : '隐藏机器人导航'
-                }
-                aria-pressed={!robotNavigationHidden}
-                title={
-                  robotNavigationHidden ? '显示机器人导航' : '隐藏机器人导航'
-                }
-              >
-                {robotNavigationHidden ? (
-                  <PanelRightOpen className="size-4" />
-                ) : (
-                  <PanelRightClose className="size-4" />
-                )}
-              </Button>
+              <WorkbenchQuickActions developerMode={developerMode} />
+              {robotNavigationProject && (
+                <Button
+                  variant="icon"
+                  onClick={() => setRobotNavigationHidden(value => !value)}
+                  aria-label={
+                    robotNavigationHidden ? '显示机器人导航' : '隐藏机器人导航'
+                  }
+                  aria-pressed={!robotNavigationHidden}
+                  title={
+                    robotNavigationHidden ? '显示机器人导航' : '隐藏机器人导航'
+                  }
+                >
+                  {robotNavigationHidden ? (
+                    <PanelRightOpen className="size-4" />
+                  ) : (
+                    <PanelRightClose className="size-4" />
+                  )}
+                </Button>
+              )}
               <button
                 className="icon-button size-8 p-0"
                 onClick={onOpenGuide}
@@ -4056,14 +4049,11 @@ export function Dashboard({
               />
             }
             controls={
-              !robotNavigationHidden &&
-              !systemFeature &&
-              activeProject &&
-              !invalidProject ? (
+              robotNavigationProject && !robotNavigationHidden ? (
                 <ControlCard
                   page={page}
                   section={section}
-                  project={activeProject}
+                  project={robotNavigationProject}
                   buildMode={buildMode}
                   catalog={catalog}
                   catalogTitle={catalogTitle}
@@ -4103,8 +4093,8 @@ export function Dashboard({
                     setCatalogTitle(title)
                   }}
                   onGit={() => {
-                    if (openNativeGit(activeProject)) return
-                    setGitProject(activeProject)
+                    if (openNativeGit(robotNavigationProject)) return
+                    setGitProject(robotNavigationProject)
                     setGitMinimized(false)
                     activateFloatingWindow('git')
                   }}
@@ -4245,7 +4235,7 @@ export function Dashboard({
       )}
       {gitProject && (
         <RobotGitControl
-          key={gitProject.path}
+          key={`git:${gitProject.path}`}
           project={gitProject}
           minimized={gitMinimized}
           zIndex={windowLayers.git}
@@ -4258,7 +4248,7 @@ export function Dashboard({
         />
       )}
       <PM2LogsPanel
-        key={root}
+        key={`pm2-logs:${root}`}
         open={pm2LogsOpen}
         minimized={pm2LogsMinimized}
         root={root}
@@ -5870,54 +5860,56 @@ function OperationTasksPage({
           )}
           {current && (
             <div className="grid gap-2">
-              {sidebarLayout && (
-                <div className="grid gap-0.5 px-0.5">
-                  <strong className="text-sm font-semibold text-(--theme-text-strong)">
-                    {label(current.action)}
-                  </strong>
-                  <small className="text-xs text-(--theme-text-muted)">
-                    {current.status === 'running'
-                      ? '正在执行'
-                      : current.status === 'failed'
-                        ? '执行失败'
-                        : current.status === 'cancelled'
-                          ? '已取消'
-                          : '已完成'}
-                    {current.createdAt &&
-                      ` · ${formatTaskTime(current.createdAt)}`}
-                  </small>
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                {sidebarLayout && (
+                  <div className="grid min-w-0 gap-0.5 px-0.5">
+                    <strong className="text-sm font-semibold text-(--theme-text-strong)">
+                      {label(current.action)}
+                    </strong>
+                    <small className="text-xs text-(--theme-text-muted)">
+                      {current.status === 'running'
+                        ? '正在执行'
+                        : current.status === 'failed'
+                          ? '执行失败'
+                          : current.status === 'cancelled'
+                            ? '已取消'
+                            : '已完成'}
+                      {current.createdAt &&
+                        ` · ${formatTaskTime(current.createdAt)}`}
+                    </small>
+                  </div>
+                )}
+                <div className="ml-auto shrink-0">
+                  {current.status === 'running' ? (
+                    <button
+                      className="secondary-button"
+                      disabled={
+                        controlling ||
+                        cancelling === current.id ||
+                        !current.canCancel
+                      }
+                      onClick={() => void act(current.id, 'cancel')}
+                    >
+                      {cancelling === current.id ? '正在取消…' : '取消任务'}
+                    </button>
+                  ) : (
+                    <button
+                      className="secondary-button"
+                      disabled={controlling || !current.canRetry}
+                      onClick={() => void act(current.id, 'retry')}
+                    >
+                      重新执行
+                    </button>
+                  )}
                 </div>
-              )}
-              <div className="flex items-center gap-2">
-                {current.status === 'running' ? (
-                  <button
-                    className="secondary-button"
-                    disabled={
-                      controlling ||
-                      cancelling === current.id ||
-                      !current.canCancel
-                    }
-                    onClick={() => void act(current.id, 'cancel')}
-                  >
-                    {cancelling === current.id ? '正在取消…' : '取消任务'}
-                  </button>
-                ) : (
-                  <button
-                    className="secondary-button"
-                    disabled={controlling || !current.canRetry}
-                    onClick={() => void act(current.id, 'retry')}
-                  >
-                    重新执行
-                  </button>
-                )}
-                {!(current.status === 'running'
-                  ? current.canCancel
-                  : current.canRetry) && (
-                  <small className="text-xs text-slate-500">
-                    请到对应功能页面操作此任务
-                  </small>
-                )}
               </div>
+              {!(current.status === 'running'
+                ? current.canCancel
+                : current.canRetry) && (
+                <small className="px-0.5 text-xs text-slate-500">
+                  请到对应功能页面操作此任务
+                </small>
+              )}
               {controlError && (
                 <p role="alert" className="text-xs text-red-600">
                   {controlError}
@@ -12743,7 +12735,7 @@ function ControlCard({
               { id: 'npmrc', label: 'npm 源' },
               { id: 'env', label: '环境变量' }
             ]
-          : [{ id: 'config', label: '机器人' }]
+          : []
         : primary === 'build'
           ? [
               { id: 'manifest', label: '包配置' },

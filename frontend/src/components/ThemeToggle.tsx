@@ -41,8 +41,8 @@ export function ThemeToggle({
       variant={embedded ? 'secondary' : 'icon'}
       className={menuItem ? 'workbench-action-item' : undefined}
       onClick={() => setTheme(next)}
-      aria-label={`切换到${next === 'dark' ? '暗色' : '亮色'}主题`}
-      title={`切换到${next === 'dark' ? '暗色' : '亮色'}主题`}
+      aria-label={`切换到${next === 'dark' ? '暗色' : '亮色'}`}
+      title={`切换到${next === 'dark' ? '暗色' : '亮色'}`}
     >
       {theme === 'dark' ? (
         <Sun className="size-4" />
@@ -50,7 +50,7 @@ export function ThemeToggle({
         <Moon className="size-4" />
       )}
       {(menuItem || embedded) && (
-        <span>{`切换到${next === 'dark' ? '暗色' : '亮色'}主题`}</span>
+        <span>{`切换到${next === 'dark' ? '暗色' : '亮色'}`}</span>
       )}
     </Button>
   )

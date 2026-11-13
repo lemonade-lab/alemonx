@@ -8,6 +8,7 @@ import (
 	"path"
 	"runtime"
 	"strings"
+	"sync"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
@@ -17,9 +18,10 @@ type auxiliaryWindows struct {
 	app        *application.App
 	baseURL    string
 	mainWindow *application.WebviewWindow
+	pendingGit sync.Map
 }
 
-func (a auxiliaryWindows) openFromMessage(message string) {
+func (a *auxiliaryWindows) openFromMessage(message string) {
 	request, ok := strings.CutPrefix(message, "alx:open-window:")
 	if !ok {
 		return
@@ -106,7 +108,13 @@ func (a auxiliaryWindows) openFromMessage(message string) {
 		case "pm2-logs":
 			title, width = "PM2 运行日志", 1000
 		case "git":
+			root := params.Get("root")
+			if root == "" {
+				return
+			}
 			title, width = "Git", 1100
+			// Display metadata must not change the window identity.
+			windowKey = fmt.Sprintf("git-%x", sha256.Sum256([]byte(root)))
 		case "pm2-processes":
 			title, width = "PM2 进程", 1050
 		case "test":
@@ -139,8 +147,10 @@ func (a auxiliaryWindows) openFromMessage(message string) {
 				return
 			}
 		}
-		identity := params.Get("root") + "\x00" + params.Get("taskId") + "\x00" + params.Get("path") + "\x00" + params.Get("id")
-		windowKey = fmt.Sprintf("%s-%x", name, sha256.Sum256([]byte(identity)))
+		if name != "git" {
+			identity := params.Get("root") + "\x00" + params.Get("taskId") + "\x00" + params.Get("path") + "\x00" + params.Get("id")
+			windowKey = fmt.Sprintf("%s-%x", name, sha256.Sum256([]byte(identity)))
+		}
 		suffix = "?" + params.Encode()
 	default:
 		return
@@ -149,7 +159,17 @@ func (a auxiliaryWindows) openFromMessage(message string) {
 	if name == "settings" && section != "" {
 		target += "#section=" + url.QueryEscape(section)
 	}
+	if name == "git" {
+		// Wails delivers raw messages concurrently. Keep one pending open per
+		// repository, from queueing through completion on the UI thread.
+		if _, pending := a.pendingGit.LoadOrStore(windowKey, struct{}{}); pending {
+			return
+		}
+	}
 	application.InvokeAsync(func() {
+		if name == "git" {
+			defer a.pendingGit.Delete(windowKey)
+		}
 		if existing, found := a.app.Window.GetByName(windowKey); found {
 			if name == "settings" && section != "" {
 				existing.SetURL(target)

@@ -83,16 +83,18 @@ export function SettingsSwitch({
   onChange,
   disabled,
   label,
-  hint
+  hint,
+  align = 'start'
 }: {
   checked: boolean
   onChange: (checked: boolean) => void
   disabled?: boolean
   label: ReactNode
   hint?: ReactNode
+  align?: 'start' | 'end'
 }) {
   return (
-    <label className="settings-switch-row">
+    <label className={cn('settings-switch-row', align === 'end' && 'settings-switch-row-end')}>
       <span className="settings-switch">
         <input
           type="checkbox"

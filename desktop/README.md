@@ -17,13 +17,13 @@ open "bin/ALemonX Desktop.app"
 
 ## 运行
 
-工作台监听 `127.0.0.1:17392`，默认工作区位于 `~/Library/Application Support/AlemonX Desktop/workspace`。可通过 `ALX_WORKSPACE` 或启动参数选用已有工作区：
+工作台优先监听 `127.0.0.1:17392`。端口被占用时，操作系统会直接分配空闲端口，桌面窗口自动连接该地址。默认工作区位于 `~/Library/Application Support/AlemonX Desktop/workspace`。可通过 `ALX_WORKSPACE` 或启动参数选用已有工作区：
 
 ```sh
 open "bin/ALemonX Desktop.app" --args --workspace "/path/to/workspace" --port 17392
 ```
 
-固定端口能保留同一来源下的 WebView 本地设置。关闭窗口会收起工作台，从菜单栏打开可恢复窗口。选择「退出 AlemonX」会关闭工作台服务。macOS 和 Windows 可通过托盘恢复收起的工作台。通过替换完整应用包更新桌面版，工作区位于应用包外。
+端口变化时，WebView 会使用对应地址的本地设置。关闭窗口会收起工作台，从菜单栏打开可恢复窗口。选择「退出 AlemonX」会关闭工作台服务。macOS 和 Windows 可通过托盘恢复收起的工作台。通过替换完整应用包更新桌面版，工作区位于应用包外。
 
 ## 构建 Windows x64
 

@@ -3,7 +3,6 @@ import { useEffect, useRef, type KeyboardEvent, type ReactNode } from 'react'
 import { useNavigationState } from '../hooks/useNavigationState'
 
 const listLimits = { min: 17, max: 35, initial: 20 }
-const controlsWidthPercent = 23
 
 function clampListWidth(value: number) {
   return Math.max(listLimits.min, Math.min(listLimits.max, Math.round(value)))
@@ -27,7 +26,6 @@ export function RobotWorkspaceSplitter({
     listLimits.initial
   )
   const listWidth = listHidden ? 0 : clampListWidth(listPreference)
-  const controlsWidth = controls ? controlsWidthPercent : 0
 
   useEffect(() => {
     const bar = root.current?.querySelector<HTMLElement>(
@@ -78,17 +76,11 @@ export function RobotWorkspaceSplitter({
         </Splitter.Panel>
         <Splitter.Panel
           className="robot-workspace-content"
-          size={`${100 - listWidth - controlsWidth}%`}
+          size={`${100 - listWidth}%`}
           min="30%"
         >
           <section className="console-page">{children}</section>
-        </Splitter.Panel>
-        <Splitter.Panel
-          className={`robot-workspace-controls${controls ? '' : ' robot-workspace-hidden'}`}
-          size={`${controlsWidth}%`}
-          resizable={false}
-        >
-          {controls}
+          {controls && <div className="robot-workspace-controls">{controls}</div>}
         </Splitter.Panel>
       </Splitter>
     </div>

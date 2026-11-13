@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Check, Loader2, LogOut, RotateCcw, Save } from 'lucide-react'
 import { Button } from './Button'
+import { GitHubAuthControl } from './GitHubAuthControl'
 import { GithubMark } from './GithubMark'
 import { SettingsCard, SettingsMessage, SettingsPage } from './SettingsCard'
 
@@ -29,7 +30,7 @@ export function GithubSettingsPanel() {
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setError('')
     try {
       const [idResponse, statusResponse] = await Promise.all([
@@ -49,13 +50,13 @@ export function GithubSettingsPanel() {
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '读取失败')
     }
-  }
+  }, [])
 
   useEffect(() => {
     void load()
-  }, [])
+  }, [load])
 
-  const saveClientID = async () => {
+  const saveClientID = async (value = clientId) => {
     setBusy(true)
     setMessage('')
     setError('')
@@ -63,7 +64,7 @@ export function GithubSettingsPanel() {
       const response = await fetch('/api/v1/github/auth/client-id', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ clientId: clientId.trim() })
+        body: JSON.stringify({ clientId: value.trim() })
       })
       const data = (await response.json()) as ClientIDInfo & { error?: string }
       if (!response.ok) throw new Error(data.error ?? '保存失败')
@@ -77,10 +78,7 @@ export function GithubSettingsPanel() {
     }
   }
 
-  const resetClientID = async () => {
-    setClientId('')
-    await saveClientID()
-  }
+  const resetClientID = () => saveClientID('')
 
   const logout = async () => {
     setBusy(true)
@@ -127,32 +125,39 @@ export function GithubSettingsPanel() {
             placeholder="如 Iv1.xxxxxxxxxxxx"
           />
         </label>
-        <div className="settings-card-actions">
-          <Button
-            variant="primary"
-            className="gap-1.5"
-            disabled={busy}
-            onClick={() => void saveClientID()}
-          >
-            {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Save className="size-3.5" />}
-            保存
-          </Button>
-          <Button
-            variant="secondary"
-            className="gap-1.5"
-            disabled={busy || !clientId}
-            onClick={() => void resetClientID()}
-          >
-            <RotateCcw className="size-3.5" />
-            恢复默认
-          </Button>
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div className="settings-card-actions">
+            <Button
+              variant="primary"
+              className="gap-1.5"
+              disabled={busy}
+              onClick={() => void saveClientID()}
+            >
+              {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Save className="size-3.5" />}
+              保存
+            </Button>
+            <Button
+              variant="secondary"
+              className="gap-1.5"
+              disabled={busy || !clientId}
+              onClick={() => void resetClientID()}
+            >
+              <RotateCcw className="size-3.5" />
+              恢复默认
+            </Button>
+          </div>
+          {status && !status.loggedIn && (
+            <div className="ml-auto">
+              <GitHubAuthControl visible onLogin={load} />
+            </div>
+          )}
         </div>
       </SettingsCard>
 
       <SettingsCard
         icon={<GithubMark className="size-4" />}
         title="GitHub 登录状态"
-        description="授权后 GitHub API 配额提升至 5000 次/小时；点击窗口顶部的 GitHub 图标可发起授权登录。"
+        description="授权后 GitHub API 配额提升至 5000 次/小时。"
       >
         {status ? (
           status.loggedIn ? (
@@ -174,7 +179,7 @@ export function GithubSettingsPanel() {
           ) : (
             <p className="settings-message is-info m-0 inline-flex items-center gap-1.5">
               <GithubMark className="size-4" />
-              未登录；点击窗口顶部的 GitHub 图标发起授权登录。
+              未登录 GitHub。
             </p>
           )
         ) : (

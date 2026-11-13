@@ -152,6 +152,7 @@ function GeneralSettings() {
       <SettingsCard title="外观" actions={<ThemeToggle embedded />} />
       <SettingsCard title="工作台">
         <SettingsSwitch
+          align="end"
           label="开发模式"
           hint="显示源码、终端与发布工具。"
           checked={developerMode}

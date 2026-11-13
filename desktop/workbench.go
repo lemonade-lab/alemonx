@@ -106,7 +106,8 @@ func startWorkbench(workspace string, port int) (*workbench, error) {
 	select {
 	case address := <-ready:
 		host, actualPort, err := net.SplitHostPort(address)
-		if err != nil || host != "127.0.0.1" || actualPort == "0" || (port != 0 && actualPort != strconv.Itoa(port)) {
+		boundPort, portErr := strconv.Atoi(actualPort)
+		if err != nil || host != "127.0.0.1" || portErr != nil || boundPort < 1 || boundPort > 65535 {
 			backend.stop()
 			return nil, fmt.Errorf("工作台返回了无效的本机地址")
 		}

@@ -71,12 +71,34 @@ export function EcosystemMarket({
   return (
     <RobotPanel
       title={title}
+      className="ecosystem-market-list"
       description={`${category} · ALemon 生态资源平台`}
       icon={<Package className="size-4" />}
       actions={
         <button className="secondary-button" onClick={() => void refetch()}>
           刷新
         </button>
+      }
+      footer={
+        <footer className="flex items-center justify-between gap-2 text-xs">
+          <button
+            className="secondary-button"
+            disabled={page <= 1 || isFetching}
+            onClick={() => setPage(page - 1)}
+          >
+            上一页
+          </button>
+          <span>
+            第 {page} 页 · 共 {list?.total ?? 0} 项
+          </span>
+          <button
+            className="secondary-button"
+            disabled={!list || page * list.pageSize >= list.total || isFetching}
+            onClick={() => setPage(page + 1)}
+          >
+            下一页
+          </button>
+        </footer>
       }
     >
       <form
@@ -100,57 +122,40 @@ export function EcosystemMarket({
           搜索
         </button>
       </form>
-      {error ? (
-        <p role="alert">{errorMessage(error)}</p>
-      ) : isFetching ? (
-        <p role="status">正在读取资源…</p>
-      ) : (
-        <>
-          <section className="grid gap-2">
-            {list?.data.map(item => (
-              <button
-                key={item.id}
-                className="grid gap-1 rounded-lg border border-(--theme-border-default) bg-(--theme-surface-panel) p-3 text-left"
-                onClick={() => setSelected(item.id)}
-              >
-                <strong className="text-sm">
-                  {item.name}
-                  {installed(item) && (
-                    <small className="ml-2 text-emerald-600">已安装</small>
-                  )}
-                </strong>
-                <small className="text-(--theme-text-muted)">
-                  {item.description}
-                </small>
-                <small className="text-(--theme-text-muted)">
-                  {item.installMode === 'npm' ? 'npm' : 'Git'}
-                  {item.ownerLogin ? ` · ${item.ownerLogin}` : ''}
-                </small>
-              </button>
-            ))}
-          </section>
-          {!list?.data.length && <p>暂无匹配资源。</p>}
-        </>
-      )}
-      <footer className="flex items-center justify-between gap-2 text-xs">
-        <button
-          className="secondary-button"
-          disabled={page <= 1 || isFetching}
-          onClick={() => setPage(page - 1)}
-        >
-          上一页
-        </button>
-        <span>
-          第 {page} 页 · 共 {list?.total ?? 0} 项
-        </span>
-        <button
-          className="secondary-button"
-          disabled={!list || page * list.pageSize >= list.total || isFetching}
-          onClick={() => setPage(page + 1)}
-        >
-          下一页
-        </button>
-      </footer>
+      <div className="min-h-0 overflow-y-auto overscroll-contain" aria-label="资源列表">
+        {error ? (
+          <p role="alert">{errorMessage(error)}</p>
+        ) : isFetching ? (
+          <p role="status">正在读取资源…</p>
+        ) : (
+          <>
+            <section className="grid gap-2">
+              {list?.data.map(item => (
+                <button
+                  key={item.id}
+                  className="grid gap-1 rounded-lg border border-(--theme-border-default) bg-(--theme-surface-panel) p-3 text-left"
+                  onClick={() => setSelected(item.id)}
+                >
+                  <strong className="text-sm">
+                    {item.name}
+                    {installed(item) && (
+                      <small className="ml-2 text-emerald-600">已安装</small>
+                    )}
+                  </strong>
+                  <small className="text-(--theme-text-muted)">
+                    {item.description}
+                  </small>
+                  <small className="text-(--theme-text-muted)">
+                    {item.installMode === 'npm' ? 'npm' : 'Git'}
+                    {item.ownerLogin ? ` · ${item.ownerLogin}` : ''}
+                  </small>
+                </button>
+              ))}
+            </section>
+            {!list?.data.length && <p>暂无匹配资源。</p>}
+          </>
+        )}
+      </div>
     </RobotPanel>
   )
 }

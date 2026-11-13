@@ -134,9 +134,19 @@ export function McpSettingsPanel() {
               <p className="wrap-break-word">
                 连接地址 <code>{data.url}</code>
               </p>
-              <Button onClick={() => void copy(data.url, '连接地址')}>
-                复制地址
-              </Button>
+              <div className="ml-auto flex flex-wrap justify-end gap-2">
+                <Button onClick={() => void copy(data.url, '连接地址')}>
+                  复制地址
+                </Button>
+                {data.managed && (
+                  <Button
+                    disabled={locked}
+                    onClick={() => (token ? setToken('') : void revealToken())}
+                  >
+                    {token ? '隐藏连接令牌' : '显示连接令牌'}
+                  </Button>
+                )}
+              </div>
             </div>
             <p>
               在运行 ALemonX 的电脑上，将此地址和 Bearer Token 填入 MCP
@@ -145,29 +155,19 @@ export function McpSettingsPanel() {
             {data.managed && (
               <p>重新启动 HTTP 服务后，需要在客户端更新令牌。</p>
             )}
-            {data.managed && (
-              <>
-                <Button
-                  disabled={locked}
-                  onClick={() => (token ? setToken('') : void revealToken())}
-                >
-                  {token ? '隐藏连接令牌' : '显示连接令牌'}
+            {token && (
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <input
+                  aria-label="连接令牌"
+                  className="min-w-0 flex-1 rounded border border-(--theme-border-default) bg-(--theme-surface-panel) p-2 font-mono"
+                  readOnly
+                  value={token}
+                  onFocus={event => event.target.select()}
+                />
+                <Button onClick={() => void copy(token, '连接令牌')}>
+                  复制令牌
                 </Button>
-                {token && (
-                  <div className="mt-2 flex flex-wrap items-center gap-2">
-                    <input
-                      aria-label="连接令牌"
-                      className="min-w-0 flex-1 rounded border border-(--theme-border-default) bg-(--theme-surface-panel) p-2 font-mono"
-                      readOnly
-                      value={token}
-                      onFocus={event => event.target.select()}
-                    />
-                    <Button onClick={() => void copy(token, '连接令牌')}>
-                      复制令牌
-                    </Button>
-                  </div>
-                )}
-              </>
+              </div>
             )}
           </>
         )}

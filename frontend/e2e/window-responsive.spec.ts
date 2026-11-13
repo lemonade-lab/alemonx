@@ -266,7 +266,7 @@ test('robot workbench resizes the left rail and keeps the right card fixed', asy
             React.createElement('header', {style:{display:'block'}}, '机器人面板'),
             React.createElement('nav', {'data-project-navigation': '', 'aria-label':'机器人功能'},
               Array.from({length: 40}, (_, index) => React.createElement('button', {key:index, style:{display:'block', height:36}}, '菜单 ' + index))),
-            React.createElement('footer', null, '快捷操作')))}, '工作区')));
+            React.createElement('footer', null, '快捷操作')))}, React.createElement('div', null, '工作区'))));
     </script>`
     })
   )
@@ -277,7 +277,18 @@ test('robot workbench resizes the left rail and keeps the right card fixed', asy
       .evaluate(node => node.getBoundingClientRect().width)
   const left = page.getByRole('separator', { name: '调整机器人列表宽度' })
   const right = page.locator('.robot-workspace-content + .ant-splitter-bar')
-  await expect(right).toBeHidden()
+  await expect(right).toHaveCount(0)
+  const column = (await page.locator('.robot-workspace-content').boundingBox())!
+  const content = (await page.locator('.robot-workspace-content > .console-page').boundingBox())!
+  const controls = page.locator('.robot-workspace-controls')
+  const dock = (await controls.boundingBox())!
+  expect(Math.abs(content.x - column.x)).toBeLessThanOrEqual(1)
+  expect(Math.abs(content.x + content.width - (column.x + column.width))).toBeLessThanOrEqual(1)
+  const workspace = (await page.getByText('工作区', { exact: true }).boundingBox())!
+  expect(workspace.x + workspace.width).toBeLessThanOrEqual(dock.x + 1)
+  const card = (await controls.locator('.control-card').boundingBox())!
+  expect(content.x + content.width).toBeGreaterThan(card.x + card.width)
+  expect(await controls.evaluate(node => getComputedStyle(node).position)).toBe('absolute')
   const menu = page.getByRole('navigation', { name: '机器人功能' })
   const footer = page.getByText('快捷操作', { exact: true })
   const footerTop = (await footer.boundingBox())!.y

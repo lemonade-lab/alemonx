@@ -6,6 +6,7 @@ import (
 	"context"
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -495,7 +496,7 @@ func serve(host, port, redisPort, mcpPort string, redisOff bool, workspaceRoot s
 			options.RedisPort = value
 		}
 	}
-	listener, err := net.Listen("tcp", host+":"+port)
+	listener, err := listenWorkbench(host, port, desktop)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -563,6 +564,9 @@ func serve(host, port, redisPort, mcpPort string, redisOff bool, workspaceRoot s
 		_ = server.Shutdown(shutdownCtx)
 	}()
 
+	if desktop {
+		port = strconv.Itoa(listener.Addr().(*net.TCPAddr).Port)
+	}
 	fmt.Print(startupMessage(Version, host, port))
 	if !isLoopbackHost(host) {
 		fmt.Printf("\n  注意：已监听 %s，局域网或公网可直接访问。\n  强烈建议先执行 alx auth enable 开启身份认证，并配合防火墙限制访问来源。\n", host)
@@ -574,6 +578,17 @@ func serve(host, port, redisPort, mcpPort string, redisOff bool, workspaceRoot s
 	if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
+}
+
+func listenWorkbench(host, port string, desktop bool) (net.Listener, error) {
+	listener, err := net.Listen("tcp", net.JoinHostPort(host, port))
+	// Winsock can report WSAEACCES for an exclusive or reserved port.
+	if desktop && (errors.Is(err, syscall.EADDRINUSE) ||
+		(runtime.GOOS == "windows" &&
+			(errors.Is(err, syscall.Errno(10048)) || errors.Is(err, syscall.Errno(10013))))) {
+		return net.Listen("tcp", net.JoinHostPort(host, "0"))
+	}
+	return listener, err
 }
 
 // isLoopbackHost reports whether the bind host only accepts local connections.
