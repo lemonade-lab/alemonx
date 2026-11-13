@@ -5,10 +5,10 @@ type NativeWindow = Window & {
   }
 }
 
-const native = window as NativeWindow
-export const windows = native.chrome?.webview
-const mac = native.webkit?.messageHandlers?.external
-export const bridge = window.top === window ? (windows ?? mac) : undefined
+const native = typeof window === 'undefined' ? undefined : window as NativeWindow
+export const windows = native?.chrome?.webview
+const mac = native?.webkit?.messageHandlers?.external
+export const bridge = native && native.top === native ? (windows ?? mac) : undefined
 
 export const desktopPlatform = bridge
   ? windows
