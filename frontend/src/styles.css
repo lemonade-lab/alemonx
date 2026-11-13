@@ -6563,7 +6563,7 @@ textarea:hover {
   background: var(--theme-danger-soft);
   color: var(--theme-danger-text);
 }
-.backpack-panel > article button:not([role='tab']),
+.backpack-panel > article button:not([role='tab'], [data-backpack-list] *),
 .backpack-manager > article button:not([role='tab']) {
   background: var(--theme-surface-raised);
   border-color: transparent;
@@ -6573,11 +6573,11 @@ textarea:hover {
     inset 0 -1px 0
       color-mix(in srgb, var(--theme-surface-panel) 88%, transparent);
 }
-.backpack-panel > article button:not([role='tab']):hover:not(:disabled),
+.backpack-panel > article button:not([role='tab'], [data-backpack-list] *):hover:not(:disabled),
 .backpack-manager > article button:not([role='tab']):hover:not(:disabled) {
   background: var(--theme-surface-hover);
 }
-.backpack-panel > article button:not([role='tab']):active,
+.backpack-panel > article button:not([role='tab'], [data-backpack-list] *):active,
 .backpack-manager > article button:not([role='tab']):active {
   background: var(--theme-surface-panel);
   box-shadow:
@@ -9579,6 +9579,27 @@ button > svg,
 .robot-workspace-content > .console-page {
   flex: 1;
   min-width: 0;
+}
+.robot-workspace-controls {
+  min-height: 0;
+}
+.robot-workspace-controls > .control-dock {
+  max-height: 100%;
+}
+.robot-workspace-controls .control-navigation {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.robot-workspace-controls .control-navigation > :not([data-project-navigation]) {
+  flex-shrink: 0;
+}
+.robot-workspace-controls [data-project-navigation] {
+  align-content: start;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  scrollbar-width: thin;
 }
 .robot-workspace-splitter > .robot-workspace-hidden,
 .robot-workspace-list.robot-workspace-hidden + .ant-splitter-bar,

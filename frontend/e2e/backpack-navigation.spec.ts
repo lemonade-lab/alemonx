@@ -18,10 +18,18 @@ async function fixture(
     latest?: string
     fail?: boolean
     delayList?: boolean
+    sortable?: boolean
   } = {}
 ) {
   const operations: Array<{ name: string; version: string; force?: boolean }> =
     []
+  const second = {
+    ...sample,
+    name: 'second-plugin',
+    path: '/test/robot/packages/second-plugin'
+  }
+  let appOrder = options.sortable ? [sample.name, second.name] : [sample.name]
+  const moves: Array<{ source: string; target: string; after: boolean }> = []
   let version = sample.version
   let versionQueries = 0
   await page.route('**/api/v1/**', async route => {
@@ -29,7 +37,11 @@ async function fixture(
     if (url.pathname.endsWith('/robot/packages')) {
       if (options.delayList)
         await new Promise(resolve => setTimeout(resolve, 200))
-      return route.fulfill({ json: { items: [{ ...sample, version }] } })
+      return route.fulfill({
+        json: {
+          items: [{ ...sample, version }, ...(options.sortable ? [second] : [])]
+        }
+      })
     }
     if (url.pathname.endsWith('/packages/status')) {
       const status = {
@@ -71,8 +83,20 @@ async function fixture(
           workspaces: ['packages/*']
         }
       })
-    if (url.pathname.endsWith('/robot/apps'))
-      return route.fulfill({ json: { items: [sample.name] } })
+    if (url.pathname.endsWith('/robot/apps')) {
+      if (route.request().method() === 'PATCH') {
+        const move = route.request().postDataJSON()
+        moves.push(move)
+        appOrder = appOrder.filter(name => name !== move.source)
+        appOrder.splice(
+          appOrder.indexOf(move.target) + Number(move.after),
+          0,
+          move.source
+        )
+        return route.fulfill({ json: {} })
+      }
+      return route.fulfill({ json: { items: appOrder } })
+    }
     if (url.pathname.endsWith('/package-config'))
       return route.fulfill({ json: { fields: [], values: {} } })
     if (url.pathname.endsWith('/package-readme'))
@@ -101,12 +125,12 @@ async function fixture(
     const {Provider}=await import('/node_modules/.vite/deps/react-redux.js');
     const {store,persistor}=await import('/src/store/guideStore.ts');
     const {BackpackPanel}=await import('/src/components/Dashboard.tsx');
-    const {useLocalPackagesQuery}=await import('/src/store/workspaceApi.ts');
+    const {useLocalPackagesQuery,useMoveAppMutation}=await import('/src/store/workspaceApi.ts');
     await new Promise(resolve=>{if(persistor.getState().bootstrapped)return resolve();const stop=persistor.subscribe(()=>{if(persistor.getState().bootstrapped){stop();resolve()}})});
     const root=new URLSearchParams(location.search).get('root')||'/test/robot';
-    function Fixture(){const {currentData,isFetching,error,refetch}=useLocalPackagesQuery(root);return React.createElement(BackpackPanel,{
+    function Fixture(){const [moveApp]=useMoveAppMutation();const {currentData,isFetching,error,refetch}=useLocalPackagesQuery(root);return React.createElement(BackpackPanel,{
       root,items:currentData?.items??[],loading:isFetching,failed:!!error,busy:false,onRefresh:refetch,
-      onSetPrivate:async()=>true,onSaveConfig:async()=>true,onConfigChanged:async()=>{},onSetAppEnabled:async()=>{},onRemove:async()=>{},
+      onSetPrivate:async()=>true,onSaveConfig:async()=>true,onConfigChanged:async()=>{},onSetAppEnabled:async()=>{},onMoveApp:(source,target,after)=>moveApp({root,source,target,after}).unwrap(),onRemove:async()=>{},
       onReplace:(name,version,force)=>window.replaceFixturePackage({name,version,force}),onPackageAction:async()=>true,onOpenLogs:()=>{},onClone:()=>{},onOpenPlugins:()=>{}
     })}
     ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(Provider,{store},React.createElement(Fixture)));
@@ -114,8 +138,37 @@ async function fixture(
     })
   )
   await page.goto('/backpack-regression')
-  return { operations, versionQueries: () => versionQueries }
+  return { operations, moves, versionQueries: () => versionQueries }
 }
+
+test('dragging an enabled plugin saves and reloads its loading order', async ({
+  page
+}) => {
+  const { moves } = await fixture(page, { sortable: true })
+  const first = page.getByRole('button', {
+    name: '调整 fixture-plugin 的加载顺序'
+  })
+  const second = page.getByRole('button', {
+    name: '调整 second-plugin 的加载顺序'
+  })
+  await expect(second).toBeVisible()
+  await second.dragTo(first.locator('xpath=ancestor::article[1]'), {
+    targetPosition: { x: 20, y: 8 }
+  })
+  await expect
+    .poll(() => moves)
+    .toEqual([
+      { source: 'second-plugin', target: 'fixture-plugin', after: false }
+    ])
+  const handles = page.getByRole('button', { name: /的加载顺序/ })
+  await expect(handles.first()).toHaveAccessibleName(
+    '调整 second-plugin 的加载顺序'
+  )
+  await page.reload()
+  await expect(handles.first()).toHaveAccessibleName(
+    '调整 second-plugin 的加载顺序'
+  )
+})
 
 test('list shows installed version and Git revision, then updates without opening details', async ({
   page

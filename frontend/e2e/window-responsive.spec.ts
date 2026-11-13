@@ -228,7 +228,12 @@ test('robot workbench resizes both sides and restores their widths after reload'
       const { store } = await import('/src/store/guideStore.ts');
       const { RobotWorkspaceSplitter } = await import('/src/components/RobotWorkspaceSplitter.tsx');
       ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(Provider, {store},
-        React.createElement(RobotWorkspaceSplitter, {list: '机器人列表', controls: '机器人面板'}, '工作区')));
+        React.createElement(RobotWorkspaceSplitter, {list: '机器人列表', controls: React.createElement('aside', {className:'control-dock flex min-h-0 flex-col'},
+          React.createElement('section', {className:'control-card control-navigation'},
+            React.createElement('header', {style:{display:'block'}}, '机器人面板'),
+            React.createElement('nav', {'data-project-navigation': '', 'aria-label':'机器人功能'},
+              Array.from({length: 40}, (_, index) => React.createElement('button', {key:index, style:{display:'block', height:36}}, '菜单 ' + index))),
+            React.createElement('footer', null, '快捷操作')))}, '工作区')));
     </script>`
     })
   )
@@ -239,6 +244,15 @@ test('robot workbench resizes both sides and restores their widths after reload'
       .evaluate(node => node.getBoundingClientRect().width)
   const left = page.getByRole('separator', { name: '调整机器人列表宽度' })
   const right = page.getByRole('separator', { name: '调整机器人面板宽度' })
+  const menu = page.getByRole('navigation', { name: '机器人功能' })
+  const footer = page.getByText('快捷操作', { exact: true })
+  const footerTop = (await footer.boundingBox())!.y
+  await menu.hover()
+  await page.mouse.wheel(0, 320)
+  await expect
+    .poll(() => menu.evaluate(node => node.scrollTop))
+    .toBeGreaterThan(0)
+  expect((await footer.boundingBox())!.y).toBe(footerTop)
   const beforeList = await width('机器人列表')
   const beforeControls = await width('机器人面板')
   const beforeWorkspace = await width('工作区')

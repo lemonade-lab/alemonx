@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -440,16 +441,12 @@ func (m Manager) RemoveLocalPackageAndDisable(root, name string) (Result, error)
 		return Result{}, cause
 	}
 	_, err = m.UpdateRuntimeConfig(root, "", func(content string) (string, error) {
-		content = normalizeRuntimeConfigYAML(content)
-		config := map[string]any{}
-		if strings.TrimSpace(content) != "" {
-			if err := yaml.Unmarshal([]byte(content), &config); err != nil {
-				return "", fmt.Errorf("无法解析运行配置：%w", err)
-			}
-		}
-		apps := appsFromConfig(config["apps"])
-		delete(apps, name)
-		return setTopLevelBooleanMap(content, "apps", apps), nil
+		return updateAppsConfig(content, func(apps yaml.MapSlice) (yaml.MapSlice, error) {
+			return slices.DeleteFunc(apps, func(item yaml.MapItem) bool {
+				key, _ := item.Key.(string)
+				return strings.TrimSpace(key) == name
+			}), nil
+		})
 	})
 	if err != nil {
 		return rollback(err)

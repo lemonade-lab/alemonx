@@ -333,6 +333,86 @@ func TestSetAppEnabledPreservesMappedAppsWithoutRewritingOtherConfig(t *testing.
 	}
 }
 
+func TestObjectAppsKeepLoadingOrderAndOptionsWhenToggled(t *testing.T) {
+	root := t.TempDir()
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"bot"}`)
+	path := filepath.Join(root, "alemon.config.yaml")
+	writeAppPageFixture(t, path, `apps:
+  z-first-tie:
+    order: -5
+    command:
+      prefix: "!"
+  a-second-tie: { enabled: true, order: -5 }
+  disabled: { enabled: false, order: -10 }
+  legacy: true
+serverPort: 18110 # keep
+`)
+	manager := Manager{}
+	apps, err := manager.EnabledApps(root)
+	if err != nil || strings.Join(apps, ",") != "z-first-tie,a-second-tie,legacy" {
+		t.Fatalf("initial apps = %v, %v", apps, err)
+	}
+	if _, err := manager.SetAppEnabled(root, "z-first-tie", false); err != nil {
+		t.Fatal(err)
+	}
+	apps, err = manager.EnabledApps(root)
+	if err != nil || strings.Join(apps, ",") != "a-second-tie,legacy" {
+		t.Fatalf("apps after disable = %v, %v", apps, err)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{"order: -5", "command:", "prefix:", "serverPort: 18110 # keep"} {
+		if !strings.Contains(string(content), expected) {
+			t.Fatalf("missing %q after toggle:\n%s", expected, content)
+		}
+	}
+	if _, err := manager.SetAppEnabled(root, "z-first-tie", true); err != nil {
+		t.Fatal(err)
+	}
+	apps, err = manager.EnabledApps(root)
+	if err != nil || strings.Join(apps, ",") != "z-first-tie,a-second-tie,legacy" {
+		t.Fatalf("apps after re-enable = %v, %v", apps, err)
+	}
+}
+
+func TestMoveAppKeepsDisabledAppsAndCommandOptions(t *testing.T) {
+	root := t.TempDir()
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"bot"}`)
+	path := filepath.Join(root, "alemon.config.yaml")
+	writeAppPageFixture(t, path, `apps:
+  local-a: { enabled: true, order: 10 }
+  disabled: { enabled: false, order: 20 }
+  external: { enabled: true, order: 30 }
+  local-b:
+    command: { prefix: "!" }
+    order: 40
+`)
+	manager := Manager{}
+	if _, err := manager.MoveApp(root, "local-b", "local-a", false); err != nil {
+		t.Fatal(err)
+	}
+	apps, err := manager.EnabledApps(root)
+	if err != nil || strings.Join(apps, ",") != "local-b,local-a,external" {
+		t.Fatalf("apps after move = %v, %v", apps, err)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(content), "command:") || !strings.Contains(string(content), "prefix:") || !strings.Contains(string(content), "enabled: false") {
+		t.Fatalf("module options lost after move:\n%s", content)
+	}
+	if _, err := manager.MoveApp(root, "disabled", "local-b", false); err == nil {
+		t.Fatal("disabled app was accepted for reordering")
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || string(after) != string(content) {
+		t.Fatalf("rejected move changed config: %v", err)
+	}
+}
+
 func TestAutoPortEnabledAcceptsBooleanAndLegacyString(t *testing.T) {
 	root := t.TempDir()
 	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"bot"}`)

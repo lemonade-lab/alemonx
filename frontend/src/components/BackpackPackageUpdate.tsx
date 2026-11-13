@@ -72,7 +72,7 @@ export function BackpackPackageUpdate({
       )}
       <button
         type="button"
-        className="secondary-button gap-1.5"
+        className="inline-flex min-h-8 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-slate-600 hover:bg-slate-100 focus-visible:outline-2 focus-visible:outline-brand-600 disabled:opacity-50 dark:hover:bg-slate-700"
         disabled={busy || phase !== 'idle'}
         onClick={() => void update()}
         aria-label={`更新 ${name}`}

@@ -1256,6 +1256,19 @@ export const workspaceApi = createApi({
         { type: 'RobotFile', id: `${body.root}:alemon.config.yaml` }
       ]
     }),
+    moveApp: build.mutation<
+      RobotResult,
+      { root: string; source: string; target: string; after: boolean }
+    >({
+      query: ({ root, ...body }) => ({
+        url: `robot/apps?${new URLSearchParams({ root })}`,
+        method: 'PATCH',
+        body
+      }),
+      invalidatesTags: (_result, _error, { root }) => [
+        { type: 'RobotFile', id: `${root}:alemon.config.yaml` }
+      ]
+    }),
     saveAppPort: build.mutation<RobotResult, { root: string; port: number }>({
       query: ({ root, port }) => ({
         url: `robot/app-port?${new URLSearchParams({ root })}`,
@@ -1546,6 +1559,7 @@ export const {
   useRobotTestPortProbeQuery,
   useSaveTestPortMutation,
   useSetAppEnabledMutation,
+  useMoveAppMutation,
   useLazyRobotRuntimePreflightQuery,
   useLazyRobotRuntimeRepairQuery,
   useApplyRuntimeRepairMutation,

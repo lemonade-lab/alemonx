@@ -116,7 +116,8 @@ import {
   Waypoints,
   Wifi,
   X,
-  type LucideIcon
+  type LucideIcon,
+  GripVertical
 } from 'lucide-react'
 import { RobotConfigForm } from './RobotConfigForm'
 import { Button } from './Button'
@@ -206,6 +207,7 @@ import {
   useRobotAppsQuery,
   useBotAppPagesQuery,
   useSetAppEnabledMutation,
+  useMoveAppMutation,
   useRobotTasksQuery,
   useControlRobotTaskMutation,
   useLazyRobotTaskQuery,
@@ -1643,6 +1645,7 @@ export function Dashboard({
   const [writePackageConfig] = useWritePackageConfigMutation()
   const [saveRobotLogin] = useSaveRobotLoginMutation()
   const [setAppEnabled] = useSetAppEnabledMutation()
+  const [moveApp] = useMoveAppMutation()
   const fileSaveTimers = useRef(new Map<string, number>())
   const fileSaveChains = useRef(new Map<string, Promise<void>>())
   const configRevisions = useRef(new Map<string, string>())
@@ -3217,6 +3220,7 @@ export function Dashboard({
     <>
       {section === 'backpack' && (
         <BackpackPanel
+          key={root}
           root={root}
           items={localPackages?.items ?? []}
           loading={packagesLoading}
@@ -3238,6 +3242,11 @@ export function Dashboard({
           onSetAppEnabled={(packageName, enabled) =>
             queueConfigSave(root, () =>
               setAppEnabled({ root, package: packageName, enabled }).unwrap()
+            )
+          }
+          onMoveApp={(source, target, after) =>
+            queueConfigSave(root, () =>
+              moveApp({ root, source, target, after }).unwrap()
             )
           }
           onRemove={async packageName => setPendingBackpackRemoval(packageName)}
@@ -7979,6 +7988,7 @@ export function BackpackPanel({
   onSaveConfig,
   onConfigChanged,
   onSetAppEnabled,
+  onMoveApp,
   onRemove,
   onReplace,
   onPackageAction,
@@ -8005,6 +8015,7 @@ export function BackpackPanel({
   ) => Promise<boolean>
   onConfigChanged: () => Promise<void>
   onSetAppEnabled: (packageName: string, enabled: boolean) => Promise<unknown>
+  onMoveApp: (source: string, target: string, after: boolean) => Promise<unknown>
   onRemove: (packageName: string) => Promise<void>
   onReplace: (
     packageName: string,
@@ -8026,7 +8037,7 @@ export function BackpackPanel({
   const [filter, setFilter] = useNavigationState<'all' | 'enabled' | 'attention' | 'dirty'>('backpack.filter', [root], 'all', ['all', 'enabled', 'attention', 'dirty'])
   const [appToggleBusy, setAppToggleBusy] = useStoreState('')
   const [privacyToggleBusy, setPrivacyToggleBusy] = useStoreState(false)
-  const { data: appsData, refetch: refetchApps } = useRobotAppsQuery(root, {
+  const { currentData: appsData, refetch: refetchApps } = useRobotAppsQuery(root, {
     skip: !root
   })
   const {
@@ -8035,6 +8046,11 @@ export function BackpackPanel({
     refetch: refetchManifest
   } = usePackageManifestQuery(root, { skip: !root })
   const { data: statuses } = useLocalPackageStatusesQuery(root, { skip: !root })
+  const [draggedApp, setDraggedApp] = useState('')
+  const [dropTarget, setDropTarget] = useState<{ name: string; after: boolean } | null>(null)
+  const [reorderBusy, setReorderBusy] = useState(false)
+  const [reorderError, setReorderError] = useState('')
+  const appPositions = new Map(appsData?.items.map((name, index) => [name, index]))
   const enabledApps = new Set(appsData?.items ?? [])
   const statusByName = new Map(
     (statuses?.items ?? []).map(status => [status.name, status])
@@ -8056,6 +8072,10 @@ export function BackpackPanel({
       return true
     })
     .sort((left, right) => {
+      const leftPosition = appPositions.get(left.name)
+      const rightPosition = appPositions.get(right.name)
+      if (leftPosition !== undefined || rightPosition !== undefined)
+        return (leftPosition ?? Infinity) - (rightPosition ?? Infinity)
       const leftStatus = statusByName.get(left.name)
       const rightStatus = statusByName.get(right.name)
       const priority = (status?: { issues: string[]; enabled: boolean }) =>
@@ -8065,6 +8085,21 @@ export function BackpackPanel({
         left.name.localeCompare(right.name)
       )
     })
+  const canReorder = !busy && !reorderBusy && !appToggleBusy
+  const sortableItems = visibleItems.filter(item => item.valid && enabledApps.has(item.name))
+  const reorderApp = async (source: string, target: string, after: boolean) => {
+    if (!canReorder || !source || source === target) return
+    setReorderBusy(true)
+    setReorderError('')
+    try {
+      await onMoveApp(source, target, after)
+      await Promise.all([refetchApps(), onConfigChanged()])
+    } catch {
+      setReorderError('保存插件顺序失败，请刷新后重试。')
+    } finally {
+      setReorderBusy(false)
+    }
+  }
   const isPrivateBackpack = Boolean(
     manifest?.private &&
     manifest.workspacesEnabled &&
@@ -8234,15 +8269,16 @@ export function BackpackPanel({
             正在读取本地插件包…
           </p>
         ) : items.length ? (
-          <div className="grid gap-2">
-            <div className="flex flex-wrap gap-2 rounded-lg border border-slate-200 bg-slate-50 p-2">
-              <label className="flex min-w-48 flex-1 items-center gap-2 rounded-md border border-slate-200 bg-white px-2">
+          <div className="grid min-w-0 gap-3">
+            <div className="flex flex-wrap items-center gap-x-1.5 gap-y-2">
+              <label className="mr-2 flex h-9 min-w-36 flex-1 items-center gap-2 rounded-lg bg-slate-100 px-3 focus-within:ring-2 focus-within:ring-brand-500">
                 <Search className="size-3.5 text-slate-400" />
                 <input
                   className="h-8 min-w-0 flex-1 bg-transparent text-xs outline-none"
                   value={query}
                   onChange={event => setQuery(event.target.value)}
                   placeholder="搜索插件"
+                  aria-label="搜索插件"
                 />
               </label>
               {(
@@ -8258,10 +8294,10 @@ export function BackpackPanel({
                   type="button"
                   aria-pressed={filter === value}
                   className={cn(
-                    'rounded-md px-2.5 text-xs',
+                    'min-h-8 rounded-md px-2.5 text-xs font-medium transition-colors',
                     filter === value
-                      ? 'bg-brand-600 text-white'
-                      : 'bg-white text-slate-600 border border-slate-200'
+                      ? 'bg-brand-50 text-brand-700 dark:bg-brand-950 dark:text-brand-300'
+                      : 'text-slate-600 hover:bg-slate-100'
                   )}
                   onClick={() => setFilter(value)}
                 >
@@ -8304,131 +8340,258 @@ export function BackpackPanel({
                 </button>
               </div>
             )}
-            {visibleItems.map(item => (
-              <article
-                className={cn(
-                  'rounded-lg border bg-white transition hover:border-slate-300',
-                  item.valid
-                    ? 'border-slate-200'
-                    : 'border-amber-200 bg-amber-50'
-                )}
-                key={item.path}
-              >
-                <button
-                  type="button"
-                  className="flex w-full items-center gap-3 p-3 text-left"
-                  onClick={() => setSelectedName(item.name)}
-                >
-                  <div className="min-w-0 flex-1">
-                    <strong className="flex items-center gap-2 text-sm font-semibold text-slate-800">
-                      {item.name}
-                      <em className="not-italic text-xs text-(--theme-text-muted)">
-                        {item.version ? `v${item.version}` : '版本未声明'}
-                      </em>
-                    </strong>
-                    {statusByName.get(item.name)?.source === 'git' && (
-                      <span className="block text-xs text-(--theme-text-muted)">
-                        Git {statusByName.get(item.name)?.branch || '未检出分支'} · {statusByName.get(item.name)?.current || '提交未知'}
-                      </span>
+            {reorderError && (
+              <p role="alert" className="m-0 text-xs text-red-600">
+                {reorderError}
+              </p>
+            )}
+            {sortableItems.length > 1 && (
+              <p className="m-0 text-xs text-slate-500" role="status">
+                {reorderBusy ? '正在保存加载顺序…' : ''}
+              </p>
+            )}
+            {visibleItems.length === 0 && (
+              <p className="m-0 py-8 text-center text-sm text-slate-500">
+                没有符合条件的插件
+              </p>
+            )}
+            <div data-backpack-list className="min-w-0 divide-y divide-slate-200/60 dark:divide-slate-700/50">
+              {visibleItems.map(item => {
+                const enabled = enabledApps.has(item.name)
+                const status = statusByName.get(item.name)
+                const sortable =
+                  item.valid && enabledApps.has(item.name) && sortableItems.length > 1
+                const marker = dropTarget?.name === item.name ? dropTarget : null
+                return (
+                  <article
+                    className={cn(
+                      'relative flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 px-2 py-3.5 transition-colors hover:bg-(--theme-surface-hover) focus-within:bg-(--theme-surface-hover)',
+                      draggedApp === item.name && 'opacity-50',
+                      marker &&
+                        'after:pointer-events-none after:absolute after:inset-x-0 after:h-0.5 after:rounded-full after:bg-brand-500',
+                      marker && (marker.after ? 'after:bottom-0' : 'after:top-0')
                     )}
-                    <span className="text-xs text-slate-500">
-                      {item.valid
-                        ? item.description || '本地 AlemonJS 插件包'
-                        : '缺少有效 package.json，暂不能作为插件运行。'}
-                    </span>
-                    <small
-                      className="truncate text-[11px] text-slate-400"
-                      title={item.path}
-                    >
-                      {item.path}
-                    </small>
-                    {statusByName.get(item.name)?.issues.length ? (
-                      <small
-                        className="mt-1 block truncate text-[11px] text-amber-700"
-                        title={statusByName.get(item.name)?.issues.join('；')}
-                      >
-                        {statusByName.get(item.name)?.issues.join('；')}
-                      </small>
-                    ) : null}
-                  </div>
-                  <ChevronRight className="size-4 shrink-0 text-slate-400" />
-                </button>
-                <div className="flex flex-wrap justify-end shrink-0 items-center gap-2 border-t border-slate-100 px-3 py-2">
-                  <label className="mr-auto flex items-center gap-1 text-[11px] text-slate-500">
-                    <input
-                      type="checkbox"
-                      checked={selectedNames.includes(item.name)}
-                      onChange={event =>
-                        setSelectedNames(current =>
-                          event.target.checked
-                            ? [...current, item.name]
-                            : current.filter(name => name !== item.name)
+                    key={item.path}
+                    onDragOver={event => {
+                      if (
+                        !canReorder ||
+                        !sortable ||
+                        !draggedApp ||
+                        draggedApp === item.name
+                      )
+                        return
+                      event.preventDefault()
+                      event.dataTransfer.dropEffect = 'move'
+                      const bounds = event.currentTarget.getBoundingClientRect()
+                      const after = event.clientY >= bounds.top + bounds.height / 2
+                      if (!marker || marker.after !== after)
+                        setDropTarget({ name: item.name, after })
+                    }}
+                    onDragLeave={event => {
+                      if (
+                        marker &&
+                        !event.currentTarget.contains(
+                          event.relatedTarget as Node | null
                         )
-                      }
-                    />
-                    选择
-                  </label>
-                  <span className="text-[11px] text-slate-400">
-                    {enabledApps.has(item.name)
-                      ? '已启用,机器人启动时会加载'
-                      : '未启用,下次启动不会加载'}
-                  </span>
-                  {item.valid && (
-                    <BackpackPackageUpdate
-                      key={`${root}:${item.name}`}
-                      root={root}
-                      name={item.name}
-                      status={statusByName.get(item.name)}
-                      busy={busy}
-                      onReplace={onReplace}
-                      onRefresh={onRefresh}
-                    />
-                  )}
-                  {item.valid && (
-                    <button
-                      className={
-                        enabledApps.has(item.name)
-                          ? 'secondary-button gap-1.5'
-                          : 'primary-button gap-1.5'
-                      }
-                      disabled={appToggleBusy === item.name}
-                      title={
-                        enabledApps.has(item.name)
-                          ? '停用后，下次启动将不再加载此模块。'
-                          : '启用后，机器人会在下次启动时加载此模块。'
-                      }
-                      onClick={() =>
-                        void toggleApp(item.name, !enabledApps.has(item.name))
-                      }
-                    >
-                      {appToggleBusy === item.name ? (
-                        <Loader2 className="size-4 animate-spin" />
-                      ) : enabledApps.has(item.name) ? (
-                        <X className="size-4" />
-                      ) : (
-                        <Play className="size-4" />
+                      )
+                        setDropTarget(null)
+                    }}
+                    onDrop={event => {
+                      if (
+                        !canReorder ||
+                        !sortable ||
+                        !draggedApp ||
+                        draggedApp === item.name
+                      )
+                        return
+                      event.preventDefault()
+                      const bounds = event.currentTarget.getBoundingClientRect()
+                      const after = event.clientY >= bounds.top + bounds.height / 2
+                      setDropTarget(null)
+                      setDraggedApp('')
+                      void reorderApp(draggedApp, item.name, after)
+                    }}
+                  >
+                    <div className="flex min-w-48 flex-[1_1_16rem] items-center gap-1">
+                      <label className="flex shrink-0 items-center rounded p-1">
+                        <input
+                          type="checkbox"
+                          className="size-3.5 accent-brand-600"
+                          aria-label={`选择 ${item.name}`}
+                          checked={selectedNames.includes(item.name)}
+                          onChange={event =>
+                            setSelectedNames(current =>
+                              event.target.checked
+                                ? [...current, item.name]
+                                : current.filter(name => name !== item.name)
+                            )
+                          }
+                        />
+                      </label>
+
+                      {sortable && (
+                        <button
+                          type="button"
+                          draggable={canReorder}
+                          aria-disabled={!canReorder}
+                          className="shrink-0 cursor-grab rounded p-1 text-slate-400 hover:text-slate-700 focus-visible:outline-2 focus-visible:outline-brand-600 active:cursor-grabbing"
+                          aria-label={`调整 ${item.name} 的加载顺序`}
+                          title="拖拽调整顺序，或使用上下方向键"
+                          onDragStart={event => {
+                            event.dataTransfer.effectAllowed = 'move'
+                            event.dataTransfer.setData('text/plain', item.name)
+                            setDraggedApp(item.name)
+                          }}
+                          onDragEnd={() => {
+                            setDraggedApp('')
+                            setDropTarget(null)
+                          }}
+                          onKeyDown={event => {
+                            if (
+                              !canReorder ||
+                              (event.key !== 'ArrowUp' && event.key !== 'ArrowDown')
+                            )
+                              return
+                            event.preventDefault()
+                            const after = event.key === 'ArrowDown'
+                            const index = sortableItems.findIndex(
+                              row => row.name === item.name
+                            )
+                            const target = sortableItems[index + (after ? 1 : -1)]
+                            if (target) void reorderApp(item.name, target.name, after)
+                          }}
+                        >
+                          <GripVertical className="size-4" aria-hidden="true" />
+                        </button>
                       )}
-                      {appToggleBusy === item.name
-                        ? '切换中…'
-                        : enabledApps.has(item.name)
-                          ? '停用'
-                          : '启用'}
-                    </button>
-                  )}
-                  {!item.valid && (
-                    <button
-                      className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md border border-red-200 px-2.5 text-xs font-semibold text-red-700 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
-                      disabled={busy}
-                      onClick={() => void onRemove(item.name)}
-                      title="删除安装失败遗留的目录"
-                    >
-                      <Trash2 className="size-3.5" />
-                      删除
-                    </button>
-                  )}
-                </div>
-              </article>
-            ))}
+                      <button
+                        type="button"
+                        className="group flex min-w-0 flex-1 items-center gap-2 rounded-md px-1 py-1 text-left focus-visible:outline-2 focus-visible:outline-brand-600"
+                        title={item.path}
+                        onClick={() => setSelectedName(item.name)}
+                      >
+                        <Package
+                          aria-hidden="true"
+                          className="size-4 shrink-0 text-slate-400"
+                        />
+                        <div className="grid min-w-0 flex-1 gap-1">
+                          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                            <strong className="max-w-full truncate text-sm font-semibold text-slate-800 group-hover:text-brand-700">
+                              {item.name}
+                            </strong>
+                            <span
+                              className={cn(
+                                'inline-flex shrink-0 items-center gap-1 text-xs',
+                                enabled
+                                  ? 'text-emerald-700 dark:text-emerald-400'
+                                  : 'text-slate-500'
+                              )}
+                            >
+                              <span
+                                aria-hidden="true"
+                                className="size-1.5 rounded-full bg-current"
+                              />
+                              {enabled ? '已启用' : '未启用'}
+                            </span>
+                          </div>
+                          <div className="flex min-w-0 flex-wrap items-center gap-x-2 text-xs text-slate-500">
+                            {item.version && (
+                              <span className="shrink-0 tabular-nums">
+                                v{item.version}
+                              </span>
+                            )}
+                            {status?.source === 'git' && (
+                              <span className="max-w-full truncate">
+                                Git {status.branch || '未检出分支'} ·{' '}
+                                {status.current || '提交未知'}
+                              </span>
+                            )}
+                            {item.valid && item.description && (
+                              <span
+                                className="max-w-full truncate"
+                                title={item.description}
+                              >
+                                {item.description}
+                              </span>
+                            )}
+                          </div>
+                          {!item.valid || Boolean(status?.issues.length) ? (
+                            <span
+                              className="truncate text-xs text-amber-700 dark:text-amber-300"
+                              title={status?.issues.join('；')}
+                            >
+                              {item.valid
+                                ? status?.issues.join('；')
+                                : '缺少有效 package.json'}
+                            </span>
+                          ) : null}
+                        </div>
+                        <ChevronRight
+                          aria-hidden="true"
+                          className="size-3.5 shrink-0 text-slate-400"
+                        />
+                      </button>
+                    </div>
+                    <div className="ml-auto flex max-w-full flex-wrap items-center justify-end gap-1.5">
+                      {item.valid && (
+                        <BackpackPackageUpdate
+                          key={`${root}:${item.name}`}
+                          root={root}
+                          name={item.name}
+                          status={statusByName.get(item.name)}
+                          busy={busy}
+                          onReplace={onReplace}
+                          onRefresh={onRefresh}
+                        />
+                      )}
+                      {item.valid && (
+                        <button
+                          className={cn(
+                            'inline-flex min-h-8 items-center gap-1.5 rounded-md px-2 text-xs font-medium focus-visible:outline-2 focus-visible:outline-brand-600 disabled:opacity-50',
+                            enabled
+                              ? 'text-slate-600 hover:bg-slate-100'
+                              : 'text-brand-700 hover:bg-brand-50 dark:text-brand-300'
+                          )}
+                          disabled={appToggleBusy === item.name}
+                          title={
+                            enabledApps.has(item.name)
+                              ? '停用后，下次启动将不再加载此模块。'
+                              : '启用后，机器人会在下次启动时加载此模块。'
+                          }
+                          onClick={() =>
+                            void toggleApp(item.name, !enabledApps.has(item.name))
+                          }
+                        >
+                          {appToggleBusy === item.name ? (
+                            <Loader2 className="size-4 animate-spin" />
+                          ) : enabledApps.has(item.name) ? (
+                            <X className="size-3.5" />
+                          ) : (
+                            <Play className="size-3.5" />
+                          )}
+                          {appToggleBusy === item.name
+                            ? '切换中…'
+                            : enabledApps.has(item.name)
+                              ? '停用'
+                              : '启用'}
+                        </button>
+                      )}
+                      {!item.valid && (
+                        <button
+                          className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md border border-red-200 px-2.5 text-xs font-semibold text-red-700 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
+                          disabled={busy}
+                          onClick={() => void onRemove(item.name)}
+                          title="删除安装失败遗留的目录"
+                        >
+                          <Trash2 className="size-3.5" />
+                          删除
+                        </button>
+                      )}
+                    </div>
+                  </article>
+                )
+              })}
+            </div>
           </div>
         ) : (
           <EmptyState

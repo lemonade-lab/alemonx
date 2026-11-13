@@ -8,10 +8,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -316,67 +318,200 @@ func (m Manager) SaveAppPort(root string, port int) (Result, error) {
 	return result, nil
 }
 
-// EnabledApps reads the alemon.config.yaml apps array. AlemonJS loads each name
-// in apps as a plugin package; item is the npm name of a local package.
+// EnabledApps returns enabled packages in AlemonJS loading order.
 func (Manager) EnabledApps(root string) ([]string, error) {
 	project, err := projectPath(root)
 	if err != nil {
 		return nil, err
 	}
-	path := filepath.Join(project, "alemon.config.yaml")
-	content, err := readRuntimeConfigFile(path)
+	content, err := readRuntimeConfigFile(filepath.Join(project, "alemon.config.yaml"))
 	if err != nil {
 		return []string{}, nil
 	}
-	var config map[string]any
-	if err := yaml.Unmarshal(content, &config); err != nil {
-		return nil, fmt.Errorf("无法解析运行配置：%w", err)
+	_, apps, err := readAppsConfig(string(content))
+	if err != nil {
+		return nil, err
 	}
-	switch apps := config["apps"].(type) {
-	case []any:
-		result := make([]string, 0, len(apps))
-		for _, item := range apps {
-			if name, ok := item.(string); ok && name != "" {
-				result = append(result, name)
-			}
+	result := make([]string, 0, len(apps))
+	for _, item := range orderedApps(apps) {
+		if item.enabled {
+			result = append(result, item.name)
 		}
-		return result, nil
-	case []string:
-		return apps, nil
-	case map[string]any:
-		result := make([]string, 0, len(apps))
-		for name, enabled := range apps {
-			if active, ok := enabled.(bool); ok && active && name != "" {
-				result = append(result, name)
-			}
-		}
-		sort.Strings(result)
-		return result, nil
-	case nil:
-		return []string{}, nil
-	default:
-		return []string{}, nil
 	}
+	return result, nil
 }
 
-// SetAppEnabled updates one local package's apps switch. AlemonJS accepts an
-// older array form, but AlemonX always writes the boolean-map form so the
-// visual config editor and backpack panel preserve disabled packages alike.
+type orderedApp struct {
+	name    string
+	order   float64
+	enabled bool
+	index   int
+}
+
+func orderedApps(apps yaml.MapSlice) []orderedApp {
+	ordered := make([]orderedApp, 0, len(apps))
+	seen := make(map[string]bool, len(apps))
+	for index, item := range apps {
+		name, _ := item.Key.(string)
+		name = strings.TrimSpace(name)
+		if name == "" || seen[name] {
+			continue
+		}
+		order := float64(index)
+		enabled := false
+		switch value := item.Value.(type) {
+		case bool:
+			enabled = value
+		case yaml.MapSlice:
+			enabled = true
+			valid := true
+			for _, option := range value {
+				switch option.Key {
+				case "enabled":
+					enabled, valid = option.Value.(bool)
+				case "order":
+					order, valid = appOrder(option.Value)
+				}
+				if !valid {
+					break
+				}
+			}
+			if !valid {
+				continue
+			}
+		default:
+			continue
+		}
+		seen[name] = true
+		ordered = append(ordered, orderedApp{name, order, enabled, index})
+	}
+	sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].order < ordered[j].order })
+	return ordered
+}
+
+func (m Manager) MoveApp(root, source, target string, after bool) (Result, error) {
+	if source == "" || target == "" || source == target {
+		return Result{}, errors.New("请选择两个不同的已启用插件。")
+	}
+	return m.UpdateRuntimeConfig(root, "", func(content string) (string, error) {
+		return updateAppsConfig(content, func(apps yaml.MapSlice) (yaml.MapSlice, error) {
+			ordered := orderedApps(apps)
+			from, to := -1, -1
+			for index, item := range ordered {
+				if item.enabled && item.name == source {
+					from = index
+				}
+				if item.enabled && item.name == target {
+					to = index
+				}
+			}
+			if from < 0 || to < 0 {
+				return nil, errors.New("插件启用状态已变化，请刷新背包后重试。")
+			}
+			if after {
+				to++
+			}
+			if from < to {
+				to--
+			}
+			if from == to {
+				return apps, nil
+			}
+			moved := ordered[from]
+			ordered = slices.Delete(ordered, from, from+1)
+			ordered = slices.Insert(ordered, to, moved)
+			for index, item := range ordered {
+				entry := &apps[item.index]
+				options, ok := entry.Value.(yaml.MapSlice)
+				if !ok {
+					options = yaml.MapSlice{{Key: "enabled", Value: item.enabled}}
+				}
+				entry.Value = setAppOption(options, "order", index)
+			}
+			return apps, nil
+		})
+	})
+}
+
+func setAppOption(options yaml.MapSlice, key string, value any) yaml.MapSlice {
+	for index := range options {
+		if options[index].Key == key {
+			options[index].Value = value
+			return options
+		}
+	}
+	return append(options, yaml.MapItem{Key: key, Value: value})
+}
+
+func appOrder(value any) (float64, bool) {
+	var order float64
+	switch number := value.(type) {
+	case int:
+		order = float64(number)
+	case int64:
+		order = float64(number)
+	case uint:
+		order = float64(number)
+	case uint64:
+		order = float64(number)
+	case float64:
+		order = number
+	default:
+		return 0, false
+	}
+	const maxSafeInteger = 1<<53 - 1
+	return order, order >= -maxSafeInteger && order <= maxSafeInteger && order == math.Trunc(order)
+}
+
+func readAppsConfig(content string) (yaml.MapSlice, yaml.MapSlice, error) {
+	var config yaml.MapSlice
+	if err := yaml.UnmarshalWithOptions([]byte(content), &config, yaml.UseOrderedMap()); err != nil {
+		return nil, nil, fmt.Errorf("无法解析运行配置：%w", err)
+	}
+	for _, item := range config {
+		if item.Key != "apps" {
+			continue
+		}
+		switch values := item.Value.(type) {
+		case yaml.MapSlice:
+			return config, values, nil
+		case []any:
+			apps := make(yaml.MapSlice, 0, len(values))
+			seen := make(map[string]bool, len(values))
+			for _, entry := range values {
+				if name, ok := entry.(string); ok && strings.TrimSpace(name) != "" && !seen[name] {
+					seen[name] = true
+					apps = append(apps, yaml.MapItem{Key: name, Value: true})
+				}
+			}
+			return config, apps, nil
+		}
+	}
+	return config, nil, nil
+}
+
+// SetAppEnabled updates the switch while preserving order and command options.
 func (m Manager) SetAppEnabled(root, packageName string, enabled bool) (Result, error) {
-	if strings.TrimSpace(packageName) == "" {
+	packageName = strings.TrimSpace(packageName)
+	if packageName == "" {
 		return Result{}, errors.New("请选择要启动的本地包")
 	}
 	result, err := m.UpdateRuntimeConfig(root, "", func(content string) (string, error) {
-		content = normalizeRuntimeConfigYAML(content)
-		var config map[string]any
-		if len(strings.TrimSpace(content)) > 0 {
-			if err := yaml.Unmarshal([]byte(content), &config); err != nil {
-				return "", fmt.Errorf("无法解析运行配置：%w", err)
+		return updateAppsConfig(content, func(apps yaml.MapSlice) (yaml.MapSlice, error) {
+			for index, item := range apps {
+				name, _ := item.Key.(string)
+				if strings.TrimSpace(name) != packageName {
+					continue
+				}
+				if options, ok := item.Value.(yaml.MapSlice); ok {
+					apps[index].Value = setAppOption(options, "enabled", enabled)
+				} else {
+					apps[index].Value = enabled
+				}
+				return apps, nil
 			}
-		}
-		apps := appsFromConfig(config["apps"])
-		apps[packageName] = enabled
-		return setTopLevelBooleanMap(content, "apps", apps), nil
+			return append(apps, yaml.MapItem{Key: packageName, Value: enabled}), nil
+		})
 	})
 	if err != nil {
 		return Result{}, err
@@ -387,31 +522,6 @@ func (m Manager) SetAppEnabled(root, packageName string, enabled bool) (Result, 
 	}
 	result.Output = packageName + " " + state + "。"
 	return result, nil
-}
-
-func appsFromConfig(existing any) map[string]bool {
-	apps := map[string]bool{}
-	switch values := existing.(type) {
-	case []any:
-		for _, item := range values {
-			if name, ok := item.(string); ok && name != "" {
-				apps[name] = true
-			}
-		}
-	case []string:
-		for _, name := range values {
-			if name != "" {
-				apps[name] = true
-			}
-		}
-	case map[string]any:
-		for name, active := range values {
-			if value, ok := active.(bool); ok && name != "" {
-				apps[name] = value
-			}
-		}
-	}
-	return apps
 }
 
 // ValidateEnabledBackpackRelease is retained for runtime-entry compatibility.
@@ -443,13 +553,23 @@ func containsString(items []string, target string) bool {
 	return false
 }
 
-// setTopLevelBooleanMap replaces exactly one top-level YAML map while leaving
-// every unrelated section, comment, and ordering decision untouched.
-func setTopLevelBooleanMap(content, key string, values map[string]bool) string {
+// updateAppsConfig rewrites only the apps section of a block-style config.
+func updateAppsConfig(content string, update func(yaml.MapSlice) (yaml.MapSlice, error)) (string, error) {
 	content = normalizeRuntimeConfigYAML(content)
+	config, apps, err := readAppsConfig(content)
+	if err != nil {
+		return "", err
+	}
+	apps, err = update(apps)
+	if err != nil {
+		return "", err
+	}
+	if apps == nil {
+		apps = yaml.MapSlice{}
+	}
 	lines := strings.Split(strings.TrimRight(content, "\n"), "\n")
 	start, end := -1, len(lines)
-	pattern := regexp.MustCompile(`^` + regexp.QuoteMeta(key) + `\s*:`)
+	pattern := regexp.MustCompile(`^(?:apps|"apps"|'apps')[ \t]*:`)
 	for index, line := range lines {
 		if start < 0 {
 			if pattern.MatchString(line) {
@@ -457,34 +577,41 @@ func setTopLevelBooleanMap(content, key string, values map[string]bool) string {
 			}
 			continue
 		}
-		if line != "" && line[0] != ' ' && line[0] != '\t' && !strings.HasPrefix(strings.TrimSpace(line), "#") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed != "" && trimmed == line && !strings.HasPrefix(line, "#") && !strings.HasPrefix(line, "- ") {
 			end = index
 			break
 		}
 	}
-	section := []string{key + ":"}
-	names := make([]string, 0, len(values))
-	for name := range values {
-		if strings.TrimSpace(name) != "" {
-			names = append(names, name)
-		}
+	for end > start+1 && (strings.TrimSpace(lines[end-1]) == "" || strings.HasPrefix(lines[end-1], "#")) {
+		end--
 	}
-	sort.Strings(names)
-	for _, name := range names {
-		section = append(section, "  "+yamlKey(name)+": "+strconv.FormatBool(values[name]))
+	section := yaml.MapSlice{{Key: "apps", Value: apps}}
+	if start < 0 && strings.HasPrefix(strings.TrimSpace(content), "{") {
+		for index := range config {
+			if config[index].Key == "apps" {
+				config[index].Value = apps
+				data, err := yaml.Marshal(config)
+				return string(data), err
+			}
+		}
+		data, err := yaml.Marshal(append(config, section...))
+		return string(data), err
+	}
+	data, err := yaml.Marshal(section)
+	if err != nil {
+		return "", err
 	}
 	if start < 0 {
-		if len(lines) == 1 && lines[0] == "" {
-			lines = nil
+		prefix := strings.TrimRight(content, "\n")
+		if prefix != "" {
+			prefix += "\n\n"
 		}
-		if len(lines) > 0 {
-			lines = append(lines, "")
-		}
-		return strings.Join(append(lines, section...), "\n") + "\n"
+		return prefix + string(data), nil
 	}
-	updated := append(append([]string{}, lines[:start]...), section...)
-	updated = append(updated, lines[end:]...)
-	return strings.Join(updated, "\n") + "\n"
+	replacement := strings.TrimSuffix(string(data), "\n")
+	updated := append(append(lines[:start:start], replacement), lines[end:]...)
+	return strings.Join(updated, "\n") + "\n", nil
 }
 
 // normalizeEmptyYAMLRoot repairs the invalid shape produced by older writers

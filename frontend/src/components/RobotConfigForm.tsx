@@ -7,7 +7,7 @@ import { useStoreState } from '../store/guideStore'
 import { useEffect, useState, useId, type ReactNode } from 'react'
 import { Settings, SlidersHorizontal } from 'lucide-react'
 import cn from 'classnames'
-import { load } from 'js-yaml'
+import { dump, load } from 'js-yaml'
 import { RobotPanel } from './RobotPanel'
 
 type Props = {
@@ -18,8 +18,9 @@ type Props = {
   extensionConfig?: ReactNode
   onChange: (content: string) => void
 }
-type ToggleKey = 'masterID' | 'masterKey' | 'botID' | 'botKey' | 'apps'
+type ToggleKey = 'masterID' | 'masterKey' | 'botID' | 'botKey'
 type AccessItem = { value: string; enabled: boolean }
+type AppItem = AccessItem & { order: number; options?: Record<string, unknown> }
 type TextKey =
   | 'port'
   | 'serverPort'
@@ -46,7 +47,8 @@ type TextKey =
   | 'cbpDeviceID'
   | 'cbpFullReceive'
   | 'autoPort'
-type Values = Record<TextKey, string> & Record<ToggleKey, AccessItem[]>
+type Values = Record<TextKey, string> &
+  Record<ToggleKey, AccessItem[]> & { apps: AppItem[] }
 const empty: Values = {
   port: '',
   serverPort: '',
@@ -195,7 +197,32 @@ function readValues(source: string): Values | null {
   values.disabledSelects = list(root.disabled_selects)
   values.disabledUserID = list(root.disabled_user_id)
   values.disabledUserKey = list(root.disabled_user_key)
-  values.apps = accessItems(root.apps)
+  const apps = Array.isArray(root.apps)
+    ? root.apps.flatMap((entry, index) =>
+        typeof entry === 'string' && entry.trim()
+          ? [{ value: entry, enabled: true, order: index }]
+          : []
+      )
+    : Object.entries(record(root.apps) ?? {}).map(([value, config], index) => {
+        const options = record(config)
+        return {
+          value,
+          enabled: options ? options.enabled !== false : config === true,
+          order:
+            typeof options?.order === 'number' &&
+            Number.isSafeInteger(options.order)
+              ? options.order
+              : index,
+          ...(options ? { options } : {})
+        }
+      })
+  const names = new Set<string>()
+  values.apps = apps.filter(item => {
+    const name = item.value.trim()
+    if (!name || names.has(name)) return false
+    names.add(name)
+    return true
+  })
   values.autoPort = text(root.autoPort)
   const mappings = Array.isArray(root.mapping_text) ? root.mapping_text : []
   const mapping = record(mappings[0])
@@ -215,7 +242,7 @@ function readValues(source: string): Values | null {
   values.cbpFullReceive = text(headers?.['x-full-receive'])
   return values
 }
-function toYaml(values: Values, includeMapping = true) {
+function toYaml(values: Values, includeMapping: boolean) {
   const lines: string[] = []
   const add = (key: string, value: string) => {
     if (value.trim()) lines.push(`${key}: ${quote(value.trim())}`)
@@ -259,7 +286,6 @@ function toYaml(values: Values, includeMapping = true) {
     if (values.repeatedUserTime.trim())
       lines.push(`  repeated_user_time: ${values.repeatedUserTime.trim()}`)
   }
-  lines.push(...mapLines('apps', values.apps))
   const cbp = [
     ['timeout', values.cbpTimeout],
     ['reconnectInterval', values.cbpReconnect],
@@ -292,24 +318,48 @@ function toYaml(values: Values, includeMapping = true) {
   }
   return lines.length ? `${lines.join('\n')}\n` : ''
 }
+function appsYaml(items: AppItem[]) {
+  const apps = new Map<string, Record<string, unknown>>()
+  for (const item of items) {
+    const name = item.value.trim()
+    if (name && !apps.has(name))
+      apps.set(name, {
+        ...item.options,
+        enabled: item.enabled,
+        order: item.order
+      })
+  }
+  return apps.size
+    ? dump({ apps: Object.fromEntries(apps) }, { noRefs: true })
+    : ''
+}
 function mergeConfig(
   existing: string,
   generated: string,
-  preserved = new Set<string>()
+  replaceKeys: ReadonlySet<string>
 ) {
-  const normalized = /^\{\s*\}$/.test(existing.trim()) ? '' : existing
-  const lines = normalized.replace(/\r/g, '').split('\n')
+  if (existing.trimStart().startsWith('{')) {
+    const root = record(load(existing)) ?? {}
+    for (const key of replaceKeys) delete root[key]
+    const next = { ...root, ...record(load(generated)) }
+    return Object.keys(next).length ? dump(next, { noRefs: true }) : ''
+  }
+  const lines = existing.replace(/\r/g, '').split('\n')
   const kept: string[] = []
   for (let index = 0; index < lines.length;) {
-    const match = lines[index].match(/^([^ \t#][^:]*):/)
-    if (!match || !managed.has(match[1]) || preserved.has(match[1])) {
+    const match = lines[index].match(
+      /^(?:['"])?([^ \t#'"][^:'"]*?)(?:['"])?[ \t]*:/
+    )
+    if (!match || !replaceKeys.has(match[1])) {
       kept.push(lines[index++])
       continue
     }
     index++
     while (
       index < lines.length &&
-      (/^\s/.test(lines[index]) || lines[index].trim() === '')
+      (/^\s/.test(lines[index]) ||
+        lines[index].trim() === '' ||
+        (match[1] === 'apps' && /^-\s/.test(lines[index])))
     )
       index++
   }
@@ -368,13 +418,14 @@ export function RobotConfigForm({
         (!next.mappingRegular.trim() && !next.mappingTarget.trim()))
     )
     setValues(next)
-    onChange(
-      mergeConfig(
-        content,
-        toYaml(next, writeMapping),
-        writeMapping ? undefined : new Set(['mapping_text'])
-      )
-    )
+    if (changedKey === 'apps') {
+      onChange(mergeConfig(content, appsYaml(next.apps), new Set(['apps'])))
+      return
+    }
+    const replaceKeys = new Set(managed)
+    replaceKeys.delete('apps')
+    if (!writeMapping) replaceKeys.delete('mapping_text')
+    onChange(mergeConfig(content, toYaml(next, writeMapping), replaceKeys))
   }
   const set = (key: TextKey, value: string) =>
     saveValues({ ...values, [key]: value }, key)
@@ -394,6 +445,152 @@ export function RobotConfigForm({
         placeholder={hint}
       />
     </label>
+  )
+  const setApps = (apps: AppItem[]) => saveValues({ ...values, apps }, 'apps')
+  const updateApp = (index: number, patch: Partial<AppItem>) =>
+    setApps(
+      values.apps.map((item, row) =>
+        row === index ? { ...item, ...patch } : item
+      )
+    )
+  const addApp = () => {
+    const lastOrder = values.apps.reduce(
+      (order, item) => Math.max(order, item.order),
+      -1
+    )
+    setValues({
+      ...values,
+      apps: [
+        ...values.apps,
+        {
+          value: '',
+          enabled: true,
+          order: Math.min(lastOrder + 1, Number.MAX_SAFE_INTEGER)
+        }
+      ]
+    })
+  }
+  const moduleTable = (
+    <section className="col-span-2 grid min-w-0 gap-2 rounded-lg border border-slate-200 bg-slate-50/50 p-2.5">
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="m-0 text-xs font-semibold text-slate-600">模块配置</h3>
+        <button
+          type="button"
+          className="secondary-button min-h-7 px-2 text-xs"
+          disabled={invalidConfig}
+          onClick={addApp}
+        >
+          + 新增项
+        </button>
+      </div>
+      {values.apps.length > 0 ? (
+        <div className="overflow-x-auto">
+          <table
+            aria-label="模块配置"
+            className="w-full min-w-80 text-left text-xs text-slate-600"
+          >
+            <thead>
+              <tr>
+                <th scope="col" className="px-1 pb-2">
+                  模块
+                </th>
+                <th scope="col" className="px-1 pb-2">
+                  启用
+                </th>
+                <th scope="col" className="px-1 pb-2">
+                  执行顺序
+                </th>
+                <th scope="col" className="px-1 pb-2">
+                  操作
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {values.apps.map((item, index) => {
+                const canInstall =
+                  inventory &&
+                  onInstall &&
+                  officialModules?.data.some(
+                    resource =>
+                      resource.installMode === 'npm' &&
+                      resource.packageName === item.value
+                  ) &&
+                  !inventory.items.some(
+                    fact => fact.name === item.value && fact.installed
+                  )
+                return (
+                  <tr key={index}>
+                    <td className="p-1">
+                      <input
+                        className={inputClass}
+                        aria-label={`模块 ${index + 1}`}
+                        list={moduleOptionsID}
+                        value={item.value}
+                        disabled={invalidConfig}
+                        placeholder="例如 alemonjs-openai"
+                        onChange={event =>
+                          updateApp(index, { value: event.target.value })
+                        }
+                      />
+                    </td>
+                    <td className="p-1">
+                      <input
+                        type="checkbox"
+                        className="size-4 accent-brand-600"
+                        aria-label={`启用模块 ${index + 1}`}
+                        checked={item.enabled}
+                        disabled={invalidConfig}
+                        onChange={event =>
+                          updateApp(index, { enabled: event.target.checked })
+                        }
+                      />
+                    </td>
+                    <td className="w-24 p-1">
+                      <span className="tabular-nums">{item.order}</span>
+                    </td>
+                    <td className="p-1">
+                      <div className="flex gap-1">
+                        {canInstall && (
+                          <button
+                            type="button"
+                            className="secondary-button min-h-8 shrink-0 px-2 text-xs"
+                            disabled={
+                              invalidConfig || Boolean(moduleInstalling)
+                            }
+                            onClick={() => void installModule(item.value)}
+                          >
+                            {moduleInstalling === item.value
+                              ? '安装中…'
+                              : '安装'}
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          className="secondary-button min-h-8 shrink-0 px-2 text-xs"
+                          disabled={invalidConfig}
+                          onClick={() =>
+                            setApps(
+                              values.apps.filter((_, row) => row !== index)
+                            )
+                          }
+                        >
+                          删除
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+          <p className="m-0 px-1 pt-2 text-xs text-slate-600">
+            在背包列表拖拽已启用插件可调整加载顺序。
+          </p>
+        </div>
+      ) : (
+        <p className="m-0 text-xs text-slate-600">暂无模块</p>
+      )}
+    </section>
   )
   const accessItemsField = (key: ToggleKey, label: string, hint: string) => {
     const items = values[key]
@@ -430,34 +627,12 @@ export function RobotConfigForm({
                 <input
                   className={inputClass}
                   disabled={invalidConfig}
-                  aria-label={key === 'apps' ? `模块 ${index + 1}` : undefined}
-                  list={key === 'apps' ? moduleOptionsID : undefined}
                   value={item.value}
                   placeholder={hint}
                   onChange={event =>
                     updateItem(index, { value: event.target.value })
                   }
                 />
-                {key === 'apps' &&
-                  inventory &&
-                  onInstall &&
-                  officialModules?.data.some(
-                    resource =>
-                      resource.installMode === 'npm' &&
-                      resource.packageName === item.value
-                  ) &&
-                  !inventory?.items.some(
-                    fact => fact.name === item.value && fact.installed
-                  ) && (
-                    <button
-                      type="button"
-                      className="secondary-button min-h-8 shrink-0 px-2 text-xs"
-                      disabled={invalidConfig || Boolean(moduleInstalling)}
-                      onClick={() => void installModule(item.value)}
-                    >
-                      {moduleInstalling === item.value ? '安装中…' : '安装'}
-                    </button>
-                  )}
                 <label className="flex shrink-0 items-center gap-1.5 text-xs font-medium text-slate-600">
                   <input
                     type="checkbox"
@@ -696,7 +871,7 @@ export function RobotConfigForm({
           <>
             {field('repeatedEventTime', '重复事件窗口（毫秒）', '60000')}
             {field('repeatedUserTime', '重复用户窗口（毫秒）', '1000')}
-            {accessItemsField('apps', '启用模块', '例如 alemonjs-openai')}
+            {moduleTable}
             <datalist id={moduleOptionsID}>
               {Array.from(
                 new Set([

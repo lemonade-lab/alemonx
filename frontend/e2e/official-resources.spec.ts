@@ -26,7 +26,8 @@ async function mount(
   page: Page,
   config = false,
   offline = false,
-  componentName = ''
+  componentName = '',
+  configSource = 'login: local-id\napps:\n  - enabled-module\n  - custom-offline\n'
 ) {
   let installed = false
   await page.route('**/api/v1/**', route => {
@@ -113,7 +114,7 @@ async function mount(
       body: `<div id="root"></div><script type="module">
  import '/src/styles.css';import RefreshRuntime from '/@react-refresh';RefreshRuntime.injectIntoGlobalHook(window);window.$RefreshReg$=()=>{};window.$RefreshSig$=()=>type=>type;window.__vite_plugin_react_preamble_installed__=true;
  const {default:React}=await import('/node_modules/.vite/deps/react.js');const {default:ReactDOM}=await import('/node_modules/.vite/deps/react-dom_client.js');const {Provider}=await import('/node_modules/.vite/deps/react-redux.js');const {store}=await import('/src/store/guideStore.ts');const {${component}}=await import('/src/components/${config ? 'RobotConfigForm' : 'OfficialResources'}.tsx');
- ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(Provider,{store},React.createElement(${component},{root:'/test/robot',label:'${component === 'OfficialExtensionChoices' ? '项目扩展' : '登录连接'}',selected:[],id:'dependency-options',onSelect:resource=>{document.body.dataset.selected=resource.id},content:'login: local-id\\napps:\\n  - enabled-module\\n  - custom-offline\\n',onChange:value=>{document.body.dataset.config=value},onInstall:async(action,target)=>{document.body.dataset.install=JSON.stringify({action,target});await fetch('/api/v1/test-install');return true},onLogin:(login,pkg)=>{document.body.dataset.login=JSON.stringify({login,pkg})}})));
+ ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(Provider,{store},React.createElement(${component},{root:'/test/robot',label:'${component === 'OfficialExtensionChoices' ? '项目扩展' : '登录连接'}',selected:[],id:'dependency-options',onSelect:resource=>{document.body.dataset.selected=resource.id},content:${JSON.stringify(configSource)},onChange:value=>{document.body.dataset.config=value},onInstall:async(action,target)=>{document.body.dataset.install=JSON.stringify({action,target});await fetch('/api/v1/test-install');return true},onLogin:(login,pkg)=>{document.body.dataset.login=JSON.stringify({login,pkg})}})));
  </script>`
     })
   )
@@ -164,15 +165,49 @@ test('configuration preserves custom apps and local editing while official catal
   ).toBeVisible()
   await page.getByRole('button', { name: '高级', exact: true }).click()
   await page.locator('summary').filter({ hasText: '运行与模块' }).click()
-  const firstRow = page.getByRole('combobox', { name: '模块 1' }).locator('..')
+  const firstRow = page
+    .getByRole('combobox', { name: '模块 1' })
+    .locator('xpath=ancestor::tr')
   await expect(firstRow.getByRole('checkbox')).toBeChecked()
   await firstRow.getByRole('checkbox').uncheck()
+  await expect(page.locator('body')).toHaveAttribute(
+    'data-config',
+    /enabled-module:\s+enabled: false\s+order: 0/
+  )
   await expect(page.locator('body')).toHaveAttribute(
     'data-config',
     /custom-offline/
   )
   await expect(page.getByRole('combobox', { name: '登录连接' })).toBeEnabled()
   await expect(page.getByText('从官方目录添加模块')).toHaveCount(0)
+})
+
+test('object app settings keep command options and order when toggled', async ({
+  page
+}) => {
+  await mount(
+    page,
+    true,
+    false,
+    '',
+    `login: local-id # keep
+apps:
+  enabled-module:
+    command:
+      prefix: '!'
+    order: 10
+`
+  )
+  await page.getByRole('button', { name: '高级', exact: true }).click()
+  await page.locator('summary').filter({ hasText: '运行与模块' }).click()
+  await expect(page.getByRole('checkbox', { name: '启用模块 1' })).toBeChecked()
+  await page.getByRole('checkbox', { name: '启用模块 1' }).uncheck()
+  const config = page.locator('body')
+  await expect(config).toHaveAttribute('data-config', /login: local-id # keep/)
+  await expect(config).toHaveAttribute(
+    'data-config',
+    /command:\s+prefix: '!'\s+order: 10\s+enabled: false/
+  )
 })
 
 test('module suggestions enhance the existing row without changing its enable state', async ({
@@ -187,7 +222,7 @@ test('module suggestions enhance the existing row without changing its enable st
   await group.getByRole('button', { name: '+ 新增项' }).click()
   const input = page.getByRole('combobox', { name: '模块 3' })
   await input.fill('@example/missing')
-  const row = input.locator('..')
+  const row = input.locator('xpath=ancestor::tr')
   await row.getByRole('checkbox').uncheck()
   await row.getByRole('button', { name: '安装', exact: true }).click()
   await expect(page.locator('body')).toHaveAttribute(
@@ -201,7 +236,7 @@ test('module suggestions enhance the existing row without changing its enable st
   )
   await expect(page.locator('body')).toHaveAttribute(
     'data-config',
-    /'@example\/missing': false/
+    /'@example\/missing':\s+enabled: false\s+order: 2/
   )
 })
 

@@ -5324,6 +5324,24 @@ func (s *server) robotAppsHandler(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"items": apps})
 		return
 	}
+	if r.Method == http.MethodPatch {
+		var input struct {
+			Source string `json:"source"`
+			Target string `json:"target"`
+			After  bool   `json:"after"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+			writeError(w, http.StatusBadRequest, "请求内容无法识别。")
+			return
+		}
+		result, err := s.robots.MoveApp(root, input.Source, input.Target, input.After)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
+		return
+	}
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
 		return
