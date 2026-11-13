@@ -166,7 +166,16 @@ jobs:
           done
           printf ',{"name":"SHA256SUMS","url":"%s/SHA256SUMS"}]}' "$release_base" >> release/alx-update-index.json
           rm release/*.sha256
-          (cd desktop-release && sha256sum alemonx-desktop-* > alemonx-desktop-SHA256SUMS)
+          (
+            cd desktop-release
+            # Keep the OS and architecture in one filename segment so older
+            # Web updaters cannot mistake these packages for server archives.
+            for asset in alemonx-desktop-*; do
+              renamed="$(printf '%s' "$asset" | sed -E 's/(macos|windows|linux)-(amd64|arm64)/\1_\2/')"
+              mv "$asset" "$renamed"
+            done
+            sha256sum alemonx-desktop-* > alemonx-desktop-SHA256SUMS
+          )
           gh release create "${GITHUB_REF_NAME}" release/* desktop-release/* --generate-notes
         env:
           GH_TOKEN: ${{ github.token }}
