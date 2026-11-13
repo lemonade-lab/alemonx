@@ -11,7 +11,6 @@ import {
   desktopPlatform,
   getAuxiliaryWindowName
 } from './components/nativeWindow'
-import './styles.css'
 
 const NativeAuxiliaryWindow = lazy(() =>
   import('./components/NativeAuxiliaryWindow').then(module => ({
