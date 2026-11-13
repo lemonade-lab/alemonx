@@ -183,6 +183,9 @@ func releasesForPlatform(items []Item, platform, architecture string) []Item {
 // check can incorrectly offer a macOS archive to a Windows user.
 func matchingAssetFor(assets []Asset, platform, architecture string) Asset {
 	for _, asset := range assets {
+		if strings.HasPrefix(strings.ToLower(asset.Name), "alemonx-desktop-") {
+			continue
+		}
 		tokens := assetNameTokens(asset.Name)
 		system := (platform == "darwin" && (tokens["darwin"] || tokens["macos"] || tokens["mac"])) ||
 			(platform == "windows" && (tokens["windows"] || tokens["win32"])) ||

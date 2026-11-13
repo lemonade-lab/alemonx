@@ -14,6 +14,8 @@ import (
 
 func TestMatchingAssetForDoesNotTreatDarwinAsWindows(t *testing.T) {
 	assets := []Asset{
+		{Name: "alemonx-desktop-windows-amd64.zip", URL: "desktop-windows"},
+		{Name: "alemonx-desktop-macos-arm64.zip", URL: "desktop-macos"},
 		{Name: "alx-darwin-arm64.zip", URL: "mac-arm"},
 		{Name: "alx-darwin-amd64.zip", URL: "mac-intel"},
 		{Name: "alx-windows-amd64.zip", URL: "windows"},
