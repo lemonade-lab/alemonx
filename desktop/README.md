@@ -23,7 +23,7 @@ open "bin/ALemonX Desktop.app"
 open "bin/ALemonX Desktop.app" --args --workspace "/path/to/workspace" --port 17392
 ```
 
-端口变化时，WebView 会使用对应地址的本地设置。关闭窗口会收起工作台，从菜单栏打开可恢复窗口。选择「退出 AlemonX」会关闭工作台服务。macOS 和 Windows 可通过托盘恢复收起的工作台。通过替换完整应用包更新桌面版，工作区位于应用包外。
+桌面偏好设置保存在用户配置目录，启动端口变化后会自动恢复。升级时会导入当前启动地址上已有的 WebView 设置。关闭窗口会收起工作台，从菜单栏打开可恢复窗口。选择「退出 AlemonX」会关闭工作台服务。macOS 和 Windows 可通过托盘恢复收起的工作台。通过替换完整应用包更新桌面版，工作区位于应用包外。
 
 ## 构建 Windows x64
 

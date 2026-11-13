@@ -1,3 +1,4 @@
+import { preferenceStorage } from '../lib/desktopPreferences'
 export type QQChatDensity = 'compact' | 'comfortable'
 export type QQChatFontSize = 'small' | 'medium' | 'large'
 export type FavoriteRetention = '7d' | '30d' | 'forever'
@@ -117,5 +118,5 @@ export function clearQQChatStore(root: string) {
 }
 
 export function resetQQChatWindowLayout(root: string) {
-  localStorage.removeItem(qqChatWindowStorageKey(root))
+  preferenceStorage.removeItem(qqChatWindowStorageKey(root))
 }

@@ -1,3 +1,4 @@
+import { preferenceStorage } from '../../../../lib/desktopPreferences'
 import { Connect } from '@testone/typing';
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
 
@@ -18,7 +19,7 @@ interface SocketState {
 // 尝试从 localStorage 读取自动连接开关，默认 true
 let _persistedAuto = true;
 try {
-  const v = localStorage.getItem('autoConnectEnabled');
+  const v = preferenceStorage.getItem('autoConnectEnabled');
   if (v !== null) {
     _persistedAuto = v === 'true';
   }
@@ -122,7 +123,7 @@ const socketSlice = createSlice({
     setAutoConnectEnabled(state, action: PayloadAction<boolean>) {
       state.autoConnectEnabled = action.payload;
       try {
-        localStorage.setItem(
+        preferenceStorage.setItem(
           'autoConnectEnabled',
           action.payload ? 'true' : 'false'
         );

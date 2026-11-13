@@ -1,3 +1,4 @@
+import { preferenceStorage } from '../../../lib/desktopPreferences'
 // 图片引用存储与规范化工具
 // 目的：将大体积 base64 图片内容转为引用以减少聊天主数组内存和裁剪频率
 
@@ -191,17 +192,17 @@ async function compressBase64IfNeeded(rawB64: string): Promise<string> {
 
 // 开启图片压缩
 export const openImageCompression = () => {
-  localStorage.setItem(LOCAL_STORAGE_IMAGE_COMPRESSION, '1');
+  preferenceStorage.setItem(LOCAL_STORAGE_IMAGE_COMPRESSION, '1');
 };
 
 // 关闭图片压缩
 export const closeImageCompression = () => {
-  localStorage.removeItem(LOCAL_STORAGE_IMAGE_COMPRESSION);
+  preferenceStorage.removeItem(LOCAL_STORAGE_IMAGE_COMPRESSION);
 };
 
 // 图片压缩开关
 export const isImageCompressionOpen = () => {
-  return localStorage.getItem(LOCAL_STORAGE_IMAGE_COMPRESSION) === '1';
+  return preferenceStorage.getItem(LOCAL_STORAGE_IMAGE_COMPRESSION) === '1';
 };
 
 export async function storeBase64WithCompress(

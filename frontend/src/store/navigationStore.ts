@@ -1,3 +1,4 @@
+import { preferenceStorage } from '../lib/desktopPreferences'
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit'
 import { persistReducer } from 'redux-persist'
 
@@ -109,10 +110,10 @@ export const persistedNavigation = persistReducer(
     key: 'alemonx-navigation',
     version: 1,
     storage: {
-      getItem: (key: string) => Promise.resolve(localStorage.getItem(key)),
+      getItem: (key: string) => Promise.resolve(preferenceStorage.getItem(key)),
       setItem: (key: string, value: string) =>
-        Promise.resolve(localStorage.setItem(key, value)),
-      removeItem: (key: string) => Promise.resolve(localStorage.removeItem(key))
+        Promise.resolve(preferenceStorage.setItem(key, value)),
+      removeItem: (key: string) => Promise.resolve(preferenceStorage.removeItem(key))
     },
     whitelist: ['values'],
     migrate: async state =>

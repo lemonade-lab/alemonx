@@ -1,3 +1,4 @@
+import { preferenceStorage } from '../lib/desktopPreferences'
 import { WorkbenchHeader } from './WorkbenchHeader'
 import {
   useCallback,
@@ -127,7 +128,7 @@ export function DesktopWindow({
     if (!storageKey) return
     setLayoutReady(false)
     try {
-      const saved = JSON.parse(localStorage.getItem(storageKey) || 'null') as { rect?: typeof windowRect; maximized?: boolean } | null
+      const saved = JSON.parse(preferenceStorage.getItem(storageKey) || 'null') as { rect?: typeof windowRect; maximized?: boolean } | null
       if (saved?.rect && Number.isFinite(saved.rect.left) && Number.isFinite(saved.rect.top) && Number.isFinite(saved.rect.width) && Number.isFinite(saved.rect.height)) {
         preferredRect.current = saved.rect
         setWindowRect(
@@ -144,7 +145,7 @@ export function DesktopWindow({
 
   useEffect(() => {
     if (!storageKey || !open || !layoutReady) return
-    localStorage.setItem(
+    preferenceStorage.setItem(
       storageKey,
       JSON.stringify({ rect: preferredRect.current, maximized })
     )

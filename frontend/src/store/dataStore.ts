@@ -1,3 +1,4 @@
+import { preferenceStorage } from '../lib/desktopPreferences'
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit'
 import { persistReducer } from 'redux-persist'
 import { migrateDataTab, type DataTab } from '../lib/dataNavigation'
@@ -74,10 +75,10 @@ export const persistedDataPreferences = persistReducer(
     key: 'alemonx-data',
     version: 5,
     storage: {
-      getItem: (key: string) => Promise.resolve(localStorage.getItem(key)),
+      getItem: (key: string) => Promise.resolve(preferenceStorage.getItem(key)),
       setItem: (key: string, value: string) =>
-        Promise.resolve(localStorage.setItem(key, value)),
-      removeItem: (key: string) => Promise.resolve(localStorage.removeItem(key))
+        Promise.resolve(preferenceStorage.setItem(key, value)),
+      removeItem: (key: string) => Promise.resolve(preferenceStorage.removeItem(key))
     },
     whitelist: ['tab', 'sqlitePaths', 'sqliteNames', 'connections'],
     migrate: async state => {

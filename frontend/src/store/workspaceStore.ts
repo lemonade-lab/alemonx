@@ -1,12 +1,13 @@
+import { preferenceStorage } from '../lib/desktopPreferences'
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit'
 import { createTransform, persistReducer } from 'redux-persist'
 
 const storage = {
-  getItem: (key: string) => Promise.resolve(window.localStorage.getItem(key)),
+  getItem: (key: string) => Promise.resolve(preferenceStorage.getItem(key)),
   setItem: (key: string, value: string) =>
-    Promise.resolve(window.localStorage.setItem(key, value)),
+    Promise.resolve(preferenceStorage.setItem(key, value)),
   removeItem: (key: string) =>
-    Promise.resolve(window.localStorage.removeItem(key))
+    Promise.resolve(preferenceStorage.removeItem(key))
 }
 
 const workspacePersistKey = 'persist:alemonx-workspace'
@@ -21,7 +22,7 @@ const isPrivateDraft = (key: string) =>
 // an old raw value in localStorage until the next state change.
 function removeLegacyPrivateDrafts() {
   try {
-    const stored = window.localStorage.getItem(workspacePersistKey)
+    const stored = preferenceStorage.getItem(workspacePersistKey)
     if (!stored) return
     const state = JSON.parse(stored) as Record<string, string>
     const drafts = JSON.parse(state.drafts ?? '{}') as Record<string, string>
@@ -30,7 +31,7 @@ function removeLegacyPrivateDrafts() {
     )
     if (Object.keys(cleanDrafts).length === Object.keys(drafts).length) return
     state.drafts = JSON.stringify(cleanDrafts)
-    window.localStorage.setItem(workspacePersistKey, JSON.stringify(state))
+    preferenceStorage.setItem(workspacePersistKey, JSON.stringify(state))
   } catch {
     // Persisted workspace data is optional; ignore malformed legacy entries.
   }
@@ -50,7 +51,7 @@ type LegacyRobots = { projects: WorkspaceProject[]; activeProjectID: string }
 export function readLegacyRobots(): LegacyRobots {
   try {
     const saved = JSON.parse(
-      window.localStorage.getItem(legacyRobotListKey) ?? '{}'
+      preferenceStorage.getItem(legacyRobotListKey) ?? '{}'
     ) as Partial<LegacyRobots>
     return {
       projects: Array.isArray(saved.projects)
@@ -65,11 +66,11 @@ export function readLegacyRobots(): LegacyRobots {
 }
 
 export function clearLegacyRobots() {
-  window.localStorage.removeItem(legacyRobotListKey)
+  preferenceStorage.removeItem(legacyRobotListKey)
 }
 
 try {
-  const raw = window.localStorage.getItem(workspacePersistKey)
+  const raw = preferenceStorage.getItem(workspacePersistKey)
   if (raw) {
     const saved = JSON.parse(raw) as Record<string, string>
     if (saved.projects || saved.activeProjectID) {
@@ -77,9 +78,9 @@ try {
       if (
         Array.isArray(projects) &&
         projects.length &&
-        !window.localStorage.getItem(legacyRobotListKey)
+        !preferenceStorage.getItem(legacyRobotListKey)
       ) {
-        window.localStorage.setItem(
+        preferenceStorage.setItem(
           legacyRobotListKey,
           JSON.stringify({
             projects,
@@ -89,7 +90,7 @@ try {
       }
       delete saved.projects
       delete saved.activeProjectID
-      window.localStorage.setItem(workspacePersistKey, JSON.stringify(saved))
+      preferenceStorage.setItem(workspacePersistKey, JSON.stringify(saved))
     }
   }
 } catch {
@@ -147,7 +148,7 @@ const workspaceSlice = createSlice({
 
 // Environment, npm registry and robot configuration files can contain tokens,
 // passwords and connection credentials. Keep an unsaved edit while the page
-// is open, but never write those values to browser localStorage.
+// is open, but never write those values to browser preferenceStorage.
 const privateDraftsTransform = createTransform<
   Record<string, string>,
   Record<string, string>

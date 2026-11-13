@@ -1,3 +1,4 @@
+import { preferenceStorage } from '../lib/desktopPreferences'
 import { Moon, Sun } from 'lucide-react'
 import { useSyncExternalStore } from 'react'
 import { Button } from './Button'
@@ -6,7 +7,7 @@ type Theme = 'light' | 'dark'
 const key = 'alemonjs-theme'
 
 function preferredTheme(): Theme {
-  const saved = window.localStorage.getItem(key)
+  const saved = preferenceStorage.getItem(key)
   if (saved === 'light' || saved === 'dark') return saved
   return window.matchMedia('(prefers-color-scheme: dark)').matches
     ? 'dark'
@@ -23,7 +24,7 @@ function subscribeToTheme(onChange: () => void) {
 function setTheme(theme: Theme) {
   document.documentElement.dataset.theme = theme
   document.documentElement.style.colorScheme = theme
-  window.localStorage.setItem(key, theme)
+  preferenceStorage.setItem(key, theme)
   window.dispatchEvent(new Event(themeEvent))
 }
 

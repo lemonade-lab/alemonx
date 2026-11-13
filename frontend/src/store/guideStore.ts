@@ -1,3 +1,4 @@
+import { preferenceStorage } from '../lib/desktopPreferences'
 import { persistedNavigation } from './navigationStore'
 import {
   configureStore,
@@ -12,11 +13,11 @@ import { persistedWorkspace } from './workspaceStore'
 import { persistedDataPreferences } from './dataStore'
 
 const storage = {
-  getItem: (key: string) => Promise.resolve(window.localStorage.getItem(key)),
+  getItem: (key: string) => Promise.resolve(preferenceStorage.getItem(key)),
   setItem: (key: string, value: string) =>
-    Promise.resolve(window.localStorage.setItem(key, value)),
+    Promise.resolve(preferenceStorage.setItem(key, value)),
   removeItem: (key: string) =>
-    Promise.resolve(window.localStorage.removeItem(key))
+    Promise.resolve(preferenceStorage.removeItem(key))
 }
 
 export type DeveloperConfig = {

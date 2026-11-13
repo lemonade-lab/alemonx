@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -539,6 +540,11 @@ func serve(host, port, redisPort, mcpPort string, redisOff bool, workspaceRoot s
 			_, _ = io.Copy(io.Discard, os.Stdin)
 			stop()
 		}()
+		configDir, err := os.UserConfigDir()
+		if err != nil {
+			log.Fatal(err)
+		}
+		preferences := &desktopPreferences{path: filepath.Join(configDir, "AlemonX Desktop", "preferences.json")}
 		server.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Host != listener.Addr().String() {
 				http.Error(w, "无效的工作台地址", http.StatusForbidden)
@@ -546,6 +552,10 @@ func serve(host, port, redisPort, mcpPort string, redisOff bool, workspaceRoot s
 			}
 			if origin := r.Header.Get("Origin"); origin != "" && origin != "http://"+listener.Addr().String() {
 				http.Error(w, "无效的工作台请求来源", http.StatusForbidden)
+				return
+			}
+			if r.URL.Path == desktopPreferencesPath {
+				preferences.ServeHTTP(w, r)
 				return
 			}
 			runtime.Handler.ServeHTTP(w, r)
