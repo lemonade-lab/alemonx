@@ -113,24 +113,25 @@ export function EnvironmentFixDialog({
       className="p-4"
     >
       <section
-        className="relative flex max-h-[calc(100dvh-32px)] w-full max-w-110 flex-col rounded-xl border border-(--theme-border-default) bg-(--theme-surface-panel) p-5 text-(--theme-text-primary) shadow-xl"
+        className="modal-surface relative flex max-h-[calc(100dvh-32px)] w-full max-w-110 flex-col"
         onMouseDown={event => event.stopPropagation()}
       >
-        <Button
-          variant="icon"
-          className="absolute right-3 top-3"
-          disabled={installing}
-          onClick={onClose}
-          aria-label="关闭"
-        >
-          <X className="size-4" />
-        </Button>
-        <h2
-          id="environment-fix-title"
-          className="mr-12 shrink-0 text-base font-semibold text-(--theme-text-strong)"
-        >
-          {isNodeUpgrade ? '升级' : '安装'} {check.name}
-        </h2>
+        <header className="flex flex-row-reverse items-center justify-between gap-3">
+          <Button
+            variant="icon"
+            disabled={installing}
+            onClick={onClose}
+            aria-label="关闭"
+          >
+            <X className="size-4" />
+          </Button>
+          <h2
+            id="environment-fix-title"
+            className="m-0 text-base font-semibold text-(--theme-text-strong)"
+          >
+            {isNodeUpgrade ? '升级' : '安装'} {check.name}
+          </h2>
+        </header>
         <div className="min-h-0 overflow-y-auto overscroll-contain">
           <p className="mt-2 text-sm leading-6 text-(--theme-text-secondary)">
             {check.suggestion ||

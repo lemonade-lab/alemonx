@@ -48,10 +48,10 @@ export default function PayloadInspector({
       className="testone-modal-surface bg-black/40"
     >
       <div
-        className="flex w-[min(520px,calc(100vw-32px))] max-h-[calc(100dvh-32px)] flex-col overflow-hidden bg-[var(--editorWidget-background)] border border-[var(--panel-border)] rounded-lg shadow-xl"
+        className="modal-surface modal-surface-flush flex w-[min(520px,calc(100vw-32px))] max-h-[calc(100dvh-32px)] flex-col"
       >
         {/* 头部 */}
-        <div className="flex items-center justify-between px-4 py-2 border-b border-[var(--panel-border)]">
+        <header className="flex items-center justify-between px-4 py-2 border-b border-[var(--panel-border)]">
           <span className="text-sm font-semibold">消息结构查看器</span>
           <button
             className="text-xs px-2 py-0.5 rounded hover:opacity-80"
@@ -59,7 +59,7 @@ export default function PayloadInspector({
           >
             ✕
           </button>
-        </div>
+        </header>
 
         {/* 消息元信息 */}
         <div className="px-4 py-2 text-xs border-b border-[var(--panel-border)] space-y-1">

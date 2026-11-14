@@ -22,7 +22,7 @@ const gitResource = {
   markdown: '# Git 文档'
 }
 
-async function mount(page: Page) {
+async function mount(page: Page, type: 'js-plugin' | 'connector' = 'js-plugin') {
   const requests: string[] = []
   await page.route('**/api/v1/**', async route => {
     const url = new URL(route.request().url())
@@ -79,7 +79,7 @@ async function mount(page: Page) {
   await page.route('**/market-regression', route =>
     route.fulfill({
       contentType: 'text/html; charset=utf-8',
-      body: `<div id="root" style="height: 540px"></div><script type="module">
+      body: `<div class="robot-workspace-splitter"><div class="robot-workspace-content" style="height: 540px"><section id="root" class="console-page"></section></div></div><script type="module">
     import '/src/styles.css';
     import RefreshRuntime from '/@react-refresh';
     RefreshRuntime.injectIntoGlobalHook(window);
@@ -91,7 +91,7 @@ async function mount(page: Page) {
     const {Provider} = await import('/node_modules/.vite/deps/react-redux.js');
     const {store} = await import('/src/store/guideStore.ts');
     const {EcosystemMarket} = await import('/src/components/EcosystemMarket.tsx');
-    ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(Provider, {store}, React.createElement(EcosystemMarket, {root:'/test/robot',type:'js-plugin',subtype:'js-module-data',category:'数据管理',busy:false,onRun: async (action, pkg) => {document.body.dataset.operation = JSON.stringify({action,pkg});return true},onSaveConfig:async()=>true})));
+    ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(Provider, {store}, React.createElement(EcosystemMarket, {root:'/test/robot',type:${JSON.stringify(type)},subtype:'js-module-data',category:'数据管理',busy:false,onRun: async (action, pkg) => {document.body.dataset.operation = JSON.stringify({action,pkg});return true},onSaveConfig:async()=>true})));
   </script>`
     })
   )
@@ -99,7 +99,14 @@ async function mount(page: Page) {
   const footer = page.locator('.ecosystem-market-list footer')
   await expect(footer).toBeVisible()
   const bounds = (await footer.boundingBox())!
-  expect(bounds.y + bounds.height).toBeCloseTo(524, 0)
+  const workspace = (await page.locator('#root').boundingBox())!
+  const header = (await page.locator('[data-robot-panel-header]').boundingBox())!
+  expect(bounds.y + bounds.height).toBeCloseTo(
+    workspace.y + workspace.height - 16,
+    0
+  )
+  expect(header.y - workspace.y).toBeCloseTo(16, 0)
+  expect(header.x).toBeCloseTo(bounds.x, 0)
   return requests
 }
 
@@ -172,4 +179,16 @@ test('a removed resource blocks installation and reports its detail error', asyn
   await expect(
     page.getByRole('button', { name: '安装', exact: true })
   ).toHaveCount(0)
+})
+
+test('connector market uses the same panel insets on a narrow screen', async ({
+  page
+}) => {
+  await page.setViewportSize({ width: 390, height: 740 })
+  await mount(page, 'connector')
+  const header = page.locator('[data-robot-panel-header]')
+  await expect(header.getByText('连接', { exact: true })).toBeVisible()
+  const panel = page.locator('[data-workbench-page]')
+  expect(await panel.evaluate(node => node.scrollWidth - node.clientWidth))
+    .toBeLessThanOrEqual(1)
 })

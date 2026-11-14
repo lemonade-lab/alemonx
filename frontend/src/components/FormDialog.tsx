@@ -27,7 +27,7 @@ export function FormDialog({
       onClose={busy ? undefined : onClose}
       className="p-3 sm:p-6"
     >
-      <section className="flex max-h-[calc(100dvh-3rem)] w-full max-w-2xl min-w-0 flex-col overflow-hidden rounded-xl border border-(--theme-border-default) bg-(--theme-surface-panel) text-(--theme-text-primary) shadow-xl">
+      <section className="modal-surface modal-surface-flush flex max-h-[calc(100dvh-3rem)] w-full max-w-2xl min-w-0 flex-col overflow-hidden">
         <header className="flex items-start justify-between gap-3 border-b border-(--theme-border-default) p-4">
           <div>
             <h2 className="text-base font-semibold">{title}</h2>

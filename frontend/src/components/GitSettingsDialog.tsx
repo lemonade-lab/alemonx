@@ -34,7 +34,7 @@ export function GitSettingsDialog({
       onClose={busy ? undefined : onClose}
     >
       <form
-        className="flex max-h-[calc(100dvh-32px)] w-full max-w-md min-w-0 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl"
+        className="modal-surface modal-surface-flush flex max-h-[calc(100dvh-32px)] w-full max-w-md min-w-0 flex-col overflow-hidden"
         onSubmit={event => {
           event.preventDefault()
           if (!busy && valid) onSubmit()

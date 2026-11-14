@@ -129,11 +129,11 @@ export function EcosystemMarket({
           <p role="status">正在读取资源…</p>
         ) : (
           <>
-            <section className="grid gap-2">
+            <section className="grid gap-3">
               {list?.data.map(item => (
                 <button
                   key={item.id}
-                  className="grid gap-1 rounded-lg border border-(--theme-border-default) bg-(--theme-surface-panel) p-3 text-left"
+                  className="grid gap-1 rounded-xl border border-(--theme-border-default) bg-(--theme-surface-panel) px-4 py-3 text-left"
                   onClick={() => setSelected(item.id)}
                 >
                   <strong className="text-sm">
@@ -264,7 +264,7 @@ function ResourceDetail({
       )}
       {item && (
         <>
-          <div className="flex gap-2" role="tablist" aria-label="资源详情">
+          <div className="flex flex-wrap gap-2" role="tablist" aria-label="资源详情">
             {[
               ['overview', '概览'],
               ['document', '文档'],
@@ -284,8 +284,8 @@ function ResourceDetail({
             ))}
           </div>
           {tab === 'overview' && (
-            <section className="grid gap-4 rounded-lg border border-(--theme-border-default) bg-(--theme-surface-panel) p-4 text-sm">
-              <p>{item.description}</p>
+            <section className="grid gap-3 rounded-xl border border-(--theme-border-default) bg-(--theme-surface-panel) px-4 py-3 text-sm">
+              <p className="m-0">{item.description}</p>
               <span>安装方式：{npm ? 'npm' : 'Git'}</span>
               {npm && target && (
                 <label className="grid gap-1">

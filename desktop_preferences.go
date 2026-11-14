@@ -21,7 +21,8 @@ type desktopPreferences struct {
 func desktopPreferenceKey(key string) bool {
 	switch key {
 	case "alemonjs-theme", "persist:alemonx-guide", "persist:alemonx-data",
-		"persist:alemonx-workspace", "persist:alemonx-navigation", "alemonx-legacy-robot-list",
+		"persist:alemonx-workspace", "persist:alemonx-navigation", "persist:alemonx-browser-recent",
+		"alemonx-legacy-robot-list",
 		"autoConnectEnabled", "ALemonTestOne:image:compression", "alx:operation-log":
 		return true
 	}

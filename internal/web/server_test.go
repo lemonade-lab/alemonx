@@ -1142,7 +1142,7 @@ func TestSetupPluginUploadArchiveInstallsPlugin(t *testing.T) {
 	}
 }
 
-func TestRobotPackageUploadRejectsArchiveOutsideReleaseGitWorkflow(t *testing.T) {
+func TestRobotPackageUploadInstallsArchive(t *testing.T) {
 	root := t.TempDir()
 	writeFixture(t, root, "package.json", `{"name":"demo","version":"1.0.0"}`)
 	s := newStatefulTestServer()
@@ -1168,8 +1168,11 @@ func TestRobotPackageUploadRejectsArchiveOutsideReleaseGitWorkflow(t *testing.T)
 	request.Header.Set("Content-Type", writer.FormDataContentType())
 	response := httptest.NewRecorder()
 	s.robotPackageUploadHandler(response, request)
-	if response.Code != http.StatusGone {
+	if response.Code != http.StatusCreated {
 		t.Fatalf("upload = %d %s", response.Code, response.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(root, "packages", "hello-plugin", "index.js")); err != nil {
+		t.Fatalf("installed plugin missing: %v", err)
 	}
 }
 

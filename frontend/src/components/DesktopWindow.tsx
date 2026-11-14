@@ -336,7 +336,9 @@ export function DesktopWindow({
         </div>
         <div className="flex shrink-0 items-center">{actions}</div>
       </WorkbenchHeader>
-      <main className="native-auxiliary-content flex min-h-0 flex-col">{children}</main>
+      <main className="native-auxiliary-content flex min-h-0 flex-col" data-native-window={id}>
+        {children}
+      </main>
     </>
   )
   return (

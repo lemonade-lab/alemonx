@@ -39,6 +39,7 @@ export type HostToast = {
   type: 'info' | 'success' | 'warning' | 'error'
   title?: string
   message?: string
+  actionLabel?: string
   duration: number
 }
 
@@ -140,7 +141,7 @@ export function HostPluginAlert({
       ariaLabel={title}
     >
       <section
-        className="grid w-full max-w-md gap-4 rounded-xl border border-slate-200 bg-white p-4.5 shadow-[0_20px_58px_rgb(28_26_23/0.22)] dark:border-slate-700 dark:bg-slate-900"
+        className="modal-surface grid w-full max-w-md gap-4"
         role="alertdialog"
         aria-modal="true"
         aria-label={title}
@@ -230,12 +231,14 @@ function useFocusDialog(active: boolean) {
  * Host-owned transient messages and notifications. Messages stack at the top
  * centre; notifications stack bottom-right, matching typical desktop shells.
  */
-export function HostUiToasts({
+export function HostUiToasts<T extends HostToast>({
   toasts,
-  onDismiss
+  onDismiss,
+  onAction
 }: {
-  toasts: HostToast[]
+  toasts: T[]
   onDismiss: (id: string) => void
+  onAction?: (toast: T) => void
 }) {
   const messages = toasts.filter(toast => toast.kind === 'message')
   const notifications = toasts.filter(toast => toast.kind === 'notification')
@@ -248,7 +251,12 @@ export function HostUiToasts({
         aria-live="polite"
       >
         {messages.map(toast => (
-          <HostToastCard key={toast.id} toast={toast} onDismiss={onDismiss} />
+          <HostToastCard
+            key={toast.id}
+            toast={toast}
+            onDismiss={onDismiss}
+            onAction={onAction && (() => onAction(toast))}
+          />
         ))}
       </div>
       <div
@@ -258,7 +266,12 @@ export function HostUiToasts({
         aria-live="polite"
       >
         {notifications.map(toast => (
-          <HostToastCard key={toast.id} toast={toast} onDismiss={onDismiss} />
+          <HostToastCard
+            key={toast.id}
+            toast={toast}
+            onDismiss={onDismiss}
+            onAction={onAction && (() => onAction(toast))}
+          />
         ))}
       </div>
     </>,
@@ -268,15 +281,17 @@ export function HostUiToasts({
 
 function HostToastCard({
   toast,
-  onDismiss
+  onDismiss,
+  onAction
 }: {
   toast: HostToast
   onDismiss: (id: string) => void
+  onAction?: () => void
 }) {
   useEffect(() => {
     const timer = window.setTimeout(() => onDismiss(toast.id), toast.duration)
     return () => window.clearTimeout(timer)
-  }, [onDismiss, toast.duration, toast.id])
+  }, [onDismiss, toast.duration, toast.id, toast.title, toast.type])
   return (
     <div className="pointer-events-auto flex w-full max-w-md items-start gap-2 rounded-xl border border-slate-200 bg-white/95 px-3 py-2.5 shadow-lg dark:border-slate-700 dark:bg-slate-900/95">
       <i
@@ -296,6 +311,15 @@ function HostToastCard({
           </p>
         )}
       </div>
+      {toast.actionLabel && onAction && (
+        <button
+          type="button"
+          className="shrink-0 self-center rounded px-1 py-0.5 text-xs font-medium text-brand-700 hover:underline focus-visible:outline dark:text-brand-300"
+          onClick={onAction}
+        >
+          {toast.actionLabel}
+        </button>
+      )}
       <button
         type="button"
         className="rounded-md p-1 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800 dark:hover:text-slate-300"

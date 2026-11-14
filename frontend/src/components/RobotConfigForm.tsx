@@ -675,7 +675,7 @@ export function RobotConfigForm({
       className="group overflow-hidden rounded-xl border border-slate-200"
       open={open}
     >
-      <summary className="flex min-h-12 cursor-pointer list-none items-center gap-2 px-3 text-sm font-semibold text-slate-700 marker:content-none [&::-webkit-details-marker]:hidden">
+      <summary className="flex min-h-12 cursor-pointer list-none items-center gap-2 px-4 text-sm font-semibold text-slate-700 marker:content-none [&::-webkit-details-marker]:hidden">
         <strong>{name}</strong>
         <span className="ml-auto text-[11px] font-semibold text-slate-400">
           {note}
@@ -684,7 +684,7 @@ export function RobotConfigForm({
           ›
         </i>
       </summary>
-      <div className="robot-config-fields grid grid-cols-2 gap-3 border-t border-slate-100 p-3">
+      <div className="robot-config-fields grid grid-cols-2 gap-3 border-t border-slate-100 px-4 py-3">
         {children}
       </div>
     </details>
@@ -723,7 +723,7 @@ export function RobotConfigForm({
   )
   return (
     <RobotPanel
-      className="robot-config-form max-w-190"
+      className="robot-config-form"
       icon={<Settings className="size-4" />}
       title="机器人配置"
       description="管理当前机器人的运行与连接参数"

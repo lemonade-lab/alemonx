@@ -67,3 +67,31 @@ test('folder drop reads all directory batches and excludes dependencies', async 
   await page.getByRole('button', { name: '取消', exact: true }).press('Escape')
   await expect(page.getByRole('dialog')).toHaveCount(0)
 })
+
+test('archive picker and drop use the package upload endpoint', async ({ page }) => {
+  await page.route('**/api/v1/robot/packages/upload', route => {
+    const body = route.request().postDataBuffer()?.toString() ?? ''
+    expect(body).toContain('name="root"')
+    expect(body).toContain('name="file"; filename="dropped.tgz"')
+    return route.fulfill({ status: 201, json: { name: 'archive-example', valid: true } })
+  })
+  await openInstaller(page)
+  const chooser = page.waitForEvent('filechooser')
+  await page.getByRole('button', { name: '选择压缩包', exact: true }).click()
+  await (await chooser).setFiles({
+    name: 'picked.zip',
+    mimeType: 'application/zip',
+    buffer: Buffer.from('fixture')
+  })
+  await expect(page.getByRole('status')).toContainText('picked.zip')
+  const dropZone = page.getByRole('button', { name: '重新选择文件夹', exact: true })
+  await dropZone.evaluate(node => {
+    const dataTransfer = new DataTransfer()
+    dataTransfer.items.add(new File(['fixture'], 'dropped.tgz'))
+    node.dispatchEvent(new DragEvent('drop', { dataTransfer, bubbles: true, cancelable: true }))
+  })
+  await expect(page.getByRole('status')).toContainText('dropped.tgz')
+  await page.getByRole('button', { name: '安装', exact: true }).click()
+  await expect(page.getByRole('status')).toContainText('archive-example · 已安装')
+  await expect(page).toHaveTitle('安装后已刷新')
+})

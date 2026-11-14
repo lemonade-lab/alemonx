@@ -53,18 +53,18 @@ export default function ModalEditMessage({
       className="testone-modal-surface bg-black/50"
     >
       <div
-        className="max-h-[calc(100dvh-32px)] w-[min(600px,calc(100vw-32px))] overflow-y-auto rounded-lg bg-[var(--editor-background)] p-4 shadow-lg"
+        className="modal-surface grid gap-3 max-h-[calc(100dvh-32px)] w-[min(600px,calc(100vw-32px))]"
       >
-        <div className="mb-4">
+        <header>
           <h2 className="text-lg font-bold text-[var(--foreground)]">
             编辑消息
           </h2>
           <p className="text-xs text-[var(--descriptionForeground)] mt-1">
             来自 @{item.UserName}
           </p>
-        </div>
+        </header>
 
-        <div className="mb-4">
+        <div>
           <textarea
             value={editText}
             onChange={e => setEditText(e.target.value)}
@@ -78,7 +78,7 @@ export default function ModalEditMessage({
           </p>
         </div>
 
-        <div className="flex gap-2 justify-end">
+        <footer className="flex gap-2 justify-end">
           <Button onClick={onCancel} className="px-4 py-2">
             取消
           </Button>
@@ -89,7 +89,7 @@ export default function ModalEditMessage({
           >
             确认编辑
           </Button>
-        </div>
+        </footer>
       </div>
     </Modal>
   );

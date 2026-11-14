@@ -10,6 +10,7 @@ import {
   OfficialResourceInfo
 } from './OfficialResources'
 import { useStoreState } from '../store/guideStore'
+import { recordBrowserSite } from '../store/browserRecentStore'
 import { useAutoSave } from '../hooks/useAutoSave'
 import {
   lazy,
@@ -215,6 +216,7 @@ import {
   useSetAppEnabledMutation,
   useMoveAppMutation,
   useRobotTasksQuery,
+  useRobotTaskQuery,
   useControlRobotTaskMutation,
   useLazyRobotTaskQuery,
   useSaveRobotLoginMutation,
@@ -1050,7 +1052,7 @@ export function DirectoryPicker({
       {newFolderName !== '' && (
         <Modal open ariaLabel="新建文件夹">
           <form
-            className="grid w-full max-w-sm gap-3 rounded-xl bg-white p-4 shadow-xl"
+            className="modal-surface grid w-full max-w-sm gap-3"
             onSubmit={event => {
               event.preventDefault()
               const name = newFolderName.trim()
@@ -1059,7 +1061,9 @@ export function DirectoryPicker({
               setNewFolderName(' ')
             }}
           >
-            <strong className="text-sm text-slate-800">新建文件夹</strong>
+            <header>
+              <strong className="text-sm">新建文件夹</strong>
+            </header>
             <input
               autoFocus
               className="h-9 rounded-md border border-slate-300 px-2 text-sm outline-none focus:border-brand-600"
@@ -1067,7 +1071,7 @@ export function DirectoryPicker({
               onChange={event => setNewFolderName(event.target.value)}
               placeholder="文件夹名称"
             />
-            <div className="flex justify-end gap-2">
+            <footer className="flex justify-end gap-2">
               <button
                 type="button"
                 className="secondary-button"
@@ -1081,7 +1085,7 @@ export function DirectoryPicker({
               >
                 新建
               </button>
-            </div>
+            </footer>
           </form>
         </Modal>
       )}
@@ -1145,19 +1149,19 @@ export function Dashboard({
     () => navigationFromURL.section
   )
   const [file, setFile] = useStoreState('.npmrc')
-  const [output, setOutput] = useStoreState('')
-  const [outputFailed, setOutputFailed] = useStoreState(false)
-  const [operationLogMinimized, setOperationLogMinimized] = useStoreState(false)
-  const [operationNotices, setOperationNotices] = useState<HostToast[]>([])
+  const [operationNotices, setOperationNotices] = useStoreState<
+    (HostToast & { taskRoot?: string })[]
+  >([])
+  const [taskWindowTarget, setTaskWindowTarget] = useStoreState<{
+    id: string
+    root: string
+    revision: string
+  } | null>(null)
   const [consoleOpen, setConsoleOpen] = useStoreState(false)
   const [consoleMinimized, setConsoleMinimized] = useStoreState(false)
   const [foregroundLogsOpen, setForegroundLogsOpen] = useStoreState(false)
   const [foregroundLogsMinimized, setForegroundLogsMinimized] =
     useStoreState(false)
-  const [foregroundLogTask, setForegroundLogTask] = useState<{
-    id: string
-    name: string
-  } | null>(null)
   const [serviceWebview, setServiceWebview] = useStoreState<{
     title: string
     url: string
@@ -1404,6 +1408,12 @@ export function Dashboard({
   )
   const activeProject = projects.find(item => item.id === activeProjectID)
   const root = activeProject?.path ?? ''
+  const openTerminal = () => {
+    if (openNativeRobotTool('terminal', root)) return
+    setConsoleOpen(true)
+    setConsoleMinimized(false)
+    activateFloatingWindow('terminal')
+  }
   useEffect(() => {
     const toggleTerminal = () => {
       if (openNativeRobotTool('terminal', root)) return
@@ -1673,36 +1683,6 @@ export function Dashboard({
     },
     []
   )
-  // Details are reserved for operations whose command output is useful for
-  // diagnosis. Form validation and ordinary save/status feedback belongs in a
-  // transient notification, never in a draggable log window.
-  const nativeOperationOutput = useRef({ output: '', failed: false })
-  const operationOutputChannel = useRef<BroadcastChannel | null>(null)
-  useEffect(() => {
-    if (!bridge) return
-    const channel = new BroadcastChannel('alx-native-operation-log')
-    operationOutputChannel.current = channel
-    channel.onmessage = ({ data }) => {
-      if (data === 'request') channel.postMessage(nativeOperationOutput.current)
-    }
-    return () => {
-      operationOutputChannel.current = null
-      channel.close()
-    }
-  }, [])
-  const showOperationDetail = (message: string, failed = false) => {
-    if (bridge) {
-      const shouldOpen = !nativeOperationOutput.current.output || failed
-      nativeOperationOutput.current = { output: message, failed }
-      operationOutputChannel.current?.postMessage(nativeOperationOutput.current)
-      openNativeWindow('operation-log', shouldOpen ? '' : 'update')
-      return
-    }
-    setOutput(message)
-    setOutputFailed(failed)
-    setOperationLogMinimized(false)
-  }
-  const showOutput = showOperationDetail
   const showOperationNotice = (
     message: string,
     type: HostToast['type'] = 'info',
@@ -1728,6 +1708,30 @@ export function Dashboard({
               : '提示'),
         message: conciseMessage,
         duration: type === 'error' ? 8000 : 4500
+      }
+    ])
+  }
+  const dismissOperationNotice = useCallback(
+    (id: string) =>
+      setOperationNotices(items => items.filter(item => item.id !== id)),
+    [setOperationNotices]
+  )
+  const showTaskNotice = (
+    taskId: string,
+    taskRoot: string,
+    message: string,
+    type: HostToast['type'] = 'info'
+  ) => {
+    setOperationNotices(items => [
+      ...items.filter(item => item.id !== taskId).slice(-4),
+      {
+        id: taskId,
+        kind: type === 'error' ? 'notification' : 'message',
+        type,
+        title: message,
+        duration: type === 'error' ? 8000 : 4500,
+        actionLabel: '查看任务',
+        taskRoot
       }
     ])
   }
@@ -2721,6 +2725,7 @@ export function Dashboard({
       showOperationNotice('请先在左侧添加机器人目录。', 'warning')
       return false
     }
+    let taskId = ''
     setBusy(true)
     try {
       if (method === 'GET') {
@@ -2758,41 +2763,29 @@ export function Dashboard({
         return true
       }
       const task = await startRobotTask(data).unwrap()
+      taskId = task.id
+      if (task.status === 'failed' || task.status === 'cancelled')
+        throw new Error(task.error || task.output || '操作未完成。')
       if (data.action === 'dev' || data.action === 'app') {
-        setOutput('')
-        // Starting a robot should surface its supervised output in the
-        // dedicated foreground-log window. The interactive terminal is a
-        // separate user tool and must never open as a side effect of launch.
-        if (!openNativeRobotTool('foreground-logs', data.root)) {
-          setForegroundLogsOpen(true)
-          setForegroundLogsMinimized(false)
-          activateFloatingWindow('foregroundLogs')
-        }
+        showTaskNotice(
+          taskId,
+          data.root,
+          data.action === 'dev' ? '开发运行已启动' : '前台运行已启动',
+          'success'
+        )
         return true
       }
       if (
-        data.action === 'dev-stop' ||
-        data.action === 'app-stop' ||
-        data.action === 'pm2-process-stop'
+        task.status === 'running' &&
+        ['dev-stop', 'app-stop', 'pm2-process-stop'].includes(data.action)
       ) {
-        // Stopping is asynchronous: the task state keeps only the affected
-        // runtime controls disabled. A PM2 command may be accepted before its
-        // completion event arrives, so never leave the confirmation dialog in
-        // “处理中”; the PM2 status stream is authoritative for its final state.
-        if (data.action !== 'pm2-process-stop')
-          showOutput(task.output || '已请求停止，正在等待进程退出…')
-        return task.status !== 'failed'
+        showTaskNotice(taskId, data.root, '已请求停止，正在等待进程退出')
+        return true
       }
-      showOutput('操作已开始，正在等待完成…')
+      if (task.status === 'running')
+        showTaskNotice(taskId, data.root, '正在执行')
       const current =
-        task.status && task.status !== 'running'
-          ? task
-          : await waitForRobotTask(task.id, {
-              timeoutMs:
-                data.action === 'dev-stop' || data.action === 'app-stop'
-                  ? 12_000
-                  : undefined
-            })
+        task.status === 'running' ? await waitForRobotTask(taskId) : task
       dispatch(
         workspaceApi.util.invalidateTags([{ type: 'Runtime', id: root }])
       )
@@ -2833,16 +2826,12 @@ export function Dashboard({
       }
       if (current.status === 'failed' || current.status === 'cancelled')
         throw new Error(current.error || current.output || '操作失败。')
-      showOutput(current.output ?? '操作完成。')
+      showTaskNotice(taskId, data.root, '操作完成', 'success')
       return true
     } catch (reason) {
-      showOutput(
-        operationErrorMessage(
-          reason,
-          '操作未完成，请在右上角任务记录中查看详情。'
-        ),
-        true
-      )
+      if (taskId) showTaskNotice(taskId, data.root, '操作未完成', 'error')
+      else
+        showOperationNotice(operationErrorMessage(reason, '操作未完成。'), 'error')
       return false
     } finally {
       setBusy(false)
@@ -2994,7 +2983,6 @@ export function Dashboard({
     // A newly added robot should open on its operational overview. Configuration
     // remains an explicit destination from the robot navigation.
     setSection('runtime')
-    setOutput('')
   }
   async function cloneRobotRepository(
     repository: string,
@@ -3133,7 +3121,6 @@ export function Dashboard({
     if (!pendingProjectRemoval) return
     void changeRobotList({ action: 'remove', id: pendingProjectRemoval })
     setPendingProjectRemoval(null)
-    setOutput('')
   }
 
   // AI is a content page, not an overlay. Any normal navigation must leave it
@@ -3146,7 +3133,6 @@ export function Dashboard({
     markUserNavigation()
     closeTemporaryContentPage()
     setSection(nextSection)
-    setOutput('')
     if (nextSection === 'npmrc') {
       setFile('.npmrc')
       api('GET', { root, file: '.npmrc' })
@@ -3171,8 +3157,8 @@ export function Dashboard({
     setSystemFeature(null)
     setSystemWindowFeature(null)
     setSystemWindows({})
+    setTaskWindowTarget(null)
     setPage(nextPage)
-    setOutput('')
   }
   function openAI() {
     markUserNavigation()
@@ -3180,7 +3166,15 @@ export function Dashboard({
     setSystemFeature(null)
     setPage('robot')
     setAIOpen(true)
-    setOutput('')
+  }
+  function openOperationTask(taskRoot: string, taskId: string) {
+    if (openNativeRobotTool('tasks', taskRoot, taskId)) return
+    setTaskWindowTarget({
+      root: taskRoot,
+      id: taskId,
+      revision: createRandomID()
+    })
+    selectSystemFeature('tasks')
   }
   function closeSystemWindow(feature: SystemFeature) {
     setSystemWindows(current => {
@@ -3189,6 +3183,7 @@ export function Dashboard({
       return remaining
     })
     setSystemWindowFeature(current => (current === feature ? null : current))
+    if (feature === 'tasks') setTaskWindowTarget(null)
   }
   function selectSystemFeature(
     nextFeature: SystemFeature,
@@ -3214,7 +3209,6 @@ export function Dashboard({
       [nextFeature]: { minimized: false }
     }))
     activateFloatingWindow(`system:${nextFeature}`)
-    setOutput('')
   }
   selectSystemFeatureRef.current = selectSystemFeature
   function openMiniBrowser(
@@ -3336,49 +3330,44 @@ export function Dashboard({
           onChange={nextContent => updateFileContent('.env', nextContent)}
         />
       )}
-      {section === 'config' && (
-        <section className="config-form">
-          {configEditor === 'visual' ? (
-            <>
-              <RobotConfigForm
-                root={root}
-                onInstall={(action, target) =>
-                  api('POST', { root, action, package: target })
-                }
-                content={configContent}
-                onChange={next => updateFileContent('alemon.config.yaml', next)}
-                toolbar={
-                  <EditorMode
-                    active={configEditor}
-                    onVisual={openVisualConfig}
-                    onText={openTextConfig}
-                  />
-                }
-                extensionConfig={
-                  <ProjectExtensionConfigsPanel
-                    configs={extensionConfigs}
-                    loading={extensionConfigsLoading}
-                    onSave={(pkg, values) => savePackageConfig(pkg, values)}
-                  />
-                }
+      {section === 'config' &&
+        (configEditor === 'visual' ? (
+          <RobotConfigForm
+            root={root}
+            onInstall={(action, target) =>
+              api('POST', { root, action, package: target })
+            }
+            content={configContent}
+            onChange={next => updateFileContent('alemon.config.yaml', next)}
+            toolbar={
+              <EditorMode
+                active={configEditor}
+                onVisual={openVisualConfig}
+                onText={openTextConfig}
               />
-            </>
-          ) : (
-            <FileEditor
-              toolbar={
-                <EditorMode
-                  active={configEditor}
-                  onVisual={openVisualConfig}
-                  onText={openTextConfig}
-                />
-              }
-              content={content}
-              placeholder="配置内容"
-              onChange={nextContent => updateFileContent(file, nextContent)}
-            />
-          )}
-        </section>
-      )}
+            }
+            extensionConfig={
+              <ProjectExtensionConfigsPanel
+                configs={extensionConfigs}
+                loading={extensionConfigsLoading}
+                onSave={(pkg, values) => savePackageConfig(pkg, values)}
+              />
+            }
+          />
+        ) : (
+          <FileEditor
+            toolbar={
+              <EditorMode
+                active={configEditor}
+                onVisual={openVisualConfig}
+                onText={openTextConfig}
+              />
+            }
+            content={content}
+            placeholder="配置内容"
+            onChange={nextContent => updateFileContent(file, nextContent)}
+          />
+        ))}
       {section === 'runtime' && (
         <RuntimePanel
           overview={runtime}
@@ -3421,25 +3410,11 @@ export function Dashboard({
           }}
           onOpenForegroundLogs={() => {
           if (openNativeRobotTool('foreground-logs', root)) return
-            setForegroundLogTask(null)
             setForegroundLogsOpen(true)
             setForegroundLogsMinimized(false)
             activateFloatingWindow('foregroundLogs')
           }}
-          onOpenScriptLogs={task => {
-            if (openNativeRobotTool('foreground-logs', root, task.id, task.name)) return
-            setForegroundLogTask(task)
-            setForegroundLogsOpen(true)
-            setForegroundLogsMinimized(false)
-            activateFloatingWindow('foregroundLogs')
-          }}
-          onClearOperationLog={() => {
-            nativeOperationOutput.current = { output: '', failed: false }
-            operationOutputChannel.current?.postMessage(nativeOperationOutput.current)
-            setOutput('')
-            setOutputFailed(false)
-            setOperationLogMinimized(false)
-          }}
+          onOpenScriptLogs={taskId => openOperationTask(root, taskId)}
           onRun={(action, packageName, message) =>
             api('POST', {
               root,
@@ -3539,7 +3514,12 @@ export function Dashboard({
     ) : feature === 'accounts' ? (
       <AccountManagementPage />
     ) : feature === 'tasks' ? (
-      <OperationTasksPage root={root} sidebarLayout={sidebarLayout} />
+      <OperationTasksPage
+        key={taskWindowTarget?.revision}
+        root={taskWindowTarget?.root ?? root}
+        initialTaskId={taskWindowTarget?.id}
+        sidebarLayout={sidebarLayout}
+      />
     ) : feature === 'environment' ? (
       <EnvironmentPage
         report={report}
@@ -3632,37 +3612,9 @@ export function Dashboard({
                 onVersionChange={setReleaseVersion}
               />
             )}
-            {output && (
-              <OperationLog
-                output={output}
-                failed={outputFailed}
-                minimized={operationLogMinimized}
-                onMinimize={() => setOperationLogMinimized(true)}
-                onRestore={() => setOperationLogMinimized(false)}
-                onClose={() => {
-                  setOutput('')
-                  setOutputFailed(false)
-                  setOperationLogMinimized(false)
-                }}
-              />
-            )}
           </section>
         )}
         {['plugins', 'connections', 'modules'].includes(page) && catalogContent}
-        {page !== 'build' && output && (
-          <OperationLog
-            output={output}
-            failed={outputFailed}
-            minimized={operationLogMinimized}
-            onMinimize={() => setOperationLogMinimized(true)}
-            onRestore={() => setOperationLogMinimized(false)}
-            onClose={() => {
-              setOutput('')
-              setOutputFailed(false)
-              setOperationLogMinimized(false)
-            }}
-          />
-        )}
       </>
     ) : robotListLoading ? (
       <p role="status" className="p-5">正在读取账户机器人列表…</p>
@@ -3683,9 +3635,12 @@ export function Dashboard({
     <>
       <HostUiToasts
         toasts={operationNotices}
-        onDismiss={id =>
-          setOperationNotices(items => items.filter(item => item.id !== id))
-        }
+        onDismiss={dismissOperationNotice}
+        onAction={toast => {
+          if (toast.taskRoot === undefined) return
+          openOperationTask(toast.taskRoot, toast.id)
+          dismissOperationNotice(toast.id)
+        }}
       />
       <Modal
         open={Boolean(loginDialog)}
@@ -3694,7 +3649,7 @@ export function Dashboard({
       >
         {loginDialog && (
           <section
-            className="grid w-full max-w-sm gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-[0_20px_58px_rgb(28_26_23/0.22)]"
+            className="modal-surface grid w-full max-w-sm gap-4"
             onMouseDown={event => event.stopPropagation()}
           >
             <header className="flex items-start justify-between gap-3">
@@ -3727,7 +3682,7 @@ export function Dashboard({
                   : '请使用手机扫码完成登录'}
               </p>
             </div>
-            <div className="flex gap-2">
+            <footer className="flex flex-wrap gap-2">
               <Button
                 className="min-w-0 flex-1"
                 onClick={() =>
@@ -3739,7 +3694,7 @@ export function Dashboard({
               <Button variant="secondary" onClick={() => void stopLoginRobot()}>
                 停止机器人
               </Button>
-            </div>
+            </footer>
           </section>
         )}
       </Modal>
@@ -3759,14 +3714,6 @@ export function Dashboard({
               >
                 <Settings className="size-4" />
               </Button>
-              <a
-                className="topbar-brand truncate px-1 text-[0.82rem] font-semibold tracking-[-0.01em] text-slate-800 no-underline transition-colors hover:text-brand-600 max-[700px]:hidden dark:text-slate-200"
-                href="https://alemonjs.com/"
-                target="_blank"
-                rel="noreferrer"
-              >
-                ALemonX
-              </a>
               <Button
                 variant="icon"
                 onClick={() => setSidebarCollapsed(value => !value)}
@@ -3783,6 +3730,14 @@ export function Dashboard({
             </div>
             <div className="ml-auto flex shrink-0 items-center gap-1">
               <WorkbenchQuickActions developerMode={developerMode} />
+              <Button
+                variant="icon"
+                onClick={openTerminal}
+                aria-label="打开终端"
+                title="终端"
+              >
+                <Terminal className="size-4" aria-hidden="true" />
+              </Button>
               {robotNavigationProject && (
                 <Button
                   variant="icon"
@@ -3861,16 +3816,16 @@ export function Dashboard({
             // 弹窗误关。用户应通过取消或保存来关闭。
           >
             <form
-              className="grid w-full max-w-sm gap-4 rounded-xl border border-slate-200 bg-white p-5 shadow-[0_20px_58px_rgb(28_26_23/0.22)]"
+              className="modal-surface grid w-full max-w-sm gap-4"
               onSubmit={event => {
                 event.preventDefault()
                 void confirmAppPort()
               }}
               onMouseDown={event => event.stopPropagation()}
             >
-              <div className="grid gap-1">
+              <header className="grid gap-1">
                 <strong className="text-sm text-ink-950">配置应用端口</strong>
-              </div>
+              </header>
               <label className="grid gap-1.5 text-xs font-medium text-slate-600">
                 应用端口（1-65535）
                 <input
@@ -3902,19 +3857,19 @@ export function Dashboard({
           </Modal>
           <Modal open={testPortDialog} ariaLabel="设置服务端口">
             <form
-              className="grid w-full max-w-sm gap-4 rounded-xl border border-slate-200 bg-white p-5 shadow-[0_20px_58px_rgb(28_26_23/0.22)]"
+              className="modal-surface grid w-full max-w-sm gap-4"
               onSubmit={event => {
                 event.preventDefault()
                 void confirmTestPort()
               }}
               onMouseDown={event => event.stopPropagation()}
             >
-              <div className="grid gap-1">
+              <header className="grid gap-1">
                 <strong className="text-sm text-ink-950">配置服务端口</strong>
                 <span className="text-xs text-slate-500">
                   用于当前机器人的测试台（testone）。
                 </span>
-              </div>
+              </header>
               <label className="grid gap-1.5 text-xs font-medium text-slate-600">
                 服务端口（1-65535）
                 <input
@@ -3944,14 +3899,14 @@ export function Dashboard({
           </Modal>
           <Modal open={livePortDialog} ariaLabel="配置在线聊天端口">
             <form
-              className="grid w-full max-w-sm gap-4 rounded-xl border border-slate-200 bg-white p-5 shadow-[0_20px_58px_rgb(28_26_23/0.22)]"
+              className="modal-surface grid w-full max-w-sm gap-4"
               onSubmit={event => {
                 event.preventDefault()
                 void confirmLivePort()
               }}
               onMouseDown={event => event.stopPropagation()}
             >
-              <div className="grid gap-1">
+              <header className="grid gap-1">
                 <strong className="text-sm text-ink-950">
                   配置 CBP 服务端口
                 </strong>
@@ -3959,7 +3914,7 @@ export function Dashboard({
                   在线聊天通过 AlemonJS 已登录机器人的 CBP
                   连接通信。保存后将打开登录并启动弹窗。
                 </span>
-              </div>
+              </header>
               <label className="grid gap-1.5 text-xs font-medium text-slate-600">
                 CBP 服务端口（1-65535）
                 <input
@@ -4043,7 +3998,6 @@ export function Dashboard({
                 onSelect={id => {
                   openProject(id)
                   setSystemFeature(null)
-                  setOutput('')
                 }}
                 onRemove={removeProject}
               />
@@ -4060,12 +4014,7 @@ export function Dashboard({
                   catalogLoading={catalogLoading}
                   developerMode={developerMode}
                   dshOpen={aiOpen}
-                  onOpenConsole={() => {
-                    if (openNativeRobotTool('terminal', root)) return
-                    setConsoleOpen(true)
-                    setConsoleMinimized(false)
-                    activateFloatingWindow('terminal')
-                  }}
+                  onOpenConsole={openTerminal}
                   onOpenAI={openAI}
                   onOpenOps={() => {
                     if (openNativeRobotTool('ops', root)) return
@@ -4087,7 +4036,6 @@ export function Dashboard({
                   onBuildMode={mode => {
                     markUserNavigation()
                     setBuildMode(mode)
-                    setOutput('')
                   }}
                   onCatalog={title => {
                     setCatalogTitle(title)
@@ -4163,10 +4111,6 @@ export function Dashboard({
           logsOnly
           minimized={foregroundLogsMinimized}
           root={root}
-          taskId={foregroundLogTask?.id}
-          logTitle={
-            foregroundLogTask ? `${foregroundLogTask.name} 日志` : undefined
-          }
           zIndex={windowLayers.foregroundLogs}
           onOpenRuntime={() => {
             markUserNavigation()
@@ -5095,16 +5039,19 @@ function GitCloneDialog({
       ariaLabel={mode === 'package' ? '克隆插件包' : '从 Git 克隆机器人'}
     >
       <section
-        className="git-dialog git-clone-dialog grid max-h-[min(720px,calc(100dvh-32px))] w-full max-w-xl grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_22px_58px_rgb(28_26_23/0.25)]"
+        className="git-dialog git-clone-dialog max-h-[calc(100dvh-2rem)] grid-rows-[auto_minmax(0,1fr)_auto]"
         role="dialog"
         aria-label={mode === 'package' ? '克隆插件包' : '从 Git 克隆机器人'}
       >
-        <header className="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
-          <div className="grid gap-1">
-            <strong className="text-sm font-semibold text-slate-900">
+        <header className="gap-3">
+          <span className="inline-flex size-9 shrink-0 items-center justify-center rounded-lg bg-(--theme-accent-soft) text-(--theme-accent-text)">
+            <GitBranch className="size-4" aria-hidden="true" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <strong className="text-sm font-semibold text-(--theme-text-strong)">
               {mode === 'package' ? '克隆插件包' : '添加 Git 仓库'}
             </strong>
-            <span className="text-xs text-slate-500">
+            <span className="text-xs text-(--theme-text-muted)">
               {mode === 'package'
                 ? '克隆到当前机器人的背包，完成后即可管理和启用。'
                 : '下载完成后会自动加入机器人目录。'}
@@ -5127,7 +5074,7 @@ function GitCloneDialog({
         </header>
         {authorizationOpen ? (
           <form
-            className="grid gap-4 overflow-auto p-4"
+            className="git-clone-form grid min-h-0 content-start gap-4 overflow-auto"
             onSubmit={event => {
               event.preventDefault()
               void submitClone({
@@ -5137,17 +5084,17 @@ function GitCloneDialog({
             }}
           >
             <div className="grid gap-1">
-              <strong className="text-sm font-semibold text-slate-900">
+              <strong className="text-sm font-semibold text-(--theme-text-strong)">
                 HTTPS 授权
               </strong>
               <p className="text-xs leading-5 text-slate-500">
                 该仓库需要身份验证。请输入代码平台账号和个人访问令牌后重试；令牌只用于本次克隆，不会写入仓库地址、配置或操作日志。
               </p>
             </div>
-            <label className="grid gap-1 text-xs font-semibold text-slate-600">
+            <label className="grid gap-1 text-xs font-semibold text-(--theme-text-secondary)">
               账号
               <input
-                className="h-9 rounded-md border border-slate-300 bg-white px-2.5 text-sm font-normal text-slate-800 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
+                className="git-clone-input"
                 value={authorizationUsername}
                 onChange={event => setAuthorizationUsername(event.target.value)}
                 autoComplete="username"
@@ -5160,10 +5107,10 @@ function GitCloneDialog({
                 </small>
               )}
             </label>
-            <label className="grid gap-1 text-xs font-semibold text-slate-600">
+            <label className="grid gap-1 text-xs font-semibold text-(--theme-text-secondary)">
               个人访问令牌
               <input
-                className="h-9 rounded-md border border-slate-300 bg-white px-2.5 text-sm font-normal text-slate-800 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
+                className="git-clone-input"
                 value={authorizationToken}
                 onChange={event => setAuthorizationToken(event.target.value)}
                 autoComplete="new-password"
@@ -5198,28 +5145,8 @@ function GitCloneDialog({
             </footer>
           </form>
         ) : (
-          <div className="grid gap-3 overflow-auto p-4">
-            <section aria-label="仓库连接方式">
-              <header className="flex items-center justify-between gap-2">
-                <small
-                  className="truncate text-[11px] text-slate-500"
-                  title={
-                    connection === 'ssh' && !sshLoading && !sshKeys.length
-                      ? '未配置 SSH 密钥；请在「设置 → SSH 管理」中生成并添加公钥，或改用 HTTPS。'
-                      : connection === 'https'
-                        ? 'HTTPS 可直接使用；访问私有仓库时，需要在代码平台完成在线授权。'
-                        : undefined
-                  }
-                >
-                  {sshLoading
-                    ? '正在检查 SSH…'
-                    : connection === 'ssh' && !sshKeys.length
-                      ? 'SSH 未配置'
-                      : connection === 'https'
-                        ? ''
-                        : ''}
-                </small>
-              </header>
+          <div className="git-clone-form grid min-h-0 content-start gap-4 overflow-auto">
+            <section className="grid gap-3" aria-label="仓库连接">
               <Tabs
                 ariaLabel="仓库连接方式"
                 items={[
@@ -5238,15 +5165,21 @@ function GitCloneDialog({
                 onChange={setConnection}
                 value={connection}
                 variant="segmented"
+                className="git-clone-protocol w-full rounded-lg bg-(--theme-surface-raised) p-1"
               />
-            </section>
-            <section className="grid gap-3">
-              <label className="grid gap-1 text-xs font-semibold text-slate-600">
+              {connection === 'ssh' && (sshLoading || !sshKeys.length) && (
+                <p className="m-0 text-xs text-(--theme-text-muted)" role="status">
+                  {sshLoading
+                    ? '正在检查 SSH…'
+                    : 'SSH 未配置。可在设置中添加密钥，或切换到 HTTPS。'}
+                </p>
+              )}
+              <label className="grid gap-1 text-xs font-semibold text-(--theme-text-secondary)">
                 <span className="flex min-w-0 items-center justify-between gap-2">
                   <span>仓库地址</span>
                 </span>
                 <input
-                  className="h-9 rounded-md border border-slate-300 bg-white px-2.5 text-sm font-normal text-slate-800 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
+                  className="git-clone-input"
                   autoFocus
                   value={repository}
                   onChange={event => {
@@ -5277,9 +5210,12 @@ function GitCloneDialog({
                   </small>
                 )}
               </label>
-              <div className="grid gap-3 sm:grid-cols-2">
+            </section>
+            <fieldset className="git-clone-group min-w-0">
+              <legend>克隆设置</legend>
+              <div className="git-clone-fields grid gap-3">
                 {mode === 'package' ? (
-                  <label className="grid gap-1 text-xs font-semibold text-slate-600">
+                  <label className="grid gap-1 text-xs font-semibold text-(--theme-text-secondary)">
                     <span className="flex items-center gap-1.5">
                       克隆分支
                       {branchesLoading && (
@@ -5289,7 +5225,7 @@ function GitCloneDialog({
                       )}
                     </span>
                     <select
-                      className="h-9 rounded-md border border-slate-300 bg-white px-2.5 text-sm font-normal text-slate-800 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100 disabled:bg-slate-100"
+                      className="git-clone-input"
                       value={branch}
                       onChange={event => setBranch(event.target.value)}
                       disabled={!branches.length || branchesLoading}
@@ -5307,7 +5243,7 @@ function GitCloneDialog({
                     </select>
                   </label>
                 ) : (
-                  <label className="grid gap-1 text-xs font-semibold text-slate-600">
+                  <label className="grid gap-1 text-xs font-semibold text-(--theme-text-secondary)">
                     <span className="flex items-center gap-1.5">
                       分支{branchesLoading ? '' : '（可选）'}
                       {branchesLoading && (
@@ -5317,7 +5253,7 @@ function GitCloneDialog({
                       )}
                     </span>
                     <select
-                      className="h-9 rounded-md border border-slate-300 bg-white px-2.5 text-sm font-normal text-slate-800 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100 disabled:bg-slate-100"
+                      className="git-clone-input"
                       value={branch}
                       onChange={event => setBranch(event.target.value)}
                       disabled={!branches.length || branchesLoading}
@@ -5333,10 +5269,10 @@ function GitCloneDialog({
                     </select>
                   </label>
                 )}
-                <label className="grid gap-1 text-xs font-semibold text-slate-600">
+                <label className="grid gap-1 text-xs font-semibold text-(--theme-text-secondary)">
                   克隆深度
                   <select
-                    className="h-9 rounded-md border border-slate-300 bg-white px-2.5 text-sm font-normal text-slate-800 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
+                    className="git-clone-input"
                     value={depth}
                     onChange={event => setDepth(Number(event.target.value))}
                   >
@@ -5346,10 +5282,10 @@ function GitCloneDialog({
                     <option value={0}>完整历史</option>
                   </select>
                 </label>
-                <label className="grid gap-1 text-xs font-semibold text-slate-600">
+                <label className="grid gap-1 text-xs font-semibold text-(--theme-text-secondary)">
                   下载来源
                   <select
-                    className="h-9 rounded-md border border-slate-300 bg-white px-2.5 text-sm font-normal text-slate-800 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
+                    className="git-clone-input"
                     value={mirror}
                     onChange={event => setMirror(event.target.value)}
                   >
@@ -5361,67 +5297,68 @@ function GitCloneDialog({
                   </select>
                 </label>
               </div>
-            </section>
-            <section className="grid gap-3 sm:grid-cols-2">
-              <label className="grid gap-1 text-xs font-semibold text-slate-600">
-                {mode === 'package' ? '存放位置' : '所在文件夹'}
-                {mode === 'package' ? (
-                  <span
-                    className="h-9 truncate rounded-md border border-slate-200 bg-slate-50 px-2.5 leading-9 text-sm font-normal text-slate-600"
-                    title={destination}
-                  >
-                    当前机器人背包（packages）
-                  </span>
-                ) : (
-                  <button
-                    type="button"
-                    className="h-9 truncate rounded-md border border-slate-300 bg-white px-2.5 text-left text-sm font-normal text-slate-700"
-                    onClick={onChooseDestination}
-                  >
-                    {gitDestinationLabel(destination)}
-                  </button>
-                )}
-              </label>
-              <label className="grid gap-1 text-xs font-semibold text-slate-600">
-                <span className="flex min-w-0 items-center justify-between gap-2">
-                  <span>新目录名称</span>
-                  {target?.exists ? (
-                    <small
-                      className="truncate font-normal text-red-700"
-                      title={`目标已存在：${target.path}`}
+            </fieldset>
+            <fieldset className="git-clone-group min-w-0">
+              <legend>存放位置</legend>
+              <div className="git-clone-fields grid gap-3">
+                <label className="grid gap-1 text-xs font-semibold text-(--theme-text-secondary)">
+                  所在文件夹
+                  {mode === 'package' ? (
+                    <span
+                      className="git-clone-input truncate leading-9"
+                      title={destination}
                     >
-                      目标已存在
-                    </small>
-                  ) : target?.path ? null : targetError ? (
-                    <small
-                      className="truncate font-normal text-red-700"
-                      title={targetError}
+                      当前机器人背包（packages）
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      className="git-clone-input flex items-center gap-2 text-left"
+                      onClick={onChooseDestination}
+                      title={destination || undefined}
                     >
-                      无法检查目标
-                    </small>
-                  ) : null}
-                </span>
-                <input
-                  className={cn(
-                    'h-9 rounded-md border bg-white px-2.5 text-sm font-normal text-slate-800 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100',
-                    target?.exists || targetError
-                      ? 'border-red-400 focus:ring-red-100'
-                      : 'border-slate-300'
+                      <Folder className="size-4 shrink-0 text-(--theme-text-muted)" aria-hidden="true" />
+                      <span className="truncate">{gitDestinationLabel(destination)}</span>
+                    </button>
                   )}
-                  value={name}
-                  onChange={event => setName(event.target.value)}
-                  placeholder="默认使用仓库名"
-                />
-              </label>
-            </section>
+                </label>
+                <label className="grid gap-1 text-xs font-semibold text-(--theme-text-secondary)">
+                  <span className="flex min-w-0 items-center justify-between gap-2">
+                    <span>新目录名称</span>
+                    {target?.exists ? (
+                      <small
+                        className="truncate font-normal text-red-700"
+                        title={`目标已存在：${target.path}`}
+                      >
+                        目标已存在
+                      </small>
+                    ) : target?.path ? null : targetError ? (
+                      <small
+                        className="truncate font-normal text-red-700"
+                        title={targetError}
+                      >
+                        无法检查目标
+                      </small>
+                    ) : null}
+                  </span>
+                  <input
+                    className="git-clone-input"
+                    aria-invalid={Boolean(target?.exists || targetError)}
+                    value={name}
+                    onChange={event => setName(event.target.value)}
+                    placeholder="默认使用仓库名"
+                  />
+                </label>
+              </div>
+            </fieldset>
           </div>
         )}
         {!authorizationOpen && (
-          <footer className="flex justify-end gap-2 border-t border-slate-200 px-4 py-3">
+          <footer className="flex-wrap">
             {busy && (
-              <div className="mr-auto grid min-w-44 gap-1 self-center">
+              <div className="mr-auto grid min-w-0 flex-[1_1_10rem] gap-1 self-center">
                 <div className="flex justify-between text-[11px] text-slate-500">
-                  <span>{status}</span>
+                  <span className="min-w-0 truncate" title={status}>{status}</span>
                   <span>{progress}%</span>
                 </div>
                 <div className="h-1.5 overflow-hidden rounded-full bg-slate-200">
@@ -5684,9 +5621,11 @@ function ProjectItem({
 }
 function OperationTasksPage({
   root,
+  initialTaskId = '',
   sidebarLayout = false
 }: {
   root: string
+  initialTaskId?: string
   sidebarLayout?: boolean
 }) {
   const { data, isFetching } = useRobotTasksQuery(undefined, {
@@ -5711,9 +5650,25 @@ function OperationTasksPage({
   const tasks = (Array.isArray(data) ? data : []).filter(
     item => !root || !item.root || item.root === root
   )
-  const [selected, setSelected] = useStoreState<string>('')
-  const current = tasks.find(item => item.id === selected) ?? tasks[0]
+  const [selected, setSelected] = useStoreState(initialTaskId)
+  const currentId = selected || tasks[0]?.id || ''
+  const listedTask = tasks.find(item => item.id === currentId)
+  const { currentData: detail, isError: detailError, refetch: refetchDetail } =
+    useRobotTaskQuery(currentId, {
+      skip: !currentId,
+      refetchOnMountOrArgChange: true
+    })
+  const current = detail ?? listedTask
+  // The task list updates on status changes. Refresh only the selected running
+  // task so its output also advances between status changes.
+  useEffect(() => {
+    if (!currentId || current?.status !== 'running') return
+    const timer = window.setInterval(() => void refetchDetail(), 1500)
+    return () => window.clearInterval(timer)
+  }, [currentId, current?.status, refetchDetail])
   const visibleTasks = tasks.slice(0, 20)
+  if (current && !visibleTasks.some(item => item.id === current.id))
+    visibleTasks.push(current)
   const label = (action: string) =>
     action.startsWith('setup:')
       ? `系统插件 · ${action.split(':').slice(-1)[0]}`
@@ -5800,9 +5755,9 @@ function OperationTasksPage({
           </div>
         </SidebarWindowSectionNav>
       )}
-      {isFetching && !tasks.length ? (
+      {!currentId && isFetching ? (
         <p className="m-0 text-xs text-slate-500">正在读取任务…</p>
-      ) : !tasks.length ? (
+      ) : !currentId ? (
         <p className="m-0 text-xs text-slate-500">暂无与当前位置相关的任务。</p>
       ) : (
         <div className="grid gap-3">
@@ -5857,6 +5812,13 @@ function OperationTasksPage({
                 </button>
               ))}
             </div>
+          )}
+          {!current && (
+            <p className="m-0 text-xs text-slate-500" role="status">
+              {detailError
+                ? '无法读取该任务，任务可能已过期。'
+                : '正在读取任务…'}
+            </p>
           )}
           {current && (
             <div className="grid gap-2">
@@ -5916,9 +5878,13 @@ function OperationTasksPage({
                 </p>
               )}
               <pre className="overflow-auto rounded-lg bg-slate-950 p-2 text-[11px] leading-5 text-slate-200">
-                {current.status === 'failed'
-                  ? current.error
-                  : current.output || '正在执行…'}
+                {[
+                  current.error,
+                  current.output === current.error ? '' : current.output
+                ].filter(Boolean).join('\n\n') ||
+                  (current.status === 'running'
+                    ? '正在等待任务输出…'
+                    : '本次任务没有输出。')}
               </pre>
             </div>
           )}
@@ -6210,7 +6176,7 @@ function InvalidDirectoryDialog({
       className="bg-slate-950/25 p-6"
     >
       <section
-        className="invalid-directory-dialog"
+        className="modal-surface invalid-directory-dialog"
         role="dialog"
         aria-modal="true"
         aria-label="目录不是合法机器人项目"
@@ -7182,10 +7148,10 @@ function SystemPluginCenter({
           onClose={() => setInstallTarget(null)}
           ariaLabel={`下载${installTarget.name}`}
         >
-          <div className="grid w-full max-w-md gap-3 rounded-xl bg-white p-5 shadow-xl dark:bg-slate-900">
-            <strong className="text-base text-slate-900 dark:text-slate-100">
-              下载“{installTarget.name}”
-            </strong>
+          <div className="modal-surface grid w-full max-w-md gap-3">
+            <header>
+              <strong className="text-base">下载“{installTarget.name}”</strong>
+            </header>
             <label className="grid gap-1 text-xs font-semibold text-slate-500">
               版本
               {releasesFetching && releaseOptions.length === 0 ? (
@@ -7249,7 +7215,7 @@ function SystemPluginCenter({
                 detail="正在从选定 Release 下载、解包并校验插件；请保持此窗口打开。"
               />
             )}
-            <div className="flex justify-end gap-2">
+            <footer className="flex justify-end gap-2">
               <Button
                 variant="secondary"
                 size="sm"
@@ -7265,7 +7231,7 @@ function SystemPluginCenter({
               >
                 {installing ? '下载中…' : '下载'}
               </Button>
-            </div>
+            </footer>
           </div>
         </Modal>
       )}
@@ -7285,19 +7251,19 @@ function SystemPluginCenter({
           }}
           ariaLabel={`${developmentLogTarget.name}开发日志`}
         >
-          <div className="grid w-full max-w-2xl gap-3 rounded-xl bg-white p-5 shadow-xl dark:bg-slate-900">
-            <div>
+          <div className="modal-surface grid w-full max-w-2xl gap-3">
+            <header>
               <strong className="block text-base text-slate-900 dark:text-slate-100">
                 {developmentLogTarget.name} · 开发日志
               </strong>
               <code className="mt-1 block break-all text-xs text-slate-500">
                 {developmentLogTarget.source}
               </code>
-            </div>
+            </header>
             <pre className="max-h-[min(70vh,36rem)] overflow-auto rounded-lg bg-slate-950 p-3 text-[11px] leading-5 text-slate-100">
               {developmentLog || '暂无日志。'}
             </pre>
-            <div className="flex justify-end">
+            <footer className="flex justify-end">
               <Button
                 variant="secondary"
                 size="sm"
@@ -7308,7 +7274,7 @@ function SystemPluginCenter({
               >
                 关闭
               </Button>
-            </div>
+            </footer>
           </div>
         </Modal>
       )}
@@ -7318,8 +7284,8 @@ function SystemPluginCenter({
           onClose={() => setVersionTarget(null)}
           ariaLabel={`${versionTarget.name}版本管理`}
         >
-          <div className="grid max-h-[min(80vh,48rem)] w-full max-w-lg min-w-0 gap-3 overflow-y-auto rounded-xl bg-white p-5 shadow-xl dark:bg-slate-900">
-            <div className="min-w-0">
+          <div className="modal-surface grid max-h-[min(80vh,48rem)] w-full max-w-lg min-w-0 gap-3 overflow-y-auto">
+            <header className="min-w-0">
               <strong className="block break-words text-base text-slate-900 dark:text-slate-100">
                 {versionTarget.name} · 版本管理
               </strong>
@@ -7334,7 +7300,7 @@ function SystemPluginCenter({
                   缓存已超过上限，建议立即清理。
                 </p>
               )}
-            </div>
+            </header>
             <div className="grid gap-2">
               {versionsFetching && versionItems.length === 0 ? (
                 <p className="m-0 flex items-center gap-1.5 text-xs text-slate-500">
@@ -7402,7 +7368,7 @@ function SystemPluginCenter({
             <p className="m-0 text-xs leading-5 text-amber-600">
               切换版本会替换当前插件文件；插件自身管理的外部进程需要先停止。
             </p>
-            <div className="flex flex-wrap justify-end gap-2">
+            <footer className="flex flex-wrap justify-end gap-2">
               <Button
                 variant="secondary"
                 size="sm"
@@ -7427,7 +7393,7 @@ function SystemPluginCenter({
               >
                 关闭
               </Button>
-            </div>
+            </footer>
           </div>
         </Modal>
       )}
@@ -8334,8 +8300,8 @@ export function BackpackPanel({
           </p>
         ) : items.length ? (
           <div className="grid min-w-0 gap-3">
-            <div className="flex flex-wrap items-center gap-x-1.5 gap-y-2">
-              <label className="mr-2 flex h-9 min-w-36 flex-1 items-center gap-2 rounded-lg bg-slate-100 px-3 focus-within:ring-2 focus-within:ring-brand-500">
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="flex h-9 min-w-0 flex-[1_1_9rem] items-center gap-2 rounded-lg bg-slate-100 px-3 focus-within:ring-2 focus-within:ring-brand-500">
                 <Search className="size-3.5 text-slate-400" />
                 <input
                   className="h-8 min-w-0 flex-1 bg-transparent text-xs outline-none"
@@ -9496,12 +9462,10 @@ type PM2RegistrationSettings = {
 function PM2RuntimeCard({
   root,
   onOpenLogs,
-  onClearOperationLog,
   onProcessAction
 }: {
   root: string
   onOpenLogs: () => void
-  onClearOperationLog: () => void
   onProcessAction: (action: string, processID: number) => Promise<boolean>
 }) {
   const [items, setItems] = useStoreState<PM2Process[]>([])
@@ -9702,7 +9666,7 @@ function PM2RuntimeCard({
 
   return (
     <section className="overflow-hidden rounded-xl border border-slate-200 bg-white">
-      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
+      <header className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-slate-200 px-4 py-3">
         <div className="grid gap-1">
           <strong className="flex items-center gap-2 text-sm font-semibold text-slate-800">
             后台运行
@@ -9714,7 +9678,7 @@ function PM2RuntimeCard({
               : '尚未注册后台进程；注册后会在此实时显示。'}
           </span>
         </div>
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="ml-auto flex max-w-full flex-wrap items-center justify-end gap-2">
           <button
             className="secondary-button gap-1.5"
             disabled={!settings || settingsBusy}
@@ -9726,12 +9690,7 @@ function PM2RuntimeCard({
           <button
             className="primary-button gap-1.5"
             disabled={!settings || settingsBusy}
-            onClick={() => {
-              // Registration is synchronous and has its own inline error.
-              // Do not leave an unrelated command-result window in front of it.
-              onClearOperationLog()
-              setRegisterOpen(true)
-            }}
+            onClick={() => setRegisterOpen(true)}
           >
             <Play className="size-4" />
             {needsApply
@@ -9758,28 +9717,30 @@ function PM2RuntimeCard({
               className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3 text-xs"
               key={item.id}
             >
-              <strong className="min-w-32 text-slate-800">{item.name}</strong>
-              <span
-                className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 font-medium ${statusTone(item.status)}`}
-              >
-                <i className="inline-block size-1.5 rounded-full bg-current" />
-                {item.status}
-              </span>
-              <span className="font-mono text-slate-500">
-                PID {item.pid || '—'}
-              </span>
-              <span className="font-mono text-slate-500">
-                CPU {item.cpu ? `${item.cpu.toFixed(1)}%` : '—'}
-              </span>
-              <span className="font-mono text-slate-500">
-                内存{' '}
-                {item.memory
-                  ? `${(item.memory / 1024 / 1024).toFixed(1)} MB`
-                  : '—'}
-              </span>
-              <span className="font-mono text-slate-500">
-                重启 {item.restarts}
-              </span>
+              <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+                <strong className="min-w-0 break-all text-slate-800">{item.name}</strong>
+                <span
+                  className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 font-medium ${statusTone(item.status)}`}
+                >
+                  <i className="inline-block size-1.5 rounded-full bg-current" />
+                  {item.status}
+                </span>
+                <span className="font-mono text-slate-500">
+                  PID {item.pid || '—'}
+                </span>
+                <span className="font-mono text-slate-500">
+                  CPU {item.cpu ? `${item.cpu.toFixed(1)}%` : '—'}
+                </span>
+                <span className="font-mono text-slate-500">
+                  内存{' '}
+                  {item.memory
+                    ? `${(item.memory / 1024 / 1024).toFixed(1)} MB`
+                    : '—'}
+                </span>
+                <span className="font-mono text-slate-500">
+                  重启 {item.restarts}
+                </span>
+              </div>
               <div className="ml-auto flex items-center gap-1">
                 {processActionsFor(item.status).map(
                   ({ action, icon: ProcessIcon, label }) => {
@@ -9825,101 +9786,103 @@ function PM2RuntimeCard({
         onClose={() => !settingsBusy && setSettingsOpen(false)}
         ariaLabel="修改后台运行配置"
       >
-        <section className="grid w-full max-w-lg gap-4 rounded-xl border border-slate-200 bg-white p-5 shadow-[0_20px_58px_rgb(28_26_23/0.22)]">
-          <header>
+        <section className="modal-surface flex min-h-0 flex-col w-full max-w-lg gap-4 overflow-hidden">
+          <header className="shrink-0">
             <strong>修改后台运行</strong>
             <p className="mt-1 text-xs text-slate-500">
               仅显示常规配置，其他 PM2
               参数由系统生成。保存后需点击“应用配置”才会影响运行中的进程。
             </p>
           </header>
-          <label className="grid gap-1.5 text-xs font-medium text-slate-600">
-            进程名称
-            <input
-              className="h-9 rounded-md border border-slate-300 bg-white px-2.5 text-sm font-normal text-slate-800 outline-none transition focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
-              value={settings?.name ?? ''}
-              onChange={event =>
-                setSettings(current =>
-                  current ? { ...current, name: event.target.value } : current
-                )
-              }
-            />
-          </label>
-          <label className="grid gap-1.5 text-xs font-medium text-slate-600">
-            启动文件
-            <input
-              className="h-9 rounded-md border border-slate-300 bg-white px-2.5 text-sm font-normal text-slate-800 outline-none transition focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
-              value={settings?.script ?? ''}
-              onChange={event =>
-                setSettings(current =>
-                  current ? { ...current, script: event.target.value } : current
-                )
-              }
-              placeholder="./index.js"
-            />
-          </label>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid min-h-0 gap-4 overflow-y-auto overscroll-contain p-1">
             <label className="grid gap-1.5 text-xs font-medium text-slate-600">
-              最大重启次数
+              进程名称
               <input
                 className="h-9 rounded-md border border-slate-300 bg-white px-2.5 text-sm font-normal text-slate-800 outline-none transition focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
-                min="0"
-                max="1000"
-                type="number"
-                value={settings?.maxRestarts ?? 10}
+                value={settings?.name ?? ''}
                 onChange={event =>
                   setSettings(current =>
-                    current
-                      ? { ...current, maxRestarts: Number(event.target.value) }
-                      : current
+                    current ? { ...current, name: event.target.value } : current
                   )
                 }
               />
             </label>
             <label className="grid gap-1.5 text-xs font-medium text-slate-600">
-              内存上限（可选）
+              启动文件
               <input
                 className="h-9 rounded-md border border-slate-300 bg-white px-2.5 text-sm font-normal text-slate-800 outline-none transition focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
-                value={settings?.maxMemory ?? ''}
+                value={settings?.script ?? ''}
                 onChange={event =>
                   setSettings(current =>
-                    current
-                      ? { ...current, maxMemory: event.target.value }
-                      : current
+                    current ? { ...current, script: event.target.value } : current
                   )
                 }
-                placeholder="512M"
+                placeholder="./index.js"
+              />
+            </label>
+            <div className="grid grid-cols-2 gap-3">
+              <label className="grid gap-1.5 text-xs font-medium text-slate-600">
+                最大重启次数
+                <input
+                  className="h-9 rounded-md border border-slate-300 bg-white px-2.5 text-sm font-normal text-slate-800 outline-none transition focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
+                  min="0"
+                  max="1000"
+                  type="number"
+                  value={settings?.maxRestarts ?? 10}
+                  onChange={event =>
+                    setSettings(current =>
+                      current
+                        ? { ...current, maxRestarts: Number(event.target.value) }
+                        : current
+                    )
+                  }
+                />
+              </label>
+              <label className="grid gap-1.5 text-xs font-medium text-slate-600">
+                内存上限（可选）
+                <input
+                  className="h-9 rounded-md border border-slate-300 bg-white px-2.5 text-sm font-normal text-slate-800 outline-none transition focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
+                  value={settings?.maxMemory ?? ''}
+                  onChange={event =>
+                    setSettings(current =>
+                      current
+                        ? { ...current, maxMemory: event.target.value }
+                        : current
+                    )
+                  }
+                  placeholder="512M"
+                />
+              </label>
+            </div>
+            <label className="settings-switch-row">
+              <span className="settings-switch">
+                <input
+                  checked={settings?.autorestart ?? true}
+                  type="checkbox"
+                  onChange={event =>
+                    setSettings(current =>
+                      current
+                        ? { ...current, autorestart: event.target.checked }
+                        : current
+                    )
+                  }
+                />
+              </span>
+              <span className="settings-switch-copy">
+                <strong>自动重启</strong>
+                <small>进程意外退出时由 PM2 自动恢复。</small>
+              </span>
+            </label>
+            <label className="grid gap-1.5 text-xs font-medium text-slate-600">
+              环境变量（每行 KEY=value）
+              <textarea
+                className="min-h-24 resize-y rounded-md border border-slate-300 bg-white px-2.5 py-2 text-sm font-normal leading-5 text-slate-800 outline-none transition focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
+                value={envText}
+                onChange={event => setEnvText(event.target.value)}
               />
             </label>
           </div>
-          <label className="settings-switch-row">
-            <span className="settings-switch">
-              <input
-                checked={settings?.autorestart ?? true}
-                type="checkbox"
-                onChange={event =>
-                  setSettings(current =>
-                    current
-                      ? { ...current, autorestart: event.target.checked }
-                      : current
-                  )
-                }
-              />
-            </span>
-            <span className="settings-switch-copy">
-              <strong>自动重启</strong>
-              <small>进程意外退出时由 PM2 自动恢复。</small>
-            </span>
-          </label>
-          <label className="grid gap-1.5 text-xs font-medium text-slate-600">
-            环境变量（每行 KEY=value）
-            <textarea
-              className="min-h-24 resize-y rounded-md border border-slate-300 bg-white px-2.5 py-2 text-sm font-normal leading-5 text-slate-800 outline-none transition focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
-              value={envText}
-              onChange={event => setEnvText(event.target.value)}
-            />
-          </label>
-          <footer className="flex justify-end gap-2">
+          <footer className="flex shrink-0 justify-end gap-2">
             <Button variant="secondary" onClick={() => setSettingsOpen(false)}>
               取消
             </Button>
@@ -9999,7 +9962,7 @@ function ScriptControlCard({
   onOpenLogs
 }: {
   root: string
-  onOpenLogs: (task: { id: string; name: string }) => void
+  onOpenLogs: (taskId: string) => void
 }) {
   const [items, setItems] = useStoreState<ScriptControlItem[]>([])
   const [collapsed, setCollapsed] = useState(true)
@@ -10066,7 +10029,7 @@ function ScriptControlCard({
       setError('该脚本暂时没有执行日志。')
       return
     }
-    onOpenLogs({ id: item.taskId, name: script })
+    onOpenLogs(item.taskId)
   }
   const saveScript = async () => {
     if (!editing || busyScript) return
@@ -10090,7 +10053,10 @@ function ScriptControlCard({
   return (
     <section className="overflow-hidden rounded-xl border border-slate-200 bg-white">
       <header
-        className="flex cursor-pointer items-center justify-between gap-3 border-b border-slate-200 px-4 py-3"
+        className={cn(
+          'flex cursor-pointer flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 py-3',
+          !collapsed && 'border-b border-slate-200'
+        )}
         role="button"
         tabIndex={0}
         aria-expanded={!collapsed}
@@ -10128,7 +10094,7 @@ function ScriptControlCard({
                 className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3 text-xs"
                 key={item.name}
               >
-                <div className="min-w-36">
+                <div className="min-w-0 wrap-anywhere">
                   <strong className="text-slate-800">{item.name}</strong>
                   <code className="ml-2 text-slate-500">{item.command}</code>
                 </div>
@@ -10142,7 +10108,7 @@ function ScriptControlCard({
                 >
                   {item.running ? '运行中' : '未运行'}
                 </span>
-                <div className="ml-auto flex gap-2">
+                <div className="ml-auto flex max-w-full flex-wrap justify-end gap-2">
                   <button
                     className="secondary-button gap-1"
                     disabled={Boolean(busyScript)}
@@ -10194,40 +10160,42 @@ function ScriptControlCard({
         onClose={() => !busyScript && setEditing(null)}
         ariaLabel="编辑脚本"
       >
-        <section className="grid w-full max-w-lg gap-4 rounded-xl border border-slate-200 bg-white p-5 shadow-[0_20px_58px_rgb(28_26_23/0.22)]">
-          <header>
+        <section className="modal-surface flex min-h-0 flex-col w-full max-w-lg gap-4 overflow-hidden">
+          <header className="shrink-0">
             <strong>编辑脚本</strong>
             <p className="mt-1 text-xs text-slate-500">
               保存后在下一次执行时生效；已运行的脚本不会被改动。
             </p>
           </header>
-          <label className="grid gap-1.5 text-xs font-medium text-slate-600">
-            脚本名称
-            <input
-              className="h-9 rounded-md border border-slate-300 bg-white px-2.5 text-sm font-normal text-slate-800 outline-none transition focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
-              value={editing?.name ?? ''}
-              onChange={event =>
-                setEditing(current =>
-                  current ? { ...current, name: event.target.value } : current
-                )
-              }
-            />
-          </label>
-          <label className="grid gap-1.5 text-xs font-medium text-slate-600">
-            命令
-            <textarea
-              className="min-h-24 resize-y rounded-md border border-slate-300 bg-white px-2.5 py-2 text-sm font-normal leading-5 text-slate-800 outline-none transition focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
-              value={editing?.command ?? ''}
-              onChange={event =>
-                setEditing(current =>
-                  current
-                    ? { ...current, command: event.target.value }
-                    : current
-                )
-              }
-            />
-          </label>
-          <footer className="flex justify-end gap-2">
+          <div className="grid min-h-0 gap-4 overflow-y-auto overscroll-contain p-1">
+            <label className="grid gap-1.5 text-xs font-medium text-slate-600">
+              脚本名称
+              <input
+                className="h-9 rounded-md border border-slate-300 bg-white px-2.5 text-sm font-normal text-slate-800 outline-none transition focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
+                value={editing?.name ?? ''}
+                onChange={event =>
+                  setEditing(current =>
+                    current ? { ...current, name: event.target.value } : current
+                  )
+                }
+              />
+            </label>
+            <label className="grid gap-1.5 text-xs font-medium text-slate-600">
+              命令
+              <textarea
+                className="min-h-24 resize-y rounded-md border border-slate-300 bg-white px-2.5 py-2 text-sm font-normal leading-5 text-slate-800 outline-none transition focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
+                value={editing?.command ?? ''}
+                onChange={event =>
+                  setEditing(current =>
+                    current
+                      ? { ...current, command: event.target.value }
+                      : current
+                  )
+                }
+              />
+            </label>
+          </div>
+          <footer className="flex shrink-0 justify-end gap-2">
             <Button variant="secondary" onClick={() => setEditing(null)}>
               取消
             </Button>
@@ -10259,7 +10227,6 @@ function RuntimePanel({
   onOpenForegroundLogs,
   onOpenScriptLogs,
   onOpenPM2Logs,
-  onClearOperationLog,
   onRun,
   onSaveLogin,
   onSavePackageConfig,
@@ -10278,9 +10245,8 @@ function RuntimePanel({
   onRefresh: () => void
   onRefreshOverview: () => Promise<RuntimeOverview | undefined>
   onOpenForegroundLogs: () => void
-  onOpenScriptLogs: (task: { id: string; name: string }) => void
+  onOpenScriptLogs: (taskId: string) => void
   onOpenPM2Logs: () => void
-  onClearOperationLog: () => void
   onRun: (
     action: string,
     packageName?: string,
@@ -10658,7 +10624,7 @@ function RuntimePanel({
         closeLoginDialog()
       } else {
         setLoginDialogError(
-          '启动未完成。请检查已安装连接、下方必填配置，或先安装所选连接包；详细原因见操作记录。'
+          '启动未完成。请检查连接包和必填配置，或查看失败提示。'
         )
       }
     } catch (reason) {
@@ -10671,7 +10637,7 @@ function RuntimePanel({
   }
   return (
     <RobotPanel
-      className="runtime-overview max-w-190"
+      className="runtime-overview"
       icon={<Play className="size-4" />}
       title={overview?.name || '正在读取项目…'}
       description={
@@ -10704,103 +10670,105 @@ function RuntimePanel({
         onClose={() => !dependencyControlBusy && setDependencyControl(null)}
         ariaLabel="依赖控制"
       >
-        <section className="grid max-h-[calc(100dvh-48px)] w-full max-w-md gap-4 overflow-y-auto rounded-xl border border-slate-200 bg-white p-5 shadow-[0_20px_58px_rgb(28_26_23/0.22)]">
-          <header>
+        <section className="modal-surface flex min-h-0 flex-col max-h-[calc(100dvh-48px)] w-full max-w-md gap-4 overflow-hidden">
+          <header className="shrink-0">
             <strong>依赖控制</strong>
             <p className="mt-1 text-xs text-slate-500">
               使用当前项目的包管理器修改 package.json 与锁文件。
             </p>
           </header>
-          <div className="grid grid-cols-3 gap-2">
-            {(
-              [
-                ['add', 'add'],
-                ['link', 'link'],
-                ['remove', 'remove']
-              ] as const
-            ).map(([mode, label]) => (
-              <button
-                className={cn(
-                  'h-9 rounded-md border text-xs font-medium transition',
-                  dependencyControl?.mode === mode
-                    ? 'border-brand-600 bg-brand-600 text-white'
-                    : 'border-slate-200 bg-white text-slate-600 hover:border-brand-300 hover:bg-brand-50'
-                )}
-                key={mode}
-                onClick={() =>
+          <div className="grid min-h-0 gap-4 overflow-y-auto overscroll-contain p-1">
+            <div className="grid grid-cols-3 gap-2">
+              {(
+                [
+                  ['add', 'add'],
+                  ['link', 'link'],
+                  ['remove', 'remove']
+                ] as const
+              ).map(([mode, label]) => (
+                <button
+                  className={cn(
+                    'h-9 rounded-md border text-xs font-medium transition',
+                    dependencyControl?.mode === mode
+                      ? 'border-brand-600 bg-brand-600 text-white'
+                      : 'border-slate-200 bg-white text-slate-600 hover:border-brand-300 hover:bg-brand-50'
+                  )}
+                  key={mode}
+                  onClick={() =>
+                    setDependencyControl(current =>
+                      current ? { ...current, mode } : current
+                    )
+                  }
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <label className="grid gap-1.5 text-xs font-medium text-slate-600">
+              包名
+              <input
+                list={
+                  dependencyControl?.mode === 'add'
+                    ? 'official-dependency-options'
+                    : undefined
+                }
+                className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm font-normal text-slate-800 outline-none transition focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
+                value={dependencyControl?.name ?? ''}
+                onChange={event =>
                   setDependencyControl(current =>
-                    current ? { ...current, mode } : current
+                    current ? { ...current, name: event.target.value } : current
                   )
                 }
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-          <label className="grid gap-1.5 text-xs font-medium text-slate-600">
-            包名
-            <input
-              list={
-                dependencyControl?.mode === 'add'
-                  ? 'official-dependency-options'
-                  : undefined
-              }
-              className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm font-normal text-slate-800 outline-none transition focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
-              value={dependencyControl?.name ?? ''}
-              onChange={event =>
-                setDependencyControl(current =>
-                  current ? { ...current, name: event.target.value } : current
-                )
-              }
-              placeholder={
-                dependencyControl?.mode === 'link'
-                  ? '如 @scope/package 或本地链接名'
-                  : '如 @alemonjs/onebot'
-              }
-              autoFocus
-            />
-          </label>
-          {dependencyControl?.mode === 'add' && (
-            <OfficialDependencyOptions id="official-dependency-options" />
-          )}
-          <label className="grid gap-1.5 text-xs font-medium text-slate-600">
-            版本（可选）
-            <input
-              className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm font-normal text-slate-800 outline-none transition focus:border-brand-600 focus:ring-2 focus:ring-brand-100 disabled:bg-slate-100"
-              value={dependencyControl?.version ?? ''}
-              onChange={event =>
-                setDependencyControl(current =>
-                  current
-                    ? { ...current, version: event.target.value }
-                    : current
-                )
-              }
-              placeholder="如 ^2.0.0 或 latest"
-              disabled={dependencyControl?.mode === 'link'}
-            />
-          </label>
-          <div className="grid grid-cols-2 gap-2">
-            {(['dependencies', 'devDependencies'] as const).map(scope => (
-              <button
-                className={cn(
-                  'h-9 rounded-md border text-xs font-medium transition disabled:cursor-not-allowed disabled:opacity-50',
-                  dependencyControl?.scope === scope
-                    ? 'border-brand-600 bg-brand-600 text-white'
-                    : 'border-slate-200 bg-white text-slate-600 hover:border-brand-300 hover:bg-brand-50'
-                )}
-                disabled={dependencyControl?.mode !== 'add'}
-                key={scope}
-                onClick={() =>
+                placeholder={
+                  dependencyControl?.mode === 'link'
+                    ? '如 @scope/package 或本地链接名'
+                    : '如 @alemonjs/onebot'
+                }
+                autoFocus
+              />
+            </label>
+            {dependencyControl?.mode === 'add' && (
+              <OfficialDependencyOptions id="official-dependency-options" />
+            )}
+            <label className="grid gap-1.5 text-xs font-medium text-slate-600">
+              版本（可选）
+              <input
+                className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm font-normal text-slate-800 outline-none transition focus:border-brand-600 focus:ring-2 focus:ring-brand-100 disabled:bg-slate-100"
+                value={dependencyControl?.version ?? ''}
+                onChange={event =>
                   setDependencyControl(current =>
-                    current ? { ...current, scope } : current
+                    current
+                      ? { ...current, version: event.target.value }
+                      : current
                   )
                 }
-              >
-                {scope}
-              </button>
-            ))}
+                placeholder="如 ^2.0.0 或 latest"
+                disabled={dependencyControl?.mode === 'link'}
+              />
+            </label>
+            <div className="grid grid-cols-2 gap-2">
+              {(['dependencies', 'devDependencies'] as const).map(scope => (
+                <button
+                  className={cn(
+                    'h-9 rounded-md border text-xs font-medium transition disabled:cursor-not-allowed disabled:opacity-50',
+                    dependencyControl?.scope === scope
+                      ? 'border-brand-600 bg-brand-600 text-white'
+                      : 'border-slate-200 bg-white text-slate-600 hover:border-brand-300 hover:bg-brand-50'
+                  )}
+                  disabled={dependencyControl?.mode !== 'add'}
+                  key={scope}
+                  onClick={() =>
+                    setDependencyControl(current =>
+                      current ? { ...current, scope } : current
+                    )
+                  }
+                >
+                  {scope}
+                </button>
+              ))}
+            </div>
           </div>
-          <footer className="flex justify-end gap-2">
+          <footer className="flex shrink-0 justify-end gap-2">
             <Button
               variant="secondary"
               onClick={() => setDependencyControl(null)}
@@ -10839,7 +10807,7 @@ function RuntimePanel({
           className="bg-slate-950/25 p-6"
         >
           <section
-            className="grid h-[min(720px,calc(100dvh-48px))] max-h-[min(720px,calc(100dvh-48px))] min-h-0 w-full max-w-2xl grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_20px_58px_rgb(28_26_23/0.22)]"
+            className="modal-surface modal-surface-flush grid h-[min(720px,calc(100dvh-48px))] max-h-[min(720px,calc(100dvh-48px))] min-h-0 w-full max-w-2xl grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden"
             role="dialog"
             aria-modal="true"
             aria-label={loginChoice.label}
@@ -11034,9 +11002,9 @@ function RuntimePanel({
       <section className="grid gap-3">
         {portStatus.length > 0 || portStatusBusy || portStatusError ? (
           <section className="overflow-hidden rounded-xl border border-slate-200 bg-white">
-            <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+            <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 py-3">
               <div className="grid gap-1">
-                <strong className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+                <strong className="flex flex-wrap items-center gap-2 text-sm font-semibold text-slate-800">
                   端口检查
                   <StatusDot
                     active={
@@ -11057,7 +11025,7 @@ function RuntimePanel({
                 </span>
               </div>
               <button
-                className="text-button gap-1.5"
+                className="secondary-button ml-auto gap-1.5"
                 disabled={portStatusBusy}
                 onClick={() => void refreshPorts()}
               >
@@ -11130,8 +11098,8 @@ function RuntimePanel({
         ) : null}
         <section className="overflow-hidden rounded-xl border border-slate-200 bg-white">
           <div className="divide-y divide-slate-200">
-            <section className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
-              <div>
+            <section className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 py-3">
+              <div className="grid min-w-0 gap-1">
                 <strong className="block text-sm font-semibold text-slate-700">
                   依赖
                   <StatusDot
@@ -11145,7 +11113,7 @@ function RuntimePanel({
                     : '等待自动同步；直接运行、构建或升级即可。'}
                 </span>
               </div>
-              <div className="ml-auto flex shrink-0 flex-wrap justify-end gap-2">
+              <div className="ml-auto flex max-w-full flex-wrap justify-end gap-2">
                 <button
                   className="secondary-button gap-1.5"
                   disabled={busy}
@@ -11177,9 +11145,9 @@ function RuntimePanel({
                 </button>
               </div>
             </section>
-            <section className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
-              <div>
-                <strong className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+            <section className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 py-3">
+              <div className="grid min-w-0 gap-1">
+                <strong className="flex flex-wrap items-center gap-2 text-sm font-semibold text-slate-700">
                   前台运行
                   <StatusDot
                     active={foregroundRunning}
@@ -11198,7 +11166,7 @@ function RuntimePanel({
                     : '还没有前台运行命令。'}
                 </span>
               </div>
-              <div className="ml-auto flex gap-2 shrink-0 justify-end">
+              <div className="ml-auto flex max-w-full flex-wrap justify-end gap-2">
                 <button
                   className="secondary-button gap-1.5"
                   disabled={busy}
@@ -11231,7 +11199,7 @@ function RuntimePanel({
                         : void askStart(
                             'app',
                             '启动前台',
-                            '会直接启动机器人，并打开运行日志。'
+                            '会直接启动机器人。'
                           )
                     }
                   >
@@ -11270,9 +11238,9 @@ function RuntimePanel({
         </section>
         {developerMode && (
           <section className="overflow-hidden rounded-xl border border-slate-200 bg-white">
-            <header className="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
+            <header className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 py-3">
               <div className="grid gap-1">
-                <strong className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+                <strong className="flex flex-wrap items-center gap-2 text-sm font-semibold text-slate-800">
                   开发运行
                   <StatusDot
                     active={developmentRunning}
@@ -11293,7 +11261,7 @@ function RuntimePanel({
                             : '还没有开发命令。'}
                 </span>
               </div>
-              <div className="flex shrink-0 flex-wrap justify-end gap-2">
+              <div className="ml-auto flex max-w-full flex-wrap justify-end gap-2">
                 {overview?.hasBuildScript && (
                   <button
                     className="secondary-button gap-1.5"
@@ -11331,7 +11299,7 @@ function RuntimePanel({
                         : void askStart(
                             'dev',
                             '启动开发',
-                            '会以开发模式启动，并打开运行日志。'
+                            '会以开发模式启动。'
                           )
                     }
                   >
@@ -11369,7 +11337,6 @@ function RuntimePanel({
         <PM2RuntimeCard
           root={root}
           onOpenLogs={onOpenPM2Logs}
-          onClearOperationLog={onClearOperationLog}
           onProcessAction={(action, processID) =>
             onRun(action, undefined, String(processID))
           }
@@ -11729,6 +11696,8 @@ function MiniBrowserWindow({
   onActivate: () => void
   onCommandConsumed: (id: string) => void
 }) {
+  const dispatch = useDispatch()
+  const recentSites = useSelector((state: RootState) => state.browserRecent.sites)
   const [homeQuery, setHomeQuery] = useState('')
   // Directly opening the browser gets one blank tab. A concrete navigation is
   // itself the first tab, so service and plugin launches never leave a spare
@@ -11946,6 +11915,8 @@ function MiniBrowserWindow({
         }
       }
       setError('')
+      const recentSite = recordBrowserSite(next)
+      if (recentSite) dispatch(recentSite)
       const nextHistory = shouldOpenNewTab
         ? [next.href]
         : activeTab.history.slice(0, activeTab.historyIndex + 1)
@@ -12148,14 +12119,11 @@ function MiniBrowserWindow({
       new CustomEvent('alx-browser-tab-closed', { detail: { id } })
     )
     if (remaining.length === 0) {
-      if (native) {
-        const home = createBrowserHomeTab()
-        setTabs([home])
-        setActiveTabID(home.id)
-        setHomeQuery('')
-        setError('')
-      }
-      onClose()
+      const home = createBrowserHomeTab()
+      setTabs([home])
+      setActiveTabID(home.id)
+      setHomeQuery('')
+      setError('')
       return
     }
     setTabs(remaining)
@@ -12235,76 +12203,74 @@ function MiniBrowserWindow({
       width={1020}
       height={700}
     >
-      <section className="mini-browser flex min-h-0 flex-1 flex-col bg-slate-50 dark:bg-slate-900">
-        {pageURL && (
-          <>
-            <form
-              className="flex shrink-0 items-center gap-2 border-b border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-800"
-              onSubmit={event => {
-                event.preventDefault()
-                void navigate()
-              }}
+      <section className="mini-browser grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)] bg-slate-50 dark:bg-slate-900">
+        <div className="min-w-0" hidden={!pageURL}>
+          <form
+            className="flex shrink-0 items-center gap-2 border-b border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-800"
+            onSubmit={event => {
+              event.preventDefault()
+              void navigate()
+            }}
+          >
+            <button
+              className="icon-button size-8 shrink-0 p-0"
+              type="button"
+              onClick={() => navigateHistory(-1)}
+              disabled={historyIndex <= 0}
+              aria-label="后退"
+              title="后退"
             >
-              <button
-                className="icon-button size-8 shrink-0 p-0"
-                type="button"
-                onClick={() => navigateHistory(-1)}
-                disabled={historyIndex <= 0}
-                aria-label="后退"
-                title="后退"
-              >
-                <ArrowLeft className="size-4" />
-              </button>
-              <button
-                className="icon-button size-8 shrink-0 p-0"
-                type="button"
-                onClick={() => navigateHistory(1)}
-                disabled={historyIndex >= history.length - 1}
-                aria-label="前进"
-                title="前进"
-              >
-                <ArrowRight className="size-4" />
-              </button>
-              <button
-                className="icon-button size-8 shrink-0 p-0"
-                type="button"
-                onClick={() =>
-                  updateActiveTab(tab => ({
-                    ...tab,
-                    frameKey: tab.frameKey + 1
-                  }))
-                }
-                aria-label="刷新"
-                title="刷新"
-              >
-                <RefreshCw className="size-4" />
-              </button>
-              <input
-                className="min-w-0 flex-1 rounded-full border border-slate-300 bg-white px-4 py-1.5 text-sm text-slate-800 outline-none placeholder:text-slate-400 focus:border-brand-600 focus:ring-2 focus:ring-brand-100 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100"
-                value={query}
-                onChange={event => setQuery(event.target.value)}
-                placeholder="输入网址或搜索内容"
-                aria-label="网址或搜索内容"
-                autoComplete="off"
-                spellCheck={false}
-              />
-              <button
-                className="icon-button size-8 shrink-0 p-0"
-                type="submit"
-                aria-label="前往"
-                title="前往"
-              >
-                <Search className="size-4" />
-              </button>
-            </form>
-            {error && (
-              <p className="m-0 border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-700 dark:border-amber-900/70 dark:bg-amber-950/30 dark:text-amber-300">
-                {error}
-              </p>
-            )}
-          </>
-        )}
-        <div className="relative min-h-0 flex-1 overflow-hidden">
+              <ArrowLeft className="size-4" />
+            </button>
+            <button
+              className="icon-button size-8 shrink-0 p-0"
+              type="button"
+              onClick={() => navigateHistory(1)}
+              disabled={historyIndex >= history.length - 1}
+              aria-label="前进"
+              title="前进"
+            >
+              <ArrowRight className="size-4" />
+            </button>
+            <button
+              className="icon-button size-8 shrink-0 p-0"
+              type="button"
+              onClick={() =>
+                updateActiveTab(tab => ({
+                  ...tab,
+                  frameKey: tab.frameKey + 1
+                }))
+              }
+              aria-label="刷新"
+              title="刷新"
+            >
+              <RefreshCw className="size-4" />
+            </button>
+            <input
+              className="min-w-0 flex-1 rounded-full border border-slate-300 bg-white px-4 py-1.5 text-sm text-slate-800 outline-none placeholder:text-slate-400 focus:border-brand-600 focus:ring-2 focus:ring-brand-100 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100"
+              value={query}
+              onChange={event => setQuery(event.target.value)}
+              placeholder="输入网址或搜索内容"
+              aria-label="网址或搜索内容"
+              autoComplete="off"
+              spellCheck={false}
+            />
+            <button
+              className="icon-button size-8 shrink-0 p-0"
+              type="submit"
+              aria-label="前往"
+              title="前往"
+            >
+              <Search className="size-4" />
+            </button>
+          </form>
+          {error && (
+            <p className="m-0 border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-700 dark:border-amber-900/70 dark:bg-amber-950/30 dark:text-amber-300">
+              {error}
+            </p>
+          )}
+        </div>
+        <div className="relative row-start-2 min-h-0 overflow-hidden">
           {tabs
             .filter(tab => tab.pageURL)
             .map(tab => (
@@ -12327,7 +12293,7 @@ function MiniBrowserWindow({
               />
             ))}
           {!pageURL && (
-            <div className="grid h-full place-items-center bg-white p-8 dark:bg-slate-900">
+            <div className="grid h-full place-items-center overflow-y-auto bg-white p-4 sm:p-8 dark:bg-slate-900">
               <form
                 className="grid w-full max-w-2xl gap-7"
                 onSubmit={event => {
@@ -12365,6 +12331,31 @@ function MiniBrowserWindow({
                   <p className="m-0 text-center text-xs text-amber-700 dark:text-amber-300">
                     {error}
                   </p>
+                )}
+                {recentSites.length > 0 && (
+                  <section aria-label="近期打开" className="grid min-w-0 gap-2">
+                    <h2 className="m-0 px-2 text-xs font-medium text-slate-500 dark:text-slate-400">
+                      近期打开
+                    </h2>
+                    <ul className="m-0 grid list-none grid-cols-2 gap-2 p-0 sm:grid-cols-3">
+                      {recentSites.map(site => {
+                        const hostname = new URL(site).host
+                        return (
+                          <li key={site} className="min-w-0">
+                            <button
+                              type="button"
+                              className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm text-slate-700 hover:bg-slate-100 focus-visible:outline-2 focus-visible:outline-brand-500 dark:text-slate-200 dark:hover:bg-slate-800"
+                              title={site}
+                              onClick={() => void navigate(site)}
+                            >
+                              <Globe2 aria-hidden="true" className="size-4 shrink-0 text-slate-500 dark:text-slate-400" />
+                              <span className="truncate">{hostname}</span>
+                            </button>
+                          </li>
+                        )
+                      })}
+                    </ul>
+                  </section>
                 )}
               </form>
             </div>
@@ -12783,15 +12774,35 @@ function ControlCard({
   return (
     <aside className="control-dock flex min-h-0 flex-col" aria-label="目录操作">
       <section className="control-card control-navigation">
-        <header className="control-identity flex items-start justify-between gap-2">
-          <div className="min-w-0">
-            <span className="block truncate text-sm font-medium text-slate-800 dark:text-slate-100">
+        <header className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-2">
+          <div className="grid min-w-0 gap-1">
+            <h2 className="m-0 truncate text-sm font-semibold text-(--theme-text-strong)">
               {project?.name ?? '未选择目录'}
-            </span>
+            </h2>
             {project && (
-              <span className="block truncate text-[11px] text-slate-400 dark:text-slate-500">
+              <small className="truncate text-xs text-(--theme-text-muted)" title={project.path}>
                 {project.path}
-              </span>
+              </small>
+            )}
+            {project && gitOverview?.repository && (
+              <div
+                className="flex items-center gap-1.5 text-xs text-(--theme-text-muted)"
+                title={
+                  gitOverview.upstream
+                    ? `领先 ${gitOverview.ahead} · 落后 ${gitOverview.behind}`
+                    : undefined
+                }
+              >
+                <GitBranch className="size-3 shrink-0" aria-hidden="true" />
+                <small className="truncate text-xs">
+                  {gitOverview.branch || '未知分支'}
+                </small>
+                {gitOverview.changes.length > 0 && (
+                  <small className="ml-auto shrink-0 text-xs font-medium text-amber-600 dark:text-amber-400">
+                    {gitOverview.changes.length} 项
+                  </small>
+                )}
+              </div>
             )}
           </div>
           <button
@@ -12803,30 +12814,6 @@ function ControlCard({
             <GitBranch className="size-3.5" />
           </button>
         </header>
-        {project && gitOverview && (
-          <div className="pb-2">
-            {gitOverview.repository ? (
-              <div
-                className="flex items-center gap-1.5 px-1 text-[11px] text-slate-500 dark:text-slate-400"
-                title={
-                  gitOverview.upstream
-                    ? `领先 ${gitOverview.ahead} · 落后 ${gitOverview.behind}`
-                    : undefined
-                }
-              >
-                <GitBranch className="size-3 shrink-0 text-slate-400 dark:text-slate-500" />
-                <span className="truncate">
-                  {gitOverview.branch || '未知分支'}
-                </span>
-                {gitOverview.changes.length > 0 && (
-                  <span className="ml-auto shrink-0 font-medium text-amber-600 dark:text-amber-400">
-                    {gitOverview.changes.length} 项
-                  </span>
-                )}
-              </div>
-            ) : null}
-          </div>
-        )}
         <ProjectNavigation
           activeID={activePrimary}
           items={directoryActions
@@ -12867,7 +12854,7 @@ function ControlCard({
           )}
         </ProjectNavigation>
         {project && appPages.length > 0 && (
-            <label className="mt-2 grid gap-1 text-xs text-(--theme-text-secondary)">
+            <label className="grid gap-1 text-xs text-(--theme-text-secondary)">
               机器人应用页
               <select
                 className="min-w-0 rounded border border-(--theme-border-default) bg-(--theme-surface-panel) px-2 py-1"
@@ -12883,7 +12870,7 @@ function ControlCard({
         )}
         {project && (
           <footer
-            className="control-quick-actions mt-2 grid grid-cols-5 gap-1 border-t border-slate-100 pt-2 dark:border-slate-700"
+            className="control-quick-actions grid-cols-5"
             title={project.path}
           >
             <button
@@ -14786,79 +14773,6 @@ function FileEditor({
     </RobotPanel>
   )
 }
-function OperationLog({
-  output,
-  failed,
-  minimized,
-  onMinimize,
-  onRestore,
-  onClose,
-  native = false
-}: {
-  native?: boolean
-  output: string
-  failed: boolean
-  minimized: boolean
-  onMinimize: () => void
-  onRestore: () => void
-  onClose: () => void
-}) {
-  const needsPermission =
-    failed && /没有权限|访问权限|permission denied|eacces/i.test(output)
-  if (minimized)
-    return (
-      <button
-        className="fixed bottom-5 right-5 z-80 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-lg dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
-        onClick={onRestore}
-        aria-label="恢复操作日志"
-      >
-        操作日志
-      </button>
-    )
-  return (
-    <DesktopWindow
-      native={native}
-      id="operation-log"
-      open
-      minimized={minimized}
-      title="操作日志"
-      subtitle={
-        needsPermission ? '需要访问授权' : failed ? '操作未完成' : '操作已完成'
-      }
-      icon={
-        failed ? (
-          <AlertTriangle className="size-4 shrink-0 text-red-600" />
-        ) : (
-          <CheckCircle2 className="size-4 shrink-0 text-emerald-600" />
-        )
-      }
-      onClose={onClose}
-      onMinimize={onMinimize}
-      zIndex={120}
-      onActivate={() => undefined}
-      initialPosition={{ left: 56, top: 76 }}
-      storageKey="alx:operation-log"
-      width={520}
-      height={380}
-    >
-      <div
-        className={`operation-log  overflow-auto flex min-h-0 flex-1 flex-col gap-2 p-3 text-(--theme-text-primary) ${failed ? 'is-error' : 'is-success'}`}
-        aria-live="polite"
-        aria-label="最近操作结果"
-      >
-        <pre className="m-0 min-h-0 flex-1  overflow-auto whitespace-pre rounded-md bg-(--theme-surface-code) p-3 font-mono text-[0.73rem] leading-relaxed text-(--theme-text-code)">
-          {output}
-        </pre>
-        {needsPermission && (
-          <small className="text-[11px] text-(--theme-text-muted)">
-            授权完成后，请回到这里重新执行本次操作。
-          </small>
-        )}
-      </div>
-    </DesktopWindow>
-  )
-}
-
 function GitReleasePanelNext({
   root,
   busy,
@@ -15584,8 +15498,14 @@ export function NativeRobotWindow({ name }: { name: RobotWindowName | SystemWind
   if (name === 'ops') return <OpsWindow {...nativeRobotWindowProps} root={root} />
   if (name === 'pm2-processes') return <NativePM2ProcessesWindow root={root} />
   if (name === 'browser') return <NativeBrowserWindow />
-  if (name === 'operation-log') return <NativeOperationLog />
-  if (name !== 'robot-app') return <NativeSystemWindow name={name} root={root} pluginID={query.get('id') ?? ''} />
+  if (name !== 'robot-app') return (
+    <NativeSystemWindow
+      name={name}
+      root={root}
+      pluginID={query.get('id') ?? ''}
+      taskId={query.get('taskId') ?? undefined}
+    />
+  )
   const path = query.get('path') ?? ''
   if (!/^\/api\/v1\/robot\/(app|webview)\/[\w-]+\//.test(path)) return null
   return (
@@ -15716,10 +15636,11 @@ function NativeEnvironment() {
   )
 }
 
-function NativeSystemWindow({ name, root, pluginID }: {
-  name: Exclude<SystemWindowName, 'browser' | 'operation-log'>
+function NativeSystemWindow({ name, root, pluginID, taskId }: {
+  name: Exclude<SystemWindowName, 'browser'>
   root: string
   pluginID: string
+  taskId?: string
 }) {
   const { data, isFetching, isError, refetch } = useSetupPluginsQuery(undefined, {
     skip: name !== 'plugins' && name !== 'plugin',
@@ -15751,7 +15672,7 @@ function NativeSystemWindow({ name, root, pluginID }: {
   return (
     <SidebarWindow {...props} sidebarAriaLabel="系统功能">
       {name === 'ops-overview' && <NativeOpsOverview />}
-      {name === 'tasks' && <OperationTasksPage root={root} sidebarLayout />}
+      {name === 'tasks' && <OperationTasksPage root={root} initialTaskId={taskId} sidebarLayout />}
       {name === 'environment' && <NativeEnvironment />}
       {name === 'plugins' && (
         <SystemPluginCenter
@@ -15763,25 +15684,5 @@ function NativeSystemWindow({ name, root, pluginID }: {
         />
       )}
     </SidebarWindow>
-  )
-}
-
-function NativeOperationLog() {
-  const [result, setResult] = useState({ output: '', failed: false })
-  useEffect(() => {
-    const channel = new BroadcastChannel('alx-native-operation-log')
-    channel.onmessage = ({ data }) => {
-      if (typeof data?.output === 'string' && typeof data?.failed === 'boolean')
-        setResult(data)
-    }
-    channel.postMessage('request')
-    return () => channel.close()
-  }, [])
-  return (
-    <OperationLog
-      {...nativeRobotWindowProps}
-      {...result}
-      onRestore={() => {}}
-    />
   )
 }

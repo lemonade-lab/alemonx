@@ -14,6 +14,8 @@ export default defineConfig({
     ]
   },
   server: {
+    // Keep test fixtures stable while local source files are being edited.
+    hmr: process.env.ALEMONX_PLAYWRIGHT !== '1',
     proxy: {
       '/api': {
         target: 'http://localhost:17390',

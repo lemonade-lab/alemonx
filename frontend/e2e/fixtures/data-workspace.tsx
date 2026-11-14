@@ -1,14 +1,12 @@
-import { createRoot } from 'react-dom/client'
-import { StrictMode } from 'react'
-import { Provider, useDispatch, useSelector } from 'react-redux'
-import { store, type RootState } from '../../src/store/guideStore'
+import { useDispatch, useSelector } from 'react-redux'
+import { type RootState } from '../../src/store/guideStore'
 import { setDataTab } from '../../src/store/dataStore'
 import { SidebarWindow } from '../../src/components/SidebarWindow'
 import { dataNavigation } from '../../src/components/data/dataNavigation'
 import DataWorkspace from '../../src/components/data/DataWorkspace'
 import '../../src/styles.css'
 
-export function Fixture() {
+export function DataWorkspaceFixture() {
   const tab = useSelector((state: RootState) => state.dataPreferences.tab)
   const dispatch = useDispatch()
   return (
@@ -28,12 +26,3 @@ export function Fixture() {
     </SidebarWindow>
   )
 }
-const root = createRoot(document.getElementById('root')!)
-root.render(
-  <StrictMode>
-    <Provider store={store}>
-      <Fixture />
-    </Provider>
-  </StrictMode>
-)
-import.meta.hot?.dispose(() => root.unmount())

@@ -45,7 +45,7 @@ export function BackpackPackageUpdate({
       }
       setPhase('updating')
       if (!(await onReplace(name, latest)))
-        throw new Error('更新失败，请查看操作日志后重试。')
+        throw new Error('更新失败，请查看任务记录后重试。')
       setMessage('已更新')
       onRefresh()
     } catch (reason) {

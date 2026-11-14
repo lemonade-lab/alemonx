@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { AlertTriangle, X } from 'lucide-react'
+import { AlertTriangle, Info, X } from 'lucide-react'
 import { Button } from './Button'
 import { Modal } from './Modal'
 
@@ -41,18 +41,27 @@ export function ConfirmDialog({
       ariaLabel={title}
     >
       <section
-        className="flex max-h-[min(420px,calc(100dvh-32px))] w-full max-w-md min-h-0 flex-col gap-4 overflow-hidden rounded-xl border border-(--theme-border-default) bg-(--theme-surface-panel) p-4.5 text-(--theme-text-primary) shadow-xl"
+        className="modal-surface flex max-h-[min(420px,calc(100dvh-32px))] w-full max-w-md min-h-0 flex-col gap-4 overflow-hidden"
         onMouseDown={event => event.stopPropagation()}
       >
         <header className="grid shrink-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2.5">
-          <i className="inline-flex size-8.5 items-center justify-center rounded-lg bg-orange-50 text-orange-700">
-            <AlertTriangle className="size-4.25" />
+          <i
+            data-danger={destructive}
+            className="inline-flex size-8.5 items-center justify-center rounded-lg bg-(--theme-accent-soft) text-(--theme-accent-text) data-[danger=true]:bg-(--theme-danger-soft) data-[danger=true]:text-(--theme-danger-text)"
+          >
+            {destructive ? (
+              <AlertTriangle className="size-4.25" aria-hidden="true" />
+            ) : (
+              <Info className="size-4.25" aria-hidden="true" />
+            )}
           </i>
           <div className="grid min-w-0 gap-0.5">
             <strong className="text-sm">{title}</strong>
-            <small className="text-[11px] text-(--theme-text-secondary)">
-              {subtitle}
-            </small>
+            {subtitle && (
+              <small className="text-[11px] text-(--theme-text-secondary)">
+                {subtitle}
+              </small>
+            )}
           </div>
           <Button variant="icon" onClick={onCancel} aria-label="关闭确认">
             <X className="size-4" />

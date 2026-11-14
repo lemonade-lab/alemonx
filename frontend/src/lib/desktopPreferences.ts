@@ -4,7 +4,8 @@ const path = '/api/desktop/preferences'
 const headers = { 'X-ALX-Desktop-Preferences': '1', 'Content-Type': 'application/json' }
 const keys = new Set([
   'alemonjs-theme', 'persist:alemonx-guide', 'persist:alemonx-data',
-  'persist:alemonx-workspace', 'persist:alemonx-navigation', 'alemonx-legacy-robot-list',
+  'persist:alemonx-workspace', 'persist:alemonx-navigation', 'persist:alemonx-browser-recent',
+  'alemonx-legacy-robot-list',
   'autoConnectEnabled', 'ALemonTestOne:image:compression', 'alx:operation-log'
 ])
 

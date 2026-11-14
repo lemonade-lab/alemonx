@@ -15,6 +15,7 @@ import (
 
 const maxExtractedPackageSize int64 = 500 << 20
 const maxPackageJSONSize int64 = 1 << 20
+const maxPackageArchiveEntries = 20000
 
 // InstallLocalPackageUpload validates a browser-uploaded plugin archive and
 // unpacks it into the robot's packages directory. The destination name comes
@@ -60,7 +61,7 @@ func (Manager) InstallLocalPackageUpload(root, archivePath string) (LocalPackage
 		name = filepath.Base(source)
 	}
 	name = filepath.Base(name)
-	if name == "" || name == "." || name == ".." || strings.HasPrefix(name, ".") || strings.ContainsAny(name, `/\`) || len([]rune(name)) > 180 {
+	if !filepath.IsLocal(name) || strings.HasPrefix(name, ".") || strings.ContainsAny(name, "/\\:\x00") || len([]rune(name)) > 180 {
 		return LocalPackage{}, errors.New("上传包 package.json 名称无效")
 	}
 	target := filepath.Join(destination, name)
@@ -161,8 +162,11 @@ func packageArchiveFormat(path string) string {
 }
 
 func safePackagePath(root, name string) (string, error) {
+	if strings.ContainsAny(name, "\\:\x00") {
+		return "", errors.New("插件包包含非法路径")
+	}
 	name = filepath.Clean(filepath.FromSlash(name))
-	if name == "." || filepath.IsAbs(name) || name == ".." || strings.HasPrefix(name, ".."+string(filepath.Separator)) {
+	if name == "." || !filepath.IsLocal(name) {
 		return "", errors.New("插件包包含非法路径")
 	}
 	target := filepath.Join(root, name)
@@ -173,17 +177,37 @@ func safePackagePath(root, name string) (string, error) {
 	return target, nil
 }
 
+func ignorePackageArchivePath(root, target string) bool {
+	relative, _ := filepath.Rel(root, target)
+	for _, segment := range strings.Split(relative, string(filepath.Separator)) {
+		if strings.HasPrefix(segment, "._") {
+			return true
+		}
+		switch strings.ToLower(strings.TrimRight(segment, ". ")) {
+		case ".git", "__macosx", ".ds_store":
+			return true
+		}
+	}
+	return false
+}
+
 func extractPackageZip(source, destination string) error {
 	archive, err := zip.OpenReader(source)
 	if err != nil {
 		return errors.New("插件包压缩包无法读取")
 	}
 	defer archive.Close()
+	if len(archive.File) > maxPackageArchiveEntries {
+		return errors.New("插件包文件数量过多")
+	}
 	var total int64
 	for _, entry := range archive.File {
 		target, err := safePackagePath(destination, entry.Name)
 		if err != nil {
 			return err
+		}
+		if ignorePackageArchivePath(destination, target) {
+			continue
 		}
 		if entry.Mode()&os.ModeSymlink != 0 {
 			return errors.New("插件包不允许包含符号链接")
@@ -197,10 +221,10 @@ func extractPackageZip(source, destination string) error {
 		if !entry.FileInfo().Mode().IsRegular() {
 			return errors.New("插件包包含不支持的文件类型")
 		}
-		total += int64(entry.UncompressedSize64)
-		if total > maxExtractedPackageSize {
+		if entry.UncompressedSize64 > uint64(maxExtractedPackageSize-total) {
 			return errors.New("插件包解压内容过大")
 		}
+		total += int64(entry.UncompressedSize64)
 		if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
 			return err
 		}
@@ -234,7 +258,7 @@ func extractPackageTarGz(source, destination string) error {
 	defer gzipReader.Close()
 	reader := tar.NewReader(gzipReader)
 	var total int64
-	for {
+	for index := 0; ; index++ {
 		header, err := reader.Next()
 		if err == io.EOF {
 			break
@@ -242,9 +266,19 @@ func extractPackageTarGz(source, destination string) error {
 		if err != nil {
 			return errors.New("插件包压缩包无法读取")
 		}
+		if index >= maxPackageArchiveEntries || header.Size < 0 || header.Size > maxExtractedPackageSize-total {
+			return errors.New("插件包解压内容过大或文件数量过多")
+		}
+		total += header.Size
+		if header.Typeflag == tar.TypeDir && (header.Name == "." || header.Name == "./") {
+			continue
+		}
 		target, err := safePackagePath(destination, header.Name)
 		if err != nil {
 			return err
+		}
+		if ignorePackageArchivePath(destination, target) {
+			continue
 		}
 		switch header.Typeflag {
 		case tar.TypeDir:
@@ -252,13 +286,6 @@ func extractPackageTarGz(source, destination string) error {
 				return err
 			}
 		case tar.TypeReg, tar.TypeRegA:
-			if header.Size < 0 {
-				return errors.New("插件包包含非法文件")
-			}
-			total += header.Size
-			if total > maxExtractedPackageSize {
-				return errors.New("插件包解压内容过大")
-			}
 			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
 				return err
 			}

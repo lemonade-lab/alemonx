@@ -1,8 +1,10 @@
 package robot
 
 import (
+	"archive/tar"
 	"archive/zip"
 	"bytes"
+	"compress/gzip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -35,6 +37,8 @@ func TestInstallLocalPackageUploadUnpacksIntoBackpack(t *testing.T) {
 	archive := writeUploadArchive(t, map[string]string{
 		"plugin/package.json": `{"name":"hello-plugin","version":"1.2.3","description":"hello"}`,
 		"plugin/index.js":     "module.exports = {}",
+		"__MACOSX/._plugin":   "metadata",
+		"plugin/.git/config":  "[core]",
 	})
 	if err := os.WriteFile(archivePath, archive, 0600); err != nil {
 		t.Fatal(err)
@@ -52,6 +56,9 @@ func TestInstallLocalPackageUploadUnpacksIntoBackpack(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, "packages", "hello-plugin", "package.json")); err != nil {
 		t.Fatalf("package directory missing: %v", err)
 	}
+	if _, err := os.Stat(filepath.Join(item.Path, ".git")); !os.IsNotExist(err) {
+		t.Fatalf("archive Git metadata must be skipped, stat err = %v", err)
+	}
 	items, err := (Manager{}).LocalPackages(root)
 	if err != nil || len(items) != 1 || items[0].Name != "hello-plugin" {
 		t.Fatalf("backpack after upload = %#v, %v", items, err)
@@ -59,6 +66,38 @@ func TestInstallLocalPackageUploadUnpacksIntoBackpack(t *testing.T) {
 	// Uploading the same package again must be refused.
 	if _, err := (Manager{}).InstallLocalPackageUpload(root, archivePath); err == nil || !strings.Contains(err.Error(), "已存在") {
 		t.Fatalf("duplicate upload error = %v", err)
+	}
+}
+
+func TestInstallLocalPackageUploadAcceptsTarGzWithRootEntry(t *testing.T) {
+	root := t.TempDir()
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"robot"}`)
+	var buffer bytes.Buffer
+	compressed := gzip.NewWriter(&buffer)
+	archive := tar.NewWriter(compressed)
+	if err := archive.WriteHeader(&tar.Header{Name: "./", Typeflag: tar.TypeDir, Mode: 0755}); err != nil {
+		t.Fatal(err)
+	}
+	manifest := `{"name":"tar-plugin","version":"1.0.0"}`
+	if err := archive.WriteHeader(&tar.Header{Name: "./package.json", Mode: 0644, Size: int64(len(manifest))}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := archive.Write([]byte(manifest)); err != nil {
+		t.Fatal(err)
+	}
+	if err := archive.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := compressed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	archivePath := filepath.Join(t.TempDir(), "upload")
+	if err := os.WriteFile(archivePath, buffer.Bytes(), 0600); err != nil {
+		t.Fatal(err)
+	}
+	item, err := (Manager{}).InstallLocalPackageUpload(root, archivePath)
+	if err != nil || item.Name != "tar-plugin" || !item.Valid {
+		t.Fatalf("uploaded item = %#v, %v", item, err)
 	}
 }
 

@@ -236,3 +236,29 @@
     min-height: 40px;
   }
 }
+
+.testone-modal .ant-modal-content {
+  --modal-inset: 16px;
+  max-height: calc(100dvh - 32px);
+  overflow: auto;
+  padding: var(--modal-inset);
+  border: 1px solid var(--theme-border-default);
+}
+
+.testone-modal .ant-modal-header,
+.testone-modal .ant-modal-footer {
+  margin-inline: calc(-1 * var(--modal-inset));
+  padding: 12px var(--modal-inset);
+  background: var(--theme-surface-raised) !important;
+}
+
+.testone-modal .ant-modal-header {
+  margin-top: calc(-1 * var(--modal-inset));
+  padding-right: 44px;
+  border-bottom: 1px solid var(--theme-border-default);
+}
+
+.testone-modal .ant-modal-footer {
+  margin-bottom: calc(-1 * var(--modal-inset));
+  border-top: 1px solid var(--theme-border-default);
+}

@@ -32,7 +32,7 @@ export function RobotPanelHeader({
     <header
       data-robot-panel-header
       className={[
-        'sticky top-2.5 z-5 mx-2.5 mt-2.5 flex min-h-13 flex-wrap items-center justify-between gap-2 rounded-[10px] border border-(--theme-border-default) bg-(--theme-surface-panel) px-4 shadow-[0_4px_14px_var(--theme-shadow-soft)]',
+        'sticky top-(--robot-panel-gutter) z-5 flex min-h-13 flex-wrap items-center justify-between gap-2 rounded-xl border border-(--theme-border-default) bg-(--theme-surface-panel) px-4 py-2 shadow-[0_4px_14px_var(--theme-shadow-soft)]',
         className
       ]
         .filter(Boolean)
@@ -54,7 +54,7 @@ export function RobotPanelHeader({
             {title}
           </div>
           {description && (
-            <small className="max-w-90 truncate text-[0.7rem] leading-tight text-(--theme-text-muted)">
+            <small className="min-w-0 max-w-90 truncate text-[0.7rem] leading-tight text-(--theme-text-muted)">
               {description}
             </small>
           )}

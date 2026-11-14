@@ -37,9 +37,9 @@ export default function ModalReactionList({
       className="testone-modal-surface bg-black/50"
     >
       <div
-        className="max-h-[calc(100dvh-32px)] w-[min(500px,calc(100vw-32px))] overflow-y-auto rounded-lg bg-[var(--editor-background)] p-4 shadow-lg"
+        className="modal-surface grid gap-3 max-h-[calc(100dvh-32px)] w-[min(500px,calc(100vw-32px))]"
       >
-        <div className="mb-4">
+        <header>
           <h2 className="text-lg font-bold text-[var(--foreground)]">
             <span className="text-2xl mr-2">{reaction.emoji}</span>
             回应用户列表
@@ -47,9 +47,9 @@ export default function ModalReactionList({
           <p className="text-xs text-[var(--descriptionForeground)] mt-1">
             共 {users.length} 人给了这个表情回应
           </p>
-        </div>
+        </header>
 
-        <div className="mb-4 max-h-[300px] overflow-y-auto">
+        <div className="max-h-[300px] overflow-y-auto">
           {users.length > 0 ? (
             <ul className="space-y-2">
               {users.map((userId, index) => (
@@ -68,11 +68,11 @@ export default function ModalReactionList({
           )}
         </div>
 
-        <div className="flex gap-2 justify-end">
+        <footer className="flex gap-2 justify-end">
           <Button onClick={onClose} className="px-4 py-2">
             关闭
           </Button>
-        </div>
+        </footer>
       </div>
     </Modal>
   );

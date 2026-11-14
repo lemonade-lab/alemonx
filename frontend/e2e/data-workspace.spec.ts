@@ -61,11 +61,13 @@ async function openData(page: Page, fixture = 'data-workspace') {
       window.$RefreshReg$ = () => {};
       window.$RefreshSig$ = () => type => type;
       window.__vite_plugin_react_preamble_installed__ = true;
-      await import('/e2e/fixtures/${fixture}.tsx');
+      await import('/e2e/fixtures/${fixture === 'data-workspace' ? 'mount-data-workspace' : fixture}.tsx');
     </script>`
     })
   )
   await page.goto('/data-workspace-regression')
+  if (fixture === 'data-workspace')
+    await expect(page.getByRole('dialog', { name: '数据', exact: true })).toHaveCount(1)
 }
 
 test('secondary sidebar restores Redis page and supports narrow-window keyboard navigation', async ({

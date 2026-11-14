@@ -3,7 +3,10 @@ import { Check, FolderOpen, LoaderCircle, Upload, X } from 'lucide-react'
 import { Modal } from './Modal'
 import { Button } from './Button'
 import { useStoreState } from '../store/guideStore'
-import { useInstallRobotPackageFolderMutation } from '../store/workspaceApi'
+import {
+  useInstallRobotPackageFolderMutation,
+  useUploadRobotPackageMutation
+} from '../store/workspaceApi'
 import {
   filesFromFolderDrop,
   filesFromFolderPicker,
@@ -25,14 +28,18 @@ export function BackpackFolderInstall({
   const [dragging, setDragging] = useStoreState(false)
   const [summary, setSummary] = useStoreState<{
     name: string
-    count: number
+    count?: number
   } | null>(null)
   const [error, setError] = useStoreState('')
   const [success, setSuccess] = useStoreState(false)
   const files = useRef<PackageFolderFile[]>([])
+  const archive = useRef<File | null>(null)
   const input = useRef<HTMLInputElement>(null)
+  const archiveInput = useRef<HTMLInputElement>(null)
   const generation = useRef(0)
-  const [install, { isLoading }] = useInstallRobotPackageFolderMutation()
+  const [installFolder, folderInstall] = useInstallRobotPackageFolderMutation()
+  const [installArchive, archiveInstall] = useUploadRobotPackageMutation()
+  const isLoading = folderInstall.isLoading || archiveInstall.isLoading
   useEffect(
     () => () => {
       generation.current++
@@ -43,6 +50,7 @@ export function BackpackFolderInstall({
     if (isLoading) return
     generation.current++
     files.current = []
+    archive.current = null
     setSummary(null)
     setError('')
     setSuccess(false)
@@ -50,15 +58,26 @@ export function BackpackFolderInstall({
     setDragging(false)
     setOpen(false)
   }
-  const choose = async (load: () => Promise<PackageFolderFile[]>) => {
+  const choose = async (load: () => Promise<PackageFolderFile[] | File>) => {
     if (reading || isLoading) return
     const request = ++generation.current
     setReading(true)
     setError('')
     setSummary(null)
     files.current = []
+    archive.current = null
     try {
       const next = await load()
+      if (request !== generation.current) return
+      if (next instanceof File) {
+        if (!/\.(zip|tar\.gz|tgz)$/i.test(next.name))
+          throw new Error('仅支持 .zip、.tar.gz 或 .tgz 压缩包。')
+        if (next.size > 500 * 1024 * 1024)
+          throw new Error('压缩包不能超过 500 MB。')
+        archive.current = next
+        setSummary({ name: next.name })
+        return
+      }
       const name = await validatePackageFolder(next)
       if (request !== generation.current) return
       files.current = next
@@ -68,7 +87,7 @@ export function BackpackFolderInstall({
         setError(
           reason instanceof Error
             ? reason.message
-            : '无法读取文件夹，请重新选择。'
+            : '无法读取插件文件，请重新选择。'
         )
     } finally {
       if (request === generation.current) setReading(false)
@@ -79,9 +98,13 @@ export function BackpackFolderInstall({
     const request = generation.current
     setError('')
     try {
-      await install({ root, files: files.current }).unwrap()
+      const installed = archive.current
+        ? await installArchive({ root, file: archive.current }).unwrap()
+        : await installFolder({ root, files: files.current }).unwrap()
       if (request !== generation.current) return
       files.current = []
+      archive.current = null
+      setSummary({ name: installed.name || summary.name })
       setSuccess(true)
       onInstalled()
     } catch (reason) {
@@ -111,7 +134,7 @@ export function BackpackFolderInstall({
         本地安装
       </Button>
       <Modal open={open} onClose={close} ariaLabel="安装插件" className="p-4">
-        <section className="grid max-h-[90dvh] w-full max-w-md gap-4 overflow-auto rounded-xl border border-(--theme-border-default) bg-(--theme-surface-panel) p-5 text-(--theme-text-primary)">
+        <section className="modal-surface grid max-h-[90dvh] w-full max-w-md gap-4 overflow-auto">
           <header className="flex items-center justify-between gap-3">
             <h2 className="m-0 text-lg font-semibold">安装插件</h2>
             <Button
@@ -155,6 +178,18 @@ export function BackpackFolderInstall({
                   event.currentTarget.value = ''
                 }}
               />
+              <input
+                type="file"
+                accept=".zip,.tar.gz,.tgz"
+                aria-label="选择插件压缩包"
+                className="hidden"
+                ref={archiveInput}
+                onChange={event => {
+                  const file = event.currentTarget.files?.[0]
+                  if (file) void choose(async () => file)
+                  event.currentTarget.value = ''
+                }}
+              />
               <button
                 type="button"
                 aria-label={summary ? '重新选择文件夹' : '选择文件夹'}
@@ -169,8 +204,14 @@ export function BackpackFolderInstall({
                 onDrop={event => {
                   event.preventDefault()
                   setDragging(false)
-                  const selected = event.dataTransfer.items
-                  void choose(() => filesFromFolderDrop(selected))
+                  const { files: dropped, items } = event.dataTransfer
+                  const file = dropped?.length === 1 ? dropped[0] : null
+                  const entry = Array.from(items).find(item => item.kind === 'file')
+                  void choose(async () =>
+                    file && !entry?.webkitGetAsEntry?.()?.isDirectory
+                      ? file
+                      : filesFromFolderDrop(items)
+                  )
                 }}
               >
                 {reading || isLoading ? (
@@ -196,10 +237,12 @@ export function BackpackFolderInstall({
                   {reading
                     ? '正在读取…'
                     : summary
-                      ? `${summary.name} · ${summary.count} 个文件`
+                      ? summary.count === undefined
+                        ? summary.name
+                        : `${summary.name} · ${summary.count} 个文件`
                       : dragging
                         ? '松开以选择'
-                        : '拖入文件夹'}
+                        : '拖入文件夹或压缩包'}
                 </span>
                 <span className="text-sm text-(--theme-accent-text)">
                   {isLoading
@@ -207,10 +250,16 @@ export function BackpackFolderInstall({
                     : reading
                       ? ' '
                       : summary
-                        ? '重新选择'
+                        ? '重新选择文件夹'
                         : '选择文件夹'}
                 </span>
               </button>
+              <Button
+                disabled={reading || isLoading}
+                onClick={() => archiveInput.current?.click()}
+              >
+                选择压缩包
+              </Button>
               {error && (
                 <p
                   role="alert"

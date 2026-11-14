@@ -86,7 +86,7 @@ export function GitHistoryPanel({
           ariaLabel="提交详情"
           className="bg-slate-950/25 p-4"
         >
-          <section className="flex max-h-[calc(100dvh-32px)] w-full max-w-4xl min-w-0 flex-col overflow-hidden rounded-lg border border-slate-200 bg-white">
+          <section className="modal-surface modal-surface-flush flex max-h-[calc(100dvh-32px)] w-full max-w-4xl min-w-0 flex-col overflow-hidden">
             <header className="flex shrink-0 items-center justify-between gap-2 border-b border-slate-200 p-3">
               <strong className="text-sm text-slate-800">
                 提交详情 · {sha.slice(0, 8)}

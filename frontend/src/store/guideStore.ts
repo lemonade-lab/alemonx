@@ -1,5 +1,6 @@
 import { preferenceStorage } from '../lib/desktopPreferences'
 import { persistedNavigation } from './navigationStore'
+import { persistedBrowserRecent } from './browserRecentStore'
 import {
   configureStore,
   createSlice,
@@ -112,6 +113,7 @@ export const store = configureStore({
     dataPreferences: persistedDataPreferences,
     ui: uiSlice.reducer,
     navigation: persistedNavigation,
+    browserRecent: persistedBrowserRecent,
     [workspaceApi.reducerPath]: workspaceApi.reducer
   },
   middleware: getDefault =>

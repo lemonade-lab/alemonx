@@ -18,7 +18,7 @@ export async function filesFromFolderDrop(
     .filter(item => item.kind === 'file')
     .map(item => item.webkitGetAsEntry())
   if (entries.length !== 1 || !entries[0]?.isDirectory)
-    throw new Error('请拖入一个插件文件夹，或点击选择文件夹。')
+    throw new Error('请一次拖入一个插件文件夹或压缩包。')
   const files: PackageFolderFile[] = []
   const walk = async (
     entry: FileSystemEntry,

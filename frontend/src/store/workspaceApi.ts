@@ -1165,7 +1165,8 @@ export const workspaceApi = createApi({
       providesTags: ['OperationTasks']
     }),
     robotTask: build.query<RobotTask, string>({
-      query: id => `robot/tasks?${new URLSearchParams({ id })}`
+      query: id => `robot/tasks?${new URLSearchParams({ id })}`,
+      providesTags: ['OperationTasks']
     }),
     robotConsole: build.query<
       ConsolePayload,
@@ -1542,6 +1543,7 @@ export const {
   usePackageManifestQuery,
   useRobotTasksQuery,
   useControlRobotTaskMutation,
+  useRobotTaskQuery,
   useLazyRobotTaskQuery,
   useLazyRobotConsoleQuery,
   useRobotRuntimeQuery,

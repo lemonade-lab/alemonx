@@ -6813,14 +6813,51 @@ func (s *server) robotPackageStashesHandler(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, map[string]any{"items": stashes})
 }
 
-// robotPackageUploadHandler rejects archives because backpack plugins must be
-// Git worktrees tracking release; archives cannot provide that provenance.
 func (s *server) robotPackageUploadHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
 		return
 	}
-	writeError(w, http.StatusGone, "背包插件仅支持通过 Git 克隆分支，不支持上传压缩包。")
+	const limit int64 = 500 << 20
+	r.Body = http.MaxBytesReader(w, r.Body, limit+(1<<20))
+	if err := r.ParseMultipartForm(8 << 20); err != nil {
+		writeError(w, http.StatusBadRequest, "上传格式无效，或压缩包超过 500 MB。")
+		return
+	}
+	defer r.MultipartForm.RemoveAll()
+	files := r.MultipartForm.File["file"]
+	if len(files) != 1 || !isUploadArchiveName(files[0].Filename) {
+		writeError(w, http.StatusBadRequest, "请选择一个 .zip、.tar.gz 或 .tgz 插件压缩包。")
+		return
+	}
+	if files[0].Size > limit {
+		writeError(w, http.StatusRequestEntityTooLarge, "压缩包不能超过 500 MB。")
+		return
+	}
+	input, err := files[0].Open()
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "无法读取上传文件。")
+		return
+	}
+	defer input.Close()
+	temporary, err := os.CreateTemp("", "alx-robot-package-*")
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "无法准备插件压缩包。")
+		return
+	}
+	defer os.Remove(temporary.Name())
+	_, copyErr := io.Copy(temporary, input)
+	closeErr := temporary.Close()
+	if copyErr != nil || closeErr != nil {
+		writeError(w, http.StatusInternalServerError, "无法保存插件压缩包。")
+		return
+	}
+	item, err := s.robots.InstallLocalPackageUpload(r.PostForm.Get("root"), temporary.Name())
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, item)
 }
 
 func (s *server) robotPackageVersionsHandler(w http.ResponseWriter, r *http.Request) {

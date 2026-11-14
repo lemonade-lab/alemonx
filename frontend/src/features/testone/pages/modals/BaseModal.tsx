@@ -22,7 +22,7 @@ const BaseModal = (
         </div>
       }
       title={
-        <div className="flex min-h-8 items-center gap-3 bg-[var(--editor-foreground))]">
+        <div className="flex min-h-8 items-center gap-3">
           {props.titleIcon}
           <div>
             <h2 className="text-lg font-semibold text-[var(--editor-foreground)] flex items-center gap-2">

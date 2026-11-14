@@ -32,7 +32,6 @@ func (a *auxiliaryWindows) openFromMessage(message string) {
 	}
 	var browserCommand string
 	var browserClose bool
-	focusExisting := true
 	var title string
 	var width int
 	windowKey := name
@@ -50,12 +49,6 @@ func (a *auxiliaryWindows) openFromMessage(message string) {
 		if section != "" {
 			return
 		}
-	case "operation-log":
-		title, width = "操作日志", 740
-		if section != "" && section != "update" {
-			return
-		}
-		focusExisting = section != "update"
 	case "browser":
 		title, width = "浏览器", 1180
 		if section != "" {
@@ -148,7 +141,11 @@ func (a *auxiliaryWindows) openFromMessage(message string) {
 			}
 		}
 		if name != "git" {
-			identity := params.Get("root") + "\x00" + params.Get("taskId") + "\x00" + params.Get("path") + "\x00" + params.Get("id")
+			windowTaskID := params.Get("taskId")
+			if name == "tasks" {
+				windowTaskID = ""
+			}
+			identity := params.Get("root") + "\x00" + windowTaskID + "\x00" + params.Get("path") + "\x00" + params.Get("id")
 			windowKey = fmt.Sprintf("%s-%x", name, sha256.Sum256([]byte(identity)))
 		}
 		suffix = "?" + params.Encode()
@@ -171,13 +168,13 @@ func (a *auxiliaryWindows) openFromMessage(message string) {
 			defer a.pendingGit.Delete(windowKey)
 		}
 		if existing, found := a.app.Window.GetByName(windowKey); found {
-			if name == "settings" && section != "" {
+			if (name == "settings" && section != "") || name == "tasks" {
 				existing.SetURL(target)
 			}
 			if browserCommand != "" {
 				existing.ExecJS(browserCommand)
 			}
-			if !browserClose && focusExisting {
+			if !browserClose {
 				revealWindow(existing)
 			}
 			return
@@ -188,9 +185,16 @@ func (a *auxiliaryWindows) openFromMessage(message string) {
 		if browserCommand != "" {
 			target += "#command=" + url.QueryEscape(section)
 		}
+		var screen *application.Screen
+		if a.mainWindow != nil {
+			if current, err := a.mainWindow.GetScreen(); err == nil {
+				screen = current
+			}
+		}
 		window := a.app.Window.NewWithOptions(application.WebviewWindowOptions{
 			Name: windowKey, Title: title, URL: target, Width: width, Height: 640,
 			MinWidth: 640, MinHeight: 480,
+			Screen: screen, InitialPosition: application.WindowCentered,
 			Frameless: runtime.GOOS == "windows",
 			Mac:       application.MacWindow{TitleBar: application.MacTitleBarHiddenInset},
 		})

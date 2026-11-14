@@ -260,13 +260,15 @@ test('robot workbench resizes the left rail and keeps the right card fixed', asy
       const { Provider } = await import('/node_modules/.vite/deps/react-redux.js');
       const { store } = await import('/src/store/guideStore.ts');
       const { RobotWorkspaceSplitter } = await import('/src/components/RobotWorkspaceSplitter.tsx');
+      const { RobotPanel } = await import('/src/components/RobotPanel.tsx');
       ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(Provider, {store},
         React.createElement(RobotWorkspaceSplitter, {list: '机器人列表', controls: React.createElement('aside', {className:'control-dock flex min-h-0 flex-col'},
           React.createElement('section', {className:'control-card control-navigation'},
             React.createElement('header', {style:{display:'block'}}, '机器人面板'),
             React.createElement('nav', {'data-project-navigation': '', 'aria-label':'机器人功能'},
               Array.from({length: 40}, (_, index) => React.createElement('button', {key:index, style:{display:'block', height:36}}, '菜单 ' + index))),
-            React.createElement('footer', null, '快捷操作')))}, React.createElement('div', null, '工作区'))));
+            React.createElement('footer', {className:'control-quick-actions grid-cols-5', 'aria-label':'快捷操作'},
+              ['终端', '应用', '测试', '聊天', '运维'].map(label => React.createElement('button', {key:label}, label)))))}, React.createElement(RobotPanel, {title:'运行概览'}, React.createElement('div', null, '工作区')))));
     </script>`
     })
   )
@@ -287,10 +289,29 @@ test('robot workbench resizes the left rail and keeps the right card fixed', asy
   const workspace = (await page.getByText('工作区', { exact: true }).boundingBox())!
   expect(workspace.x + workspace.width).toBeLessThanOrEqual(dock.x + 1)
   const card = (await controls.locator('.control-card').boundingBox())!
+  const panelHeader = page.locator('[data-robot-panel-header]')
+  const header = (await panelHeader.boundingBox())!
+  expect(header.x).toBeCloseTo(workspace.x, 0)
+  expect(header.width).toBeCloseTo(workspace.width, 0)
+  expect(Math.abs(header.y - card.y)).toBeLessThanOrEqual(2)
+  const betweenPanels = card.x - (header.x + header.width)
+  const rightGutter = content.x + content.width - (card.x + card.width)
+  expect(Math.abs(betweenPanels - rightGutter)).toBeLessThanOrEqual(2)
   expect(content.x + content.width).toBeGreaterThan(card.x + card.width)
   expect(await controls.evaluate(node => getComputedStyle(node).position)).toBe('absolute')
   const menu = page.getByRole('navigation', { name: '机器人功能' })
-  const footer = page.getByText('快捷操作', { exact: true })
+  const footer = controls.locator('footer[aria-label="快捷操作"]')
+  const shortcutSizes = await footer.getByRole('button').evaluateAll(buttons =>
+    buttons.map(button => {
+      const { width, top } = button.getBoundingClientRect()
+      return { width, top }
+    })
+  )
+  expect(shortcutSizes).toHaveLength(5)
+  for (const shortcut of shortcutSizes) {
+    expect(shortcut.width).toBeCloseTo(shortcutSizes[0].width, 0)
+    expect(shortcut.top).toBe(shortcutSizes[0].top)
+  }
   const footerTop = (await footer.boundingBox())!.y
   await menu.hover()
   await page.mouse.wheel(0, 320)
@@ -340,6 +361,10 @@ test('robot workbench resizes the left rail and keeps the right card fixed', asy
     .boundingBox()
   expect(listBox!.y).toBeLessThan(controlsBox!.y)
   expect(controlsBox!.y).toBeLessThan(workspaceBox!.y)
+  const narrowHeader = (await panelHeader.boundingBox())!
+  const narrowCard = (await controls.locator('.control-card').boundingBox())!
+  expect(narrowHeader.x).toBeCloseTo(narrowCard.x, 0)
+  expect(Math.abs(narrowHeader.width - narrowCard.width)).toBeLessThanOrEqual(2)
 })
 
 for (const platform of ['mac', 'windows', 'linux'] as const) {
@@ -424,6 +449,17 @@ test('desktop settings sends a native request and opens a standalone settings pa
     route.fulfill({ json: { enabled: false, authenticated: false } })
   )
   await page.goto('/dashboard/robot')
+  const tools = page.getByRole('button', { name: '操作', exact: true })
+  const terminal = page.getByRole('button', { name: '打开终端', exact: true })
+  await expect(terminal).toBeVisible()
+  expect((await terminal.boundingBox())!.x).toBeGreaterThan(
+    (await tools.boundingBox())!.x
+  )
+  await terminal.click()
+  await expect(page.locator('html')).toHaveAttribute(
+    'data-last-native-message',
+    /^alx:open-window:terminal:root=/
+  )
   await page.getByRole('button', { name: '打开设置', exact: true }).click()
   await expect(page.locator('html')).toHaveAttribute(
     'data-last-native-message',
@@ -488,4 +524,39 @@ test('native terminal restores its session and robot application embeds the exis
   await expect(
     page.frameLocator('iframe').getByText('机器人应用内容')
   ).toBeVisible()
+})
+
+test('Git clone keeps its themed footer visible on a narrow window', async ({
+  page
+}) => {
+  await page.setViewportSize({ width: 1180, height: 760 })
+  await page.route('**/api/v1/**', route =>
+    route.fulfill({ json: { items: [], keys: [] } })
+  )
+  await page.route('**/api/v1/workspace/robots', route =>
+    route.fulfill({
+      json: { scope: 'test', local: true, initialized: true, projects: [], activeProjectID: '' }
+    })
+  )
+  await page.route('**/api/v1/auth/status', route =>
+    route.fulfill({ json: { enabled: false, authenticated: false } })
+  )
+  await page.route('**/api/v1/goals', route => route.fulfill({ json: [] }))
+  await page.route('**/api/v1/checks', route => route.fulfill({ json: { checks: [] } }))
+  await page.route('**/api/v1/robot/tasks', route => route.fulfill({ json: [] }))
+  await page.goto('/dashboard/robot')
+  await page.getByRole('button', { name: '从 Git 克隆', exact: true }).click()
+  await page.setViewportSize({ width: 390, height: 540 })
+  const dialog = page.getByRole('dialog', { name: '从 Git 克隆机器人' }).last()
+  const submit = dialog.getByRole('button', { name: '克隆并添加' })
+  await expect(submit).toBeInViewport()
+  await expect(submit).toBeDisabled()
+  await dialog.getByRole('tab', { name: 'HTTPS' }).click()
+  await expect(dialog.getByLabel('仓库地址')).toHaveAttribute(
+    'placeholder',
+    /^https:/
+  )
+  await expect(dialog.getByRole('group', { name: '克隆设置' })).toBeVisible()
+  await expect(dialog.getByRole('group', { name: '存放位置' })).toBeVisible()
+  expect(await dialog.evaluate(element => element.scrollWidth)).toBeLessThanOrEqual(390)
 })

@@ -66,10 +66,11 @@ async function openConnect(page: Page) {
   await page.route('**/connect-regression', route =>
     route.fulfill({
       contentType: 'text/html',
-      body: `<div id="root"></div><script type="module">import RefreshRuntime from '/@react-refresh'; RefreshRuntime.injectIntoGlobalHook(window); window.$RefreshReg$ = () => {}; window.$RefreshSig$ = () => type => type; window.__vite_plugin_react_preamble_installed__ = true; await import('/e2e/fixtures/data-workspace.tsx');</script>`
+      body: `<div id="root"></div><script type="module">import RefreshRuntime from '/@react-refresh'; RefreshRuntime.injectIntoGlobalHook(window); window.$RefreshReg$ = () => {}; window.$RefreshSig$ = () => type => type; window.__vite_plugin_react_preamble_installed__ = true; await import('/e2e/fixtures/mount-data-workspace.tsx');</script>`
     })
   )
   await page.goto('/connect-regression')
+  await expect(page.getByRole('dialog', { name: '数据', exact: true })).toHaveCount(1)
   await page.getByRole('tab', { name: 'Connect', exact: true }).click()
 }
 
