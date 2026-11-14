@@ -256,6 +256,7 @@ import {
   type SetupPluginDevelopment
 } from '../store/workspaceApi'
 import {
+  setDeveloperMode,
   setDraft,
   setRobotConfig
 } from '../store/workspaceStore'
@@ -1406,6 +1407,11 @@ export function Dashboard({
   const developerMode = useSelector(
     (state: RootState) => state.workspace.developerMode
   )
+  useEffect(() => {
+    const toggle = () => dispatch(setDeveloperMode(!developerMode))
+    window.addEventListener('alx:desktop-developer-mode-toggle', toggle)
+    return () => window.removeEventListener('alx:desktop-developer-mode-toggle', toggle)
+  }, [developerMode, dispatch])
   const activeProject = projects.find(item => item.id === activeProjectID)
   const root = activeProject?.path ?? ''
   const openTerminal = () => {

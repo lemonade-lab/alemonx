@@ -560,3 +560,53 @@ test('Git clone keeps its themed footer visible on a narrow window', async ({
   await expect(dialog.getByRole('group', { name: '存放位置' })).toBeVisible()
   expect(await dialog.evaluate(element => element.scrollWidth)).toBeLessThanOrEqual(390)
 })
+
+test('macOS tray panel shows service status and sends desktop actions', async ({ page }) => {
+  await page.setViewportSize({ width: 316, height: 211 })
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'platform', { value: 'MacIntel' })
+    Object.assign(window, {
+      webkit: { messageHandlers: { external: {
+        postMessage: (message: string) => {
+          document.documentElement.dataset.lastNativeMessage = message
+        }
+      } } }
+    })
+  })
+  await page.route('**/healthz', route =>
+    route.fulfill({ json: { status: 'ok', version: 'v1.0.0' } })
+  )
+  let mode = 'auto'
+  await page.route('**/api/v1/system/network', route => {
+    if (route.request().method() === 'PUT') mode = route.request().postDataJSON().mode
+    return route.fulfill({ json: {
+      version: 2, revision: 1, mode, automatic: { groups: [] }, proxy: { url: '' }
+    } })
+  })
+  await page.goto('/desktop-window/tray-panel')
+  const panel = page.getByRole('main', { name: 'ALemonX 菜单' })
+  await expect(panel.getByRole('status')).toHaveText('工作台在线')
+  await expect(panel.getByText('v1.0.0')).toBeVisible()
+  const bounds = (await panel.boundingBox())!
+  expect(211 - (bounds.y + bounds.height)).toBeLessThanOrEqual(8)
+  await expect(page.locator('body')).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)')
+  await expect(panel.getByRole('button', { name: '打开终端' })).toHaveCSS('border-top-width', '0px')
+  const modes = panel.getByRole('group', { name: '网络模式' })
+  await expect(modes.getByRole('button', { name: '自动' })).toHaveAttribute('aria-pressed', 'true')
+  await modes.getByRole('button', { name: '直连' }).click()
+  await expect(modes.getByRole('button', { name: '直连' })).toHaveAttribute('aria-pressed', 'true')
+  await modes.getByRole('button', { name: '代理' }).click()
+  await expect(panel.getByRole('alert')).toContainText('配置代理地址')
+  await panel.getByRole('button', { name: /^切换到/ }).click()
+  await expect(page.locator('html')).toHaveAttribute('data-theme', /^(dark|light)$/)
+  await panel.getByRole('button', { name: '更多' }).click()
+  for (const [label, action] of [['切换开发模式', 'developer-mode'], ['打开终端', 'terminal'], ['打开', 'open'], ['重启应用', 'restart'], ['退出', 'quit']]) {
+    const button = panel.getByRole('button', { name: label, exact: true })
+    await expect(button).toBeInViewport()
+    await button.click()
+    await expect(page.locator('html')).toHaveAttribute(
+      'data-last-native-message',
+      `alx:tray:${action}`
+    )
+  }
+})
