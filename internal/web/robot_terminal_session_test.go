@@ -4,6 +4,7 @@ package web
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -83,7 +84,7 @@ func TestRuntimeShutdownClosesOpenTerminal(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime := &ServerRuntime{server: s}
-	if err := runtime.Shutdown(t.Context()); err != nil {
+	if err := runtime.Shutdown(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	request = httptest.NewRequest(http.MethodGet, "/api/v1/terminal/sessions/"+session.ID, nil)
