@@ -12,9 +12,19 @@ import (
 	"alemonx/internal/httpcache"
 )
 
+func isolateGitHubConfig(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("AppData", dir)
+	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("GH_TOKEN", "")
+}
+
 func TestStartDeviceFlowUsesConfiguredClientID(t *testing.T) {
 	t.Setenv("ALEMONX_GITHUB_CLIENT_ID", "")
-	t.Setenv("HOME", t.TempDir())
+	isolateGitHubConfig(t)
 	var receivedClientID string
 	deviceServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = r.ParseForm()
@@ -40,7 +50,7 @@ func TestStartDeviceFlowUsesConfiguredClientID(t *testing.T) {
 
 func TestDeviceFlowEndToEnd(t *testing.T) {
 	t.Setenv("ALEMONX_GITHUB_CLIENT_ID", "client-123")
-	t.Setenv("HOME", t.TempDir())
+	isolateGitHubConfig(t)
 
 	var polls atomic.Int32
 	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -122,7 +132,7 @@ func TestPollExpiredFlowReturnsExpired(t *testing.T) {
 
 func TestSaveManualTokenAndStatus(t *testing.T) {
 	t.Setenv("ALEMONX_GITHUB_CLIENT_ID", "")
-	t.Setenv("HOME", t.TempDir())
+	isolateGitHubConfig(t)
 	userServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"login":"manual-user"}`))
@@ -143,7 +153,7 @@ func TestSaveManualTokenAndStatus(t *testing.T) {
 
 func TestClientIDSourceAndSaveOverride(t *testing.T) {
 	t.Setenv("ALEMONX_GITHUB_CLIENT_ID", "")
-	t.Setenv("HOME", t.TempDir())
+	isolateGitHubConfig(t)
 	if value, source := ClientIDSource(); value != defaultClientID || source != "builtin" {
 		t.Fatalf("builtin default expected, got %q/%q", value, source)
 	}
@@ -168,7 +178,7 @@ func TestClientIDSourceAndSaveOverride(t *testing.T) {
 
 func TestIdentityFlowUsesFreshGitHubIDWithoutStoringToken(t *testing.T) {
 	t.Setenv("ALEMONX_GITHUB_CLIENT_ID", "identity-test-client")
-	t.Setenv("HOME", t.TempDir())
+	isolateGitHubConfig(t)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/device":

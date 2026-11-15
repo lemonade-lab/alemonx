@@ -30,10 +30,8 @@ type entry struct {
 }
 
 var (
-	mu            sync.Mutex
-	store         = map[string]*entry{}
-	tokenFileOnce sync.Once
-	tokenFile     string
+	mu    sync.Mutex
+	store = map[string]*entry{}
 )
 
 // Response is the result of a cached fetch. Stale is true when the fresh
@@ -126,13 +124,11 @@ func GitHubTokenHeader() (string, string) {
 }
 
 func readTokenFile() string {
-	tokenFileOnce.Do(func() {
-		tokenFile = TokenPath()
-	})
-	if tokenFile == "" {
+	path := TokenPath()
+	if path == "" {
 		return ""
 	}
-	data, err := os.ReadFile(tokenFile)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return ""
 	}
