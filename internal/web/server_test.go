@@ -1557,6 +1557,33 @@ func TestCleanWebChecksNodeAndGit(t *testing.T) {
 	}
 }
 
+func TestChecksBunProjectModes(t *testing.T) {
+	handler := newTestServer()
+	for _, goal := range []string{"install", "develop"} {
+		t.Run(goal, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodPost, "/api/v1/checks", strings.NewReader(`{"goalId":"`+goal+`","variant":"bun"}`))
+			handler.ServeHTTP(response, request)
+			var report system.Report
+			if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &report) != nil {
+				t.Fatalf("Bun checks response = %d %s", response.Code, response.Body.String())
+			}
+			required := map[string]bool{}
+			for _, check := range report.Checks {
+				required[check.ID] = !check.Optional
+			}
+			for _, id := range []string{"git", "bun"} {
+				if !required[id] {
+					t.Errorf("%s must be required in Bun mode", id)
+				}
+			}
+			if required["node"] {
+				t.Error("Bun mode must work without Node.js")
+			}
+		})
+	}
+}
+
 func TestIdentityProtectionRequiresLoginAfterEnable(t *testing.T) {
 	identity, err := access.NewAt(filepath.Join(t.TempDir(), "auth.json"))
 	if err != nil {

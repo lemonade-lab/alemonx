@@ -193,7 +193,7 @@ func (s *server) terminalSessionsHandler(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	cmd := exec.CommandContext(context.Background(), shell, terminalShellArgs(shell)...)
-	cmd.Dir, cmd.Env = cwd, append(terminalEnvironment(os.Environ()), "TERM=xterm-256color", "PS1=$ ")
+	cmd.Dir, cmd.Env = cwd, append(system.BunEnvironment(terminalEnvironment(os.Environ())), "TERM=xterm-256color", "PS1=$ ")
 	terminal, err := pty.Start(cmd)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "交互式终端启动失败："+err.Error())

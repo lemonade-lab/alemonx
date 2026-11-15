@@ -584,7 +584,7 @@ func projectPackageManager(root string) string {
 	}
 	if data, err := os.ReadFile(filepath.Join(root, "package.json")); err == nil && json.Unmarshal(data, &manifest) == nil {
 		manager := strings.ToLower(strings.Split(strings.TrimSpace(manifest.PackageManager), "@")[0])
-		if manager == "npm" || manager == "yarn" || manager == "pnpm" {
+		if manager == "npm" || manager == "yarn" || manager == "pnpm" || manager == "bun" {
 			return manager
 		}
 	}
@@ -593,6 +593,16 @@ func projectPackageManager(root string) string {
 	}
 	if _, err := os.Stat(filepath.Join(root, "pnpm-lock.yaml")); err == nil {
 		return "pnpm"
+	}
+	for _, lockFile := range []string{"bun.lock", "bun.lockb"} {
+		if _, err := os.Stat(filepath.Join(root, lockFile)); err == nil {
+			return "bun"
+		}
+	}
+	for _, lockFile := range []string{"package-lock.json", "npm-shrinkwrap.json"} {
+		if _, err := os.Stat(filepath.Join(root, lockFile)); err == nil {
+			return "npm"
+		}
 	}
 	return "yarn"
 }

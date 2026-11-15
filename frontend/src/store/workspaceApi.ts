@@ -142,10 +142,23 @@ export type RobotChatSnapshot = {
   openedConversationIds: string[]
   preferences: unknown
 }
+export type ProjectRuntime = 'node' | 'bun'
+export type RuntimeSwitchPlan = {
+  current: ProjectRuntime
+  target: ProjectRuntime
+  version?: string
+  packageManager: string
+  revision: string
+  changes: string[]
+  blocked: string[]
+  platform: string
+  check: { id: string; name: string; status: string; suggestion: string }
+}
 export type RuntimeOverview = {
   name: string
   version: string
   packageManager: string
+  runtime?: 'node' | 'bun'
   hasAppScript: boolean
   hasDevScript: boolean
   hasBuildScript: boolean
@@ -182,6 +195,8 @@ export type PM2Process = {
   restarts: number
   script: string
   cwd: string
+  runtime?: 'node' | 'bun'
+  runtimeVersion?: string
 }
 export type SystemNetworkMode = 'auto' | 'direct' | 'proxy'
 export type SystemNetworkGroup = { id: string; candidates: string[] }
@@ -572,6 +587,14 @@ export type NVMNodeStatus = {
   latestVersion?: string
   latestInstalled: boolean
 }
+export type BunRuntimeStatus = {
+  check: { id: string; name: string; status: string; detail: string; suggestion: string }
+  version?: string
+  path?: string
+  managed: boolean
+  platform: string
+  container: boolean
+}
 export type PythonRuntimeStatus = {
   available: boolean
   fixed?: boolean
@@ -842,6 +865,9 @@ export const workspaceApi = createApi({
     >({
       query: body => ({ url: 'system/node/nvm', method: 'POST', body }),
       invalidatesTags: ['EnvironmentReport']
+    }),
+    bunRuntimeStatus: build.query<BunRuntimeStatus, void>({
+      query: () => 'system/bun'
     }),
     pythonRuntimeStatus: build.query<PythonRuntimeStatus, void>({
       query: () => 'system/python',
@@ -1311,6 +1337,26 @@ export const workspaceApi = createApi({
         { type: 'Runtime', id: body.root }
       ]
     }),
+    robotRuntimeSwitch: build.query<
+      RuntimeSwitchPlan,
+      { root: string; target: ProjectRuntime }
+    >({
+      query: args => `robot/runtime/switch?${new URLSearchParams(args)}`,
+      keepUnusedDataFor: 0
+    }),
+    applyRobotRuntimeSwitch: build.mutation<
+      { runtime: ProjectRuntime },
+      { root: string; target: ProjectRuntime; revision: string }
+    >({
+      query: body => ({ url: 'robot/runtime/switch', method: 'POST', body }),
+      invalidatesTags: (_result, error, { root }) => error
+        ? []
+        : [
+          { type: 'Runtime', id: root },
+          { type: 'PackageConfig', id: root },
+          { type: 'PackageManifest', id: root }
+        ]
+    }),
     robotProject: build.query<
       { valid: boolean; path?: string; error?: string },
       string
@@ -1496,6 +1542,7 @@ export const {
   useSystemMcpQuery,
   useControlSystemMcpMutation,
   useNvmNodeStatusQuery,
+  useBunRuntimeStatusQuery,
   useManageNVMNodeMutation,
   usePythonRuntimeStatusQuery,
   useManagePythonRuntimeMutation,
@@ -1564,6 +1611,8 @@ export const {
   useMoveAppMutation,
   useLazyRobotRuntimePreflightQuery,
   useLazyRobotRuntimeRepairQuery,
+  useLazyRobotRuntimeSwitchQuery,
+  useApplyRobotRuntimeSwitchMutation,
   useApplyRuntimeRepairMutation,
   useLazyRobotProjectQuery,
   useLazyRobotFileQuery,

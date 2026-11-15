@@ -42,6 +42,7 @@ import (
 	"alemonx/internal/githubauth"
 	"alemonx/internal/logging"
 	"alemonx/internal/mcp"
+	"alemonx/internal/packagemanager"
 	"alemonx/internal/project"
 	"alemonx/internal/redis"
 	"alemonx/internal/releases"
@@ -1140,6 +1141,7 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	mux.HandleFunc("/api/v1/system/service", s.systemServiceHandler)
 	mux.HandleFunc("/api/v1/system/environment/install", s.environmentInstallHandler)
 	mux.HandleFunc("/api/v1/system/node/nvm", s.nodeNVMHandler)
+	mux.HandleFunc("/api/v1/system/bun", s.bunStatusHandler)
 	mux.HandleFunc("/api/v1/system/python", s.pythonRuntimeHandler)
 	mux.HandleFunc("/api/v1/system/network", s.systemNetworkHandler)
 	mux.HandleFunc("/api/v1/goals/download", s.downloadGoal)
@@ -1220,6 +1222,7 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	mux.HandleFunc("/api/v1/robot/runtime", s.robotRuntimeHandler)
 	mux.HandleFunc("/api/v1/robot/runtime/preflight", s.robotRuntimePreflightHandler)
 	mux.HandleFunc("/api/v1/robot/runtime/repair", s.robotRuntimeRepairHandler)
+	mux.HandleFunc("/api/v1/robot/runtime/switch", s.robotRuntimeSwitchHandler)
 	mux.HandleFunc("/api/v1/robot/tasks", s.robotTasksHandler)
 	mux.HandleFunc("/api/v1/robot/tasks/control", s.operationControlHandler)
 	mux.HandleFunc("/api/v1/robot/events", s.robotEventsHandler)
@@ -5682,6 +5685,12 @@ func (s *server) robotTasksHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if input.Action == "dev" || input.Action == "app" || input.Action == "app-open" {
+		release, err := robot.BeginOperation(r.Context(), input.Root)
+		if err != nil {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+		defer release()
 		// Starting a robot owns the dependency lifecycle. A new clone or a
 		// changed workspace must not make beginners detour to a separate
 		// "install dependencies" button before they can run it.
@@ -8393,6 +8402,12 @@ func (s *server) botAppPageMessageHandler(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, "插件消息内容无效。")
 		return
 	}
+	release, err := robot.BeginOperation(r.Context(), root)
+	if err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	defer release()
 	runtime, err := s.ensureBotAppPageRuntime(root)
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, err.Error())
@@ -8444,6 +8459,12 @@ func (s *server) botAppPageEventsStreamHandler(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusInternalServerError, "SSE 不受支持。")
 		return
 	}
+	release, err := robot.BeginOperation(r.Context(), root)
+	if err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	defer release()
 	runtime, err := s.ensureBotAppPageRuntime(root)
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, err.Error())
@@ -8458,6 +8479,7 @@ func (s *server) botAppPageEventsStreamHandler(w http.ResponseWriter, r *http.Re
 	queued := append([]json.RawMessage(nil), runtime.events[id]...)
 	delete(runtime.events, id)
 	s.mu.Unlock()
+	release()
 	defer func() {
 		s.mu.Lock()
 		delete(runtime.streams[id], stream)
@@ -8522,13 +8544,23 @@ func (s *server) ensureBotAppPageRuntime(root string) (*botAppPageRuntime, error
 	} else if err != nil {
 		return nil, err
 	}
-	nodeRuntime, lookupErr := system.CurrentNodeRuntime()
-	if lookupErr != nil {
-		return nil, fmt.Errorf("机器人应用页通信需要 Node.js，请先在环境管理中安装")
+	var command *exec.Cmd
+	if packagemanager.UsesBunRuntime(project) {
+		bun, lookupErr := system.ResolveCommand("bun")
+		if lookupErr != nil {
+			return nil, errors.New("机器人应用页通信需要 Bun，请先安装 Bun")
+		}
+		command = exec.Command(bun, scriptPath)
+		command.Env = system.BunEnvironment(os.Environ())
+	} else {
+		nodeRuntime, lookupErr := system.CurrentNodeRuntime()
+		if lookupErr != nil {
+			return nil, errors.New("机器人应用页通信需要 Node.js，请先在环境管理中安装")
+		}
+		command = exec.Command(nodeRuntime.Path, scriptPath)
+		command.Env = nodeRuntime.Environment
 	}
-	command := exec.Command(nodeRuntime.Path, scriptPath)
 	command.Dir = project
-	command.Env = nodeRuntime.Environment
 	robot.HideWindow(command)
 	stdin, err := command.StdinPipe()
 	if err != nil {
@@ -9463,7 +9495,7 @@ func (s *server) checksHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if input.Variant != "" {
-		valid := input.GoalID == "web" && (input.Variant == "clean" || input.Variant == "docker") || input.GoalID == "build" && (input.Variant == "npm" || input.Variant == "git")
+		valid := input.GoalID == "web" && (input.Variant == "clean" || input.Variant == "docker") || input.GoalID == "build" && (input.Variant == "npm" || input.Variant == "git") || (input.GoalID == "install" || input.GoalID == "develop") && input.Variant == "bun"
 		if !valid {
 			writeError(w, http.StatusBadRequest, "构建或部署方式无效，请重新选择。")
 			return
@@ -9519,6 +9551,14 @@ func (s *server) environmentInstallHandler(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"output": output})
+}
+
+func (s *server) bunStatusHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
+		return
+	}
+	writeJSON(w, http.StatusOK, system.CurrentBunStatus())
 }
 
 // nodeNVMHandler uses the same NVM installation as the environment installer.

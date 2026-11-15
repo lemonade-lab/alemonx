@@ -622,3 +622,64 @@ test('macOS tray panel shows service status and sends desktop actions', async ({
     )
   }
 })
+
+test('native environment window installs and updates managed Bun', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.assign(window, {
+      webkit: { messageHandlers: { external: { postMessage: () => {} } } }
+    })
+  })
+  const actions: string[] = []
+  let version = ''
+  await page.route('**/api/v1/**', route => {
+    const path = new URL(route.request().url()).pathname
+    switch (path) {
+      case '/api/v1/auth/status':
+        return route.fulfill({ json: { enabled: false } })
+      case '/api/v1/checks':
+        return route.fulfill({ json: { checks: [], platform: 'darwin/arm64' } })
+      case '/api/v1/system/bun':
+        return route.fulfill({
+          json: {
+            check: {
+              id: 'bun',
+              name: 'Bun',
+              status: version ? 'ready' : 'missing',
+              detail: version || '未检测到',
+              suggestion: '请安装 Bun 后重新检测。'
+            },
+            version,
+            path: version ? '/cache/alemonx/environments/bun/bin/bun' : '',
+            managed: Boolean(version),
+            platform: 'darwin/arm64',
+            container: false
+          }
+        })
+      case '/api/v1/system/environment/install': {
+        const { checkId, confirm } = route.request().postDataJSON()
+        expect(confirm).toBe(true)
+        actions.push(checkId)
+        version = checkId === 'bun' ? '1.4.4' : '1.4.5'
+        return route.fulfill({ json: { output: '操作完成' } })
+      }
+      default:
+        return route.fulfill({ json: {} })
+    }
+  })
+
+  await page.goto('/desktop-window/environment')
+  await page.getByRole('button', { name: 'Bun', exact: true }).click()
+  const panel = page.getByRole('region', { name: 'Bun 版本管理' })
+  await expect(panel.getByText('未检测到', { exact: true })).toBeVisible()
+  await panel.getByRole('button', { name: '安装 Bun', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: '环境修复' })
+  await dialog.getByRole('button', { name: '安装', exact: true }).click()
+  await dialog.getByRole('button', { name: '完成', exact: true }).click()
+  await expect(panel.getByText('1.4.4', { exact: true })).toBeVisible()
+  await expect(panel.getByText('工作台托管', { exact: true })).toBeVisible()
+  await panel.getByRole('button', { name: '检查并更新 Bun' }).click()
+  await dialog.getByRole('button', { name: '升级', exact: true }).click()
+  await dialog.getByRole('button', { name: '完成', exact: true }).click()
+  await expect(panel.getByText('1.4.5', { exact: true })).toBeVisible()
+  expect(actions).toEqual(['bun', 'bun-update'])
+})

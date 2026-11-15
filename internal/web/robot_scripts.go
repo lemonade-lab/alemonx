@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -134,6 +135,11 @@ func (s *server) startRobotScript(root, script string) (operationTask, error) {
 	if _, err := s.robots.Validate(root); err != nil {
 		return operationTask{}, err
 	}
+	release, err := robot.BeginOperation(context.Background(), root)
+	if err != nil {
+		return operationTask{}, err
+	}
+	defer release()
 	if _, err := s.robots.EnsureRuntimeDependencies(root); err != nil {
 		return operationTask{}, err
 	}

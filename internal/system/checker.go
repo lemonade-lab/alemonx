@@ -49,22 +49,41 @@ type Checker struct {
 
 func NewChecker() *Checker { return &Checker{timeout: 5 * time.Second} }
 
+func (c *Checker) checkProjectRuntime(target string) Check {
+	if target == "bun" {
+		return c.command("bun", "Bun", "--version", "请安装 Bun 后重新检查。")
+	}
+	return c.command("node", "Node.js", "--version", "请安装 Node.js 22 稳定版后重新检查。")
+}
+
+func (c *Checker) CheckProjectRuntime(target string) Report {
+	check := c.checkProjectRuntime(target)
+	checks := []Check{check}
+	return Report{"runtime", checksAreUsable(checks), runtime.GOOS + "/" + runtime.GOARCH, InContainer(), checks, time.Now().Format(time.RFC3339)}
+}
+
 func (c *Checker) CheckGoal(goalID, variant string) Report {
+	var runtimeCheck Check
+	if (goalID == "install" || goalID == "develop") && variant == "bun" {
+		runtimeCheck = c.checkProjectRuntime("bun")
+	} else {
+		runtimeCheck = c.checkProjectRuntime("node")
+	}
 	checks := []Check{
-		c.command("node", "NodeJS", "--version", "请安装 Node.js 22 稳定版后重新检查。"),
+		runtimeCheck,
 		c.command("git", "Git", "--version", "请安装 Git 后重新检查。"),
 		c.fonts(),
 		c.browser(),
 		c.browserDependencies(),
 		c.commonDependencies(),
 	}
-	nodeRequired, gitRequired := false, false
+	runtimeRequired, gitRequired := false, false
 	switch goalID {
 	case "install", "develop":
-		nodeRequired, gitRequired = true, true
+		runtimeRequired, gitRequired = true, true
 	case "web":
 		if variant == "clean" {
-			nodeRequired, gitRequired = true, true
+			runtimeRequired, gitRequired = true, true
 		} else {
 			checks = append(checks, c.command("docker", "Docker", "--version", "请安装并启动 Docker Desktop 后重新检查。"))
 		}
@@ -75,13 +94,13 @@ func (c *Checker) CheckGoal(goalID, variant string) Report {
 			// Git 发布实际只需要 Node.js 与 Git。Yarn/PNPM 会在执行时
 			// 通过 npx 临时运行，jq 也没有参与当前发布链路，不能把它们
 			// 误报为新用户必须全局安装的环境。
-			nodeRequired, gitRequired = true, true
+			runtimeRequired, gitRequired = true, true
 		} else {
-			nodeRequired = true
+			runtimeRequired = true
 			checks = append(checks, c.command("npm", "npm", "--version", "请随 Node.js 一并安装 npm 后重新检查。"))
 		}
 	}
-	checks[0].Optional = !nodeRequired
+	checks[0].Optional = !runtimeRequired
 	checks[1].Optional = !gitRequired
 	ready := platformSupported() && checksAreUsable(checks)
 	return Report{goalID, ready, runtime.GOOS + "/" + runtime.GOARCH, InContainer(), checks, time.Now().Format(time.RFC3339)}
@@ -181,7 +200,9 @@ func (c *Checker) command(id, name, argument, suggestion string) Check {
 	repaired := previousErr != nil || filepath.Clean(previousPath) != filepath.Clean(path)
 	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
 	defer cancel()
-	output, err := exec.CommandContext(ctx, path, argument).CombinedOutput()
+	command := exec.CommandContext(ctx, path, argument)
+	HideWindow(command)
+	output, err := command.CombinedOutput()
 	if ctx.Err() != nil {
 		return Check{ID: id, Name: name, Status: "warning", Detail: "检测超时", Suggestion: "请确认程序可以正常启动后重试。"}
 	}
@@ -574,8 +595,28 @@ func ResolveCommand(name string) (string, error) {
 		// here would make task execution disagree with `node --version`.
 		return exec.LookPath(name)
 	}
+	if name == "bun" {
+		if target := managedBunPath(); target != "" {
+			if path, err := exec.LookPath(target); err == nil {
+				return path, nil
+			}
+		}
+	}
 	if path, err := exec.LookPath(name); err == nil {
 		return path, nil
+	}
+	if name == "bun" {
+		root := os.Getenv("BUN_INSTALL")
+		if !filepath.IsAbs(root) {
+			if home, err := os.UserHomeDir(); err == nil && filepath.IsAbs(home) {
+				root = filepath.Join(home, ".bun")
+			}
+		}
+		if filepath.IsAbs(root) {
+			if path, err := exec.LookPath(filepath.Join(root, "bin", name)); err == nil {
+				return path, nil
+			}
+		}
 	}
 	if runtime.GOOS == "windows" {
 		for _, directory := range windowsCommandDirectories(name) {

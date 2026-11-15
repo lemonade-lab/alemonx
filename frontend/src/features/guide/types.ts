@@ -31,6 +31,7 @@ export type ProjectConfig = {
   destinationMode: 'current' | 'custom'
   destination: string
   language: string
+  runtime?: 'node' | 'bun'
   packageManager: string
   eslint: boolean
   initializeGit: boolean

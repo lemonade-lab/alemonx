@@ -1,3 +1,4 @@
+import { RobotRuntimeSwitch } from './RobotRuntimeSwitch'
 import { BackpackPackageUpdate } from './BackpackPackageUpdate'
 import { WorkbenchQuickActions } from './WorkbenchQuickActions'
 import { RobotDirectoryTree } from './RobotDirectoryTree'
@@ -176,6 +177,7 @@ import {
 } from './SidebarWindow'
 import { qqChatWindowStorageKey } from './qqChatStorage'
 import { NodeNVMPanel } from './NodeNVMPanel'
+import { BunRuntimePanel } from './BunRuntimePanel'
 import { PythonRuntimePanel } from './PythonRuntimePanel'
 import { ConfigFieldsEditor, ConfigSourceLinks } from './PackageConfigFields'
 import { sameConfigValues } from './configFieldUtils'
@@ -5912,7 +5914,7 @@ function EnvironmentPage({
   onFix: (check: Check) => void
   sidebarLayout?: boolean
 }) {
-  const [environmentView, setEnvironmentView] = useNavigationState<'general' | 'nodejs' | 'python'>('environment.section', [], 'general', ['general', 'nodejs', 'python'])
+  const [environmentView, setEnvironmentView] = useNavigationState<'general' | 'nodejs' | 'bun' | 'python'>('environment.section', [], 'general', ['general', 'nodejs', 'bun', 'python'])
   // NodeJS has its own version-management page. Keeping it out of the
   // general checklist avoids showing two competing “current” versions.
   const checks = (report?.checks ?? []).filter(check => check.id !== 'node')
@@ -5940,6 +5942,7 @@ function EnvironmentPage({
     requiredChecks.length > 0 && readyCount === requiredChecks.length
   const showGeneral = !sidebarLayout || environmentView === 'general'
   const showNodeJS = !sidebarLayout || environmentView === 'nodejs'
+  const showBun = !sidebarLayout || environmentView === 'bun'
   const showPython = !sidebarLayout || environmentView === 'python'
   return (
     <section className="workspace-content system-feature-page mx-auto max-w-215">
@@ -5958,6 +5961,13 @@ function EnvironmentPage({
             onClick={() => setEnvironmentView('nodejs')}
           >
             <Terminal className="size-4" /> NodeJS
+          </button>
+          <button
+            type="button"
+            aria-current={environmentView === 'bun' ? 'page' : undefined}
+            onClick={() => setEnvironmentView('bun')}
+          >
+            <Terminal className="size-4" /> Bun
           </button>
           <button
             type="button"
@@ -6086,9 +6096,10 @@ function EnvironmentPage({
       )}
 
       {showNodeJS && <NodeNVMPanel onChanged={onRefresh} />}
+      {showBun && <BunRuntimePanel onChanged={onRefresh} />}
       {showPython && <PythonRuntimePanel onChanged={onRefresh} />}
 
-      {sidebarLayout ? (
+      {sidebarLayout && environmentView !== 'bun' ? (
         <SidebarWindowActions>
           <button
             className={
@@ -6108,7 +6119,7 @@ function EnvironmentPage({
             重新检查
           </button>
         </SidebarWindowActions>
-      ) : (
+      ) : !sidebarLayout && (
         <footer className="flex justify-end border-t border-slate-100 pt-3 dark:border-slate-800">
           <button
             className="system-feature-refresh inline-flex min-h-8 items-center gap-1.5 justify-center rounded-lg px-3 text-xs font-semibold transition-colors"
@@ -9734,6 +9745,13 @@ function PM2RuntimeCard({
                 <span className="font-mono text-slate-500">
                   PID {item.pid || '—'}
                 </span>
+                {item.pid > 0 && (item.status === 'online' || item.status === 'launching') && (
+                  <span className="font-mono text-slate-500">
+                    {item.runtime
+                      ? `${item.runtime === 'bun' ? 'Bun' : 'Node.js'} ${item.runtimeVersion ? `v${item.runtimeVersion}` : '版本未知'}`
+                      : '运行时待确认'}
+                  </span>
+                )}
                 <span className="font-mono text-slate-500">
                   CPU {item.cpu ? `${item.cpu.toFixed(1)}%` : '—'}
                 </span>
@@ -10648,19 +10666,30 @@ function RuntimePanel({
       title={overview?.name || '正在读取项目…'}
       description={
         overview
-          ? `${overview.version || '未设置版本'} · ${overview.packageManager} · ${overview.hasDevScript ? '已配置开发命令' : '未配置 dev 命令'}`
+          ? `${overview.version || '未设置版本'} · ${overview.runtime === 'bun' ? 'Bun' : 'Node.js'} · ${overview.packageManager} · ${overview.hasDevScript ? '已配置开发命令' : '未配置 dev 命令'}`
           : '读取包信息、平台包与运行状态。'
       }
       actions={
-        <button
-          className="icon-button size-9 shrink-0 p-0"
-          disabled={loading}
-          onClick={handleRefresh}
-          aria-label="刷新运行状态"
-          title="刷新运行状态"
-        >
-          <RefreshCw className="size-4" />
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          {overview && (
+            <RobotRuntimeSwitch
+              key={root}
+              root={root}
+              current={overview.runtime === 'bun' ? 'bun' : 'node'}
+              disabled={loading || busy}
+              onChanged={handleRefresh}
+            />
+          )}
+          <button
+            className="icon-button size-9 shrink-0 p-0"
+            disabled={loading}
+            onClick={handleRefresh}
+            aria-label="刷新运行状态"
+            title="刷新运行状态"
+          >
+            <RefreshCw className="size-4" />
+          </button>
+        </div>
       }
     >
       <ConfirmDialog

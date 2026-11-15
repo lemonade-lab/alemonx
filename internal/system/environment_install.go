@@ -441,8 +441,13 @@ func InstallEnvironment(ctx context.Context, checkID string) (string, error) {
 	if InContainer() {
 		return "", errors.New("Docker 环境的运行库由镜像提供，不能在容器内安装。请更新镜像后重新创建容器。")
 	}
-	if strings.TrimSpace(checkID) == "node" {
+	switch strings.TrimSpace(checkID) {
+	case "node":
 		return InstallNodeWithNVM(ctx)
+	case "bun":
+		return InstallManagedBun(ctx)
+	case "bun-update":
+		return UpdateManagedBun(ctx)
 	}
 	plan, err := EnvironmentInstallPlanForHost(checkID)
 	if err != nil {

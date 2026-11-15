@@ -138,7 +138,10 @@ func (Manager) StreamPM2Logs(ctx context.Context, root string, onLine func(strin
 	name, args := pm2Launcher(path)
 	command := exec.CommandContext(ctx, name, append(args, "logs", "--raw", "--lines", "0")...)
 	command.Dir = path
-	applyManagedNodeEnvironment(command)
+	applyRuntimeCommandEnvironment(command)
+	if err := applyPM2SocketEnvironment(command); err != nil {
+		return err
+	}
 	HideWindow(command)
 	stdout, err := command.StdoutPipe()
 	if err != nil {
@@ -310,6 +313,7 @@ type RuntimeOverview struct {
 	Name                 string           `json:"name"`
 	Version              string           `json:"version"`
 	PackageManager       string           `json:"packageManager"`
+	Runtime              string           `json:"runtime"`
 	HasAppScript         bool             `json:"hasAppScript"`
 	HasDevScript         bool             `json:"hasDevScript"`
 	HasBuildScript       bool             `json:"hasBuildScript"`
@@ -680,7 +684,7 @@ func (Manager) RuntimeOverview(root string) (RuntimeOverview, error) {
 	if err != nil || json.Unmarshal(data, &manifest) != nil {
 		return RuntimeOverview{}, errors.New("无法读取 package.json")
 	}
-	overview := RuntimeOverview{Name: manifest.Name, Version: manifest.Version, PackageManager: projectPackageManager(path), HasAppScript: manifest.Scripts["app"] != "", HasDevScript: manifest.Scripts["dev"] != "", HasBuildScript: manifest.Scripts["build"] != "", HasStartScript: manifest.Scripts["start"] != ""}
+	overview := RuntimeOverview{Name: manifest.Name, Version: manifest.Version, Runtime: packagemanager.ProjectRuntime(path), PackageManager: projectPackageManager(path), HasAppScript: manifest.Scripts["app"] != "", HasDevScript: manifest.Scripts["dev"] != "", HasBuildScript: manifest.Scripts["build"] != "", HasStartScript: manifest.Scripts["start"] != ""}
 	if manifest.PackageManager != "" {
 		overview.PackageManager = strings.Split(manifest.PackageManager, "@")[0]
 	}
@@ -982,7 +986,7 @@ func (m Manager) UpgradeAlemonDependencies(root string) (Result, error) {
 		}
 	default:
 		args := []string{"upgrade", "--latest"}
-		if manager == "pnpm" {
+		if manager == "pnpm" || manager == "bun" {
 			args[0] = "update"
 		}
 		if plan.Workspace {
@@ -1135,19 +1139,23 @@ func (Manager) PM2Logs(root string, page int) (PM2LogPage, error) {
 // PM2Process is one process from the local PM2 daemon, surfaced to the UI so
 // the PM2 status panel can render a real table instead of raw CLI text.
 type PM2Process struct {
-	ID        int     `json:"id"`
-	Name      string  `json:"name"`
-	Namespace string  `json:"namespace"`
-	Status    string  `json:"status"`
-	PID       int     `json:"pid"`
-	CWD       string  `json:"cwd"`
-	Memory    int64   `json:"memory"`
-	CPU       float64 `json:"cpu"`
-	Uptime    int64   `json:"uptime"`
-	Restarts  int     `json:"restarts"`
-	Script    string  `json:"script"`
-	ErrorLog  string  `json:"errorLog,omitempty"`
-	OutputLog string  `json:"outputLog,omitempty"`
+	ID             int     `json:"id"`
+	Name           string  `json:"name"`
+	Namespace      string  `json:"namespace"`
+	Status         string  `json:"status"`
+	PID            int     `json:"pid"`
+	CWD            string  `json:"cwd"`
+	Memory         int64   `json:"memory"`
+	CPU            float64 `json:"cpu"`
+	Uptime         int64   `json:"uptime"`
+	Restarts       int     `json:"restarts"`
+	Script         string  `json:"script"`
+	Interpreter    string  `json:"interpreter,omitempty"`
+	ErrorLog       string  `json:"errorLog,omitempty"`
+	OutputLog      string  `json:"outputLog,omitempty"`
+	Runtime        string  `json:"runtime,omitempty"`
+	RuntimeVersion string  `json:"runtimeVersion,omitempty"`
+	nodeVersion    string
 }
 
 // PackageScript is one declared package.json script safe to present to the
@@ -1244,7 +1252,14 @@ func (Manager) PM2Processes(root string) ([]PM2Process, error) {
 	if err != nil {
 		return nil, fmt.Errorf("无法读取 PM2 进程：%w", err)
 	}
-	return parsePM2Processes(output)
+	processes, err := parsePM2Processes(output)
+	if err != nil {
+		return nil, err
+	}
+	for i := range processes {
+		observePM2Runtime(&processes[i])
+	}
+	return processes, nil
 }
 
 // PM2ProjectProcesses returns only the PM2 entries whose working directory is
@@ -1277,7 +1292,10 @@ func pm2JList(root string) (string, error) {
 	cmd := exec.CommandContext(ctx, name, append(args, "jlist")...)
 	cmd.Dir = root
 	cmd.Env = os.Environ()
-	applyManagedNodeEnvironment(cmd)
+	applyRuntimeCommandEnvironment(cmd)
+	if err := applyPM2SocketEnvironment(cmd); err != nil {
+		return "", err
+	}
 	HideWindow(cmd)
 	output, err := cmd.Output()
 	text := strings.TrimSpace(string(output))
@@ -1290,7 +1308,7 @@ func pm2JList(root string) (string, error) {
 			// directly. Report the missing executable instead of incorrectly
 			// telling users to install PM2 when their Node runtime is missing.
 			missing := filepath.Base(name)
-			if missing != "node" && missing != "npx" && missing != "npm" {
+			if missing != "node" && missing != "npx" && missing != "npm" && missing != "bun" && missing != "bun.exe" {
 				missing = "pm2"
 			}
 			return text, pm2UnavailableHint(missingCommandAdvice(missing))
@@ -1307,6 +1325,13 @@ func pm2JList(root string) (string, error) {
 // system installation preserves upgraded users' daemon; otherwise the bundled
 // PM2 keeps the workbench usable offline. npx remains the last resort.
 func pm2Launcher(root string) (string, []string) {
+	if packagemanager.UsesBunRuntime(root) {
+		bun := bunToolPath()
+		if localPM2(root) {
+			return bun, []string{filepath.Join(root, "node_modules", "pm2", "bin", "pm2")}
+		}
+		return bun, []string{"x", "--bun", "--package", "pm2@5", "pm2"}
+	}
 	if localPM2(root) {
 		// Do not route a local PM2 through `npx --no-install pm2`. Newer npm
 		// implements npx as `npm exec`, which can briefly create a console on
@@ -1480,13 +1505,15 @@ func parsePM2Processes(output string) ([]PM2Process, error) {
 		Status   string `json:"status"`
 		Restarts int    `json:"restart_time"`
 		PM2Env   struct {
-			Script    string `json:"script"`
-			Namespace string `json:"namespace"`
-			Status    string `json:"status"`
-			Uptime    int64  `json:"pm_uptime"`
-			ErrorLog  string `json:"pm_err_log_path"`
-			OutputLog string `json:"pm_out_log_path"`
-			CWD       string `json:"pm_cwd"`
+			Script      string `json:"script"`
+			Interpreter string `json:"exec_interpreter"`
+			NodeVersion string `json:"node_version"`
+			Namespace   string `json:"namespace"`
+			Status      string `json:"status"`
+			Uptime      int64  `json:"pm_uptime"`
+			ErrorLog    string `json:"pm_err_log_path"`
+			OutputLog   string `json:"pm_out_log_path"`
+			CWD         string `json:"pm_cwd"`
 		} `json:"pm2_env"`
 		Monit struct {
 			Memory int64   `json:"memory"`
@@ -1505,19 +1532,21 @@ func parsePM2Processes(output string) ([]PM2Process, error) {
 			status = p.Status
 		}
 		processes = append(processes, PM2Process{
-			ID:        p.PMID,
-			Name:      p.Name,
-			Namespace: p.PM2Env.Namespace,
-			Status:    strings.ToLower(status),
-			PID:       p.PID,
-			CWD:       p.PM2Env.CWD,
-			Memory:    p.Monit.Memory,
-			CPU:       p.Monit.CPU,
-			Uptime:    p.PM2Env.Uptime,
-			Restarts:  p.Restarts,
-			Script:    p.PM2Env.Script,
-			ErrorLog:  p.PM2Env.ErrorLog,
-			OutputLog: p.PM2Env.OutputLog,
+			ID:          p.PMID,
+			Name:        p.Name,
+			Namespace:   p.PM2Env.Namespace,
+			Status:      strings.ToLower(status),
+			PID:         p.PID,
+			CWD:         p.PM2Env.CWD,
+			Memory:      p.Monit.Memory,
+			CPU:         p.Monit.CPU,
+			Uptime:      p.PM2Env.Uptime,
+			Restarts:    p.Restarts,
+			Script:      p.PM2Env.Script,
+			Interpreter: p.PM2Env.Interpreter,
+			nodeVersion: p.PM2Env.NodeVersion,
+			ErrorLog:    p.PM2Env.ErrorLog,
+			OutputLog:   p.PM2Env.OutputLog,
 		})
 	}
 	return processes, nil
@@ -1554,19 +1583,26 @@ func parsePM2Status(root, output string) (PM2Status, error) {
 	if err := json.Unmarshal([]byte(output), &processes); err != nil {
 		return PM2Status{}, fmt.Errorf("无法解析 PM2 状态：%w", err)
 	}
+	result := PM2Status{Configured: true, Status: "not-found"}
 	for _, process := range processes {
 		if !sameWorkspacePath(process.PM2Env.CWD, root) {
 			continue
 		}
 		status := strings.ToLower(process.PM2Env.Status)
-		return PM2Status{
+		current := PM2Status{
 			Configured: true,
 			Managed:    true,
 			Running:    status == "online" || status == "launching",
 			Status:     status,
-		}, nil
+		}
+		if current.Running {
+			return current, nil
+		}
+		if !result.Managed || status == "stopping" || status == "waiting restart" {
+			result = current
+		}
 	}
-	return PM2Status{Configured: true, Status: "not-found"}, nil
+	return result, nil
 }
 
 func paginatePM2LogLines(lines []string, page int) PM2LogPage {
@@ -1822,6 +1858,22 @@ func (m Manager) Run(root, action, message, packageName, version, tag, token str
 			dependencyOutput = strings.TrimSpace(dependencyOutput + "\n检测到机器人目录已移动，已重新登记 PM2 进程。")
 		}
 	}
+	reapplyPM2Runtime := false
+	switch action {
+	case "pm2", "pm2-restart", "pm2-reload", "pm2-process-start", "pm2-process-restart", "pm2-process-reload":
+		target := ""
+		if strings.HasPrefix(action, "pm2-process-") {
+			target = message
+		}
+		changed, refreshErr := m.preparePM2RuntimeChange(root, target)
+		if refreshErr != nil {
+			return Result{Path: root, Output: dependencyOutput}, refreshErr
+		}
+		if changed {
+			reapplyPM2Runtime = true
+			action = "pm2"
+		}
+	}
 	manager := projectPackageManager(root)
 	var name string
 	var args []string
@@ -1922,7 +1974,12 @@ func (m Manager) Run(root, action, message, packageName, version, tag, token str
 		if err := m.ValidateEnabledBackpackRelease(root); err != nil {
 			return Result{}, err
 		}
-		name, args = manager, []string{"run", "start"}
+		if reapplyPM2Runtime {
+			name, args = pm2Launcher(root)
+			args = append(args, "start", "pm2.config.cjs")
+		} else {
+			name, args = manager, []string{"run", "start"}
+		}
 	case "pm2-stop":
 		name, args = manager, []string{"run", "stop"}
 	case "pm2-stop-project":
@@ -2283,7 +2340,11 @@ func nodeToolPath(name string) string {
 	return name
 }
 
-func applyManagedNodeEnvironment(command *exec.Cmd) {
+func applyRuntimeCommandEnvironment(command *exec.Cmd) {
+	if filepath.Base(command.Path) == "bun" || strings.EqualFold(filepath.Base(command.Path), "bun.exe") {
+		command.Env = system.BunEnvironment(command.Environ())
+		return
+	}
 	runtime, err := system.CurrentNodeRuntime()
 	if err != nil {
 		return
@@ -2298,18 +2359,32 @@ func PackageManagerCommand(root string, args ...string) (*exec.Cmd, string) {
 	return packageManagerCommand(root, projectPackageManager(root), args...)
 }
 
+func bunToolPath() string {
+	if path, err := system.ResolveCommand("bun"); err == nil {
+		return path
+	}
+	return "bun"
+}
+
 func packageManagerCommand(root, manager string, args ...string) (*exec.Cmd, string) {
-	if path := nodeToolPath(manager); path != manager {
+	path := nodeToolPath(manager)
+	if manager == "bun" {
+		path = bunToolPath()
+		if len(args) > 0 && args[0] == "run" && packagemanager.UsesBunRuntime(root) {
+			args = append([]string{"run", "--bun"}, args[1:]...)
+		}
+	}
+	if path != manager {
 		command := exec.Command(path, args...)
 		command.Dir = root
-		applyManagedNodeEnvironment(command)
+		applyRuntimeCommandEnvironment(command)
 		HideWindow(command)
 		return command, ""
 	}
 	if _, err := exec.LookPath(manager); err == nil {
 		command := exec.Command(manager, args...)
 		command.Dir = root
-		applyManagedNodeEnvironment(command)
+		applyRuntimeCommandEnvironment(command)
 		HideWindow(command)
 		return command, ""
 	}
@@ -2317,7 +2392,7 @@ func packageManagerCommand(root, manager string, args ...string) (*exec.Cmd, str
 		if command, prefix, ok := resources.ToolCommand("yarn"); ok {
 			executable := exec.Command(command, append(prefix, args...)...)
 			executable.Dir = root
-			applyManagedNodeEnvironment(executable)
+			applyRuntimeCommandEnvironment(executable)
 			HideWindow(executable)
 			return executable, "使用内置 Yarn 运行"
 		}
@@ -2328,13 +2403,13 @@ func packageManagerCommand(root, manager string, args ...string) (*exec.Cmd, str
 	default:
 		command := exec.Command(manager, args...)
 		command.Dir = root
-		applyManagedNodeEnvironment(command)
+		applyRuntimeCommandEnvironment(command)
 		HideWindow(command)
 		return command, ""
 	}
 	command := exec.Command(nodeToolPath("npx"), append(packagemanager.NPXArgs(root, manager), args...)...)
 	command.Dir = root
-	applyManagedNodeEnvironment(command)
+	applyRuntimeCommandEnvironment(command)
 	HideWindow(command)
 	return command, "未找到 " + strings.ToUpper(manager) + "，临时通过 npm 获取并执行；不会修改电脑的全局安装。"
 }
@@ -2344,6 +2419,9 @@ func runPackageManager(root string, args ...string) (string, error) {
 }
 
 func packageVersionArgs(root, manager, version string) []string {
+	if manager == "bun" {
+		return []string{"pm", "version", version, "--no-git-tag-version"}
+	}
 	if manager == "yarn" {
 		if packagemanager.ModernYarn(root) {
 			return []string{"version", version}
@@ -2398,11 +2476,15 @@ func runCommandOutput(root string, values map[string]string, combined, trim bool
 	ctx, cancel := context.WithTimeout(operationContext(root), timeout)
 	defer cancel()
 	path := nodeToolPath(name)
+	if name == "npm" && packagemanager.UsesBunRuntime(root) {
+		path = bunToolPath()
+		args = append([]string{"x", "--bun", "--package", "npm@10.9.9", "npm"}, args...)
+	}
 	cmd := exec.CommandContext(ctx, path, args...)
 	cmd.Dir = root
 	cmd.Env = os.Environ()
 	applyNodeSiblingEnvironment(cmd, path)
-	applyManagedNodeEnvironment(cmd)
+	applyRuntimeCommandEnvironment(cmd)
 	HideWindow(cmd)
 	configureCancellableCommand(cmd)
 	for key, value := range values {
@@ -2416,6 +2498,11 @@ func runCommandOutput(root string, values map[string]string, combined, trim bool
 		}
 		if prefix != "" {
 			cmd.Env = append(cmd.Env, prefix+value)
+		}
+	}
+	if usesPM2Socket(cmd) {
+		if err := applyPM2SocketEnvironment(cmd); err != nil {
+			return "", err
 		}
 	}
 	var raw []byte
@@ -2509,7 +2596,7 @@ func commandTimeout(name string, args ...string) time.Duration {
 			return 10 * time.Minute
 		}
 	}
-	if base == "npm" || base == "yarn" || base == "pnpm" || base == "npx" {
+	if base == "npm" || base == "yarn" || base == "pnpm" || base == "npx" || base == "bun" || base == "bun.exe" {
 		return 20 * time.Minute
 	}
 	// Bundled tools run through `node <workspace>/packages/<name>/...` and
@@ -2533,6 +2620,8 @@ func missingCommandAdvice(name string) error {
 	switch strings.ToLower(name) {
 	case "node", "npm", "npx", "yarn", "pnpm":
 		return errors.New("未检测到 Node.js 运行环境（含 npm/npx）。请先在左上角“环境”中安装 Node.js LTS，完成后重新执行；Yarn 和 PNPM 无需全局安装，alx 会临时执行它们")
+	case "bun", "bun.exe":
+		return errors.New("未检测到 Bun。请在引导中安装 Bun，完成后重新执行")
 	case "git":
 		return errors.New("未检测到 Git。请先在左上角“环境”中安装 Git，完成后重新执行")
 	default:

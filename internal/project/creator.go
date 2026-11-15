@@ -29,6 +29,7 @@ type Config struct {
 	DestinationMode     string   `json:"destinationMode"`
 	Destination         string   `json:"destination"`
 	Language            string   `json:"language"`
+	Runtime             string   `json:"runtime,omitempty"`
 	PackageManager      string   `json:"packageManager"`
 	ESLint              bool     `json:"eslint"`
 	InitializeGit       bool     `json:"initializeGit"`
@@ -39,6 +40,7 @@ type Config struct {
 	DevelopmentPackages []string `json:"developmentPackages"`
 	ResourceIDs         []string `json:"resourceIDs,omitempty"`
 	resolvedResources   []catalog.Resource
+	bunVersion          string
 }
 
 type Result struct {
@@ -66,6 +68,15 @@ var validName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$`)
 func (c *Creator) Create(config Config) (Result, error) {
 	if err := validate(config); err != nil {
 		return Result{}, err
+	}
+	if config.PackageManager == "bun" {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		version, err := system.BunVersion(ctx)
+		cancel()
+		if err != nil {
+			return Result{}, err
+		}
+		config.bunVersion = version
 	}
 	if err := resolveResources(&config, catalog.Detail); err != nil {
 		return Result{}, err
@@ -140,7 +151,7 @@ func (c *Creator) Create(config Config) (Result, error) {
 		}
 	}
 	log("正在安装项目依赖…")
-	install := map[string][]string{"yarn": {"install"}, "npm": {"install"}, "pnpm": {"install"}}[config.PackageManager]
+	install := []string{"install"}
 	install = append(append([]string{}, packagePrefix...), install...)
 	if packageCommand == "npx" {
 		install = append(packagemanager.NPXArgs(path, config.PackageManager), install...)
@@ -218,7 +229,13 @@ func validate(c Config) error {
 	if c.Language != "js" && c.Language != "ts" {
 		return errors.New("开发语言无效")
 	}
-	if c.PackageManager != "yarn" && c.PackageManager != "npm" && c.PackageManager != "pnpm" {
+	if c.Runtime != "" && c.Runtime != "node" && c.Runtime != "bun" {
+		return errors.New("JavaScript 运行时无效")
+	}
+	if c.Runtime == "bun" && c.PackageManager != "bun" {
+		return errors.New("Bun 运行时需要通过 Bun 安装依赖")
+	}
+	if c.PackageManager != "yarn" && c.PackageManager != "npm" && c.PackageManager != "pnpm" && c.PackageManager != "bun" {
 		return errors.New("包管理器无效")
 	}
 	if c.ImageMode != "none" && c.ImageMode != "html" && c.ImageMode != "react" {
@@ -280,7 +297,15 @@ func patchPackage(root string, config Config) error {
 	// Persist the user's package-manager choice. Subsequent robot operations
 	// read package.json first, so a copied project behaves consistently even
 	// before a lock file exists.
-	if config.PackageManager != "" {
+	if config.Runtime == "bun" {
+		pkg["alemonxRuntime"] = "bun"
+		if err := os.WriteFile(filepath.Join(root, "bunfig.toml"), []byte("[run]\nbun = true\n"), 0644); err != nil {
+			return err
+		}
+	}
+	if config.PackageManager == "bun" {
+		pkg["packageManager"] = "bun@" + config.bunVersion
+	} else if config.PackageManager != "" {
 		pkg["packageManager"] = map[string]string{"npm": "npm@10", "yarn": "yarn@" + packagemanager.YarnVersion, "pnpm": "pnpm@" + packagemanager.PNPMVersion}[config.PackageManager]
 	}
 	dependencies, _ := pkg["devDependencies"].(map[string]any)
@@ -312,6 +337,10 @@ func patchPackage(root string, config Config) error {
 		}
 		dependencies[resource.PackageName] = version
 	}
+	if config.Runtime == "bun" {
+		scripts["app"] = "bun index.js"
+		scripts["review"] = "bun x --bun alemonc start"
+	}
 	if !config.UsePM2 {
 		remove("pm2")
 		delete(scripts, "start")
@@ -326,9 +355,6 @@ func patchPackage(root string, config Config) error {
 		// stable identity so the PM2 app name survives directory moves.
 		if err := pm2config.EnsureID(root); err != nil {
 			return fmt.Errorf("写入项目身份失败：%w", err)
-		}
-		if err := os.WriteFile(filepath.Join(root, "pm2.config.cjs"), []byte(pm2config.Config(root)), 0644); err != nil {
-			return err
 		}
 	}
 	if config.ImageMode != "react" {
@@ -383,7 +409,13 @@ func patchPackage(root string, config Config) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, append(encoded, '\n'), 0644)
+	if err := os.WriteFile(path, append(encoded, '\n'), 0644); err != nil {
+		return err
+	}
+	if config.UsePM2 {
+		return os.WriteFile(filepath.Join(root, "pm2.config.cjs"), []byte(pm2config.Config(root)), 0644)
+	}
+	return nil
 }
 
 // eslintConfig generates a useful ESLint config for the guided projects.
@@ -454,9 +486,13 @@ func writeAgentsFile(root string, config Config) error {
 	if config.Language == "js" {
 		extension = "js"
 	}
-	verify := "npx tsc --noEmit"
+	runtimeName, execPrefix := "Node.js", "npx "
+	if config.Runtime == "bun" {
+		runtimeName, execPrefix = "Bun", "bun x --bun "
+	}
+	verify := execPrefix + "tsc --noEmit"
 	if config.ESLint {
-		verify += "\nnpx eslint src --ext ." + extension
+		verify += "\n" + execPrefix + "eslint src --ext ." + extension
 	}
 	lvyConfig := "lvy.config.ts"
 	if config.Language == "js" {
@@ -464,7 +500,7 @@ func writeAgentsFile(root string, config Config) error {
 	}
 	content := `# AGENTS.md
 
-这是一个 AlemonJS（聊天平台机器人开发框架）项目，基于 Node.js 开发。
+这是一个 AlemonJS（聊天平台机器人开发框架）项目，基于 ` + runtimeName + ` 开发。
 
 ## 工作原则
 
@@ -574,7 +610,7 @@ func createCommandTimeout(name string, args ...string) time.Duration {
 	if base == "git" && len(args) > 0 && (args[0] == "clone" || args[0] == "fetch" || args[0] == "pull") {
 		return 10 * time.Minute
 	}
-	if base == "npm" || base == "yarn" || base == "pnpm" || base == "npx" {
+	if base == "npm" || base == "yarn" || base == "pnpm" || base == "bun" || base == "npx" {
 		return 20 * time.Minute
 	}
 	if base == "node" && len(args) > 0 && strings.Contains(filepath.ToSlash(args[0]), "/packages/") {
@@ -623,6 +659,11 @@ func run(directory string, logs *[]string, name string, args ...string) error {
 }
 
 func projectCommandPath(name string) string {
+	if name == "bun" || name == "git" {
+		if path, err := system.ResolveCommand(name); err == nil {
+			return path
+		}
+	}
 	base := filepath.Base(name)
 	if base == "node" {
 		if runtime, err := system.CurrentNodeRuntime(); err == nil {
@@ -771,6 +812,8 @@ func missingCommandAdvice(name string) error {
 	switch strings.ToLower(name) {
 	case "node", "npm", "npx", "yarn", "pnpm":
 		return errors.New("未检测到 Node.js 运行环境（含 npm/npx）。请先在左上角“环境”中安装 Node.js LTS，完成后重新创建项目")
+	case "bun":
+		return errors.New("未检测到 Bun。请在引导中安装 Bun 后重新创建项目")
 	case "git":
 		return errors.New("未检测到 Git。请先在左上角“环境”中安装 Git，完成后重新创建项目")
 	default:

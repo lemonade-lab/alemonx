@@ -1,31 +1,23 @@
 import { useStoreState } from '../../store/guideStore'
 import { useEffect, useRef, type CSSProperties, type ReactNode } from 'react'
 import { useDispatch } from 'react-redux'
-import { useLocation, useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import { ArrowRight, Code2 } from 'lucide-react'
 import { setProject } from '../../store/guideStore'
 import { DirectoryPicker } from '../../components/Dashboard'
 import { ErrorNotice } from '../../components/ErrorNotice'
 import { GuideHeader } from '../../components/GuideHeader'
-import type { Check, Creation, Goal, ProjectConfig, Report } from './types'
+import type { Goal } from './types'
 import { guideIcons } from './icons'
 
 type Props = {
-  loading: boolean
   group?: string
   goal?: Goal
-  report: Report | null
-  checking: boolean
   error: string
-  creating: boolean
-  creation: Creation | null
   onSelect: (id: string | null) => void
   onClose: () => void
   onOpenSettings: () => void
   onClearError: () => void
-  onCheck: (variant?: string) => void
-  onCreate: (config: ProjectConfig) => void
-  onFix: (check: Check) => void
   windowStyle?: CSSProperties
   windowControls?: ReactNode
   renderFlow: (registerBack: (handler: () => void) => void) => ReactNode
@@ -34,13 +26,11 @@ type Props = {
 export function GuideHome({
   group,
   goal,
-  report,
   error,
   onSelect,
   onClose,
   onOpenSettings,
   onClearError,
-  onFix,
   renderFlow,
   windowStyle,
   windowControls
@@ -48,22 +38,7 @@ export function GuideHome({
   const backAction = useRef<() => void>(() => {})
   const dispatch = useDispatch()
   const [directoryPickerOpen, setDirectoryPickerOpen] = useStoreState(false)
-  const location = useLocation()
   const navigate = useNavigate()
-  const currentStep = Number(location.pathname.match(/\/step\/(\d+)/)?.[1] ?? 0)
-  const missingChecks =
-    report?.checks.filter(
-      check =>
-        check.status !== 'ready' &&
-        check.status !== 'outdated' &&
-        !check.optional &&
-        ['node', 'git', 'docker'].includes(check.id)
-    ) ?? []
-  const isCheckStep =
-    goal?.id === 'install' || goal?.id === 'develop'
-      ? currentStep === 1
-      : goal?.id === 'web' && currentStep === 2
-
   useEffect(() => {
     const open = () => setDirectoryPickerOpen(true)
     window.addEventListener('alemon:choose-directory', open)
@@ -86,15 +61,6 @@ export function GuideHome({
           renderFlow(handler => {
             backAction.current = handler
           })
-        )}
-        {isCheckStep && missingChecks.length > 0 && (
-          <div className="environment-repair">
-            {missingChecks.map(check => (
-              <button key={check.id} onClick={() => onFix(check)}>
-                安装 / 下载 {check.name}
-              </button>
-            ))}
-          </div>
         )}
         <DirectoryPicker
           open={directoryPickerOpen}

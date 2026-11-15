@@ -14,6 +14,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"alemonx/internal/packagemanager"
 )
 
 const (
@@ -154,6 +156,12 @@ func ConfigWithOptions(root string, options Options) string {
 	fields.WriteString("      namespace: " + strconv.Quote(namespace) + ",\n")
 	fields.WriteString("      cwd: __dirname,\n")
 	fields.WriteString("      script: " + jsSingleQuote(options.Script) + ",\n")
+	switch packagemanager.DeclaredProjectRuntime(path) {
+	case "bun":
+		fields.WriteString("      interpreter: process.versions.bun ? process.execPath : 'bun',\n")
+	case "node":
+		fields.WriteString("      interpreter: process.versions.bun ? 'node' : process.execPath,\n")
+	}
 	fields.WriteString("      autorestart: " + strconv.FormatBool(options.Autorestart) + ",\n")
 	fields.WriteString("      min_uptime: '10s',\n")
 	fields.WriteString("      max_restarts: " + strconv.Itoa(options.MaxRestarts) + ",\n")

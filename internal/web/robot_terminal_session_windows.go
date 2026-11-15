@@ -19,6 +19,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"alemonx/internal/system"
 )
 
 const terminalOutputLimit = 1024 * 1024
@@ -155,6 +157,7 @@ func (s *server) terminalSessionsHandler(w http.ResponseWriter, r *http.Request)
 	}
 	cmd := exec.Command(shell)
 	cmd.Dir = cwd
+	cmd.Env = system.BunEnvironment(os.Environ())
 	inputPipe, err := cmd.StdinPipe()
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())

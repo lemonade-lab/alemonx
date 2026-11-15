@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"alemonx/internal/packagemanager"
 	"alemonx/internal/pm2config"
 	"alemonx/internal/resources"
 	"alemonx/internal/system"
@@ -68,9 +69,11 @@ func (m Manager) RuntimeRepairPlan(root, mode string) (RuntimeRepairPlan, error)
 	if !framework {
 		plan.Automatic = append(plan.Automatic, "补齐 AlemonJS 框架依赖")
 	}
-	if _, err := system.ResolveCommand("node"); err != nil {
-		plan.Blocked = append(plan.Blocked, "未检测到 Node.js；请先安装 Node.js LTS。")
+	runtimeName := packagemanager.ProjectRuntime(path)
+	if _, err := system.ResolveCommand(runtimeName); err != nil {
+		plan.Blocked = append(plan.Blocked, missingCommandAdvice(runtimeName).Error())
 	}
+	appScript := runtimeName + " index.js"
 	missing, dependencyErr := m.RuntimeDependencies(root)
 	if dependencyErr != nil {
 		plan.Blocked = append(plan.Blocked, dependencyErr.Error())
@@ -89,7 +92,7 @@ func (m Manager) RuntimeRepairPlan(root, mode string) (RuntimeRepairPlan, error)
 		planScriptChange(&plan, manifest.Scripts["dev"], desired, "dev")
 	}
 	if mode == "app" || mode == "dev" || mode == "all" {
-		planScriptChange(&plan, manifest.Scripts["app"], "node index.js", "app")
+		planScriptChange(&plan, manifest.Scripts["app"], appScript, "app")
 	}
 	if mode == "pm2" || mode == "all" {
 		planScriptChange(&plan, manifest.Scripts["start"], "pm2 startOrRestart pm2.config.cjs", "start")
@@ -115,7 +118,7 @@ func planScriptChange(plan *RuntimeRepairPlan, current, desired, name string) {
 	if current == desired {
 		return
 	}
-	if current == "" || current == "node index.js" || current == "lvy app.js" || current == "lvy app.ts" {
+	if current == "" || current == "node index.js" || current == "bun index.js" || current == "lvy app.js" || current == "lvy app.ts" {
 		plan.Automatic = append(plan.Automatic, "补齐 "+name+" 运行脚本："+desired)
 		return
 	}
@@ -158,17 +161,18 @@ func (m Manager) ApplyRuntimeRepair(root, mode string, confirmOverrides bool) (R
 	}
 	isTS := exists(filepath.Join(path, "app.ts")) || exists(filepath.Join(path, "lvy.config.ts"))
 	isJS := exists(filepath.Join(path, "app.js")) || exists(filepath.Join(path, "lvy.config.js"))
+	appScript := packagemanager.ProjectRuntime(path) + " index.js"
 	if mode == "dev" || mode == "all" {
 		if isTS {
 			manifest.Scripts["dev"] = "lvy app.ts"
 		} else if isJS {
 			manifest.Scripts["dev"] = "lvy app.js"
 		} else {
-			manifest.Scripts["dev"] = "node index.js"
+			manifest.Scripts["dev"] = appScript
 		}
 	}
 	if mode == "app" || mode == "dev" || mode == "all" {
-		manifest.Scripts["app"] = "node index.js"
+		manifest.Scripts["app"] = appScript
 	}
 	if mode == "pm2" || mode == "all" {
 		manifest.Scripts["start"] = "pm2 startOrRestart pm2.config.cjs"

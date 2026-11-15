@@ -82,7 +82,7 @@ workspace/
 1. **Install**: install `alx` with the "One-line install" command in the README (use the mirror command in mainland China).
 2. **Open**: run `alx` and open `http://127.0.0.1:17390` in a browser; or run `alx open`.
 3. **Create**: choose "Develop" in the setup guide to create a new robot, or "Manage" to add an existing robot directory.
-4. **Check the environment**: in "Environment", confirm Node.js (v22.22.3+) and Git are ready and fix them with one click as prompted.
+4. **Check the environment**. Choose Node.js 22 LTS or Bun when installing a bot or creating a development project. The guide checks Git and the selected runtime and offers installation when needed. Bun projects use Bun for dependencies, scripts, and background processes. For an existing project, use Switch runtime on the robot’s Run page. Stop the project before confirming the switch, then start it when you are ready.
 5. **Run**: choose development mode in "Run" for debugging, or use PM2 for persistent runs.
 6. **Test and publish**: verify features with the Test Center, then publish to npm or create a Git Release.
 

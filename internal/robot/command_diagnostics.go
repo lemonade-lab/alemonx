@@ -67,7 +67,7 @@ func packageCommandEntry(cmd *exec.Cmd) string {
 		base = strings.TrimSuffix(strings.TrimSuffix(base, ".js"), ".cjs")
 	}
 	switch base {
-	case "npm", "npm-cli", "npx", "npx-cli", "yarn", "pnpm", "corepack":
+	case "npm", "npm-cli", "npx", "npx-cli", "yarn", "pnpm", "corepack", "bun":
 		return base
 	}
 	return ""

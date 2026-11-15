@@ -257,7 +257,7 @@ test('empty robot workspace opens the new robot wizard', async ({ page }) => {
   await page.getByRole('button', { name: '立即全新创建' }).click()
   await expect(page).toHaveURL(/\/guide\/install\/step\/1$/)
   await expect(
-    page.getByRole('heading', { name: '你的环境都准备好了吗' })
+    page.getByRole('heading', { name: '检查运行环境' })
   ).toBeVisible()
 })
 
@@ -340,4 +340,91 @@ test('saved robots reopen from the account and stale URLs cannot register robots
   await expect(gitWindow).toHaveCount(1)
   await gitWindow.getByRole('button', { name: '关闭saved-robot · Git' }).click()
   await expect(gitWindow).toHaveCount(0)
+})
+
+test('robot runtime switches only after a fresh compatible preview is confirmed', async ({ page }) => {
+  const root = '/test/robots/runtime-fixture'
+  let runtime = 'node'
+  let stopped = false
+  const mutations: unknown[] = []
+  await page.route('**/api/v1/**', route => {
+    const request = route.request()
+    const url = new URL(request.url())
+    switch (url.pathname) {
+      case '/api/v1/auth/status':
+        return route.fulfill({ json: { enabled: false } })
+      case '/api/v1/goals':
+        return route.fulfill({ json: [] })
+      case '/api/v1/workspace/robots':
+        return route.fulfill({
+          json: {
+            scope: 'local',
+            initialized: true,
+            projects: [{ id: root, name: 'runtime-fixture', path: root }],
+            activeProjectID: root
+          }
+        })
+      case '/api/v1/robot/validate':
+        return route.fulfill({ json: { valid: true } })
+      case '/api/v1/robot/runtime':
+        return route.fulfill({
+          json: { name: 'runtime-fixture', version: '1.0.0', runtime, packageManager: runtime === 'node' ? 'npm' : 'bun', platforms: [] }
+        })
+      case '/api/v1/robot/pm2-processes':
+        return route.fulfill({
+          json: {
+            items: [
+              { id: 1, name: 'bun-worker', status: 'online', pid: 101, runtime: 'bun', runtimeVersion: '1.4.4' },
+              { id: 2, name: 'node-worker', status: 'online', pid: 102, runtime: 'node', runtimeVersion: '22.23.5' },
+              { id: 3, name: 'stopped-worker', status: 'stopped', pid: 103, runtime: 'bun', runtimeVersion: '9.9.9' }
+            ]
+          }
+        })
+      case '/api/v1/robot/runtime/switch':
+        if (request.method() === 'POST') {
+          mutations.push(request.postDataJSON())
+          runtime = 'bun'
+          return route.fulfill({ json: { runtime } })
+        }
+        expect(url.searchParams.get('target')).toBe('bun')
+        return route.fulfill({
+          json: {
+            current: 'node',
+            target: 'bun',
+            changes: ['重新安装依赖'],
+            blocked: stopped ? [] : ['请先手动停止该项目的 PM2 进程，再切换运行时。'],
+            packageManager: 'bun',
+            revision: 'fixture-preview',
+            platform: 'darwin/arm64',
+            check: { id: 'bun', name: 'Bun', status: 'ready', suggestion: '' }
+          }
+        })
+      default:
+        return route.fulfill({ status: 503, json: { error: '测试中未启用此服务' } })
+    }
+  })
+  await page.goto(`/dashboard/robot?root=${encodeURIComponent(root)}`)
+  await expect(page.getByText('Bun v1.4.4', { exact: true })).toBeVisible()
+  await expect(page.getByText('Node.js v22.23.5', { exact: true })).toBeVisible()
+  await expect(page.getByText('Bun v9.9.9', { exact: true })).toHaveCount(0)
+  const switchRuntime = page.getByRole('button', {
+    name: '切换运行时',
+    exact: true
+  })
+  await expect(switchRuntime).toBeVisible()
+  await expect(switchRuntime).not.toHaveCSS('font-size', '0px')
+  await switchRuntime.click()
+  const dialog = page.getByRole('dialog', { name: '切换项目运行时' })
+  await expect(dialog.getByText(/请先手动停止/)).toBeVisible()
+  const confirm = dialog.getByRole('button', { name: '确认切换' })
+  await expect(confirm).toBeDisabled()
+  expect(mutations).toEqual([])
+  stopped = true
+  await dialog.getByRole('button', { name: '重新检查' }).click()
+  await expect(confirm).toBeEnabled()
+  await confirm.click()
+  await expect(dialog).toHaveCount(0)
+  await expect(page.getByText('已切换至 Bun，可手动启动。')).toBeVisible()
+  await expect(page.getByText(/1\.0\.0 · Bun · bun/)).toBeVisible()
+  expect(mutations).toEqual([{ root, target: 'bun', revision: 'fixture-preview' }])
 })

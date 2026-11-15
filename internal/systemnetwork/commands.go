@@ -297,9 +297,9 @@ func commandHasCredentials(cmd *exec.Cmd, env []string) bool {
 			return true
 		}
 	}
-	paths := []string{filepath.Join(cmd.Dir, ".npmrc"), filepath.Join(cmd.Dir, ".yarnrc"), filepath.Join(cmd.Dir, ".yarnrc.yml"), filepath.Join(cmd.Dir, "pnpm-workspace.yaml")}
+	paths := []string{filepath.Join(cmd.Dir, ".npmrc"), filepath.Join(cmd.Dir, ".yarnrc"), filepath.Join(cmd.Dir, ".yarnrc.yml"), filepath.Join(cmd.Dir, "pnpm-workspace.yaml"), filepath.Join(cmd.Dir, "bunfig.toml")}
 	if home, err := os.UserHomeDir(); err == nil {
-		paths = append(paths, filepath.Join(home, ".npmrc"), filepath.Join(home, ".yarnrc"), filepath.Join(home, ".yarnrc.yml"))
+		paths = append(paths, filepath.Join(home, ".npmrc"), filepath.Join(home, ".yarnrc"), filepath.Join(home, ".yarnrc.yml"), filepath.Join(home, ".bunfig.toml"))
 	}
 	for _, path := range paths {
 		if raw, err := os.ReadFile(path); err == nil {

@@ -43,7 +43,7 @@ export function NodeNVMPanel({ onChanged }: { onChanged: () => void }) {
         <div className="flex items-center justify-between gap-2">
           <span className="text-xs font-medium text-slate-500">推荐使用</span>
           <div className="flex items-center gap-1.5">
-            <code className="text-xs font-semibold text-slate-700 dark:text-slate-200">{status?.recommendedVersion ?? 'v22.22.3'}</code>
+            <code className="text-xs font-semibold text-slate-700 dark:text-slate-200">{status?.recommendedVersion ?? '22 LTS'}</code>
             <span className={status?.recommendedInstalled ? 'rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300' : 'rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700 dark:bg-amber-950 dark:text-amber-300'}>
               {status?.recommendedInstalled ? '已下载' : '未下载'}
             </span>

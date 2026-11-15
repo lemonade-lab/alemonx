@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"alemonx/internal/system"
 )
 
 // TestRepairRuntimeUsesIndexJSEntry verifies that repairing a project produces
@@ -510,5 +512,27 @@ func TestStripPM2BannerIgnoresDaemonSpawnNotices(t *testing.T) {
 	}
 	if len(items) != 0 {
 		t.Fatalf("parsed = %#v, want empty", items)
+	}
+}
+
+func TestBunRuntimeCommandAndRepairPlan(t *testing.T) {
+	if _, err := system.ResolveCommand("bun"); err != nil {
+		t.Skip("Bun is unavailable")
+	}
+	root := t.TempDir()
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{
+		"name":"bun-fixture", "alemonxRuntime":"bun", "packageManager":"bun@1.4.4",
+		"dependencies":{"alemonjs":"^2"}, "scripts":{"app":"node index.js"}
+	}`)
+	writeAppPageFixture(t, filepath.Join(root, "index.js"), "if (!process.versions.bun) process.exit(9); console.log('bun-runtime')")
+	writeAppPageFixture(t, filepath.Join(root, "node_modules", "alemonjs", "package.json"), `{"name":"alemonjs","version":"2.0.0"}`)
+	cmd, _ := PackageManagerCommand(root, "run", "app")
+	output, err := cmd.CombinedOutput()
+	if err != nil || !strings.Contains(string(output), "bun-runtime") {
+		t.Fatalf("Bun launch failed: %v: %s", err, output)
+	}
+	plan, err := (Manager{}).RuntimeRepairPlan(root, "app")
+	if err != nil || len(plan.Blocked) > 0 || !strings.Contains(strings.Join(plan.Automatic, "\n"), "bun index.js") {
+		t.Fatalf("Bun repair plan = %+v, %v", plan, err)
 	}
 }

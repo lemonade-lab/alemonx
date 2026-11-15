@@ -9,6 +9,7 @@ type Check = { id: string; name: string; status?: string; suggestion: string }
 type Props = {
   check: Check
   platform?: string
+  updateBun?: boolean
   onClose: () => void
   onInstalled?: () => void
 }
@@ -16,8 +17,14 @@ type Props = {
 const links: Record<string, Array<{ label: string; href: string }>> = {
   node: [
     {
-      label: 'Node.js 官方下载',
-      href: 'https://nodejs.org/en/download'
+      label: 'Node.js 22 LTS 官方下载',
+      href: 'https://nodejs.org/en/download/archive/v22'
+    }
+  ],
+  bun: [
+    {
+      label: 'Bun 官方安装说明',
+      href: 'https://bun.com/docs/installation'
     }
   ],
   git: [
@@ -53,6 +60,7 @@ const links: Record<string, Array<{ label: string; href: string }>> = {
 export function EnvironmentFixDialog({
   check,
   platform = '',
+  updateBun = false,
   onClose,
   onInstalled
 }: Props) {
@@ -68,9 +76,11 @@ export function EnvironmentFixDialog({
       platform.startsWith('windows/')) &&
     (['browser-dependencies', 'common-dependencies'].includes(check.id)
       ? isLinux
-      : ['node', 'git', 'docker', 'browser', 'fonts'].includes(check.id))
+      : check.id === 'bun'
+        ? /\/(arm64|amd64)$/.test(platform)
+        : ['node', 'git', 'docker', 'browser', 'fonts'].includes(check.id))
   const isManagedNode = check.id === 'node'
-  const isNodeUpgrade = isManagedNode && check.status === 'outdated'
+  const upgrading = updateBun || (isManagedNode && check.status === 'outdated')
   const installOnServer = async () => {
     setInstalling(true)
     setInstalled(false)
@@ -79,7 +89,7 @@ export function EnvironmentFixDialog({
       const response = await fetch('/api/v1/system/environment/install', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ checkId: check.id, confirm: true })
+        body: JSON.stringify({ checkId: updateBun ? 'bun-update' : check.id, confirm: true })
       })
       const text = await response.text()
       let body: { output?: string; error?: string } = {}
@@ -129,7 +139,7 @@ export function EnvironmentFixDialog({
             id="environment-fix-title"
             className="m-0 text-base font-semibold text-(--theme-text-strong)"
           >
-            {isNodeUpgrade ? '升级' : '安装'} {check.name}
+            {upgrading ? '升级' : '安装'} {check.name}
           </h2>
         </header>
         <div className="min-h-0 overflow-y-auto overscroll-contain">
@@ -137,7 +147,7 @@ export function EnvironmentFixDialog({
             {check.suggestion ||
               '请选择官方安装包，完成后返回环境面板重新检查。'}
           </p>
-          {canInstallOnServer ? (
+          {canInstallOnServer && check.id !== 'bun' ? (
             installing && (
               <DownloadProgress
                 className="mt-5"
@@ -147,6 +157,12 @@ export function EnvironmentFixDialog({
             )
           ) : (
             <div className="mt-5 grid gap-2">
+              {canInstallOnServer && installing && (
+                <DownloadProgress
+                  label={`正在安装 ${check.name}`}
+                  detail="安装期间请保持此窗口打开，完成后将自动更新环境状态。"
+                />
+              )}
               {options.map(option => (
                 <a
                   className="flex items-center justify-between gap-3 rounded-lg border border-(--theme-border-default) p-3 text-(--theme-accent-text) transition hover:border-(--theme-accent) hover:bg-(--theme-accent-soft)"
@@ -221,7 +237,7 @@ export function EnvironmentFixDialog({
                   ? '安装中…'
                   : message
                     ? '重试安装'
-                    : isNodeUpgrade
+                    : upgrading
                       ? '升级'
                       : '安装'}
               </button>

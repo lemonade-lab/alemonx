@@ -72,3 +72,30 @@ func NPXArgs(root, manager string) []string {
 	}
 	return []string{"--yes", Spec(root, manager)}
 }
+
+// UsesBunRuntime reads the explicit project runtime selection. A declaration
+// of Bun as a package manager alone is also valid for Node.js projects.
+func UsesBunRuntime(root string) bool {
+	return ProjectRuntime(root) == "bun"
+}
+
+func ProjectRuntime(root string) string {
+	if DeclaredProjectRuntime(root) == "bun" {
+		return "bun"
+	}
+	return "node"
+}
+
+func DeclaredProjectRuntime(root string) string {
+	data, err := os.ReadFile(filepath.Join(root, "package.json"))
+	if err != nil {
+		return ""
+	}
+	var manifest struct {
+		Runtime string `json:"alemonxRuntime"`
+	}
+	if json.Unmarshal(data, &manifest) == nil && (manifest.Runtime == "bun" || manifest.Runtime == "node") {
+		return manifest.Runtime
+	}
+	return ""
+}

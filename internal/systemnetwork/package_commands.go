@@ -38,7 +38,7 @@ func commandBase(value string) string {
 func packageToolName(value string) string {
 	name, _, _ := strings.Cut(value, "@")
 	switch name {
-	case "yarn", "npm", "pnpm", "npx", "corepack":
+	case "yarn", "npm", "pnpm", "npx", "corepack", "bun":
 		return name
 	}
 	return ""
@@ -109,15 +109,17 @@ func inspectPackageCommand(cmd *exec.Cmd) packageCommand {
 
 func (p packageCommand) networkOperation() bool {
 	switch p.operation {
+	case "x":
+		return p.tool == "bun"
 	case "install", "i", "add", "ci", "view", "info", "show", "publish", "whoami", "pack", "create", "init", "update", "upgrade", "up", "remove", "uninstall", "rm", "link", "unlink", "rebuild", "dlx", "import", "outdated", "audit":
-		return p.tool == "npm" || p.tool == "yarn" || p.tool == "pnpm"
+		return p.tool == "npm" || p.tool == "yarn" || p.tool == "pnpm" || p.tool == "bun"
 	}
 	return false
 }
 
 func (p packageCommand) mirrorRead() bool {
 	// Writes and authentication always stay on the official registry.
-	if p.operation == "publish" || p.operation == "whoami" || p.operation == "login" || p.operation == "logout" {
+	if p.operation == "publish" || p.operation == "whoami" || p.operation == "login" || p.operation == "logout" || (p.tool == "bun" && p.operation == "x") {
 		return false
 	}
 	return p.bootstrap >= 0 || p.networkOperation() && p.operation != "pack"
@@ -147,7 +149,14 @@ func (p packageCommand) applyNetworkOptions(cmd *exec.Cmd, values map[string]str
 		values["YARN_NPM_REGISTRY_SERVER"] = values["npm_config_registry"]
 		values["YARN_HTTP_PROXY"], values["YARN_HTTPS_PROXY"] = proxyURL, proxyURL
 	}
-	if p.networkOperation() && !p.modernYarn {
+	if p.tool == "bun" && p.networkOperation() {
+		if p.operation == "x" {
+			insertCommandOptions(cmd, p.start+1, []string{"--registry", values["npm_config_registry"]})
+		} else {
+			cmd.Args = append(cmd.Args, "--registry="+values["npm_config_registry"])
+		}
+	}
+	if p.tool != "bun" && p.networkOperation() && !p.modernYarn {
 		prefix := "--"
 		if p.tool == "pnpm" {
 			prefix = "--config."

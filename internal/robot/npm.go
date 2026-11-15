@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -316,20 +315,11 @@ func npmPackage(name string) (latest, publishedAt string, found bool, err error)
 }
 
 func npmWhoami(root string) string {
-	cmd := exec.Command(nodeToolPath("npm"), "whoami", "--registry="+npmRegistry)
-	cmd.Dir = root
-	applyManagedNodeEnvironment(cmd)
-	HideWindow(cmd)
-	cleanup, networkErr := systemnetwork.ApplyCommand(cmd)
-	if networkErr != nil {
-		return ""
-	}
-	defer cleanup()
-	output, err := cmd.Output()
+	output, err := runNPMJSON(root, "whoami", "--registry="+npmRegistry)
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(string(output))
+	return strings.TrimSpace(output)
 }
 
 func publishWithToken(root, target, tag, token string) (string, error) {

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"sync"
 )
 
@@ -15,7 +17,7 @@ var operationContexts = struct {
 }{roots: map[string]context.Context{}}
 
 func BeginOperation(ctx context.Context, root string) (func(), error) {
-	root, err := filepath.Abs(root)
+	root, err := operationRoot(root)
 	if err != nil {
 		return nil, err
 	}
@@ -32,7 +34,7 @@ func BeginOperation(ctx context.Context, root string) (func(), error) {
 }
 
 func operationContext(root string) context.Context {
-	root, _ = filepath.Abs(root)
+	root, _ = operationRoot(root)
 	operationContexts.Lock()
 	defer operationContexts.Unlock()
 	for path := root; ; path = filepath.Dir(path) {
@@ -44,4 +46,18 @@ func operationContext(root string) context.Context {
 		}
 	}
 	return context.Background()
+}
+
+func operationRoot(root string) (string, error) {
+	root, err := filepath.Abs(root)
+	if err != nil {
+		return "", err
+	}
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
+	if runtime.GOOS == "windows" {
+		root = strings.ToLower(root)
+	}
+	return root, nil
 }

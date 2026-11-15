@@ -30,7 +30,6 @@ import { DownloadProgress } from './components/DownloadProgress'
 import { ErrorNotice } from './components/ErrorNotice'
 import { clampWindowRectToViewport } from './lib/windowRect'
 import {
-  workspaceApi,
   useGoalsQuery,
   useWorkspaceQuery,
   useLazyEnvironmentReportQuery,
@@ -155,9 +154,13 @@ export default function App() {
   const { data: goalData, isLoading: loading } = useGoalsQuery()
   const [
     loadEnvironmentReport,
-    { data: environmentData, isFetching: checking }
+    {
+      currentData: environmentData,
+      isFetching: checking,
+      isError: environmentCheckFailed,
+      originalArgs: checkedEnvironment
+    }
   ] = useLazyEnvironmentReportQuery()
-  const report = (environmentData as Report | undefined) ?? null
   const goals = (goalData as Goal[] | null | undefined) ?? []
   const settingsTitle = '设置'
   const routeGoal = location.pathname.match(
@@ -167,6 +170,10 @@ export default function App() {
   const selectedID = routeGoal ?? null
   const guideOpen = !location.pathname.startsWith('/dashboard')
   const activeID = selectedID ?? 'install'
+  const report =
+    checkedEnvironment?.goalId === activeID
+      ? ((environmentData as Report | undefined) ?? null)
+      : null
   const activeGoal = goals.find(goal => goal.id === activeID)
   const [workbenchRect, setWorkbenchRect] =
     useState<WorkbenchRect>(initialWorkbenchRect)
@@ -532,12 +539,6 @@ export default function App() {
     const selectedVariant = typeof variant === 'string' ? variant : ''
     try {
       setError('')
-      // Invalidate the cached result first so "重新检查" always performs a
-      // fresh server-side environment check instead of returning the cached
-      // 5-minute report with no visible change.
-      workspaceApi.util.invalidateTags([
-        { type: 'EnvironmentReport', id: `${activeID}:${selectedVariant}` }
-      ])
       await loadEnvironmentReport(
         { goalId: activeID, variant: selectedVariant },
         false
@@ -708,14 +709,9 @@ export default function App() {
         >
           {guideOpen ? (
             <GuideHome
-              loading={loading}
               group={guideGroup}
               goal={selectedID ? activeGoal : undefined}
-              report={report}
-              checking={checking}
               error={error}
-              creating={creating}
-              creation={creation}
               onSelect={id => {
                 if (id === 'manage') {
                   navigate('/dashboard/robot')
@@ -728,9 +724,6 @@ export default function App() {
               onClose={() => navigate('/dashboard')}
               onOpenSettings={openSettings}
               onClearError={() => setError('')}
-              onCheck={checkEnvironment}
-              onCreate={createProject}
-              onFix={setRepairCheck}
               windowStyle={windowStyle}
               windowControls={workbenchWindowControls}
               renderFlow={registerBack => (
@@ -738,6 +731,14 @@ export default function App() {
                   loading={loading}
                   goal={selectedID ? activeGoal : undefined}
                   report={report}
+                  reportVariant={
+                    checkedEnvironment?.goalId === activeID
+                      ? checkedEnvironment.variant
+                      : undefined
+                  }
+                  checkFailed={
+                    environmentCheckFailed && checkedEnvironment?.goalId === activeID
+                  }
                   checking={checking}
                   creating={creating}
                   creation={creation}
@@ -848,7 +849,13 @@ export default function App() {
         <EnvironmentFixDialog
           check={repairCheck}
           platform={report?.platform}
-          onInstalled={() => void checkEnvironment()}
+          onInstalled={() =>
+            void checkEnvironment(
+              checkedEnvironment?.goalId === activeID
+                ? checkedEnvironment.variant
+                : undefined
+            )
+          }
           onClose={() => setRepairCheck(null)}
         />
       )}
@@ -1176,6 +1183,8 @@ function FlowView({
   loading,
   goal,
   report,
+  reportVariant,
+  checkFailed,
   checking,
   creating,
   creation,
@@ -1188,6 +1197,8 @@ function FlowView({
   loading: boolean
   goal?: Goal
   report: Report | null
+  reportVariant?: string
+  checkFailed: boolean
   checking: boolean
   creating: boolean
   creation: Creation | null
@@ -1215,6 +1226,9 @@ function FlowView({
   const [webEdition, setWebEdition] = useStoreState<'clean' | 'docker' | null>(
     null
   )
+  const [projectRuntime, setProjectRuntime] = useStoreState<'node' | 'bun'>(
+    'node'
+  )
   const [buildMode, setBuildMode] = useStoreState<'npm' | 'git' | null>(null)
   const [selectedMirror, setSelectedMirror] = useStoreState<Mirror | null>(null)
   const [releaseURL, setReleaseURL] = useStoreState<string | null>(null)
@@ -1232,6 +1246,7 @@ function FlowView({
   )
   const isDeveloper = goal?.id === 'develop'
   const isInstaller = goal?.id === 'install'
+  const useBun = projectRuntime === 'bun'
   const releaseApp = goal?.id === 'web' && webEdition === 'clean' ? 'alx' : null
   const {
     data: releaseData,
@@ -1282,6 +1297,21 @@ function FlowView({
       ]
     : ['选择目的']
   const flowStep = step - 1
+  const environmentVariant =
+    goal?.id === 'web'
+      ? webEdition
+      : goal?.id === 'build'
+        ? buildMode
+        : useBun
+          ? 'bun'
+          : ''
+  const isEnvironmentStep =
+    ((isInstaller || isDeveloper) && flowStep === 0) ||
+    ((goal?.id === 'web' || goal?.id === 'build') && flowStep === 1)
+  const environmentReport =
+    reportVariant === environmentVariant ? report : null
+  const failedEnvironment = reportVariant === environmentVariant && checkFailed
+
   const setFlowStep = (value: number) => {
     const nextStep = Math.max(0, Math.min(value, totalSteps.length - 1))
     setStep(nextStep)
@@ -1301,27 +1331,16 @@ function FlowView({
     if (routedStep !== step) setStep(routedStep)
   }, [routedStep, step, setStep])
   useEffect(() => {
-    const variant =
-      goal?.id === 'web'
-        ? webEdition
-        : goal?.id === 'build'
-          ? buildMode
-          : undefined
-    const isCheckStep =
-      goal?.id === 'develop' || goal?.id === 'install'
-        ? flowStep === 0
-        : (goal?.id === 'web' || goal?.id === 'build') &&
-          Boolean(variant) &&
-          flowStep === 1
+    const key = `${goal?.id}:${environmentVariant ?? ''}`
     if (
-      (goal?.id === 'develop' || goal?.id === 'install' || variant) &&
-      isCheckStep &&
-      automaticCheck.current !== `${goal?.id}:${variant ?? ''}`
+      isEnvironmentStep &&
+      environmentVariant !== null &&
+      automaticCheck.current !== key
     ) {
-      automaticCheck.current = `${goal?.id}:${variant ?? ''}`
-      onCheck(variant ?? undefined)
+      automaticCheck.current = key
+      onCheck(environmentVariant)
     }
-  }, [buildMode, flowStep, goal?.id, onCheck, webEdition])
+  }, [environmentVariant, goal?.id, isEnvironmentStep, onCheck])
   useEffect(() => {
     currentStepElement.current?.scrollIntoView({
       behavior: 'smooth',
@@ -1415,6 +1434,26 @@ function FlowView({
       )}
     </>
   )
+  const environmentPage = (chooseRuntime = false) => (
+    <EnvironmentCheckPanel
+      report={environmentReport}
+      checking={checking}
+      failed={failedEnvironment}
+      runtime={
+        chooseRuntime
+          ? {
+              value: projectRuntime,
+              onChange: value => {
+                automaticCheck.current = null
+                setProjectRuntime(value)
+              }
+            }
+          : undefined
+      }
+      onCheck={() => onCheck(environmentVariant ?? undefined)}
+      onFix={onFix}
+    />
+  )
   const developerPage = () => {
     const choices = (
       title: string,
@@ -1441,15 +1480,7 @@ function FlowView({
     )
     switch (flowStep) {
       case 0:
-        return (
-          <EnvironmentCheckPanel
-            title="你的环境都准备好了吗"
-            report={report}
-            checking={checking}
-            onCheck={() => onCheck()}
-            onFix={onFix}
-          />
-        )
+        return environmentPage(true)
       case 1:
         return (
           <>
@@ -1558,19 +1589,26 @@ function FlowView({
           'pm2'
         )
       case 6:
-        return choices(
-          '用什么安装项目依赖？',
-          [
-            [
-              'yarn',
-              'Yarn（推荐）',
-              '没有 Yarn 时会临时使用，不会修改电脑的全局安装。'
-            ],
-            ['npm', 'npm', 'Node.js 自带，不需要额外安装。'],
-            ['pnpm', 'pnpm', '更省磁盘空间，需要电脑已经安装。']
-          ],
-          'manager'
-        )
+        return useBun
+          ? (
+            <>
+              <h1>用什么安装项目依赖？</h1>
+              <p>Bun 负责运行项目和管理依赖。</p>
+            </>
+          )
+          : choices(
+              '用什么安装项目依赖？',
+              [
+                [
+                  'yarn',
+                  'Yarn（推荐）',
+                  '没有 Yarn 时会临时使用，不会修改电脑的全局安装。'
+                ],
+                ['npm', 'npm', 'Node.js 自带，不需要额外安装。'],
+                ['pnpm', 'pnpm', '更省磁盘空间，需要电脑已经安装。']
+              ],
+              'manager'
+            )
       case 7:
         return (
           <>
@@ -1705,7 +1743,7 @@ function FlowView({
                 <span>
                   语言：{config.language === 'ts' ? 'TypeScript' : 'JavaScript'}
                 </span>
-                <span>包管理器：{config.manager}</span>
+                <span>包管理器：{useBun ? 'Bun' : config.manager === 'bun' ? 'Yarn' : config.manager}</span>
                 <span>
                   开发能力包：
                   {capabilities.length
@@ -1750,22 +1788,13 @@ function FlowView({
     }
   }
   const installerPage = () => {
-    if (flowStep === 0)
-      return (
-        <EnvironmentCheckPanel
-          title="你的环境都准备好了吗"
-          report={report}
-          checking={checking}
-          onCheck={() => onCheck()}
-          onFix={onFix}
-        />
-      )
+    if (flowStep === 0) return environmentPage(true)
     if (flowStep === 1)
       return (
         <>
           <h1>机器人放在哪里？</h1>
           <p>
-            只需给机器人起名并选一个保存位置；其余均使用适合新手的默认设置。
+            给机器人起名并选一个保存位置。
           </p>
           <div className="project-fields">
             <label>
@@ -1853,7 +1882,7 @@ function FlowView({
         ) : (
           <>
             <p>
-              将使用默认 JavaScript 模板、Yarn、Git
+              将使用默认 JavaScript 模板、Git
               存档，不附加开发技能、图片工具或 PM2。
             </p>
             <div className="config-summary">
@@ -1867,7 +1896,8 @@ function FlowView({
                     ? `${project.destination}/${project.name}`
                     : '请返回填写保存位置'}
               </span>
-              <span>默认环境：JavaScript + Yarn</span>
+              <span>运行时：{useBun ? 'Bun' : 'Node.js'}</span>
+              <span>依赖安装：{useBun ? 'Bun' : 'Yarn'}</span>
               <span>项目存档：初始化 Git</span>
             </div>
           </>
@@ -1912,15 +1942,7 @@ function FlowView({
         </>
       )
     if (flowStep === 1)
-      return (
-        <EnvironmentCheckPanel
-          title="你的环境都准备好了吗"
-          report={report}
-          checking={checking}
-          onCheck={() => onCheck(webEdition ?? undefined)}
-          onFix={onFix}
-        />
-      )
+      return environmentPage()
     if (webEdition === 'clean' && flowStep === 2)
       return (
         <>
@@ -1999,15 +2021,7 @@ function FlowView({
         </>
       )
     if (flowStep === 1)
-      return (
-        <EnvironmentCheckPanel
-          title="你的环境都准备好了吗"
-          report={report}
-          checking={checking}
-          onCheck={() => onCheck(buildMode ?? undefined)}
-          onFix={onFix}
-        />
-      )
+      return environmentPage()
     return (
       <>
         <h1>{buildMode === 'git' ? 'Git 化构建' : 'NPM 构建'}</h1>
@@ -2128,7 +2142,8 @@ function FlowView({
           destinationMode: project.destinationMode,
           destination: project.destination,
           language: 'js',
-          packageManager: 'yarn',
+          runtime: projectRuntime,
+          packageManager: useBun ? 'bun' : 'yarn',
           eslint: false,
           initializeGit: true,
           usePM2: false,
@@ -2144,7 +2159,8 @@ function FlowView({
           destinationMode: project.destinationMode,
           destination: project.destination,
           language: config.language,
-          packageManager: config.manager,
+          runtime: projectRuntime,
+          packageManager: useBun ? 'bun' : config.manager === 'bun' ? 'yarn' : config.manager,
           eslint: config.eslint === 'yes',
           initializeGit: config.git === 'yes',
           usePM2: config.pm2 === 'yes',
@@ -2187,7 +2203,9 @@ function FlowView({
           </button>
         ))}
       </aside>
-      <section className="wizard-page">
+      <section
+        className={isEnvironmentStep ? 'wizard-page guide-environment-page' : 'wizard-page'}
+      >
         {goal && (
           <p className="wizard-progress" aria-live="polite">
             第 {step + 1} / {totalSteps.length} 步 · {totalSteps[step]}
@@ -2245,8 +2263,12 @@ function FlowView({
           )}{' '}
         </div>
         <footer className="wizard-actions">
-          {isInstaller && flowStep === 0 && report?.ready && (
-            <button className="next-button" onClick={next}>
+          {isEnvironmentStep && (
+            <button
+              className="next-button"
+              onClick={next}
+              disabled={checking || failedEnvironment || !environmentReport?.ready}
+            >
               继续
             </button>
           )}
@@ -2264,11 +2286,6 @@ function FlowView({
               {creating ? '正在安装…' : '确认安装'}
             </button>
           )}
-          {isDeveloper && flowStep === 0 && report?.ready && (
-            <button className="next-button" onClick={next}>
-              继续
-            </button>
-          )}
           {isDeveloper && flowStep > 0 && flowStep < 11 && (
             <button className="next-button" onClick={next}>
               继续
@@ -2284,11 +2301,6 @@ function FlowView({
             </button>
           )}
           {isWeb && flowStep === 0 && webEdition && (
-            <button className="next-button" onClick={next}>
-              继续
-            </button>
-          )}
-          {isWeb && flowStep === 1 && report?.ready && (
             <button className="next-button" onClick={next}>
               继续
             </button>
@@ -2330,11 +2342,6 @@ function FlowView({
             </button>
           )}
           {isBuild && flowStep === 0 && buildMode && (
-            <button className="next-button" onClick={next}>
-              继续
-            </button>
-          )}
-          {isBuild && flowStep === 1 && report?.ready && (
             <button className="next-button" onClick={next}>
               继续
             </button>

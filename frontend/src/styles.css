@@ -1168,15 +1168,6 @@ button {
   right: 72px;
 }
 
-.environment-repair {
-  bottom: 24px;
-  display: flex;
-  gap: 8px;
-  left: 270px;
-  position: absolute;
-}
-
-.environment-repair button,
 .next-button {
   border-radius: 7px;
   cursor: pointer;
@@ -5250,10 +5241,6 @@ textarea:focus-visible {
 }
 
 @media (max-width: 800px) {
-  .environment-repair {
-    left: 18px;
-  }
-
   .guide-goals,
   .summary-grid {
     grid-template-columns: 1fr;
@@ -6735,7 +6722,7 @@ textarea:hover {
 .runtime-overview > header small {
   margin-top: 4px;
 }
-.runtime-overview > header .secondary-button {
+.runtime-overview > header:not([data-robot-panel-header]) .secondary-button {
   align-items: center;
   display: inline-flex;
   font-size: 0;
@@ -6744,7 +6731,7 @@ textarea:hover {
   padding: 0;
   width: 32px;
 }
-.runtime-overview > header .secondary-button svg {
+.runtime-overview > header:not([data-robot-panel-header]) .secondary-button svg {
   height: 16px;
   width: 16px;
 }
@@ -10155,4 +10142,45 @@ html[data-tray-panel],
 
 .tray-footer button[data-action='quit']:hover:not(:disabled) {
   color: var(--tray-danger);
+}
+
+.guide-environment-page.wizard-page {
+  justify-content: flex-start;
+  min-height: 0;
+  overflow: hidden;
+  padding: 1rem clamp(0.875rem, 3.5vw, 2.25rem) 0.875rem;
+}
+
+.guide-environment-page > .wizard-progress {
+  flex: none;
+  margin: 0 auto 0.75rem;
+  max-width: 55rem;
+  position: static;
+  width: 100%;
+}
+
+.guide-environment-page > .wizard-content {
+  flex: 1;
+  margin: 0;
+  max-width: none;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0.25rem 0.25rem 0.75rem;
+}
+
+.guide-environment-page > .wizard-actions {
+  border-top: 1px solid var(--theme-border-default);
+  flex: none;
+  justify-content: flex-end;
+  margin-inline: auto;
+  max-width: 55rem;
+  padding-top: 0.625rem;
+  position: static;
+  width: 100%;
+}
+
+.guide-environment-page .next-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }

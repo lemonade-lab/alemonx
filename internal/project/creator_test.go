@@ -408,11 +408,40 @@ func TestPatchPackageDeclaresSelectedPackageManager(t *testing.T) {
 func TestCreateCommandReportsMissingEnvironmentClearly(t *testing.T) {
 	t.Setenv("PATH", "")
 	logs := []string{}
-	err := run(t.TempDir(), &logs, "git", "--version")
+	err := run(t.TempDir(), &logs, "npm", "--version")
 	if err == nil || !strings.Contains(err.Error(), "左上角“环境”") {
-		t.Fatalf("run error = %v, want Git installation guidance", err)
+		t.Fatalf("run error = %v, want Node.js installation guidance", err)
 	}
 	if strings.Contains(err.Error(), "executable file not found") {
 		t.Fatalf("run error leaked raw exec error: %q", err)
+	}
+}
+
+func TestPatchPackageConfiguresSelectedBunRuntime(t *testing.T) {
+	root := t.TempDir()
+	if err := copyTemplate(os.DirFS("../../resources/templates"), "dev", root); err != nil {
+		t.Fatal(err)
+	}
+	config := Config{
+		Name: "runtime-fixture", Language: "js", ImageMode: "none", StyleMode: "css",
+		Runtime: "bun", PackageManager: "bun", bunVersion: "1.4.4", UsePM2: true,
+	}
+	if err := patchPackage(root, config); err != nil {
+		t.Fatal(err)
+	}
+	for file, contents := range map[string][]string{
+		"package.json":   {`"alemonxRuntime": "bun"`, `"packageManager": "bun@1.4.4"`, `"app": "bun index.js"`},
+		"bunfig.toml":    {"[run]\nbun = true\n"},
+		"pm2.config.cjs": {"interpreter: process.versions.bun ? process.execPath : 'bun'"},
+	} {
+		data, err := os.ReadFile(filepath.Join(root, file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, wanted := range contents {
+			if !strings.Contains(string(data), wanted) {
+				t.Errorf("%s is missing %q", file, wanted)
+			}
+		}
 	}
 }

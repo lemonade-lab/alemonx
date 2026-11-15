@@ -22,10 +22,11 @@ import (
 )
 
 const (
-	nodeIndexURL        = "https://nodejs.org/dist/index.json"
-	nodeDownloadLimit   = 180 << 20
-	nodeDownloadTimeout = 12 * time.Minute
-	nvmVersion          = "v0.40.7"
+	recommendedNodeVersion = "22.23.5"
+	nodeIndexURL           = "https://nodejs.org/dist/index.json"
+	nodeDownloadLimit      = 180 << 20
+	nodeDownloadTimeout    = 12 * time.Minute
+	nvmVersion             = "v0.40.7"
 )
 
 var (
@@ -56,7 +57,7 @@ type NVMNodeStatus struct {
 // ActiveVersion is populated exclusively from a real `node --version` call;
 // managed defaults and downloaded versions are never treated as current use.
 func NVMStatus() NVMNodeStatus {
-	status := NVMNodeStatus{Versions: []string{}, RecommendedVersion: "v" + MinimumNodeVersion}
+	status := NVMNodeStatus{Versions: []string{}, RecommendedVersion: "v" + recommendedNodeVersion}
 	directory, err := preferredNVMDirectory()
 	if err == nil {
 		if entries, readErr := os.ReadDir(filepath.Join(directory, "versions", "node")); readErr == nil {
@@ -72,7 +73,7 @@ func NVMStatus() NVMNodeStatus {
 			sortNodeVersions(status.Versions)
 		}
 	}
-	status.RecommendedInstalled = containsNodeVersion(status.Versions, MinimumNodeVersion)
+	status.RecommendedInstalled = containsNodeVersion(status.Versions, recommendedNodeVersion)
 	status.ActiveVersion = systemNodeVersion()
 	return status
 }
@@ -306,8 +307,8 @@ func ensureNVM() (string, bool, error) {
 const nvmInstallNode22Script = `set -eu
 export NVM_DIR="$1"
 . "$NVM_DIR/nvm.sh"
-nvm install 22
-nvm use 22 >/dev/null
+nvm install --lts=jod
+nvm use --lts=jod >/dev/null
 printf '__ALX_NODE_BIN__=%s\n' "$(dirname "$(command -v node)")"
 printf '__ALX_NODE_VERSION__=%s\n' "$(node --version)"`
 
@@ -465,7 +466,7 @@ func node22LTS(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("Node.js 版本索引格式无效：%w", err)
 	}
 	for _, release := range releases {
-		if strings.HasPrefix(release.Version, "v22.") && len(release.LTS) > 0 && string(release.LTS) != "false" && string(release.LTS) != "null" {
+		if version, stable := parseNodeVersion(release.Version); stable && version[0] == 22 && len(release.LTS) > 0 && string(release.LTS) != "false" && string(release.LTS) != "null" {
 			return release.Version, nil
 		}
 	}
