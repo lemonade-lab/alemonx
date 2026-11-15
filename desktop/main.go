@@ -2,11 +2,13 @@ package main
 
 import (
 	_ "embed"
+	"encoding/json"
 	"flag"
 	"log"
 	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 	"sync/atomic"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -17,6 +19,14 @@ import (
 var trayIcon []byte
 
 func main() {
+	if len(os.Args) == 3 && os.Args[1] == desktopInstallFlag {
+		if err := runDesktopInstaller(os.Args[2]); err != nil {
+			log.Print(err)
+			os.Exit(1)
+		}
+		return
+	}
+	updater := desktopUpdater{}
 	workspace := flag.String("workspace", "", "工作区目录，也可通过 ALX_WORKSPACE 指定")
 	port := flag.Int("port", 17392, "本地工作台端口")
 	flag.Parse()
@@ -35,6 +45,12 @@ func main() {
 			if cmd := restartCommand.Load(); cmd != nil {
 				if err := cmd.Start(); err != nil {
 					log.Printf("无法重启 ALemonX Desktop：%v", err)
+					if len(cmd.Args) == 3 && cmd.Args[1] == desktopInstallFlag {
+						_ = os.WriteFile(desktopUpdateResultPath(), []byte("无法启动桌面安装程序："+err.Error()), 0600)
+						if executable, executableErr := os.Executable(); executableErr == nil {
+							_ = startUpdatedDesktop(desktopInstallPlan{Executable: executable, Arguments: os.Args[1:]})
+						}
+					}
 					return
 				}
 				_ = cmd.Process.Release()
@@ -52,12 +68,35 @@ func main() {
 					restartWorkbench()
 				case "alx:tray:quit":
 					quitWorkbench()
-				case "alx:tray:terminal":
-					trayWindow.Hide()
-					window.ExecJS("window.dispatchEvent(new Event('alx:desktop-terminal-toggle'))")
 				case "alx:tray:developer-mode":
 					window.ExecJS("window.dispatchEvent(new Event('alx:desktop-developer-mode-toggle'))")
 				}
+				return
+			}
+			if action, found := strings.CutPrefix(message, "alx:desktop-update:"); found {
+				settings, exists := appWindowSettings(auxiliary.app)
+				if exists && source == settings {
+					go func() {
+						state := updater.handle(action, func(cmd *exec.Cmd) bool {
+							if !restartCommand.CompareAndSwap(nil, cmd) {
+								return false
+							}
+							application.InvokeAsync(auxiliary.app.Quit)
+							return true
+						})
+						if action == "install" && state.Error == "" {
+							return
+						}
+						result, _ := json.Marshal(struct {
+							desktopUpdateState
+							Action string `json:"action"`
+						}{state, action})
+						source.ExecJS("window.dispatchEvent(new CustomEvent('alx:desktop-update', {detail:" + string(result) + "}))")
+					}()
+				}
+				return
+			}
+			if handleWorkbenchAuthMessage(auxiliary.app, source, workbenchURL, message) {
 				return
 			}
 			auxiliary.openFromMessage(message)
@@ -173,18 +212,35 @@ func main() {
 
 		trayWindow = app.Window.NewWithOptions(application.WebviewWindowOptions{
 			Name: "tray-panel", Title: "ALemonX",
-			Width: 316, Height: 211,
+			Width: 316, Height: 186,
 			URL:    backend.url + "/desktop-window/tray-panel",
 			Hidden: true, Frameless: true, DisableResize: true, AlwaysOnTop: true,
-			Mac:             application.MacWindow{Backdrop: application.MacBackdropTransparent},
+			Mac:             application.MacWindow{Backdrop: application.MacBackdropTransparent, CornerRadius: 16},
 			HideOnFocusLost: true, HideOnEscape: true,
 			DefaultContextMenuDisabled: true,
 		})
 		tray.AttachWindow(trayWindow)
+		materialInstalled := false
+		tray.OnClick(func() {
+			application.InvokeSync(func() {
+				if !materialInstalled {
+					materialInstalled = prepareTrayMaterial(trayWindow)
+				}
+				tray.ToggleWindow()
+			})
+		})
 	}
 
 	app.OnShutdown(backend.stop)
+	app.OnShutdown(updater.discardStagedUpdate)
 	if err := app.Run(); err != nil {
 		log.Print(err)
 	}
+}
+
+func appWindowSettings(app *application.App) (application.Window, bool) {
+	if app == nil {
+		return nil, false
+	}
+	return app.Window.GetByName("settings")
 }

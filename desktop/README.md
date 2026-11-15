@@ -51,3 +51,5 @@ sh desktop/build/linux/package.sh
 ## 桌面发布
 
 在 Actions 中手动运行 **ALemonX Desktop** 可以生成构建产物。推送常规 `vX.Y.Z` 标签时，现有 CI 将桌面包附加到同一个 GitHub Release。桌面产物使用 `alemonx-desktop-` 前缀，Web 更新索引仍只收录原有产物。
+
+正式版可在「设置 → 更新」检查新版本。下载完成并通过 SHA-256 校验后，选择「安装并重启」。macOS 更新整个应用包，Windows 和 Linux 更新桌面启动器及同目录的工作台服务。安装目录需要当前用户有写权限。首次从不含此功能的版本升级，请手动下载桌面包。

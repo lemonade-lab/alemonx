@@ -116,3 +116,52 @@ func TestAccountsRolesAndPermissions(t *testing.T) {
 		t.Fatal("deleting a role should revoke its permission from bound accounts")
 	}
 }
+
+func TestGitHubBindingLifecycle(t *testing.T) {
+	manager, err := NewAt(filepath.Join(t.TempDir(), "auth.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := manager.Enable("root", "secret", "secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.CreateAccount("reader", "password", "password", nil); err != nil {
+		t.Fatal(err)
+	}
+	reader, err := manager.Login("reader", "password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrong, correct := "wrong", "secret"
+	if _, err := manager.GitHubBindingKey(root, &wrong); err == nil {
+		t.Fatal("binding accepted the wrong workbench password")
+	}
+	rootKey, err := manager.GitHubBindingKey(root, &correct)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readerKey, err := manager.GitHubBindingKey(reader, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := manager.LoginWithGitHub(123); err == nil {
+		t.Fatal("unbound GitHub identity logged in")
+	}
+	if err := manager.SetGitHubBinding(root, rootKey, 123, "original-name"); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.SetGitHubBinding(reader, readerKey, 123, "original-name"); err == nil {
+		t.Fatal("duplicate GitHub binding succeeded")
+	}
+	session, account, err := manager.LoginWithGitHub(123)
+	if err != nil || account != "root" || !manager.Authorize(session, "system.manage") {
+		t.Fatalf("GitHub session for %q failed: %v", account, err)
+	}
+	if _, err := manager.ResetSuperAdmin("root", "new-secret", "new-secret"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := manager.LoginWithGitHub(123); err == nil || manager.Authenticate(session) {
+		t.Fatal("administrator recovery must invalidate the GitHub binding and old sessions")
+	}
+}

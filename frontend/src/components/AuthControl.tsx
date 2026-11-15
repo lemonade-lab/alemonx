@@ -1,11 +1,32 @@
 import { useStoreState } from '../store/guideStore'
-import { Fragment, useCallback, useEffect, type ReactNode } from 'react'
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useRef,
+  type FormEvent,
+  type ReactNode
+} from 'react'
 import { LockKeyhole, LogOut, UserRound, X } from 'lucide-react'
 import { Button } from './Button'
 import { desktopPlatform } from './nativeWindow'
 import { SettingsCard, SettingsMessage, SettingsPage } from './SettingsCard'
+import { WorkbenchGitHubFlow } from './WorkbenchGitHubFlow'
+import {
+  canRememberPassword,
+  lastAccount,
+  readRememberedPassword,
+  rememberAccount,
+  remembersPassword,
+  setRememberedPassword
+} from './workbenchCredentials'
 
-type AuthStatus = { enabled: boolean; authenticated: boolean; account?: string }
+type AuthStatus = {
+  enabled: boolean
+  authenticated: boolean
+  account?: string
+  githubLogin?: string
+}
 
 async function authRequest(path: string, init?: RequestInit) {
   const controller = new AbortController()
@@ -43,6 +64,9 @@ export function AuthGate({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useStoreState(true)
   const [loadError, setLoadError] = useStoreState('')
   const [account, setAccount] = useStoreState('')
+  const [remember, setRemember] = useStoreState(false)
+  const [githubPending, setGitHubPending] = useStoreState(false)
+  const passwordChanged = useRef(false)
   const [password, setPassword] = useStoreState('')
   const [error, setError] = useStoreState('')
   const [busy, setBusy] = useStoreState(false)
@@ -62,7 +86,9 @@ export function AuthGate({ children }: { children: ReactNode }) {
   useEffect(() => {
     refresh()
     window.addEventListener('alx:auth-changed', refresh)
-    const channel = desktopPlatform ? new BroadcastChannel('alx-native-auth') : null
+    const channel = desktopPlatform
+      ? new BroadcastChannel('alx-native-auth')
+      : null
     if (channel) {
       channel.onmessage = () => {
         setStatus(null)
@@ -74,17 +100,61 @@ export function AuthGate({ children }: { children: ReactNode }) {
       window.removeEventListener('alx:auth-changed', refresh)
     }
   }, [refresh, setStatus])
-  const login = async () => {
+  const loginVisible = status?.enabled === true && !status.authenticated
+  useEffect(() => {
+    if (!loginVisible) return
+    const saved = lastAccount()
+    const controller = new AbortController()
+    passwordChanged.current = false
+    setAccount(saved)
+    setPassword('')
+    setRemember(remembersPassword(saved))
+    void readRememberedPassword(saved, controller.signal)
+      .then(value => {
+        if (!controller.signal.aborted && !passwordChanged.current)
+          setPassword(value)
+      })
+      .catch(reason => {
+        if (!controller.signal.aborted) {
+          setError(
+            reason instanceof Error ? reason.message : '无法读取已记住的密码。'
+          )
+        }
+      })
+    return () => controller.abort()
+  }, [loginVisible, setAccount, setError, setPassword, setRemember])
+
+  const completeLogin = useCallback(
+    (signedInAccount?: string) => {
+      if (signedInAccount) rememberAccount(signedInAccount)
+      setPassword('')
+      setError('')
+      notifyAuthChanged()
+    },
+    [setError, setPassword]
+  )
+
+  const login = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (busy || githubPending) return
+    const values = new FormData(event.currentTarget)
+    const username = String(values.get('username') ?? '').trim()
+    const secret = String(values.get('password') ?? '')
+    if (!username || !secret) return
     setBusy(true)
     setError('')
     try {
-      await authRequest('login', {
+      const result = await authRequest('login', {
         method: 'POST',
-        body: JSON.stringify({ account, password })
+        body: JSON.stringify({ account: username, password: secret })
       })
-      setPassword('')
-      notifyAuthChanged()
-      refresh()
+      const signedInAccount = result.account || username
+      try {
+        await setRememberedPassword(signedInAccount, secret, remember)
+      } catch {
+        window.alert('已登录。系统或浏览器密码管理器未能更新已保存的密码。')
+      }
+      completeLogin(signedInAccount)
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '登录未完成。')
     } finally {
@@ -127,52 +197,85 @@ export function AuthGate({ children }: { children: ReactNode }) {
     )
   return (
     <main className="auth-gate flex min-h-screen items-center justify-center p-5">
-      <section className="grid w-full max-w-90 gap-3 rounded-xl border border-slate-200 bg-white p-6 shadow-[0_18px_52px_rgb(28_26_23/0.12)]">
+      <section className="grid w-full max-w-90 gap-4 rounded-xl border border-slate-200 bg-white p-6 shadow-[0_18px_52px_rgb(28_26_23/0.12)] dark:border-slate-700 dark:bg-slate-900">
         <LockKeyhole className="size-6 text-brand-600" />
-        <div className="flex min-w-0 items-start justify-between gap-3">
-          <div>
-            <strong className="text-sm text-slate-800">身份认证</strong>
-            <p className="mt-1 text-xs leading-5 text-slate-500">
-              此 alx 服务已开启账户保护，请登录后继续。
-            </p>
-          </div>
-          {error && (
-            <small className="shrink-0 text-xs text-red-700" title={error}>
-              登录失败
-            </small>
-          )}
+        <div>
+          <strong className="text-sm text-(--theme-text-strong)">
+            身份认证
+          </strong>
+          <p className="mt-1 text-xs leading-5 text-(--theme-text-secondary)">
+            此 alx 服务已开启账户保护，请登录后继续。
+          </p>
         </div>
-        <label className="grid gap-1 text-xs font-semibold text-slate-600">
-          账户
-          <input
-            className="min-h-9 rounded-md border border-slate-300 px-2.5 font-normal"
-            autoComplete="username"
-            value={account}
-            onChange={event => setAccount(event.target.value)}
-          />
-        </label>
-        <label className="grid gap-1 text-xs font-semibold text-slate-600">
-          密码
-          <input
-            className="min-h-9 rounded-md border border-slate-300 px-2.5 font-normal"
-            autoComplete="current-password"
-            type="password"
-            value={password}
-            onChange={event => setPassword(event.target.value)}
-            onKeyDown={event => {
-              if (event.key === 'Enter') void login()
-            }}
-          />
-        </label>
-        <Button
-          variant="primary"
-          loading={busy}
-          loadingLabel="正在登录…"
-          disabled={!account || !password}
-          onClick={() => void login()}
-        >
-          登录
-        </Button>
+        <form className="grid gap-3" onSubmit={event => void login(event)}>
+          <label className="grid gap-1 text-xs font-semibold text-(--theme-text-secondary)">
+            账户
+            <input
+              className="settings-input"
+              name="username"
+              autoComplete="username"
+              value={account}
+              disabled={busy || githubPending}
+              required
+              onChange={event => {
+                passwordChanged.current = true
+                setAccount(event.target.value)
+                setPassword('')
+                setRemember(remembersPassword(event.target.value))
+              }}
+            />
+          </label>
+          <label className="grid gap-1 text-xs font-semibold text-(--theme-text-secondary)">
+            密码
+            <input
+              className="settings-input"
+              name="password"
+              autoComplete="current-password"
+              type="password"
+              value={password}
+              disabled={busy || githubPending}
+              required
+              onChange={event => {
+                passwordChanged.current = true
+                setPassword(event.target.value)
+              }}
+            />
+          </label>
+          {canRememberPassword && (
+            <label className="flex items-center gap-2 text-xs text-(--theme-text-secondary)">
+              <input
+                type="checkbox"
+                checked={remember}
+                disabled={busy || githubPending}
+                onChange={event => setRemember(event.target.checked)}
+              />
+              记住密码
+            </label>
+          )}
+          {error && (
+            <p
+              role="alert"
+              className="m-0 text-xs text-red-700 dark:text-red-300"
+            >
+              {error}
+            </p>
+          )}
+          <Button
+            type="submit"
+            variant="primary"
+            loading={busy}
+            loadingLabel="正在登录…"
+            disabled={githubPending}
+          >
+            登录
+          </Button>
+        </form>
+        <WorkbenchGitHubFlow
+          mode="login"
+          disabled={busy}
+          onComplete={completeLogin}
+          onPendingChange={setGitHubPending}
+        />
       </section>
     </main>
   )
@@ -209,12 +312,13 @@ export function AuthControl({ embedded = false }: { embedded?: boolean }) {
     setBusy(true)
     setError('')
     try {
-      await authRequest('setup', {
+      const result = await authRequest('setup', {
         method: 'POST',
         body: JSON.stringify({ account, password, confirmation })
       })
       setPassword('')
       setConfirmation('')
+      if (result.account) rememberAccount(result.account)
       if (!embedded) setOpen(false)
       notifyAuthChanged()
       refresh()
@@ -225,9 +329,26 @@ export function AuthControl({ embedded = false }: { embedded?: boolean }) {
     }
   }
   const logout = async () => {
-    await authRequest('logout', { method: 'POST' })
-    notifyAuthChanged()
-    refresh()
+    try {
+      await authRequest('logout', { method: 'POST' })
+      notifyAuthChanged()
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '退出登录失败。')
+    }
+  }
+  const unlink = async () => {
+    setBusy(true)
+    setError('')
+    try {
+      await authRequest('github/binding', { method: 'DELETE' })
+      refresh()
+    } catch (reason) {
+      setError(
+        reason instanceof Error ? reason.message : '解除 GitHub 绑定失败。'
+      )
+    } finally {
+      setBusy(false)
+    }
   }
   const content = status?.enabled ? (
     <>
@@ -237,6 +358,24 @@ export function AuthControl({ embedded = false }: { embedded?: boolean }) {
           {status.account || '已登录'}
         </b>
       </p>
+      {status.githubLogin ? (
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="m-0 text-xs text-(--theme-text-secondary)">
+            已绑定 GitHub @{status.githubLogin}
+          </p>
+          <Button
+            type="button"
+            variant="secondary"
+            loading={busy}
+            onClick={() => void unlink()}
+          >
+            解除绑定
+          </Button>
+        </div>
+      ) : (
+        <WorkbenchGitHubFlow mode="binding" onComplete={refresh} />
+      )}
+      {error && <SettingsMessage tone="error">{error}</SettingsMessage>}
       <div className="settings-card-actions">
         <Button
           variant="secondary"
@@ -302,29 +441,29 @@ export function AuthControl({ embedded = false }: { embedded?: boolean }) {
     <div className={embedded ? 'settings-auth-panel' : 'relative'}>
       {!embedded && (
         <Button
-        variant="icon"
-        className={
-          status?.enabled ? 'border-brand-100 bg-brand-50 text-brand-600' : ''
-        }
-        onClick={() =>
-          setOpen(value => {
-            const next = !value
-            if (next)
-              window.dispatchEvent(
-                new CustomEvent('alx:top-tool-open', { detail: 'auth' })
-              )
-            return next
-          })
-        }
-        aria-label="身份认证"
-        aria-expanded={open}
-        title="身份认证"
-      >
-        <LockKeyhole className="size-4" />
+          variant="icon"
+          className={
+            status?.enabled ? 'border-brand-100 bg-brand-50 text-brand-600' : ''
+          }
+          onClick={() =>
+            setOpen(value => {
+              const next = !value
+              if (next)
+                window.dispatchEvent(
+                  new CustomEvent('alx:top-tool-open', { detail: 'auth' })
+                )
+              return next
+            })
+          }
+          aria-label="身份认证"
+          aria-expanded={open}
+          title="身份认证"
+        >
+          <LockKeyhole className="size-4" />
         </Button>
       )}
-      {open && (
-        embedded ? (
+      {open &&
+        (embedded ? (
           <SettingsPage
             title="认证"
             description="控制本机管理 API 的账户保护。"
@@ -371,8 +510,7 @@ export function AuthControl({ embedded = false }: { embedded?: boolean }) {
             </header>
             {content}
           </section>
-        )
-      )}
+        ))}
     </div>
   )
 }

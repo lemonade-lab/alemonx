@@ -1,4 +1,4 @@
-.PHONY: help dev bundle-resources dsh-runtime build test test-agent test-all test-sqlite test-space format lint dev-fe build-frontend test-sse verify-sse release-check docker-build docker-buildx docker-buildx-push docker-yunzai-build docker-yunzai-buildx docker-base-build docker-base-buildx docker-base-buildx-push docker-up docker-down docker-logs docker-local-dev
+.PHONY: help dev bundle-resources dsh-runtime build test test-agent test-all test-sqlite test-space format lint dev-fe build-frontend test-sse verify-sse release-check docker-build docker-buildx docker-buildx-push docker-yunzai-build docker-yunzai-buildx docker-base-build docker-base-buildx docker-base-buildx-push docker-up docker-down docker-logs docker-local-dev desktop-build
 
 .DEFAULT_GOAL := help
 
@@ -138,6 +138,9 @@ docker-yunzai-buildx-push: ## Build and publish the multi-architecture alemonx-y
 
 docker-local-dev: ## Start a local Docker development environment
 	./scripts/docker-local-dev.sh
+
+desktop-build: ## Start a local Docker development environment
+	./desktop/build/darwin/package.sh
 
 .PHONY: test-api
 test-api: ## Test HTTP API contracts and generate the route coverage report

@@ -1,4 +1,4 @@
-import { ArrowLeft, LayoutDashboard, Settings } from 'lucide-react'
+import { ArrowLeft, LayoutDashboard } from 'lucide-react'
 import { ThemeToggle } from './ThemeToggle'
 import { WorkbenchHeader } from './WorkbenchHeader'
 import { Button } from './Button'
@@ -10,31 +10,10 @@ type GuideHeaderProps = {
   showBack: boolean
 }
 
-export function GuideHeader({
-  onBack,
-  onClose,
-  onOpenSettings,
-  showBack
-}: GuideHeaderProps) {
+export function GuideHeader({ onBack, onClose, showBack }: GuideHeaderProps) {
   return (
     <WorkbenchHeader className="topbar relative flex min-h-11 shrink-0 items-center justify-between gap-2 border-b border-slate-200 bg-white/90 px-3 dark:border-slate-700">
       <div className="flex min-w-0 flex-1 items-center gap-1.5">
-        <Button
-          variant="icon"
-          onClick={onOpenSettings}
-          aria-label="打开设置"
-          title="设置"
-        >
-          <Settings className="size-4" />
-        </Button>
-        <a
-          className="truncate px-1 text-[0.82rem] font-semibold tracking-[-0.01em] text-slate-800 no-underline transition-colors hover:text-brand-600 max-[700px]:hidden dark:text-slate-200"
-          href="https://alemonjs.com/"
-          target="_blank"
-          rel="noreferrer"
-        >
-          ALemonX
-        </a>
         <ThemeToggle />
         {showBack && (
           <Button

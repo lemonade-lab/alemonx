@@ -562,7 +562,7 @@ test('Git clone keeps its themed footer visible on a narrow window', async ({
 })
 
 test('macOS tray panel shows service status and sends desktop actions', async ({ page }) => {
-  await page.setViewportSize({ width: 316, height: 211 })
+  await page.setViewportSize({ width: 316, height: 186 })
   await page.addInitScript(() => {
     Object.defineProperty(navigator, 'platform', { value: 'MacIntel' })
     Object.assign(window, {
@@ -587,10 +587,21 @@ test('macOS tray panel shows service status and sends desktop actions', async ({
   const panel = page.getByRole('main', { name: 'ALemonX 菜单' })
   await expect(panel.getByRole('status')).toHaveText('工作台在线')
   await expect(panel.getByText('v1.0.0')).toBeVisible()
-  const bounds = (await panel.boundingBox())!
-  expect(211 - (bounds.y + bounds.height)).toBeLessThanOrEqual(8)
+  const bounds = { x: 0, y: 0, width: 316, height: 186 }
+  expect(await panel.boundingBox()).toEqual(bounds)
+  await page.evaluate(() => {
+    window.dispatchEvent(new Event('blur'))
+    window.dispatchEvent(new Event('focus'))
+  })
+  expect(await panel.boundingBox()).toEqual(bounds)
+  await expect(panel).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)')
+  await page.emulateMedia({ colorScheme: 'dark' })
+  await expect(panel).toHaveCSS('color', 'rgb(241, 241, 244)')
+  await page.emulateMedia({ colorScheme: 'light' })
+  await expect(panel).toHaveCSS('color', 'rgb(32, 32, 36)')
   await expect(page.locator('body')).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)')
-  await expect(panel.getByRole('button', { name: '打开终端' })).toHaveCSS('border-top-width', '0px')
+  await expect(panel.getByRole('button', { name: '打开终端' })).toHaveCount(0)
+  expect(await panel.evaluate(node => getComputedStyle(node, '::before').content)).toBe('none')
   const modes = panel.getByRole('group', { name: '网络模式' })
   await expect(modes.getByRole('button', { name: '自动' })).toHaveAttribute('aria-pressed', 'true')
   await modes.getByRole('button', { name: '直连' }).click()
@@ -598,9 +609,10 @@ test('macOS tray panel shows service status and sends desktop actions', async ({
   await modes.getByRole('button', { name: '代理' }).click()
   await expect(panel.getByRole('alert')).toContainText('配置代理地址')
   await panel.getByRole('button', { name: /^切换到/ }).click()
-  await expect(page.locator('html')).toHaveAttribute('data-theme', /^(dark|light)$/)
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
+  await expect(panel).toHaveCSS('color', 'rgb(32, 32, 36)')
   await panel.getByRole('button', { name: '更多' }).click()
-  for (const [label, action] of [['切换开发模式', 'developer-mode'], ['打开终端', 'terminal'], ['打开', 'open'], ['重启应用', 'restart'], ['退出', 'quit']]) {
+  for (const [label, action] of [['切换开发模式', 'developer-mode'], ['打开', 'open'], ['重启应用', 'restart'], ['退出', 'quit']]) {
     const button = panel.getByRole('button', { name: label, exact: true })
     await expect(button).toBeInViewport()
     await button.click()

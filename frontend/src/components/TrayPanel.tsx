@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { AppWindow, Bot, Code2, Ellipsis, Network, Power, RotateCw, Terminal } from 'lucide-react'
+import { AppWindow, Bot, Code2, Ellipsis, Network, Power, RotateCw } from 'lucide-react'
 import {
   useSaveSystemNetworkMutation,
   useSystemNetworkQuery,
@@ -80,21 +80,13 @@ export function TrayPanel() {
           <h1 className="m-0 text-sm font-semibold">ALemonX</h1>
           <p className="m-0 flex items-center gap-1.5 whitespace-nowrap text-[11px] text-(--tray-muted)" role="status">
             <span
-              className={`size-1.5 rounded-full ${service?.online ? 'bg-(--theme-success)' : service ? 'bg-(--theme-danger)' : 'bg-current'}`}
+              className={`size-1.5 rounded-full ${service?.online ? 'bg-(--tray-success)' : service ? 'bg-(--tray-danger)' : 'bg-current'}`}
               aria-hidden="true"
             />
             {service?.online ? '工作台在线' : service ? '工作台不可用' : '正在检查…'}
           </p>
         </div>
         <div className="tray-shortcuts">
-          <Button
-            variant="icon"
-            aria-label="打开终端"
-            title="打开终端"
-            onClick={() => bridge?.postMessage('alx:tray:terminal')}
-          >
-            <Terminal className="size-4" aria-hidden="true" />
-          </Button>
           <ThemeToggle />
           <Button
             variant="icon"

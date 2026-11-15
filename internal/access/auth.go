@@ -32,6 +32,8 @@ var Permissions = []string{
 }
 
 type Account struct {
+	GitHubID       int64     `json:"githubId,omitempty"`
+	GitHubLogin    string    `json:"githubLogin,omitempty"`
 	Account        string    `json:"account"`
 	PasswordHash   string    `json:"passwordHash,omitempty"`
 	Roles          []string  `json:"roles"`
@@ -50,6 +52,7 @@ type Role struct {
 
 // Status deliberately contains no password material.
 type Status struct {
+	GitHubLogin   string   `json:"githubLogin,omitempty"`
 	RobotScope    string   `json:"-"`
 	Enabled       bool     `json:"enabled"`
 	Authenticated bool     `json:"authenticated"`
@@ -234,6 +237,7 @@ func (m *Manager) Status(token string) (Status, error) {
 		return status, nil
 	}
 	status.Authenticated, status.Account = true, account.Account
+	status.GitHubLogin = account.GitHubLogin
 	// Include the account creation time so recreating a username cannot
 	// inherit a deleted account's saved robot list.
 	status.RobotScope = account.Account + "\x00" + account.Created.UTC().Format(time.RFC3339Nano)
@@ -324,6 +328,8 @@ func (m *Manager) ResetSuperAdmin(account, password, confirmation string) (strin
 		m.data.Accounts = append(m.data.Accounts, Account{Account: account, PasswordHash: string(hash), SuperAdmin: true, Enabled: true, Created: now, Updated: now})
 	} else {
 		m.data.Accounts[index].PasswordHash = string(hash)
+		m.data.Accounts[index].GitHubID = 0
+		m.data.Accounts[index].GitHubLogin = ""
 		m.data.Accounts[index].SuperAdmin = true
 		m.data.Accounts[index].Enabled = true
 		m.data.Accounts[index].Updated = now
@@ -479,6 +485,8 @@ func (m *Manager) UpdateAccount(account string, roles []string, password, confir
 			return Account{}, fmt.Errorf("无法保护密码：%w", err)
 		}
 		m.data.Accounts[index].PasswordHash = string(hash)
+		m.data.Accounts[index].GitHubID = 0
+		m.data.Accounts[index].GitHubLogin = ""
 	}
 	m.data.Accounts[index].Updated = time.Now()
 	if err := m.persist(); err != nil {

@@ -35,7 +35,7 @@ CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.Version=$version -X mai
 
 cd "$desktop_dir"
 # Wails needs this tag to stop WKWebView drawing an opaque tray backdrop.
-CGO_ENABLED=1 go build -tags "production private_mac_apis" -trimpath -o "$app/Contents/MacOS/ALemonX Desktop" .
+CGO_ENABLED=1 go build -tags "production private_mac_apis" -trimpath -ldflags "-X main.desktopVersion=$version" -o "$app/Contents/MacOS/ALemonX Desktop" .
 codesign --force --sign - "$app/Contents/MacOS/alx"
 codesign --force --sign - "$app"
 codesign --verify --deep --strict "$app"

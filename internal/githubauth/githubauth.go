@@ -51,6 +51,7 @@ type DeviceFlow struct {
 }
 
 type PollResult struct {
+	UserID   int64  `json:"-"`
 	Status   string `json:"status"`
 	Login    string `json:"login,omitempty"`
 	Interval int    `json:"interval,omitempty"`
@@ -58,6 +59,11 @@ type PollResult struct {
 }
 
 type deviceFlowState struct {
+	mu         sync.Mutex
+	owner      string
+	clientID   string
+	nextPoll   time.Time
+	finished   bool
 	deviceCode string
 	interval   int
 	expiresAt  time.Time
@@ -164,6 +170,11 @@ func Status() (AuthStatus, error) {
 // StartDeviceFlow begins the GitHub device authorization flow and stores the
 // pending state under a flow id for later polling.
 func StartDeviceFlow() (DeviceFlow, error) {
+	return StartIdentityFlow("")
+}
+
+// StartIdentityFlow isolates workbench identity flows from the shared API token.
+func StartIdentityFlow(owner string) (DeviceFlow, error) {
 	clientID := ClientID()
 	if clientID == "" {
 		return DeviceFlow{}, errors.New("未配置 GitHub OAuth App 的 Client ID；请在环境中设置 ALEMONX_GITHUB_CLIENT_ID 或创建配置文件 github-oauth-client-id")
@@ -192,16 +203,33 @@ func StartDeviceFlow() (DeviceFlow, error) {
 		}
 		return DeviceFlow{}, fmt.Errorf("GitHub 授权失败：%s", message)
 	}
-	if response.DeviceCode == "" || response.UserCode == "" {
+	if response.DeviceCode == "" || response.UserCode == "" || response.ExpiresIn <= 0 {
 		return DeviceFlow{}, errors.New("GitHub 授权响应缺少设备码")
 	}
 	interval := response.Interval
 	if interval < 5 {
 		interval = 5
 	}
-	flowID := randomID()
+	var secret [32]byte
+	if _, err := rand.Read(secret[:]); err != nil {
+		return DeviceFlow{}, err
+	}
+	flowID := hex.EncodeToString(secret[:])
+	now := time.Now()
 	flowsMu.Lock()
+	for id, state := range flows {
+		if !now.Before(state.expiresAt) {
+			delete(flows, id)
+		}
+	}
+	if len(flows) >= 256 {
+		flowsMu.Unlock()
+		return DeviceFlow{}, errors.New("GitHub 授权请求过多，请稍后重试")
+	}
 	flows[flowID] = &deviceFlowState{
+		owner:      owner,
+		clientID:   clientID,
+		nextPoll:   now.Add(time.Duration(interval) * time.Second),
 		deviceCode: response.DeviceCode,
 		interval:   interval,
 		expiresAt:  time.Now().Add(time.Duration(response.ExpiresIn) * time.Second),
@@ -219,18 +247,35 @@ func StartDeviceFlow() (DeviceFlow, error) {
 // PollDeviceFlow advances the pending device flow. On success the token is
 // persisted and the flow is removed.
 func PollDeviceFlow(flowID string) (PollResult, error) {
+	return PollIdentityFlow(flowID, "")
+}
+
+func PollIdentityFlow(flowID, owner string) (PollResult, error) {
 	flowsMu.Lock()
 	state := flows[flowID]
 	flowsMu.Unlock()
-	if state == nil {
+	if state == nil || state.owner != owner {
 		return PollResult{Status: "expired"}, nil
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.finished {
+		return PollResult{Status: "expired"}, nil
+	}
+	finish := func() {
+		state.finished = true
+		removeFlow(flowID)
 	}
 	if time.Now().After(state.expiresAt) {
-		removeFlow(flowID)
+		finish()
 		return PollResult{Status: "expired"}, nil
 	}
+	if owner != "" && time.Now().Before(state.nextPoll) {
+		return PollResult{Status: "pending", Interval: state.interval}, nil
+	}
+	state.nextPoll = time.Now().Add(time.Duration(state.interval) * time.Second)
 	form := url.Values{
-		"client_id":   {ClientID()},
+		"client_id":   {state.clientID},
 		"device_code": {state.deviceCode},
 		"grant_type":  {"urn:ietf:params:oauth:grant-type:device_code"},
 	}
@@ -249,10 +294,13 @@ func PollDeviceFlow(flowID string) (PollResult, error) {
 	switch response.Error {
 	case "":
 		if response.AccessToken == "" {
-			removeFlow(flowID)
+			finish()
 			return PollResult{}, errors.New("GitHub 授权响应缺少 Token")
 		}
-		removeFlow(flowID)
+		finish()
+		if owner != "" {
+			return fetchIdentity(response.AccessToken)
+		}
 		if err := httpcache.SaveToken(response.AccessToken); err != nil {
 			return PollResult{}, err
 		}
@@ -266,15 +314,16 @@ func PollDeviceFlow(flowID string) (PollResult, error) {
 		return PollResult{Status: "pending", Interval: state.interval}, nil
 	case "slow_down":
 		state.interval += 5
+		state.nextPoll = time.Now().Add(time.Duration(state.interval) * time.Second)
 		return PollResult{Status: "slow_down", Interval: state.interval}, nil
 	case "expired_token":
-		removeFlow(flowID)
+		finish()
 		return PollResult{Status: "expired"}, nil
 	case "access_denied":
-		removeFlow(flowID)
+		finish()
 		return PollResult{Status: "denied"}, nil
 	default:
-		removeFlow(flowID)
+		finish()
 		message := response.ErrorDescription
 		if message == "" {
 			message = response.Error
@@ -372,10 +421,28 @@ func removeFlow(flowID string) {
 	flowsMu.Unlock()
 }
 
-func randomID() string {
-	bytes := make([]byte, 16)
-	if _, err := rand.Read(bytes); err != nil {
-		return fmt.Sprintf("%d", time.Now().UnixNano())
+func fetchIdentity(token string) (PollResult, error) {
+	request, err := http.NewRequest(http.MethodGet, userURL, nil)
+	if err != nil {
+		return PollResult{}, err
 	}
-	return hex.EncodeToString(bytes)
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("Accept", "application/vnd.github+json")
+	request.Header.Set("User-Agent", "alemonx")
+	response, err := systemnetwork.DefaultClient(10 * time.Second).Do(request)
+	if err != nil {
+		return PollResult{}, errors.New("无法读取 GitHub 用户信息")
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return PollResult{}, errors.New("无法读取 GitHub 用户信息")
+	}
+	var user struct {
+		ID    int64  `json:"id"`
+		Login string `json:"login"`
+	}
+	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&user); err != nil || user.ID <= 0 || user.Login == "" {
+		return PollResult{}, errors.New("GitHub 用户信息无法识别")
+	}
+	return PollResult{Status: "ok", UserID: user.ID, Login: user.Login}, nil
 }

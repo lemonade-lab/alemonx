@@ -165,3 +165,53 @@ func TestClientIDSourceAndSaveOverride(t *testing.T) {
 		t.Fatalf("cleared override should fall back to builtin, got %q/%q", value, source)
 	}
 }
+
+func TestIdentityFlowUsesFreshGitHubIDWithoutStoringToken(t *testing.T) {
+	t.Setenv("ALEMONX_GITHUB_CLIENT_ID", "identity-test-client")
+	t.Setenv("HOME", t.TempDir())
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/device":
+			_, _ = w.Write([]byte(`{"device_code":"test-device","user_code":"TEST-CODE","verification_uri":"https://github.com/login/device","expires_in":900,"interval":5}`))
+		case "/token":
+			_, _ = w.Write([]byte(`{"access_token":"identity-test-token"}`))
+		case "/user":
+			if r.Header.Get("Authorization") != "Bearer identity-test-token" {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			_, _ = w.Write([]byte(`{"id":123456,"login":"renamed-account"}`))
+		}
+	}))
+	defer upstream.Close()
+	previousDevice, previousToken, previousUser := deviceCodeURL, tokenURL, userURL
+	deviceCodeURL, tokenURL, userURL = upstream.URL+"/device", upstream.URL+"/token", upstream.URL+"/user"
+	t.Cleanup(func() { deviceCodeURL, tokenURL, userURL = previousDevice, previousToken, previousUser })
+
+	flow, err := StartIdentityFlow("binding:account-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result, _ := PollDeviceFlow(flow.FlowID); result.Status != "expired" {
+		t.Fatal("shared token flow accepted an identity flow ID")
+	}
+	if result, _ := PollIdentityFlow(flow.FlowID, "binding:account-b"); result.Status != "expired" {
+		t.Fatal("a different session accessed the binding flow")
+	}
+	if result, _ := PollIdentityFlow(flow.FlowID, "binding:account-a"); result.Status != "pending" {
+		t.Fatal("early request bypassed the polling interval")
+	}
+	flowsMu.Lock()
+	flows[flow.FlowID].nextPoll = time.Now().Add(-time.Second)
+	flowsMu.Unlock()
+	result, err := PollIdentityFlow(flow.FlowID, "binding:account-a")
+	if err != nil || result.Status != "ok" || result.UserID != 123456 || result.Login != "renamed-account" {
+		t.Fatalf("poll = %#v, %v", result, err)
+	}
+	if _, err := os.Stat(httpcache.TokenPath()); !os.IsNotExist(err) {
+		t.Fatal("identity flow persisted the shared GitHub token")
+	}
+	if result, _ := PollIdentityFlow(flow.FlowID, "binding:account-a"); result.Status != "expired" {
+		t.Fatal("completed flow was reusable")
+	}
+}

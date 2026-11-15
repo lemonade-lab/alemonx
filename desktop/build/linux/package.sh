@@ -37,7 +37,7 @@ done
 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.Version=$version -X main.FrontendBuild=$version" -o "$app/alx" .
 
 cd "$desktop_dir"
-CGO_ENABLED=1 go build -tags production -trimpath -ldflags "-s -w" -o "$app/alemonx-desktop" .
+CGO_ENABLED=1 go build -tags production -trimpath -ldflags "-s -w -X main.desktopVersion=$version" -o "$app/alemonx-desktop" .
 cp build/linux/README.txt "$app/"
 tar -C "$stage" -czf "$stage/$name.tar.gz" "$name"
 mv "$stage/$name.tar.gz" "$output/"

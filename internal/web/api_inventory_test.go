@@ -39,9 +39,14 @@ func registeredAPIRoutes(t *testing.T) []string {
 		case *ast.BasicLit:
 			path, _ = strconv.Unquote(value.Value)
 		case *ast.Ident:
-			if value.Name == "pluginDownloadBrokerPath" {
+			switch value.Name {
+			case "pluginDownloadBrokerPath":
 				path = pluginDownloadBrokerPath
-			} else {
+			case "authGitHubLoginPath":
+				path = authGitHubLoginPath
+			case "authGitHubBindingPath":
+				path = authGitHubBindingPath
+			default:
 				t.Errorf("unresolved route constant: %s", value.Name)
 			}
 		default:
@@ -77,6 +82,7 @@ func TestAllRegisteredAPIsRequireAuthentication(t *testing.T) {
 		"/api/v1/auth/status": true, "/api/v1/auth/setup": true,
 		"/api/v1/auth/login": true, "/api/v1/auth/logout": true,
 		pluginDownloadBrokerPath: true,
+		authGitHubLoginPath:      true,
 	}
 	routes := registeredAPIRoutes(t)
 	for _, path := range routes {

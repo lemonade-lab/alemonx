@@ -7,6 +7,7 @@ import { setDeveloperMode } from '../store/workspaceStore'
 import { AccountManagementPage } from './AccountManagement'
 import { AuthControl } from './AuthControl'
 import { SetupUpdateButton } from './SetupUpdateButton'
+import { DesktopUpdatePanel } from './DesktopUpdatePanel'
 import { NetworkSettingsPanel } from './NetworkSettingsPanel'
 import { GithubSettingsPanel } from './GithubSettingsPanel'
 import { ServiceControlCard } from './ServiceControlCard'
@@ -119,7 +120,7 @@ export function AppSettingsPanel({
       {active === 'general' && <GeneralSettings />}
       {active === 'ssh' && <SSHControl embedded />}
       {active === 'mcp' && <McpSettingsPanel />}
-      {active === 'update' && <SetupUpdateButton embedded />}
+      {active === 'update' && (windowProps.native ? <DesktopUpdatePanel /> : <SetupUpdateButton embedded />)}
       {active === 'network' && <NetworkSettingsPanel />}
       {active === 'github' && <GithubSettingsPanel />}
       {active === 'auth' && <AuthControl embedded />}

@@ -1103,6 +1103,8 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	mux.HandleFunc("/api/v1/auth/status", s.authStatusHandler)
 	mux.HandleFunc("/api/v1/auth/setup", s.authSetupHandler)
 	mux.HandleFunc("/api/v1/auth/login", s.authLoginHandler)
+	mux.HandleFunc(authGitHubLoginPath, s.authGitHubHandler)
+	mux.HandleFunc(authGitHubBindingPath, s.authGitHubHandler)
 	mux.HandleFunc("/api/v1/auth/logout", s.authLogoutHandler)
 	mux.HandleFunc("/api/v1/auth/management", s.authManagementHandler)
 	mux.HandleFunc("/api/v1/auth/accounts/", s.authAccountHandler)
@@ -1286,6 +1288,8 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 }
 
 const authCookieName = "alx_session"
+const authGitHubLoginPath = "/api/v1/auth/github/login"
+const authGitHubBindingPath = "/api/v1/auth/github/binding"
 
 func (s *server) authToken(r *http.Request) string {
 	if authorization := strings.TrimSpace(r.Header.Get("Authorization")); authorization != "" {
@@ -9694,7 +9698,7 @@ func (s *server) ginAccess() gin.HandlerFunc {
 			c.Next()
 			return
 		}
-		if !strings.HasPrefix(path, "/api/v1/") || path == "/api/v1/auth/status" || path == "/api/v1/auth/setup" || path == "/api/v1/auth/login" || path == "/api/v1/auth/logout" {
+		if !strings.HasPrefix(path, "/api/v1/") || path == "/api/v1/auth/status" || path == "/api/v1/auth/setup" || path == "/api/v1/auth/login" || path == authGitHubLoginPath || path == "/api/v1/auth/logout" {
 			c.Next()
 			return
 		}
@@ -9863,7 +9867,8 @@ func (w *captureWriter) message() string {
 // redacted; the body is capped to keep logs readable.
 func (s *server) loggableRequestBody(c *gin.Context) string {
 	// SQL, Redis values and credentials must never enter request logs.
-	if strings.HasPrefix(c.Request.URL.Path, "/api/v1/data/") || c.Request.URL.Path == "/api/v1/system/network" {
+	if strings.HasPrefix(c.Request.URL.Path, "/api/v1/data/") || c.Request.URL.Path == "/api/v1/system/network" ||
+		c.Request.URL.Path == authGitHubLoginPath || c.Request.URL.Path == authGitHubBindingPath {
 		return ""
 	}
 	if c.Request.Body == nil || c.Request.Body == http.NoBody {
