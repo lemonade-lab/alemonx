@@ -442,6 +442,10 @@ func InstallEnvironment(ctx context.Context, checkID string) (string, error) {
 		return "", errors.New("Docker 环境的运行库由镜像提供，不能在容器内安装。请更新镜像后重新创建容器。")
 	}
 	switch strings.TrimSpace(checkID) {
+	case "git":
+		if runtime.GOOS == "windows" {
+			return installManagedWindowsGit(ctx)
+		}
 	case "node":
 		return InstallNodeWithNVM(ctx)
 	case "bun":

@@ -602,6 +602,13 @@ func ResolveCommand(name string) (string, error) {
 			}
 		}
 	}
+	if runtime.GOOS == "windows" && name == "git" {
+		if directory := managedGitDirectory(); directory != "" {
+			if path, err := exec.LookPath(filepath.Join(directory, "cmd", "git.exe")); err == nil {
+				return path, nil
+			}
+		}
+	}
 	if path, err := exec.LookPath(name); err == nil {
 		return path, nil
 	}

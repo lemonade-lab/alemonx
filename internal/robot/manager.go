@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -2476,6 +2477,11 @@ func runCommandOutput(root string, values map[string]string, combined, trim bool
 	ctx, cancel := context.WithTimeout(operationContext(root), timeout)
 	defer cancel()
 	path := nodeToolPath(name)
+	if runtime.GOOS == "windows" && name == "git" {
+		if resolved, err := system.ResolveCommand(name); err == nil {
+			path = resolved
+		}
+	}
 	if name == "npm" && packagemanager.UsesBunRuntime(root) {
 		path = bunToolPath()
 		args = append([]string{"x", "--bun", "--package", "npm@10.9.9", "npm"}, args...)

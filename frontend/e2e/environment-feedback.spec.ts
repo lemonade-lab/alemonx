@@ -240,3 +240,85 @@ test('Bun runtime installs independently of Node.js', async ({ page }) => {
   await page.getByRole('button', { name: '确认安装', exact: true }).click()
   await expect(page.getByText('机器人已安装', { exact: true })).toBeVisible()
 })
+
+test('Windows Git install offers the official installer if automatic installation fails', async ({
+  page
+}) => {
+  let attempts = 0
+  let installed = false
+  await page.route('**/api/v1/**', route => {
+    const path = new URL(route.request().url()).pathname
+    switch (path) {
+      case '/api/v1/auth/status':
+        return route.fulfill({ json: { enabled: false } })
+      case '/api/v1/goals':
+        return route.fulfill({
+          json: [
+            {
+              id: 'install',
+              title: '安装机器人',
+              description: '',
+              steps: ['环境', '位置', '确认']
+            }
+          ]
+        })
+      case '/api/v1/catalog/options':
+        return route.fulfill({ json: { data: [] } })
+      case '/api/v1/checks':
+        return route.fulfill({
+          json: {
+            ready: installed,
+            platform: 'windows/amd64',
+            checks: [
+              {
+                id: 'node',
+                name: 'Node.js',
+                status: 'ready',
+                detail: 'v22.23.5'
+              },
+              {
+                id: 'git',
+                name: 'Git',
+                status: installed ? 'ready' : 'missing',
+                detail: installed ? 'git version 2.56.1.windows.1' : '未检测到'
+              }
+            ]
+          }
+        })
+      case '/api/v1/system/environment/install':
+        expect(route.request().postDataJSON()).toEqual({
+          checkId: 'git',
+          confirm: true
+        })
+        attempts++
+        if (attempts === 1)
+          return route.fulfill({
+            status: 400,
+            json: { error: '下载 Git for Windows 失败' }
+          })
+        installed = true
+        return route.fulfill({ json: { output: '已安装工作台托管的 Git' } })
+      default:
+        return route.fulfill({ json: {} })
+    }
+  })
+  await page.goto('/guide/install/step/1')
+  await page.getByRole('button', { name: '安装 Git', exact: true }).click()
+  const dialog = page.getByRole('dialog')
+  const download = dialog.getByRole('link', {
+    name: '下载完整的 Git for Windows'
+  })
+  await expect(download).toHaveAttribute(
+    'href',
+    'https://git-scm.com/download/win'
+  )
+  await dialog.getByRole('button', { name: '安装', exact: true }).click()
+  await expect(dialog.getByRole('alert')).toBeVisible()
+  await expect(download).toBeVisible()
+  await dialog.getByRole('button', { name: '重试安装', exact: true }).click()
+  await dialog.getByRole('button', { name: '完成', exact: true }).click()
+  await expect(page.getByText('git version 2.56.1.windows.1')).toBeVisible()
+  await expect(
+    page.getByRole('button', { name: '继续', exact: true })
+  ).toBeEnabled()
+})

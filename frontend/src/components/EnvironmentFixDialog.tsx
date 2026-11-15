@@ -64,7 +64,15 @@ export function EnvironmentFixDialog({
   onClose,
   onInstalled
 }: Props) {
-  const options = links[check.id] ?? []
+  const isWindowsGit = check.id === 'git' && platform.startsWith('windows/')
+  const options = isWindowsGit
+    ? [
+        {
+          label: '下载完整的 Git for Windows',
+          href: 'https://git-scm.com/download/win'
+        }
+      ]
+    : (links[check.id] ?? [])
   const [installing, setInstalling] = useStoreState(false)
   const [installed, setInstalled] = useStoreState(false)
   const [message, setMessage] = useStoreState('')
@@ -144,10 +152,12 @@ export function EnvironmentFixDialog({
         </header>
         <div className="min-h-0 overflow-y-auto overscroll-contain">
           <p className="mt-2 text-sm leading-6 text-(--theme-text-secondary)">
-            {check.suggestion ||
-              '请选择官方安装包，完成后返回环境面板重新检查。'}
+            {isWindowsGit
+              ? '一键安装会下载并校验官方 MinGit，供当前工作台使用。'
+              : check.suggestion ||
+                '请选择官方安装包，完成后返回环境面板重新检查。'}
           </p>
-          {canInstallOnServer && check.id !== 'bun' ? (
+          {canInstallOnServer && check.id !== 'bun' && !isWindowsGit ? (
             installing && (
               <DownloadProgress
                 className="mt-5"
