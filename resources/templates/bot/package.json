@@ -13,9 +13,9 @@
   },
   "devDependencies": {
     "@alemonjs/onebot": "^2.1.23",
-    "@alemonjs/qq-bot": "^2.1.37",
+    "@alemonjs/qq-bot": "^2.1.46",
     "@types/node": "^22",
-    "alemonjs": "^2.1.109"
+    "alemonjs": "^2.1.124"
   },
   "dependencies": {
     "@alemonjs/db": "^0.0.21",
