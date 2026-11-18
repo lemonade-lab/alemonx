@@ -350,21 +350,14 @@ test('robot workbench resizes the left rail and keeps the right card fixed', asy
   await page.setViewportSize({ width: 390, height: 820 })
   await expect(left).toBeHidden()
   await expect(right).toBeHidden()
-  const listBox = await page
-    .getByText('机器人列表', { exact: true })
-    .boundingBox()
-  const controlsBox = await page
-    .getByText('机器人面板', { exact: true })
-    .boundingBox()
-  const workspaceBox = await page
-    .getByText('工作区', { exact: true })
-    .boundingBox()
-  expect(listBox!.y).toBeLessThan(controlsBox!.y)
-  expect(controlsBox!.y).toBeLessThan(workspaceBox!.y)
-  const narrowHeader = (await panelHeader.boundingBox())!
-  const narrowCard = (await controls.locator('.control-card').boundingBox())!
-  expect(narrowHeader.x).toBeCloseTo(narrowCard.x, 0)
-  expect(Math.abs(narrowHeader.width - narrowCard.width)).toBeLessThanOrEqual(2)
+  await expect(page.getByText('机器人列表', { exact: true })).toBeHidden()
+  await expect(page.getByText('机器人面板', { exact: true })).toBeHidden()
+  const phoneContent = (await page.locator('.robot-workspace > .console-page').boundingBox())!
+  expect(phoneContent.y).toBe(0)
+  expect(phoneContent.height).toBe(600)
+  await page.setViewportSize({ width: 1280, height: 820 })
+  await expect(left.locator('.ant-splitter-bar-dragger')).toBeVisible()
+  await expect.poll(() => width('机器人列表')).toBe(resizedList)
 })
 
 for (const platform of ['mac', 'windows', 'linux'] as const) {

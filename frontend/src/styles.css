@@ -9728,6 +9728,64 @@ button > svg,
   }
 }
 
+/* The phone drawer owns scrolling; desktop rail height limits must not clip it. */
+.workbench-mobile-navigation .project-rail {
+  border: 0;
+}
+.workbench-mobile-navigation .control-dock {
+  padding: 12px;
+  position: static;
+}
+.workbench-mobile-navigation .control-navigation {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+}
+.workbench-mobile-navigation [data-project-navigation] {
+  max-height: none;
+  overflow: visible;
+}
+.workbench-mobile-navigation .control-quick-actions {
+  display: grid;
+  gap: 4px;
+  border-top: 1px solid var(--theme-border-subtle);
+  padding-top: 8px;
+}
+.workbench-mobile-navigation button {
+  min-height: 44px;
+  min-width: 44px;
+}
+
+@media (max-width: 940px) {
+  .dashboard-window > .topbar {
+    flex-wrap: nowrap;
+    gap: 4px;
+    padding: env(safe-area-inset-top) max(8px, env(safe-area-inset-right)) 0 max(8px, env(safe-area-inset-left));
+  }
+  .dashboard-window > .topbar > div {
+    gap: 4px;
+  }
+  .dashboard-window > .topbar .icon-button {
+    min-height: 44px;
+    min-width: 44px;
+  }
+  .dashboard-window :is(.primary-button, .secondary-button, .danger-button) {
+    min-height: 44px;
+  }
+  .dashboard-window .console-page {
+    grid-template-rows: auto;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .robot-workspace > .console-page > [data-workbench-page] {
+    margin-inline: auto;
+    padding-block: 8px;
+    width: calc(100% - 16px);
+  }
+  :is(.dashboard-window, [role='dialog']) :is(input, select, textarea) {
+    font-size: 16px;
+  }
+}
+
 [data-native-desktop],
 [data-native-desktop] :is(body, #root, .app-shell) {
   height: 100%;
