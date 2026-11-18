@@ -20,8 +20,15 @@ FROM node-runtime AS dsh-runtime
 WORKDIR /out/dsh
 COPY resources/packages/dsh/package.json resources/packages/dsh/package-lock.json ./
 COPY resources/packages/dsh/plugins ./plugins
+RUN npm ci --ignore-scripts --no-audit --no-fund
 COPY resources/packages/dsh/scripts ./scripts
-RUN npm ci --ignore-scripts --no-audit --no-fund && npm run check
+ARG BUILDPLATFORM
+ARG TARGETPLATFORM
+ARG DSH_WEB_STARTUP_TIMEOUT_MS
+# Keep the target-platform startup check, with more time under emulation.
+RUN if [ "$BUILDPLATFORM" != "$TARGETPLATFORM" ]; then \
+      export DSH_WEB_STARTUP_TIMEOUT_MS="${DSH_WEB_STARTUP_TIMEOUT_MS:-120000}"; \
+    fi && npm run check
 
 # 后端构建阶段
 FROM golang:1.24 AS builder
