@@ -49,10 +49,19 @@ func (s *Server) developmentLogs(root, query string) (string, error) {
 }
 
 func RuntimeLogResult(id, mode, status, runError, output, query string) (string, error) {
+	return encodeResult(map[string]any{
+		"taskId": id, "mode": mode, "status": status,
+		"error": robot.BoundedDiagnosticText(runError, 4096), "lines": RuntimeLogLines(output, query),
+	})
+}
+
+func RuntimeLogLines(output, query string) []string {
 	if len(output) > runtimeLogLimit {
 		output = output[len(output)-runtimeLogLimit:]
 		if _, rest, found := strings.Cut(output, "\n"); found {
 			output = rest
+		} else {
+			return []string{}
 		}
 	}
 	keyword := strings.ToLower(strings.TrimSpace(query))
@@ -66,8 +75,5 @@ func RuntimeLogResult(id, mode, status, runError, output, query string) (string,
 	if len(lines) > 100 {
 		lines = lines[len(lines)-100:]
 	}
-	return encodeResult(map[string]any{
-		"taskId": id, "mode": mode, "status": status,
-		"error": robot.RedactRuntimeLog(runError), "lines": lines,
-	})
+	return lines
 }

@@ -4,6 +4,7 @@ package mcp
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -48,13 +50,29 @@ type Server struct {
 // Policy limits which local filesystem roots this MCP process may manage.
 // An empty list preserves the legacy local-client behaviour.
 type Policy struct {
-	CheckAccount   func() error
-	WorkbenchTask  func(string) (root, payload string, ok bool)
-	AllowedRoots   []string
-	RobotList      func() (workspace.RobotList, error)
-	RegisterRobot  func(string) error
-	ControlRobot   func(root, mode, action string) (string, error)
-	LocalRobotLogs func(root, query string) (string, error)
+	DiagnosticOnly        bool
+	CheckAccount          func() error
+	OnToolCall            func(name string, success bool)
+	WorkbenchTask         func(context.Context, string) (root, payload string, ok bool)
+	Diagnostics           func(context.Context, string) robot.RobotDiagnostics
+	WorkbenchOperations   func(context.Context, string) []robot.DiagnosticOperation
+	WorkbenchProjectTasks func(context.Context, []string) []robot.DiagnosticOperation
+	AllowedRoots          []string
+	RobotList             func() (workspace.RobotList, error)
+	RegisterRobot         func(string) error
+	ControlRobot          func(root, mode, action string) (string, error)
+	SubmitProjectAction   func(ProjectAction) (string, error)
+	LocalRobotLogs        func(root, query string) (string, error)
+}
+
+// ProjectAction carries a confirmed operation to the workbench task runner.
+type ProjectAction struct {
+	Root    string `json:"root"`
+	Action  string `json:"action"`
+	Package string `json:"package"`
+	Message string `json:"message"`
+	Version string `json:"version"`
+	Tag     string `json:"tag"`
 }
 
 type operationTask struct {
@@ -147,7 +165,7 @@ func (s *Server) HTTPHandler(token string) http.Handler {
 			return
 		}
 		writer.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(writer).Encode(s.handle(message))
+		_ = json.NewEncoder(writer).Encode(s.handle(request.Context(), message))
 	})
 }
 
@@ -189,7 +207,7 @@ func (s *Server) Serve(input io.Reader, output io.Writer) error {
 		if request.ID == nil { // MCP notifications do not receive a response.
 			continue
 		}
-		response := s.handle(request)
+		response := s.handle(context.Background(), request)
 		if err := encoder.Encode(response); err != nil {
 			return err
 		}
@@ -216,24 +234,28 @@ type rpcError struct {
 	Message string `json:"message"`
 }
 
-func (s *Server) handle(request rpcRequest) rpcResponse {
+func (s *Server) handle(ctx context.Context, request rpcRequest) rpcResponse {
 	if request.JSONRPC != "2.0" {
 		return errorResponse(request.ID, -32600, "仅支持 JSON-RPC 2.0")
 	}
 	switch request.Method {
 	case "initialize":
+		instructions := "此服务只能管理本机 AlemonJS 项目。项目源码可在受限范围内读写；所有会修改项目或执行命令的工具都必须传 confirm=true。密钥文件、依赖目录、Git 元数据和任意宿主机命令始终不可访问。"
+		if s.policy.DiagnosticOnly {
+			instructions = "此连接使用只读诊断密钥，可查询账户机器人、状态、脱敏日志和任务历史。"
+		}
 		return resultResponse(request.ID, map[string]any{
 			"protocolVersion": protocolVersion,
 			"capabilities":    map[string]any{"tools": map[string]any{"listChanged": false}, "resources": map[string]any{"listChanged": false}},
 			"serverInfo":      map[string]string{"name": "alemonx", "version": s.version},
-			"instructions":    "此服务只能管理本机 AlemonJS 项目。项目源码可在受限范围内读写；所有会修改项目或执行命令的工具都必须传 confirm=true。密钥文件、依赖目录、Git 元数据和任意宿主机命令始终不可访问。",
+			"instructions":    instructions,
 		})
 	case "ping":
 		return resultResponse(request.ID, map[string]any{})
 	case "tools/list":
-		return resultResponse(request.ID, map[string]any{"tools": tools()})
+		return resultResponse(request.ID, map[string]any{"tools": s.availableTools()})
 	case "tools/call":
-		return s.callTool(request.ID, request.Params)
+		return s.callTool(ctx, request.ID, request.Params)
 	case "resources/list":
 		return resultResponse(request.ID, map[string]any{"resources": []map[string]any{{"uri": "alemonjs://mcp/capabilities", "name": "AlemonJS MCP capabilities", "description": "MCP control boundary and available management capabilities.", "mimeType": "application/json"}}})
 	case "resources/read":
@@ -241,6 +263,29 @@ func (s *Server) handle(request rpcRequest) rpcResponse {
 	default:
 		return errorResponse(request.ID, -32601, "不支持的 MCP 方法")
 	}
+}
+
+func diagnosticToolAllowed(name string) bool {
+	switch name {
+	case "alemonjs_list_robots", "alemonjs_get_robot_diagnostics", "alemonjs_get_robot_logs",
+		"alemonjs_list_robot_operations", "alemonjs_get_project_task":
+		return true
+	}
+	return false
+}
+
+func (s *Server) availableTools() []map[string]any {
+	registered := tools()
+	if !s.policy.DiagnosticOnly {
+		return registered
+	}
+	selected := make([]map[string]any, 0, 5)
+	for _, tool := range registered {
+		if diagnosticToolAllowed(tool["name"].(string)) {
+			selected = append(selected, tool)
+		}
+	}
+	return selected
 }
 
 func tools() []map[string]any {
@@ -271,7 +316,7 @@ func tools() []map[string]any {
 		tool("alemonjs_start_project_action", "启动项目操作", "异步执行受限项目操作，并返回可供轮询的任务 ID。包含可停止的 dev 开发模式、PM2 生命周期、构建和发布操作；必须在用户明确同意后传 confirm=true，不支持任意 shell 命令。", actionSchema(), false, true),
 		tool("alemonjs_stop_development", "停止开发模式", "停止由 alemonjs_start_project_action 的 dev 操作启动的开发机器人。必须在用户明确确认后调用。", objectSchema(map[string]any{"taskId": stringSchema("dev 操作返回的任务 ID。"), "confirm": boolSchema("用户已经确认停止开发机器人时为 true。")}, "taskId", "confirm"), false, true),
 		tool("alemonjs_get_project_task", "查询项目操作", "查询一个 MCP 项目操作任务的实时状态和输出。", objectSchema(map[string]any{"taskId": stringSchema("alemonjs_start_project_action 返回的任务 ID。")}, "taskId"), true, false),
-		tool("alemonjs_list_project_tasks", "列出项目操作", "列出当前 MCP 会话创建的项目操作任务。", objectSchema(map[string]any{"root": stringSchema("可选。仅返回该机器人项目的操作任务。")}), true, false),
+		tool("alemonjs_list_project_tasks", "列出项目操作", "列出项目操作任务。工作台 MCP 返回持久化任务历史。", objectSchema(map[string]any{"root": stringSchema("可选。仅返回该机器人项目的操作任务。")}), true, false),
 		tool("alemonjs_list_setup_plugins", "列出 Setup 插件", "列出当前电脑可用的 Setup 插件及其 Web 界面入口（是否已安装、可运行）。不执行插件代码。", objectSchema(map[string]any{}), true, false),
 		tool("alemonjs_create_project", "创建项目", "使用内置模板创建 AlemonJS 项目，并安装依赖。会写入磁盘、联网下载依赖，必须在用户明确确认后调用。", objectSchema(map[string]any{"config": map[string]any{"type": "object", "description": "与 ALemonX 创建向导相同的项目配置。"}, "confirm": boolSchema("用户已经确认创建项目时为 true。")}, "config", "confirm"), false, true),
 	}, robotTools()...)
@@ -288,7 +333,7 @@ func toolExternal(name, title, description string, schema map[string]any) map[st
 }
 
 func actionSchema() map[string]any {
-	return objectSchema(map[string]any{"root": stringSchema("机器人项目的绝对路径。"), "action": map[string]any{"type": "string", "enum": []string{"install", "build", "dev", "pm2", "pm2-stop", "pm2-status", "install-package", "uninstall-package", "commit", "npm-version", "git-release", "npm-publish"}, "description": "要执行的受限操作。"}, "package": stringSchema("仅 install-package/uninstall-package 时需要，且必须是受支持的 AlemonJS 包。"), "message": stringSchema("仅 commit 时需要，作为 Git 提交说明。"), "version": stringSchema("npm-version 或 git-release 时需要，格式为 1.2.3。"), "tag": stringSchema("npm-publish 时使用的 npm 标签，默认 latest。"), "confirm": boolSchema("用户已经明确确认本次本机修改或命令执行时为 true。")}, "root", "action", "confirm")
+	return objectSchema(map[string]any{"root": stringSchema("机器人项目的绝对路径。"), "action": map[string]any{"type": "string", "enum": []string{"install", "build", "dev", "pm2", "pm2-stop", "pm2-status", "install-package", "uninstall-package", "commit", "npm-version", "git-release", "npm-publish"}, "description": "要执行的受限操作。"}, "package": stringSchema("仅 install-package/uninstall-package 时需要，且必须是受支持的 AlemonJS 包。"), "message": stringSchema("commit 使用提交说明，git-release 和 npm-publish 使用所选源码提交。"), "version": stringSchema("npm-version 或 git-release 时需要，格式为 1.2.3。"), "tag": stringSchema("npm-publish 时使用的 npm 标签，默认 latest。"), "confirm": boolSchema("用户已经明确确认本次本机修改或命令执行时为 true。")}, "root", "action", "confirm")
 }
 
 func objectSchema(properties map[string]any, required ...string) map[string]any {
@@ -315,7 +360,16 @@ func manifestSchema() map[string]any {
 	return objectSchema(map[string]any{"name": stringSchema("npm 包名。"), "version": stringSchema("语义化版本，例如 1.2.3。"), "description": stringSchema("单行包说明。"), "homepage": stringSchema("可选主页 URL。"), "repository": stringSchema("可选仓库 URL。"), "license": stringSchema("可选许可证标识。"), "private": boolSchema("是否私有包。"), "access": map[string]any{"type": "string", "enum": []string{"", "public", "restricted"}, "description": "发布访问级别。"}}, "name", "version", "description", "private")
 }
 
-func (s *Server) callTool(id json.RawMessage, params json.RawMessage) rpcResponse {
+// Audit only registered tool names. The client controls the raw name field.
+var auditableTools = sync.OnceValue(func() map[string]bool {
+	names := make(map[string]bool)
+	for _, tool := range tools() {
+		names[tool["name"].(string)] = true
+	}
+	return names
+})
+
+func (s *Server) callTool(ctx context.Context, id json.RawMessage, params json.RawMessage) rpcResponse {
 	var call struct {
 		Name      string          `json:"name"`
 		Arguments json.RawMessage `json:"arguments"`
@@ -323,11 +377,21 @@ func (s *Server) callTool(id json.RawMessage, params json.RawMessage) rpcRespons
 	if err := json.Unmarshal(params, &call); err != nil || call.Name == "" {
 		return errorResponse(id, -32602, "tools/call 参数无效")
 	}
-	text, err := s.execute(call.Name, call.Arguments)
+	text, err := s.execute(ctx, call.Name, call.Arguments)
+	if s.policy.OnToolCall != nil {
+		name := "unknown"
+		if auditableTools()[call.Name] {
+			name = call.Name
+		}
+		s.policy.OnToolCall(name, err == nil)
+	}
 	return resultResponse(id, toolResult(text, err))
 }
 
-func (s *Server) execute(name string, arguments json.RawMessage) (string, error) {
+func (s *Server) execute(ctx context.Context, name string, arguments json.RawMessage) (string, error) {
+	if s.policy.DiagnosticOnly && !diagnosticToolAllowed(name) {
+		return "", errors.New("诊断密钥无权调用此工具")
+	}
 	if s.policy.CheckAccount != nil {
 		if err := s.policy.CheckAccount(); err != nil {
 			return "", err
@@ -335,8 +399,9 @@ func (s *Server) execute(name string, arguments json.RawMessage) (string, error)
 	}
 	switch name {
 	case "alemonjs_list_robots", "alemonjs_list_robot_backpack", "alemonjs_get_robot_run_options",
-		"alemonjs_manage_robot_plugin", "alemonjs_set_robot_plugin_enabled", "alemonjs_control_robot_runtime", "alemonjs_get_robot_logs":
-		return s.robotTool(name, arguments)
+		"alemonjs_manage_robot_plugin", "alemonjs_set_robot_plugin_enabled", "alemonjs_control_robot_runtime", "alemonjs_get_robot_logs",
+		"alemonjs_get_robot_diagnostics", "alemonjs_list_robot_operations":
+		return s.robotTool(ctx, name, arguments)
 	case "alemonjs_project_status":
 		var input struct {
 			Root string `json:"root"`
@@ -693,13 +758,8 @@ func (s *Server) execute(name string, arguments json.RawMessage) (string, error)
 		return result.Output, err
 	case "alemonjs_start_project_action":
 		var input struct {
-			Root    string `json:"root"`
-			Action  string `json:"action"`
-			Package string `json:"package"`
-			Message string `json:"message"`
-			Version string `json:"version"`
-			Tag     string `json:"tag"`
-			Confirm bool   `json:"confirm"`
+			ProjectAction
+			Confirm bool `json:"confirm"`
 		}
 		if err := decodeArguments(arguments, &input); err != nil {
 			return "", err
@@ -714,11 +774,11 @@ func (s *Server) execute(name string, arguments json.RawMessage) (string, error)
 			return "", fmt.Errorf("MCP 不允许该操作")
 		}
 		if input.Action == "pm2-status" {
-			processes, err := s.robotBackgroundProcesses(input.Root)
+			pm2, err := s.robots.DiagnosticPM2Status(ctx, input.Root)
 			if err != nil {
 				return "", err
 			}
-			return encodeResult(processes)
+			return encodeResult(pm2.Processes)
 		}
 		if s.policy.ControlRobot != nil {
 			switch input.Action {
@@ -733,14 +793,10 @@ func (s *Server) execute(name string, arguments json.RawMessage) (string, error)
 		if input.Action == "dev" {
 			return encodeResult(s.startDevelopment(input.Root))
 		}
-		return encodeResult(s.startTask(input.Root, input.Action, func() (string, error) {
-			tag := input.Tag
-			if tag == "" {
-				tag = "latest"
-			}
-			result, err := s.robots.Run(input.Root, input.Action, input.Message, input.Package, input.Version, tag, "", true)
-			return result.Output, err
-		}))
+		if input.Tag == "" {
+			input.Tag = "latest"
+		}
+		return s.submitProjectAction(input.ProjectAction)
 	case "alemonjs_stop_development":
 		var input struct {
 			TaskID  string `json:"taskId"`
@@ -753,11 +809,14 @@ func (s *Server) execute(name string, arguments json.RawMessage) (string, error)
 			return "", fmt.Errorf("此操作会停止开发机器人；请在用户明确确认后传 confirm=true")
 		}
 		if s.policy.WorkbenchTask != nil && s.policy.ControlRobot != nil {
-			root, payload, ok := s.policy.WorkbenchTask(input.TaskID)
+			root, payload, ok := s.policy.WorkbenchTask(ctx, input.TaskID)
 			if ok {
-				var task struct{ Mode string }
-				if json.Unmarshal([]byte(payload), &task) != nil || task.Mode != "dev" {
-					return "", fmt.Errorf("请选择开发模式任务")
+				var task struct {
+					Mode              string
+					ActiveDevelopment bool
+				}
+				if json.Unmarshal([]byte(payload), &task) != nil || task.Mode != "dev" || !task.ActiveDevelopment {
+					return "", fmt.Errorf("请选择当前正在运行的开发任务")
 				}
 				if err := s.authorizeRoot(root); err != nil {
 					return "", err
@@ -776,7 +835,7 @@ func (s *Server) execute(name string, arguments json.RawMessage) (string, error)
 		}
 		task, ok := s.getTask(input.TaskID)
 		if !ok && s.policy.WorkbenchTask != nil {
-			root, result, found := s.policy.WorkbenchTask(input.TaskID)
+			root, result, found := s.policy.WorkbenchTask(ctx, input.TaskID)
 			if found {
 				if err := s.authorizeRoot(root); err != nil {
 					return "", err
@@ -790,6 +849,8 @@ func (s *Server) execute(name string, arguments json.RawMessage) (string, error)
 		if err := s.authorizeRoot(task.Root); err != nil {
 			return "", err
 		}
+		task.Output = robot.BoundedDiagnosticText(task.Output, runtimeLogLimit)
+		task.Error = robot.BoundedDiagnosticText(task.Error, 4096)
 		return encodeResult(task)
 	case "alemonjs_list_project_tasks":
 		var input struct {
@@ -802,6 +863,22 @@ func (s *Server) execute(name string, arguments json.RawMessage) (string, error)
 			if err := s.authorizeRoot(input.Root); err != nil {
 				return "", err
 			}
+		}
+		if s.policy.WorkbenchProjectTasks != nil && s.policy.RobotList != nil {
+			if input.Root != "" {
+				return encodeResult(s.policy.WorkbenchProjectTasks(ctx, []string{input.Root}))
+			}
+			list, err := s.policy.RobotList()
+			if err != nil {
+				return "", err
+			}
+			roots := make([]string, 0, len(list.Projects))
+			for _, entry := range list.Projects {
+				if s.authorizePath(entry.Path) == nil {
+					roots = append(roots, entry.Path)
+				}
+			}
+			return encodeResult(s.policy.WorkbenchProjectTasks(ctx, roots))
 		}
 		return encodeResult(s.listTasks(input.Root))
 	case "alemonjs_list_setup_plugins":
@@ -948,12 +1025,14 @@ func decodeArguments(data json.RawMessage, target any) error {
 }
 
 func allowedAction(action string) bool {
-	return strings.Contains(",install,build,dev,pm2,pm2-stop,pm2-status,install-package,uninstall-package,commit,npm-version,git-release,npm-publish,", ","+action+",")
+	return slices.Contains([]string{"install", "build", "dev", "pm2", "pm2-stop", "pm2-status", "install-package", "uninstall-package", "commit", "npm-version", "git-release", "npm-publish"}, action)
 }
 
 func validEnvironmentCheck(goalID, variant string) bool {
 	switch goalID {
-	case "install", "develop", "mobile":
+	case "install", "develop":
+		return variant == "" || variant == "bun"
+	case "mobile":
 		return variant == ""
 	case "web":
 		return variant == "clean" || variant == "docker"
@@ -970,6 +1049,16 @@ func encodeResult(value any) (string, error) {
 		return "", err
 	}
 	return string(encoded), nil
+}
+
+func (s *Server) submitProjectAction(input ProjectAction) (string, error) {
+	if s.policy.SubmitProjectAction != nil {
+		return s.policy.SubmitProjectAction(input)
+	}
+	return encodeResult(s.startTask(input.Root, input.Action, func() (string, error) {
+		result, err := s.robots.Run(input.Root, input.Action, input.Message, input.Package, input.Version, input.Tag, "", true)
+		return result.Output, err
+	}))
 }
 
 func (s *Server) startTask(root, action string, run func() (string, error)) operationTask {
@@ -1133,12 +1222,21 @@ func (s *Server) readResource(id json.RawMessage, params json.RawMessage) rpcRes
 	if err := json.Unmarshal(params, &input); err != nil || input.URI != "alemonjs://mcp/capabilities" {
 		return errorResponse(id, -32602, "资源不存在")
 	}
+	if s.policy.DiagnosticOnly {
+		content, _ := encodeResult(map[string]any{
+			"version": s.version, "profile": "diagnostic",
+			"scopes": []string{"account-robots", "robot-diagnostics", "robot-logs", "robot-operations"},
+		})
+		return resultResponse(id, map[string]any{"contents": []map[string]string{
+			{"uri": input.URI, "mimeType": "application/json", "text": content},
+		}})
+	}
 	workspaceInfo := map[string]any{}
 	if root, resolveErr := workspace.ResolveRoot(s.workspaceRoot); resolveErr == nil {
 		layout := workspace.Layout{Root: root}
 		workspaceInfo = map[string]any{"root": layout.Root, "templates": layout.Templates(), "bots": layout.Bots()}
 	}
-	text, err := encodeResult(map[string]any{"version": s.version, "transport": "stdio or protected local Streamable HTTP", "workspace": workspaceInfo, "scopes": []string{"account-robots", "robot-backpack", "robot-runtime", "robot-logs", "project-status", "project-files", "local-packages", "confirmed-project-actions"}, "allowedRoots": s.policy.AllowedRoots, "blocked": []string{"arbitrary shell", "secret files", "git metadata", "dependency directories", "symbolic links"}, "confirmation": "任何写入、项目命令或对外发布都需要 confirm=true；NPM 发布和 GIT 发布还应先执行预检。"})
+	text, err := encodeResult(map[string]any{"version": s.version, "transport": "stdio or protected local Streamable HTTP", "workspace": workspaceInfo, "scopes": []string{"account-robots", "robot-backpack", "robot-runtime", "robot-logs", "robot-diagnostics", "robot-operations", "project-status", "project-files", "local-packages", "confirmed-project-actions"}, "allowedRoots": s.policy.AllowedRoots, "blocked": []string{"arbitrary shell", "secret files", "git metadata", "dependency directories", "symbolic links"}, "confirmation": "任何写入、项目命令或对外发布都需要 confirm=true；NPM 发布和 GIT 发布还应先执行预检。"})
 	if err != nil {
 		return errorResponse(id, -32603, "资源编码失败")
 	}

@@ -1,40 +1,49 @@
 package web
 
 import (
-	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
-	"net/http"
 	"net/http/httptest"
-	"slices"
 
 	"alemonx/internal/access"
+	"alemonx/internal/logging"
 	"alemonx/internal/mcp"
 	"alemonx/internal/robot"
 	"alemonx/internal/workspace"
 )
 
-func (s *server) mcpAccountValid(identity access.Status, token string) bool {
-	current, err := s.auth.Status(token)
-	return err == nil && current.Enabled == identity.Enabled &&
-		(!identity.Enabled || current.Authenticated && current.RobotScope == identity.RobotScope &&
-			(current.SuperAdmin || (slices.Contains(current.Permissions, "system.manage") && slices.Contains(current.Permissions, "workbench.manage"))))
-}
-
 func (s *server) accountMCPPolicy(policy mcp.Policy, root string, identity access.Status, token string) mcp.Policy {
 	policy = mcp.WithRobotAccount(policy, root, func() (string, error) {
-		if !s.mcpAccountValid(identity, token) {
-			return "", errors.New("MCP 工作台账户会话已失效，请重新启动 HTTP 服务。")
+		current, valid, err := s.auth.MCPKeyStatus(token)
+		if err != nil || !valid || current.RobotScope != identity.RobotScope || current.Enabled != identity.Enabled || current.MCPDiagnostic != identity.MCPDiagnostic {
+			return "", errors.New("MCP 连接密钥已失效。")
 		}
 		return identity.RobotScope, nil
 	})
-	policy.ControlRobot = s.controlMCPRobot
+	account := identity.Account
+	if account == "" {
+		account = "local"
+	}
+	policy.DiagnosticOnly = identity.MCPDiagnostic
+	policy.OnToolCall = func(tool string, success bool) {
+		logging.InfoEvent("mcp.tool.called", logging.Fields{"account": account, "diagnostic_key": identity.MCPDiagnostic, "tool": tool, "success": success})
+	}
+	policy.ControlRobot = func(root, mode, action string) (string, error) {
+		return s.controlMCPRobot(account, root, mode, action)
+	}
+	policy.SubmitProjectAction = func(action mcp.ProjectAction) (string, error) {
+		return s.submitMCPRobotTask(account, robotTaskRequest{ProjectAction: action, Confirm: "true"})
+	}
 	policy.LocalRobotLogs = s.localMCPRobotLogs
 	policy.WorkbenchTask = s.mcpRobotTask
+	policy.Diagnostics = s.robotDiagnosticSnapshot
+	policy.WorkbenchOperations = s.robotDiagnosticOperations
+	policy.WorkbenchProjectTasks = s.mcpProjectTasks
 	return policy
 }
 
-func (s *server) controlMCPRobot(root, mode, action string) (string, error) {
+func (s *server) controlMCPRobot(account, root, mode, action string) (string, error) {
 	actions := map[string][2]string{
 		"development": {"dev", "dev-stop"},
 		"foreground":  {"app", "app-stop"},
@@ -48,12 +57,12 @@ func (s *server) controlMCPRobot(root, mode, action string) (string, error) {
 	if action == "stop" {
 		command = commands[1]
 	}
-	payload, _ := json.Marshal(map[string]string{"root": root, "action": command})
-	// Reuse the workbench operation handler so MCP and the UI share startup
-	// checks, process ownership, logs, and task state.
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/robot/tasks", bytes.NewReader(payload))
+	return s.submitMCPRobotTask(account, robotTaskRequest{ProjectAction: mcp.ProjectAction{Root: root, Action: command}})
+}
+
+func (s *server) submitMCPRobotTask(account string, input robotTaskRequest) (string, error) {
 	recorder := httptest.NewRecorder()
-	s.robotTasksHandler(recorder, request)
+	s.submitRobotTask(recorder, context.Background(), input, account)
 	if recorder.Code < 200 || recorder.Code >= 300 {
 		var failure struct{ Error string }
 		if json.Unmarshal(recorder.Body.Bytes(), &failure) == nil && failure.Error != "" {
@@ -74,21 +83,6 @@ func (s *server) controlMCPRobot(root, mode, action string) (string, error) {
 func (s *server) localMCPRobotLogs(root, query string) (string, error) {
 	snapshot := s.runtimeProcess(root)
 	return mcp.RuntimeLogResult(snapshot.id, snapshot.mode, snapshot.status, snapshot.runError, snapshot.output, query)
-}
-
-func (s *server) mcpRobotTask(id string) (string, string, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	for _, task := range s.operations {
-		if task.ID == id && task.Root != "" {
-			switch task.Action {
-			case "dev", "dev-stop", "app", "app-stop", "pm2", "pm2-stop-project":
-				result, err := mcp.RuntimeLogResult(task.ID, task.Action, task.Status, task.Error, task.Output, "")
-				return task.Root, result, err == nil
-			}
-		}
-	}
-	return "", "", false
 }
 
 func (s *server) addCreatedRobot(root, account, path string) error {

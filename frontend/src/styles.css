@@ -8590,13 +8590,6 @@ button > svg,
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
-.account-row {
-  align-items: center;
-  grid-template-columns: minmax(9rem, 1fr) minmax(15rem, 2fr) auto;
-}
-
-.account-role-fields,
-.account-permission-grid,
 .npmrc-config-fields {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
@@ -8621,9 +8614,6 @@ button > svg,
 
 @container robot-panel (max-width: 759px) {
   .account-create-fields,
-  .account-row,
-  .account-role-fields,
-  .account-permission-grid,
   .npmrc-config-fields,
   .env-config-entry,
   .robot-config-fields {

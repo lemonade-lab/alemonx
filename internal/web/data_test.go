@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/gin-gonic/gin"
@@ -126,7 +127,7 @@ func TestDataProtectsSystemSQLiteAliases(t *testing.T) {
 	}
 }
 
-func TestDataRequiresSuperAdmin(t *testing.T) {
+func TestDataAllowsAllAuthenticatedAccounts(t *testing.T) {
 	identity, err := access.NewAt(filepath.Join(t.TempDir(), "auth.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -135,25 +136,22 @@ func TestDataRequiresSuperAdmin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := identity.SaveRole(access.Role{ID: "reader", Name: "只读", Permissions: []string{"workbench.view"}}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := identity.CreateAccount("reader", "secret", "secret", []string{"reader"}); err != nil {
+	if _, err := identity.CreateAccount("reader", "secret", "secret"); err != nil {
 		t.Fatal(err)
 	}
 	reader, err := identity.Login("reader", "secret")
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := &server{auth: identity}
+	handler := NewServerWithAuth("test", fstest.MapFS{"dist/index.html": &fstest.MapFile{Data: []byte("<!doctype html>")}}, identity)
 	for _, tc := range []struct {
 		token  string
 		status int
-	}{{"", 403}, {reader, 403}, {admin, 200}} {
+	}{{"", 401}, {reader, 200}, {admin, 200}} {
 		w := httptest.NewRecorder()
 		r := httptest.NewRequest("GET", "/api/v1/data/catalog", nil)
 		r.Header.Set("Authorization", "Bearer "+tc.token)
-		s.dataHandler(w, r)
+		handler.ServeHTTP(w, r)
 		if w.Code != tc.status {
 			t.Fatalf("got %d want %d", w.Code, tc.status)
 		}

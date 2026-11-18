@@ -31,7 +31,7 @@ func TestWorkbenchManagedMCPHTTP(t *testing.T) {
 	s := &server{
 		auth:      identity,
 		mcpEvents: newMCPEventHub(),
-		mcpHTTP: managedMCP{port: port, accountHandler: func(token string, _ access.Status, _ string) http.Handler {
+		mcpHTTP: managedMCP{port: port, accountHandler: func(token string, _ access.Status) http.Handler {
 			return mcp.NewServer("test", nil).HTTPHandler(token)
 		}},
 	}
@@ -50,7 +50,11 @@ func TestWorkbenchManagedMCPHTTP(t *testing.T) {
 	}
 	const local = "http://localhost:17390"
 	post("start", "http://untrusted.example", http.StatusForbidden)
+	post("token", "http://untrusted.example", http.StatusForbidden)
 	post("start", local, http.StatusConflict)
+	if autoStart, err := identity.MCPAutoStart(); err != nil || autoStart {
+		t.Fatalf("a failed start must not enable automatic restore: %t (%v)", autoStart, err)
+	}
 	if err := occupied.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -97,6 +101,8 @@ func TestWorkbenchManagedMCPHTTP(t *testing.T) {
 	post("stop", local, http.StatusOK)
 	post("token", local, http.StatusConflict)
 	post("start", local, http.StatusOK)
+	requestMCP(token, http.StatusOK)
+	post("revoke", local, http.StatusNoContent)
 	requestMCP(token, http.StatusUnauthorized)
 	requestMCP(readToken(), http.StatusOK)
 	s.shutdownMCP()

@@ -5,6 +5,7 @@ package web
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"strconv"
@@ -63,6 +64,10 @@ func killProcessGroup(_ int) {}
 func portListenerPIDs(port int) []int {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	return portListenerPIDsContext(ctx, port, false)
+}
+
+func portListenerPIDsContext(ctx context.Context, port int, loopbackOnly bool) []int {
 	output, err := exec.CommandContext(ctx, "netstat", "-ano").Output()
 	if err != nil {
 		return nil
@@ -75,8 +80,14 @@ func portListenerPIDs(port int) []int {
 		if len(fields) < 5 || !strings.EqualFold(fields[0], "tcp") {
 			continue
 		}
-		if !strings.Contains(fields[1], needle) || !strings.Contains(strings.ToUpper(fields[3]), "LISTEN") {
+		if !strings.HasSuffix(fields[1], needle) || !strings.Contains(strings.ToUpper(fields[3]), "LISTEN") {
 			continue
+		}
+		if loopbackOnly {
+			host, _, err := net.SplitHostPort(fields[1])
+			if err != nil || (host != "127.0.0.1" && host != "0.0.0.0") {
+				continue
+			}
 		}
 		pid, parseErr := strconv.Atoi(fields[len(fields)-1])
 		if parseErr != nil || pid <= 0 || seen[pid] {
@@ -109,6 +120,8 @@ func processDescription(pid int) string {
 
 // processWorkingDirectory is not reported on Windows without extra tooling.
 func processWorkingDirectory(_ int) string { return "" }
+
+func processWorkingDirectoryContext(_ context.Context, _ int) string { return "" }
 
 // processPGID is always 0 on Windows; process-group signalling is not used.
 func processPGID(_ int) int { return 0 }

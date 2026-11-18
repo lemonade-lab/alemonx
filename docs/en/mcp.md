@@ -30,7 +30,9 @@ ALemonX supports both standard MCP transports: **stdio** and **Streamable HTTP**
 
 ### Streamable HTTP
 
-In the ALemonX workbench, open **Settings → MCP**, choose **Start HTTP Service**, then **Show Connection Token**. On the computer running ALemonX, enter the displayed address and token in the client’s Streamable HTTP form. The listener stops when the workbench process exits and generates a new token each time it starts.
+In **Settings → MCP**, a super administrator starts the HTTP service when workbench authentication is enabled. The workbench restores the HTTP listener on restart if it was last started manually. A manual stop persists across restarts. Each signed-in user can choose **Create Connection Key** and enter the displayed address and their own key in the client’s Streamable HTTP form on the computer running ALemonX.
+
+Each account can keep a separate read-only diagnostic key alongside its operator key. The server enforces a diagnostic allowlist consisting of robot discovery, status, redacted logs, and task history and detail. The two keys can be rotated or revoked independently.
 
 | Field | Value |
 | --- | --- |
@@ -55,7 +57,7 @@ The workbench stores each account's robot folders, pinned order, and current sel
 
 Use `alemonjs_list_robots` to find a robot, then `alemonjs_list_robot_backpack` for its packages and `alemonjs_get_robot_run_options` for launch modes and enabled plugins. Use `alemonjs_manage_robot_plugin` to install official Git plugins or uninstall a backpack package, and `alemonjs_set_robot_plugin_enabled` to change what loads at the next startup. `alemonjs_control_robot_runtime` starts or stops the robot, and `alemonjs_get_robot_logs` returns local or PM2 logs.
 
-Workbench HTTP tokens are scoped to the account that starts the connection. Workbench HTTP shares runtime state with the UI and supports development, foreground, and PM2. CLI connections support development and PM2 and require `ALX_AUTH_TOKEN` with workbench management permissions when account authentication is enabled.
+Workbench HTTP keys are scoped to the account that creates them and its robot list. The service log records the account, tool and result in `mcp.tool.called`. Keys survive workbench logout and service restarts. Users can revoke or regenerate their own key at any time. Revocation or regeneration immediately invalidates the old key. Only a key digest is stored, and the plaintext is shown when a key is created or regenerated. Keys issued before this change must be recreated. Workbench HTTP shares runtime state with the UI and supports development, foreground, and PM2. CLI connections support development and PM2. When account authentication is enabled, only a super administrator can start or stop Workbench HTTP or launch CLI MCP with `ALX_AUTH_TOKEN`.
 
 ## Capability model
 
@@ -86,6 +88,14 @@ The `alemonjs://mcp/capabilities` resource returns the workspace paths (`workspa
 | Setup system checks | `alemonjs_check_environment`, `alemonjs_check_setup_update`, `alemonjs_list_releases`, `alemonjs_list_catalog` |
 
 `npm-publish` and `git-release` have external side effects and require the user's explicit confirmation for this run after the pre-publish checks pass; MCP never reads or forwards the npm token.
+
+## Production diagnostics
+
+The workbench **Runtime → Production Diagnostics** view and MCP use the same project-scoped diagnostic backend.
+
+1. Call `alemonjs_get_robot_diagnostics` for the project version, startup checks, supervised local run, PM2 process state, configured loopback TCP ports, and recent operations. The workbench probes the observed runtime port when available, including autoPort changes, and reports the configured port separately. TCP reachability, listener ownership, application HTTP readiness, and platform connection are separate signals. Platform connection stays unknown without session evidence.
+2. Filter `alemonjs_list_robot_operations` with `status: "failed"`, then call `alemonjs_get_project_task` by task ID for its timeline and redacted output. Workbench HTTP merges live tasks, durable MCP tasks, and retained journal entries and returns at most 40 recent operations per project. The journal retains up to seven days within its size limit. For asynchronous operations, Workbench HTTP records `mcp.task.accepted` before execution and `mcp.task.result` after execution. Save the task ID to look up the initiating account, robot, and outcome after a restart, even after journal expiry. If no outcome was recorded before restart, the task is marked `interrupted` with an unknown result. The workbench does not replay it.
+3. For `alemonjs_get_robot_logs` in `background` mode, use `source: "err"`, `since`, `until`, `query`, or `page` to narrow the results. Use RFC3339 timestamps for time ranges. PM2 reads connect to an existing daemon, and the log tail is capped at 4 MiB per eligible file. A true `truncated` flag identifies a partial window.
 
 ## Recommended agent workflow
 

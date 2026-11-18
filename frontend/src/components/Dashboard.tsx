@@ -1,4 +1,5 @@
 import { RobotRuntimeSwitch } from './RobotRuntimeSwitch'
+import { RobotDiagnostics } from './RobotDiagnostics'
 import { BackpackPackageUpdate } from './BackpackPackageUpdate'
 import { WorkbenchQuickActions } from './WorkbenchQuickActions'
 import { RobotDirectoryTree } from './RobotDirectoryTree'
@@ -162,6 +163,7 @@ import {
   type HostWebview
 } from './PluginHostUi'
 import { GLOBAL_MODAL_Z_INDEX, Modal } from './Modal'
+import { useCanManageAccounts } from '../hooks/useCanManageAccounts'
 import { AccountManagementPage } from './AccountManagement'
 import { RobotGitControl } from './RobotGitControl'
 import { useIsMobileViewport } from '../hooks/useIsMobileViewport'
@@ -4426,9 +4428,7 @@ function ProjectRail({
   const activePlugins = setupPlugins.filter(
     item => item.enabled && !item.online
   )
-  const [canManageAccounts, setCanManageAccounts] = useStoreState(false)
-  const [canManageData, setCanManageData] = useStoreState(false)
-  const [authRevision, setAuthRevision] = useStoreState(0)
+  const canManageAccounts = useCanManageAccounts()
   const isMobile = useIsMobileViewport()
   const [mobileOpen, setMobileOpen] = useState<{
     robot: boolean
@@ -4437,39 +4437,6 @@ function ProjectRail({
   }>({ robot: true, plugins: false, system: false })
   const toggleMobileGroup = (group: 'robot' | 'plugins' | 'system') =>
     setMobileOpen(current => ({ ...current, [group]: !current[group] }))
-  useEffect(() => {
-    const refreshAuth = () => setAuthRevision(value => value + 1)
-    window.addEventListener('alx:auth-changed', refreshAuth)
-    return () => window.removeEventListener('alx:auth-changed', refreshAuth)
-  }, [setAuthRevision])
-  useEffect(() => {
-    let active = true
-    void fetch('/api/v1/auth/status', { credentials: 'same-origin' })
-      .then(async response => {
-        if (!response.ok) return null
-        return (await response.json()) as {
-          enabled?: boolean
-          superAdmin?: boolean
-        }
-      })
-      .then(status => {
-        if (active) {
-          setCanManageAccounts(Boolean(status?.enabled && status.superAdmin))
-          setCanManageData(
-            Boolean(status && (!status.enabled || status.superAdmin))
-          )
-        }
-      })
-      .catch(() => {
-        if (active) {
-          setCanManageAccounts(false)
-          setCanManageData(false)
-        }
-      })
-    return () => {
-      active = false
-    }
-  }, [authRevision, setCanManageAccounts, setCanManageData])
   const clearLongPress = () => {
     if (longPressTimer.current === null) return
     window.clearTimeout(longPressTimer.current)
@@ -4584,11 +4551,7 @@ function ProjectRail({
   const systemNav = (
     <nav className="grid gap-0.5">
       {coreFeatureCatalog
-        .filter(item =>
-          item.id === 'data'
-            ? canManageData
-            : item.id !== 'accounts' || canManageAccounts
-        )
+        .filter(item => item.id !== 'accounts' || canManageAccounts)
         .map(item => (
           <button
             className={cn(
@@ -5689,6 +5652,13 @@ function OperationTasksPage({
     const timer = window.setInterval(() => void refetchDetail(), 1500)
     return () => window.clearInterval(timer)
   }, [currentId, current?.status, refetchDetail])
+  const taskStateLabel = {
+    running: '进行中',
+    completed: '已完成',
+    failed: '需要处理',
+    cancelled: '已取消',
+    interrupted: '执行结果未知'
+  }
   const visibleTasks = tasks.slice(0, 20)
   if (current && !visibleTasks.some(item => item.id === current.id))
     visibleTasks.push(current)
@@ -5763,13 +5733,7 @@ function OperationTasksPage({
                 <span className="min-w-0">
                   <strong>{label(item.action)}</strong>
                   <small>
-                    {item.status === 'running'
-                      ? '进行中'
-                      : item.status === 'failed'
-                        ? '需要处理'
-                        : item.status === 'cancelled'
-                          ? '已取消'
-                          : '已完成'}
+                    {taskStateLabel[item.status]}
                     {item.createdAt && ` · ${formatTaskTime(item.createdAt)}`}
                   </small>
                 </span>
@@ -5815,13 +5779,7 @@ function OperationTasksPage({
                   <span className="grid gap-0.5 text-slate-700 dark:text-slate-200">
                     {label(item.action)}
                     <small className="text-[11px] text-slate-400">
-                      {item.status === 'running'
-                        ? '进行中'
-                        : item.status === 'failed'
-                          ? '需要处理'
-                          : item.status === 'cancelled'
-                            ? '已取消'
-                            : '已完成'}
+                      {taskStateLabel[item.status]}
                     </small>
                   </span>
                   {item.createdAt && (
@@ -5852,13 +5810,9 @@ function OperationTasksPage({
                       {label(current.action)}
                     </strong>
                     <small className="text-xs text-(--theme-text-muted)">
-                      {current.status === 'running'
-                        ? '正在执行'
-                        : current.status === 'failed'
-                          ? '执行失败'
-                          : current.status === 'cancelled'
-                            ? '已取消'
-                            : '已完成'}
+                      {current.status === 'failed'
+                        ? '执行失败'
+                        : taskStateLabel[current.status]}
                       {current.createdAt &&
                         ` · ${formatTaskTime(current.createdAt)}`}
                     </small>
@@ -5894,6 +5848,11 @@ function OperationTasksPage({
                 <small className="px-0.5 text-xs text-slate-500">
                   请到对应功能页面操作此任务
                 </small>
+              )}
+              {current.account && (
+                <p className="break-all text-xs text-(--theme-text-muted)">
+                  MCP 发起账户 {current.account} · 目标机器人 {current.root}
+                </p>
               )}
               {controlError && (
                 <p role="alert" className="text-xs text-red-600">
@@ -10688,6 +10647,7 @@ function RuntimePanel({
       }
       actions={
         <div className="flex flex-wrap items-center gap-2">
+          <RobotDiagnostics key={`diagnostics:${root}`} root={root} />
           {overview && (
             <RobotRuntimeSwitch
               key={root}
@@ -11281,9 +11241,7 @@ function RuntimePanel({
                     <Settings className="size-4" />
                     修复
                   </button>
-                ) : (
-                  <small>还没有可直接运行的命令。</small>
-                )}
+                ) : null}
               </div>
             </section>
           </div>

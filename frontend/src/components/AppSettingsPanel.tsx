@@ -4,6 +4,7 @@ import { Power } from 'lucide-react'
 import { useDispatch, useSelector } from 'react-redux'
 import type { RootState } from '../store/guideStore'
 import { setDeveloperMode } from '../store/workspaceStore'
+import { useCanManageAccounts } from '../hooks/useCanManageAccounts'
 import { AccountManagementPage } from './AccountManagement'
 import { AuthControl } from './AuthControl'
 import { SetupUpdateButton } from './SetupUpdateButton'
@@ -25,6 +26,7 @@ import type { DesktopWindowProps } from './DesktopWindow'
 export function AppSettingsPanel({
   ...windowProps
 }: Omit<DesktopWindowProps, 'children'>) {
+  const canManageAccounts = useCanManageAccounts(windowProps.open)
   const [active, setActive] = useNavigationState<SettingsSection>(
     'settings.section',
     [],
@@ -61,6 +63,13 @@ export function AppSettingsPanel({
       setActive('auth')
     }
   }, [active, dependencySources, setActive])
+  const items = settingsSections.filter(
+    item =>
+      (item.id !== 'accounts' || canManageAccounts) &&
+      (item.id !== 'dependency-sources' || dependencySources?.supported)
+  )
+  const visibleSection = items.some(item => item.id === active) ? active : 'general'
+
   const stopService = async () => {
     setStopBusy(true)
     setStopMessage('')
@@ -88,12 +97,8 @@ export function AppSettingsPanel({
   return (
     <SidebarWindow
       {...windowProps}
-      activeItem={active}
-      items={
-        dependencySources?.supported
-          ? settingsSections
-          : settingsSections.filter(item => item.id !== 'dependency-sources')
-      }
+      activeItem={visibleSection}
+      items={items}
       onActiveItemChange={setActive}
       sidebarAriaLabel="设置页面"
       sidebarFooter={
@@ -117,16 +122,16 @@ export function AppSettingsPanel({
         </>
       }
     >
-      {active === 'general' && <GeneralSettings />}
-      {active === 'ssh' && <SSHControl embedded />}
-      {active === 'mcp' && <McpSettingsPanel />}
-      {active === 'update' && (windowProps.native ? <DesktopUpdatePanel /> : <SetupUpdateButton embedded />)}
-      {active === 'network' && <NetworkSettingsPanel />}
-      {active === 'github' && <GithubSettingsPanel />}
-      {active === 'auth' && <AuthControl embedded />}
-      {active === 'accounts' && <AccountManagementPage />}
-      {active === 'service' && <ServiceControlCard />}
-      {active === 'dependency-sources' && <DependencySourcesPanel />}
+      {visibleSection === 'general' && <GeneralSettings />}
+      {visibleSection === 'ssh' && <SSHControl embedded />}
+      {visibleSection === 'mcp' && <McpSettingsPanel />}
+      {visibleSection === 'update' && (windowProps.native ? <DesktopUpdatePanel /> : <SetupUpdateButton embedded />)}
+      {visibleSection === 'network' && <NetworkSettingsPanel />}
+      {visibleSection === 'github' && <GithubSettingsPanel />}
+      {visibleSection === 'auth' && <AuthControl embedded />}
+      {visibleSection === 'accounts' && <AccountManagementPage />}
+      {visibleSection === 'service' && <ServiceControlCard />}
+      {visibleSection === 'dependency-sources' && <DependencySourcesPanel />}
       <ConfirmDialog
         open={stopConfirm}
         title="停止 AlemonX"

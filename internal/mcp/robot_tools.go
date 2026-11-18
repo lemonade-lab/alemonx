@@ -1,10 +1,12 @@
 package mcp
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"alemonx/internal/catalog"
 	"alemonx/internal/robot"
@@ -21,7 +23,21 @@ func robotTools() []map[string]any {
 		tool("alemonjs_manage_robot_plugin", "安装或卸载机器人插件", "从官方资源目录安装 Git 插件到指定机器人的背包，或卸载背包内指定插件。返回操作任务。", objectSchema(map[string]any{"root": root, "action": map[string]any{"type": "string", "enum": []string{"install", "uninstall"}}, "resourceId": stringSchema("安装时填写官方 Git 插件资源 ID。"), "package": stringSchema("卸载时填写背包包名。"), "confirm": confirm}, "root", "action", "confirm"), false, true),
 		tool("alemonjs_set_robot_plugin_enabled", "启用或停用背包插件", "调整指定机器人下次启动时加载的背包插件。", objectSchema(map[string]any{"root": root, "package": stringSchema("背包中的包名。"), "enabled": boolSchema("true 为启用，false 为停用。"), "confirm": confirm}, "root", "package", "enabled", "confirm"), false, true),
 		tool("alemonjs_control_robot_runtime", "启动或停止机器人", "按开发模式或 PM2 后台模式启动或停止指定机器人。工作台连接还支持前台模式。", objectSchema(map[string]any{"root": root, "mode": map[string]any{"type": "string", "enum": []string{"development", "foreground", "background"}}, "action": map[string]any{"type": "string", "enum": []string{"start", "stop"}}, "confirm": confirm}, "root", "mode", "action", "confirm"), false, true),
-		tool("alemonjs_get_robot_logs", "查看机器人日志", "读取指定机器人的最近日志。后台日志支持关键词与页码。工作台连接可读取本机运行日志。", objectSchema(map[string]any{"root": root, "mode": map[string]any{"type": "string", "enum": []string{"local", "background"}}, "query": stringSchema("可选日志关键词。"), "page": map[string]any{"type": "integer", "minimum": 1}}, "root", "mode"), true, false),
+		tool("alemonjs_get_robot_diagnostics", "检查机器人生产状态", "只读检查项目、登录配置缺项、PM2 进程、监听端口、本机运行和近期任务。报告会区分未登记、守护进程离线和无法读取。", objectSchema(map[string]any{"root": root}, "root"), true, false),
+		tool("alemonjs_list_robot_operations", "列出机器人操作时间线", "列出当前机器人近期任务、状态、时间和失败原因。使用 get_project_task 按 ID 读取步骤和输出。工作台内置 HTTP 可以查询工作台任务。", objectSchema(map[string]any{
+			"root": root, "status": map[string]any{"type": "string", "enum": []string{"running", "completed", "failed", "stopped", "cancelled"}},
+			"limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 40},
+		}, "root"), true, false),
+		tool("alemonjs_get_robot_logs", "查看机器人日志", "读取脱敏日志。本机模式返回近期运行日志。PM2 模式支持日志来源、时间范围、关键词和分页，时间筛选会忽略无时间戳的行。", objectSchema(map[string]any{
+			"root": root, "mode": map[string]any{"type": "string", "enum": []string{"local", "background"}},
+			"query":   stringSchema("可选关键词。"),
+			"page":    map[string]any{"type": "integer", "minimum": 1},
+			"perPage": map[string]any{"type": "integer", "minimum": 1, "maximum": 100},
+			"source":  map[string]any{"type": "string", "enum": []string{"all", "out", "err"}},
+			"date":    stringSchema("仅 PM2。工作台本地时区 YYYY-MM-DD。"),
+			"since":   stringSchema("仅 PM2。RFC3339 开始时间。"),
+			"until":   stringSchema("仅 PM2。RFC3339 结束时间。"),
+		}, "root", "mode"), true, false),
 	}
 }
 
@@ -65,7 +81,7 @@ func (s *Server) listAccountRobots() (string, error) {
 	return encodeResult(map[string]any{"robots": robots, "activeRobotId": active})
 }
 
-func (s *Server) robotTool(name string, arguments []byte) (string, error) {
+func (s *Server) robotTool(ctx context.Context, name string, arguments []byte) (string, error) {
 	if name == "alemonjs_list_robots" {
 		return s.listAccountRobots()
 	}
@@ -79,6 +95,13 @@ func (s *Server) robotTool(name string, arguments []byte) (string, error) {
 		Action     string `json:"action"`
 		Query      string `json:"query"`
 		Page       int    `json:"page"`
+		PerPage    int    `json:"perPage"`
+		Source     string `json:"source"`
+		Date       string `json:"date"`
+		Since      string `json:"since"`
+		Until      string `json:"until"`
+		Status     string `json:"status"`
+		Limit      int    `json:"limit"`
 	}
 	if err := decodeArguments(arguments, &input); err != nil {
 		return "", err
@@ -107,7 +130,7 @@ func (s *Server) robotTool(name string, arguments []byte) (string, error) {
 		}
 		return encodeResult(entries)
 	case "alemonjs_get_robot_run_options":
-		return s.robotRunOptions(root)
+		return s.robotRunOptions(ctx, root)
 	case "alemonjs_manage_robot_plugin":
 		if !input.Confirm {
 			return "", fmt.Errorf("请在用户确认后传 confirm=true")
@@ -136,13 +159,36 @@ func (s *Server) robotTool(name string, arguments []byte) (string, error) {
 			return "", fmt.Errorf("请在用户确认后传 confirm=true")
 		}
 		return s.controlRobot(root, input.Mode, input.Action)
+	case "alemonjs_get_robot_diagnostics":
+		return encodeResult(s.diagnoseRobot(ctx, root))
+	case "alemonjs_list_robot_operations":
+		operations, err := s.robotOperationList(ctx, root, input.Status, input.Limit)
+		if err != nil {
+			return "", err
+		}
+		return encodeResult(operations)
 	case "alemonjs_get_robot_logs":
 		if input.Mode == "background" {
-			result, err := s.robots.PM2AuditLogs(root, robot.PM2AuditQuery{Page: input.Page, PerPage: 100, Query: strings.TrimSpace(input.Query)})
+			if input.PerPage < 0 || input.PerPage > 100 || input.Page < 0 {
+				return "", fmt.Errorf("每页限制 1 到 100 行，页码从 1 开始")
+			}
+			perPage := input.PerPage
+			if perPage == 0 {
+				perPage = 100
+			}
+			ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+			defer cancel()
+			result, err := s.robots.DiagnosticPM2Logs(ctx, root, robot.PM2AuditQuery{
+				Page: input.Page, PerPage: perPage,
+				Query: strings.TrimSpace(input.Query), Source: input.Source, Date: input.Date, Since: input.Since, Until: input.Until,
+			})
 			if err != nil {
 				return "", err
 			}
 			return encodeResult(result)
+		}
+		if input.Source != "" || input.Date != "" || input.Since != "" || input.Until != "" || input.PerPage != 0 {
+			return "", fmt.Errorf("日志来源、日期和分页筛选适用于 PM2 日志")
 		}
 		if input.Mode != "local" {
 			return "", fmt.Errorf("请选择 local 或 background 日志")
@@ -183,13 +229,10 @@ func (s *Server) manageRobotPlugin(root, action, resourceID, name string) (strin
 	default:
 		return "", fmt.Errorf("请选择安装或卸载")
 	}
-	return encodeResult(s.startTask(root, command, func() (string, error) {
-		result, err := s.robots.Run(root, command, "", name, "", "", "", true)
-		return result.Output, err
-	}))
+	return s.submitProjectAction(ProjectAction{Root: root, Action: command, Package: name})
 }
 
-func (s *Server) robotRunOptions(root string) (string, error) {
+func (s *Server) robotRunOptions(ctx context.Context, root string) (string, error) {
 	enabled, err := s.robots.EnabledApps(root)
 	if err != nil {
 		return "", err
@@ -199,7 +242,7 @@ func (s *Server) robotRunOptions(root string) (string, error) {
 		return "", err
 	}
 	preflight, preflightErr := s.robots.RuntimePreflight(root)
-	background, pm2Err := s.robotBackgroundProcesses(root)
+	background, pm2Err := s.robots.DiagnosticPM2Status(ctx, root)
 	available := make([]string, 0, 3)
 	if status.HasDevScript {
 		available = append(available, "development")
@@ -213,18 +256,9 @@ func (s *Server) robotRunOptions(root string) (string, error) {
 	return encodeResult(map[string]any{
 		"robot": filepath.Base(root), "enabledPlugins": enabled, "project": status,
 		"availableModes": available, "startTool": "alemonjs_control_robot_runtime",
-		"backgroundProcesses": background, "backgroundStatusAvailable": pm2Err == nil,
+		"backgroundProcesses": background.Processes, "backgroundStatusAvailable": pm2Err == nil, "backgroundState": background.State,
 		"preflight": preflight, "preflightAvailable": preflightErr == nil,
 	})
-}
-
-func (s *Server) robotBackgroundProcesses(root string) ([]map[string]any, error) {
-	processes, err := s.robots.PM2ProjectProcesses(root)
-	result := make([]map[string]any, 0, len(processes))
-	for _, process := range processes {
-		result = append(result, map[string]any{"name": process.Name, "status": process.Status, "restarts": process.Restarts})
-	}
-	return result, err
 }
 
 func (s *Server) controlRobot(root, mode, action string) (string, error) {

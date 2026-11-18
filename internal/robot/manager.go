@@ -1489,6 +1489,7 @@ func parsePM2Processes(output string) ([]PM2Process, error) {
 			Script      string `json:"script"`
 			Interpreter string `json:"exec_interpreter"`
 			NodeVersion string `json:"node_version"`
+			Restarts    *int   `json:"restart_time"`
 			Namespace   string `json:"namespace"`
 			Status      string `json:"status"`
 			Uptime      int64  `json:"pm_uptime"`
@@ -1511,6 +1512,9 @@ func parsePM2Processes(output string) ([]PM2Process, error) {
 			// Older PM2 releases exposed the state at the top level. Current
 			// jlist payloads keep it in pm2_env, so accept both shapes.
 			status = p.Status
+		}
+		if p.PM2Env.Restarts != nil {
+			p.Restarts = *p.PM2Env.Restarts
 		}
 		processes = append(processes, PM2Process{
 			ID:          p.PMID,

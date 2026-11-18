@@ -939,8 +939,8 @@ func (s *server) requirePluginDevelopment(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return false
 	}
-	if status.Enabled && (!status.Authenticated || !status.SuperAdmin) {
-		writeError(w, http.StatusForbidden, "只有已登录的超级管理员可以管理源码开发会话。")
+	if status.Enabled && !status.Authenticated {
+		writeError(w, http.StatusForbidden, "请先登录工作台。")
 		return false
 	}
 	return true

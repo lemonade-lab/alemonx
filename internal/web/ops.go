@@ -162,17 +162,7 @@ func (s *server) opsActor(r *http.Request) (string, string) {
 				return "anonymous", "viewer"
 			}
 			if status.Authenticated {
-				// The account/role subsystem is authoritative for authenticated
-				// workbench users. Keep legacy OpsRoleBinding support below for
-				// installations that already configured the older ops-only roles.
-				if status.SuperAdmin || s.auth.Authorize(s.authToken(r), "operations.manage") {
-					return status.Account, "admin"
-				}
-				role := "viewer"
-				if binding, roleErr := s.opsStore.GetRole(status.Account); roleErr == nil && binding.Role != "" {
-					role = binding.Role
-				}
-				return status.Account, role
+				return status.Account, "admin"
 			}
 		}
 	}
@@ -215,7 +205,7 @@ func opsRoleLevel(role string) int {
 
 func (s *server) requireOpsRole(w http.ResponseWriter, r *http.Request, required, action, resource string) bool {
 	actor, role := s.opsActor(r)
-	highRisk := strings.HasPrefix(action, "incident.approve") || strings.HasPrefix(action, "incident.rollback") || strings.HasPrefix(action, "maintenance.rollback") || strings.HasPrefix(action, "maintenance.takeover") || strings.HasPrefix(action, "monitor.emergency-stop") || action == "policy.update" || action == "roles.update"
+	highRisk := strings.HasPrefix(action, "incident.approve") || strings.HasPrefix(action, "incident.rollback") || strings.HasPrefix(action, "maintenance.rollback") || strings.HasPrefix(action, "maintenance.takeover") || strings.HasPrefix(action, "monitor.emergency-stop") || action == "policy.update"
 	if highRisk && s.auth != nil {
 		if status, statusErr := s.auth.Status(s.authToken(r)); statusErr == nil && status.Enabled && strings.TrimSpace(r.Header.Get("X-Operation-Reason")) == "" && strings.TrimSpace(r.URL.Query().Get("reason")) == "" {
 			_ = s.opsStore.AppendAudit(agent.AuditEntry{Actor: actor, Role: role, Action: action, Resource: resource, Result: "denied", Reason: "高风险操作必须提供理由", Created: time.Now()})
@@ -655,41 +645,6 @@ func (s *server) opsHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, 200, items)
-		return
-	}
-	if path == "roles" && r.Method == http.MethodGet {
-		if !s.requireOpsRole(w, r, "viewer", "roles.read", "roles") {
-			return
-		}
-		items, err := s.opsStore.ListRoles()
-		if err != nil {
-			writeError(w, 500, err.Error())
-			return
-		}
-		writeJSON(w, 200, items)
-		return
-	}
-	if path == "roles" && r.Method == http.MethodPatch {
-		if !s.requireOpsRole(w, r, "admin", "roles.update", "roles") {
-			return
-		}
-		var binding agent.OpsRoleBinding
-		if json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&binding) != nil || binding.Account == "" {
-			writeError(w, 400, "角色配置无效")
-			return
-		}
-		switch binding.Role {
-		case "viewer", "operator", "approver", "admin":
-		default:
-			writeError(w, 400, "角色无效")
-			return
-		}
-		binding.Updated = time.Now()
-		if err := s.opsStore.SaveRole(binding); err != nil {
-			writeError(w, 500, err.Error())
-			return
-		}
-		writeJSON(w, 200, binding)
 		return
 	}
 	if path == "alerts" && r.Method == http.MethodGet {

@@ -687,8 +687,8 @@ func mcpAccountPolicy(root string) mcp.Policy {
 		if !status.Enabled {
 			return "", nil
 		}
-		if !status.Authenticated || !manager.Authorize(token, "workbench.manage") {
-			return "", fmt.Errorf("请通过工作台启动 MCP HTTP，或使用有工作台管理权限的 ALX_AUTH_TOKEN")
+		if !status.Authenticated || !status.SuperAdmin {
+			return "", fmt.Errorf("启动 MCP 需要超级管理员的 ALX_AUTH_TOKEN")
 		}
 		return status.RobotScope, nil
 	}

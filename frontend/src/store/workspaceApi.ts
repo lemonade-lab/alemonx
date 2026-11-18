@@ -13,12 +13,13 @@ type ConsolePayload = {
   startedAt?: string
 }
 type RobotTask = {
+  account?: string
   canCancel?: boolean
   canRetry?: boolean
   id: string
   root: string
   action: string
-  status: 'running' | 'completed' | 'failed' | 'cancelled'
+  status: 'running' | 'completed' | 'failed' | 'cancelled' | 'interrupted'
   output?: string
   error?: string
   createdAt?: string
@@ -176,6 +177,52 @@ export type RuntimeOverview = {
     source?: 'builtin' | 'declared'
     logo?: string
   }>
+}
+export type RobotDiagnosticOperation = {
+  id: string
+  account?: string
+  root?: string
+  source?: string
+  action: string
+  status: string
+  createdAt: string
+  finishedAt?: string
+  progress: number
+  error?: string
+}
+export type RobotDiagnosticTask = RobotDiagnosticOperation & {
+  steps?: { at: string; progress: number; message: string }[]
+  lines: string[]
+}
+export type RobotDiagnosticLogs = {
+  lines: { source: string; text: string; timestamp?: string }[]
+  truncated: boolean
+  hasOlder: boolean
+}
+type RobotDiagnosticSignal = { state: string; evidence: string }
+export type RobotDiagnosticReport = {
+  observedAt: string
+  project?: RuntimeOverview
+  preflight?: { login: string; missing: string[] }
+  localRuntime?: RobotDiagnosticOperation
+  pm2: {
+    state: 'unavailable' | 'daemon_offline' | 'unregistered' | 'registered'
+    processes: { id: number; name: string; status: string; pid: number; restarts: number; memoryBytes: number; cpuPercent: number }[]
+  }
+  platformConnection: RobotDiagnosticSignal
+  ports: {
+    kind: string
+    label: string
+    port: number
+    configuredPort?: number
+    actualPort?: number
+    tcp: RobotDiagnosticSignal
+    ownership: RobotDiagnosticSignal
+    applicationReadiness: RobotDiagnosticSignal
+    httpStatus?: number
+  }[]
+  recentOperations: RobotDiagnosticOperation[]
+  findings: { code: string; message: string; taskId?: string }[]
 }
 export type PM2Status = {
   configured: boolean
@@ -602,7 +649,17 @@ export type PythonRuntimeStatus = {
   activeVersion?: string
 }
 
-type SystemMcpStatus = { running: boolean; managed: boolean; url: string }
+type SystemMcpStatus = {
+  canControl: boolean
+  canIssueToken: boolean
+  hasToken: boolean
+  hasDiagnosticToken: boolean
+  account?: string
+  running: boolean
+  autoStart: boolean
+  managed: boolean
+  url: string
+}
 
 export const workspaceApi = createApi({
   reducerPath: 'workspaceApi',
@@ -1210,6 +1267,15 @@ export const workspaceApi = createApi({
       keepUnusedDataFor: 20,
       providesTags: (_result, _error, root) => [{ type: 'Runtime', id: root }]
     }),
+    robotDiagnostics: build.query<RobotDiagnosticReport, string>({
+      query: root => `robot/diagnostics?${new URLSearchParams({ root })}`
+    }),
+    robotDiagnosticTask: build.query<RobotDiagnosticTask, { root: string; taskId: string }>({
+      query: params => `robot/diagnostics?${new URLSearchParams(params)}`
+    }),
+    robotDiagnosticLogs: build.query<RobotDiagnosticLogs, { root: string; source: 'all' | 'err' }>({
+      query: params => `robot/diagnostics?${new URLSearchParams({ ...params, view: 'pm2-logs' })}`
+    }),
     robotPM2Status: build.query<PM2Status, string>({
       query: root => `robot/pm2-status?${new URLSearchParams({ root })}`,
       providesTags: (_result, _error, root) => [{ type: 'Runtime', id: root }]
@@ -1594,6 +1660,9 @@ export const {
   useLazyRobotTaskQuery,
   useLazyRobotConsoleQuery,
   useRobotRuntimeQuery,
+  useRobotDiagnosticsQuery,
+  useRobotDiagnosticTaskQuery,
+  useRobotDiagnosticLogsQuery,
   useRobotPM2StatusQuery,
   useRobotPM2ProcessesQuery,
   useAppPortQuery,

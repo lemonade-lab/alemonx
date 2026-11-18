@@ -260,7 +260,7 @@ This is a deliberate security boundary: every modifying operation requires your 
 
 **Q16: Codex cannot connect to MCP?**
 
-Open **Settings → MCP** to start the Streamable HTTP service and copy the connection address and Bearer token. For STDIO, enter the command `alx` and argument `mcp` so the client can start the process. Optionally set `MCP_ALLOWED_ROOTS` to limit manageable directories.
+Use **Settings → MCP** to create, revoke, or regenerate your connection key. A super administrator starts the Streamable HTTP service before clients can connect. For STDIO, enter the command `alx` and argument `mcp` so the client can start the process. Optionally set `MCP_ALLOWED_ROOTS` to limit manageable directories.
 
 **Q17: What can the AI do to my robots, and what not?**
 

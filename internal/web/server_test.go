@@ -119,7 +119,7 @@ func TestRequireSuperAdminAllowsWhenAuthenticationDisabled(t *testing.T) {
 	}
 	s := &server{auth: manager}
 	recorder := httptest.NewRecorder()
-	if !s.requireSuperAdmin(recorder, httptest.NewRequest(http.MethodPost, "/api/v1/system/dependency-sources", nil)) {
+	if !s.requireSuperAdmin(recorder, httptest.NewRequest(http.MethodPost, "/api/v1/auth/accounts", nil)) {
 		t.Fatalf("disabled authentication must not require a super administrator: %d %s", recorder.Code, recorder.Body.String())
 	}
 	if recorder.Code != http.StatusOK || recorder.Body.Len() != 0 {
@@ -408,7 +408,11 @@ func newSudoActionTestServer(t *testing.T, run func(context.Context, []byte, str
 func sudoActionRequest(t *testing.T, s *server, token, remote, password string, confirm bool) *http.Request {
 	t.Helper()
 	host, _, _ := net.SplitHostPort(remote)
-	intent, err := s.privilegeStore.createIntent("fixture-system", "prepare-runtime", "", "root", host, "password")
+	identity, err := s.auth.Status(token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, err := s.privilegeStore.createIntent("fixture-system", "prepare-runtime", "", identity.Account, host, "password")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -493,7 +497,7 @@ func TestActiveSetupPluginOperationUsesPluginScope(t *testing.T) {
 	}
 }
 
-func TestManifestSudoActionRequiresLocalSuperAdminAndConfirmation(t *testing.T) {
+func TestManifestSudoActionRequiresLocalAuthenticationAndConfirmation(t *testing.T) {
 	s, token := newSudoActionTestServer(t, func(context.Context, []byte, string, []string) (string, error) {
 		t.Fatal("sudo executor must not run when the request is rejected")
 		return "", nil
@@ -506,18 +510,10 @@ func TestManifestSudoActionRequiresLocalSuperAdminAndConfirmation(t *testing.T) 
 		t.Setenv("ALX_PRIVILEGED_MODE", "disabled")
 		_ = system.ConfigurePrivilegedMode("127.0.0.1", false)
 	})
-	if _, err := s.auth.CreateAccount("operator", "operator-password", "operator-password", nil); err != nil {
-		t.Fatal(err)
-	}
-	operatorToken, err := s.auth.Login("operator", "operator-password")
-	if err != nil {
-		t.Fatal(err)
-	}
 	for name, request := range map[string]*http.Request{
-		"remote":           sudoActionRequest(t, s, token, "203.0.113.10:4242", "password", true),
-		"unconfirmed":      sudoActionRequest(t, s, token, "127.0.0.1:4242", "password", false),
-		"unauthenticated":  sudoActionRequest(t, s, "", "127.0.0.1:4242", "password", true),
-		"ordinary-account": sudoActionRequest(t, s, operatorToken, "127.0.0.1:4242", "password", true),
+		"remote":          sudoActionRequest(t, s, token, "203.0.113.10:4242", "password", true),
+		"unconfirmed":     sudoActionRequest(t, s, token, "127.0.0.1:4242", "password", false),
+		"unauthenticated": sudoActionRequest(t, s, "", "127.0.0.1:4242", "password", true),
 	} {
 		t.Run(name, func(t *testing.T) {
 			recorder := httptest.NewRecorder()
@@ -564,13 +560,20 @@ func TestManifestSudoActionAllowsLocalOperationWhenAuthenticationIsUnset(t *test
 
 func TestManifestSudoActionUsesTransientPasswordAndLocksAfterThreeFailures(t *testing.T) {
 	var received []byte
-	s, token := newSudoActionTestServer(t, func(_ context.Context, password []byte, program string, args []string) (string, error) {
+	s, _ := newSudoActionTestServer(t, func(_ context.Context, password []byte, program string, args []string) (string, error) {
 		if program != "go" || !reflect.DeepEqual(args, []string{"version"}) {
 			t.Fatalf("command = %s %#v", program, args)
 		}
 		received = password
 		return "", system.ErrSudoPasswordInvalid
 	})
+	if _, err := s.auth.CreateAccount("operator", "operator-password", "operator-password"); err != nil {
+		t.Fatal(err)
+	}
+	token, err := s.auth.Login("operator", "operator-password")
+	if err != nil {
+		t.Fatal(err)
+	}
 	for attempt := 0; attempt < 3; attempt++ {
 		recorder := httptest.NewRecorder()
 		s.setupPluginActionHandler(recorder, sudoActionRequest(t, s, token, "127.0.0.1:4242", "only-once", true))
@@ -1646,7 +1649,7 @@ func TestIdentityProtectionAcceptsBearerTokenForAppClients(t *testing.T) {
 	}
 }
 
-func TestAccountRolesControlManagementAndWorkbenchAccess(t *testing.T) {
+func TestOrdinaryAccountCanManageWorkbenchButNotAccounts(t *testing.T) {
 	identity, err := access.NewAt(filepath.Join(t.TempDir(), "auth.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -1670,19 +1673,8 @@ func TestAccountRolesControlManagementAndWorkbenchAccess(t *testing.T) {
 	if management.Code != http.StatusOK {
 		t.Fatalf("initial management = %d %s", management.Code, management.Body.String())
 	}
-	if !bytes.Contains(management.Body.Bytes(), []byte(`"roles":[]`)) {
-		t.Fatalf("initial management must return an empty roles array: %s", management.Body.String())
-	}
-
-	createRole := httptest.NewRecorder()
-	request = httptest.NewRequest(http.MethodPost, "/api/v1/auth/roles", bytes.NewBufferString(`{"id":"reader","name":"只读","permissions":["workbench.view"]}`))
-	request.AddCookie(superCookie)
-	handler.ServeHTTP(createRole, request)
-	if createRole.Code != http.StatusCreated {
-		t.Fatalf("create role = %d %s", createRole.Code, createRole.Body.String())
-	}
 	createAccount := httptest.NewRecorder()
-	request = httptest.NewRequest(http.MethodPost, "/api/v1/auth/accounts", bytes.NewBufferString(`{"account":"alice","password":"password","confirmation":"password","roles":["reader"]}`))
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/auth/accounts", bytes.NewBufferString(`{"account":"alice","password":"password","confirmation":"password"}`))
 	request.AddCookie(superCookie)
 	handler.ServeHTTP(createAccount, request)
 	if createAccount.Code != http.StatusCreated {
@@ -1697,26 +1689,26 @@ func TestAccountRolesControlManagementAndWorkbenchAccess(t *testing.T) {
 	}
 	aliceCookie := aliceLogin.Result().Cookies()[0]
 
-	readOnly := httptest.NewRecorder()
+	read := httptest.NewRecorder()
 	request = httptest.NewRequest(http.MethodGet, "/api/v1/goals", nil)
 	request.AddCookie(aliceCookie)
-	handler.ServeHTTP(readOnly, request)
-	if readOnly.Code != http.StatusOK {
-		t.Fatalf("reader GET = %d %s", readOnly.Code, readOnly.Body.String())
+	handler.ServeHTTP(read, request)
+	if read.Code != http.StatusOK {
+		t.Fatalf("ordinary account GET = %d %s", read.Code, read.Body.String())
 	}
-	blockedWrite := httptest.NewRecorder()
+	write := httptest.NewRecorder()
 	request = httptest.NewRequest(http.MethodPost, "/api/v1/checks", bytes.NewBufferString(`{"goalId":"mobile"}`))
 	request.AddCookie(aliceCookie)
-	handler.ServeHTTP(blockedWrite, request)
-	if blockedWrite.Code != http.StatusForbidden {
-		t.Fatalf("reader write = %d %s", blockedWrite.Code, blockedWrite.Body.String())
+	handler.ServeHTTP(write, request)
+	if write.Code != http.StatusOK {
+		t.Fatalf("ordinary account write = %d %s", write.Code, write.Body.String())
 	}
 	blockedManagement := httptest.NewRecorder()
 	request = httptest.NewRequest(http.MethodGet, "/api/v1/auth/management", nil)
 	request.AddCookie(aliceCookie)
 	handler.ServeHTTP(blockedManagement, request)
 	if blockedManagement.Code != http.StatusForbidden {
-		t.Fatalf("reader management = %d %s", blockedManagement.Code, blockedManagement.Body.String())
+		t.Fatalf("ordinary account management = %d %s", blockedManagement.Code, blockedManagement.Body.String())
 	}
 }
 

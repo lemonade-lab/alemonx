@@ -600,7 +600,7 @@ Web UI ── POST /setup/plugins/<id>/actions
 注意：
 
 - `native` 模式各平台映射：darwin → `native`，windows → `native-uac`，linux → `polkit`。
-- `password` 模式只在认证启用时允许超级管理员；密码在内存中立即清零，失败尝试有锁定记录。
+- `password` 模式在认证启用后要求登录。密码在内存中立即清零，失败尝试有锁定记录。
 - `planAction`/`useLatestAudit` 的操作不接受浏览器额外参数，只接受宿主签发的 `planID` 或最近审计；执行时宿主向 runner 传入 `{ operation, ...planParams, __alxFingerprint? }`。
 - 特权模式由 `ALX_PRIVILEGED_MODE` 控制（`enabled` / `local`）；`local` 仅限本机回环且无转发头。
 - 审计表带哈希链（`previous_hash`/`chain_hash`）防篡改，`GET /api/v1/system/privileged/audit?plugin=<id>` 可读取，`privileged/status` 返回链完整性与签名版本。

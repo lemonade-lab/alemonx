@@ -72,6 +72,8 @@ type mirror struct {
 
 type operationTask struct {
 	ID         string          `json:"id"`
+	Account    string          `json:"account,omitempty"`
+	Source     string          `json:"source,omitempty"`
 	Root       string          `json:"root"`
 	Path       string          `json:"path,omitempty"`
 	Action     string          `json:"action"`
@@ -128,6 +130,8 @@ type opsEventHub struct {
 type mcpEventHub struct {
 	mu          sync.Mutex
 	running     bool
+	managed     bool
+	autoStart   bool
 	subscribers map[chan bool]struct{}
 }
 
@@ -145,13 +149,13 @@ func (h *mcpEventHub) unsubscribe(ch chan bool) {
 	h.mu.Unlock()
 }
 func (h *mcpEventHub) status() bool { h.mu.Lock(); defer h.mu.Unlock(); return h.running }
-func (h *mcpEventHub) set(running bool) bool {
+func (h *mcpEventHub) set(running, managed, autoStart bool) bool {
 	h.mu.Lock()
-	if h.running == running {
+	if h.running == running && h.managed == managed && h.autoStart == autoStart {
 		h.mu.Unlock()
 		return false
 	}
-	h.running = running
+	h.running, h.managed, h.autoStart = running, managed, autoStart
 	for ch := range h.subscribers {
 		select {
 		case ch <- running:
@@ -227,6 +231,10 @@ func (h *robotEventHub) publish(event robotEvent) {
 // still usable, but a reconnect is never told about an event that was not
 // safely recorded.
 func (s *server) publishRobotEvent(event robotEvent) {
+	if event.Task != nil && event.Task.Source == "mcp" && event.Task.FinishedAt != nil {
+		s.finishMCPTask(*event.Task)
+	}
+
 	s.mu.RLock()
 	operations := append([]operationTask(nil), s.operations...)
 	s.mu.RUnlock()
@@ -1003,6 +1011,9 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 			_ = s.goalStore.UpdateRunByTask(current.ID, status, current.LastError)
 		}
 	})
+	if err := s.settleRecoveredMCPTasks(); err != nil {
+		log.Printf("MCP 任务恢复失败：%s", safeStoreError(err))
+	}
 	if startBackground {
 		// Register observers before starting background loops so startup
 		// reconciliation and the first scheduled/monitor event cannot bypass
@@ -1078,12 +1089,9 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	if mcpWorkspace == "" {
 		mcpWorkspace = options.WorkspaceRoot
 	}
-	s.mcpHTTP.accountHandler = func(token string, identity access.Status, authToken string) http.Handler {
-		policy := s.accountMCPPolicy(options.MCPPolicy, mcpWorkspace, identity, authToken)
+	s.mcpHTTP.accountHandler = func(token string, identity access.Status) http.Handler {
+		policy := s.accountMCPPolicy(options.MCPPolicy, mcpWorkspace, identity, token)
 		return mcp.NewServerWithPolicyAndWorkspace(version, mcpTemplates, policy, mcpWorkspace).HTTPHandler(token)
-	}
-	if startBackground {
-		s.startMCPStatusMonitor()
 	}
 	s.workspaceRequested = options.WorkspaceRoot
 	s.dshRuntimes = newDSHRegistry(options.WorkspaceRoot)
@@ -1103,8 +1111,7 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	mux.HandleFunc("/api/v1/auth/management", s.authManagementHandler)
 	mux.HandleFunc("/api/v1/auth/accounts/", s.authAccountHandler)
 	mux.HandleFunc("/api/v1/auth/accounts", s.authAccountsHandler)
-	mux.HandleFunc("/api/v1/auth/roles/", s.authRoleHandler)
-	mux.HandleFunc("/api/v1/auth/roles", s.authRolesHandler)
+
 	mux.HandleFunc("/api/v1/goals", s.listGoals)
 	mux.HandleFunc("/api/v1/checks", s.checksHandler)
 	mux.HandleFunc("/api/v1/projects", s.projectsHandler)
@@ -1213,6 +1220,7 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	mux.HandleFunc("/api/v1/robot/live/upload", s.robotLiveUploadHandler)
 	mux.HandleFunc("/api/v1/robot/live/", s.robotLiveHandler)
 	mux.HandleFunc("/api/v1/robot/runtime", s.robotRuntimeHandler)
+	mux.HandleFunc("/api/v1/robot/diagnostics", s.robotDiagnosticsHandler)
 	mux.HandleFunc("/api/v1/robot/runtime/preflight", s.robotRuntimePreflightHandler)
 	mux.HandleFunc("/api/v1/robot/runtime/repair", s.robotRuntimeRepairHandler)
 	mux.HandleFunc("/api/v1/robot/runtime/switch", s.robotRuntimeSwitchHandler)
@@ -1280,6 +1288,9 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	router.Any("/*path", gin.WrapH(s.browserHTTPRecovery(mux)))
 	runtime := &ServerRuntime{Handler: router, server: s, updateRequested: make(chan struct{})}
 	s.requestUpdateShutdown = runtime.RequestUpdateShutdown
+	if startBackground {
+		s.startMCPStatusMonitor()
+	}
 	return runtime
 }
 
@@ -1366,14 +1377,13 @@ func (s *server) authLogoutHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
 		return
 	}
-	s.revokeMCPForSession(s.authToken(r))
 	http.SetCookie(w, &http.Cookie{Name: authCookieName, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteStrictMode})
 	writeJSON(w, http.StatusOK, map[string]bool{"authenticated": false})
 }
 
 // authManagementHandler returns the complete account-management view. It is
 // intentionally separate from /status so ordinary users never receive other
-// accounts or the editable permission catalogue.
+// accounts.
 func (s *server) authManagementHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
@@ -1387,17 +1397,12 @@ func (s *server) authManagementHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	roles, err := s.auth.ListRoles()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
 	status, err := s.auth.Status(s.authToken(r))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"current": status, "accounts": accounts, "roles": roles, "permissions": access.Permissions})
+	writeJSON(w, http.StatusOK, map[string]any{"current": status, "accounts": accounts})
 }
 
 func (s *server) authAccountsHandler(w http.ResponseWriter, r *http.Request) {
@@ -1409,16 +1414,15 @@ func (s *server) authAccountsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var input struct {
-		Account      string   `json:"account"`
-		Password     string   `json:"password"`
-		Confirmation string   `json:"confirmation"`
-		Roles        []string `json:"roles"`
+		Account      string `json:"account"`
+		Password     string `json:"password"`
+		Confirmation string `json:"confirmation"`
 	}
 	if json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&input) != nil {
 		writeError(w, http.StatusBadRequest, "账户配置无效。")
 		return
 	}
-	created, err := s.auth.CreateAccount(input.Account, input.Password, input.Confirmation, input.Roles)
+	created, err := s.auth.CreateAccount(input.Account, input.Password, input.Confirmation)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -1438,15 +1442,14 @@ func (s *server) authAccountHandler(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodPatch:
 		var input struct {
-			Roles        []string `json:"roles"`
-			Password     *string  `json:"password"`
-			Confirmation *string  `json:"confirmation"`
+			Password     *string `json:"password"`
+			Confirmation *string `json:"confirmation"`
 		}
 		if json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&input) != nil {
 			writeError(w, http.StatusBadRequest, "账户配置无效。")
 			return
 		}
-		updated, updateErr := s.auth.UpdateAccount(account, input.Roles, input.Password, input.Confirmation)
+		updated, updateErr := s.auth.UpdateAccount(account, input.Password, input.Confirmation)
 		if updateErr != nil {
 			writeError(w, http.StatusBadRequest, updateErr.Error())
 			return
@@ -1454,60 +1457,6 @@ func (s *server) authAccountHandler(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, updated)
 	case http.MethodDelete:
 		if err := s.auth.DeleteAccount(account); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]bool{"deleted": true})
-	default:
-		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
-	}
-}
-
-func (s *server) authRolesHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
-		return
-	}
-	if !s.requireSuperAdmin(w, r) {
-		return
-	}
-	var role access.Role
-	if json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&role) != nil {
-		writeError(w, http.StatusBadRequest, "角色配置无效。")
-		return
-	}
-	created, err := s.auth.CreateRole(role)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusCreated, created)
-}
-
-func (s *server) authRoleHandler(w http.ResponseWriter, r *http.Request) {
-	if !s.requireSuperAdmin(w, r) {
-		return
-	}
-	id, err := url.PathUnescape(strings.TrimPrefix(r.URL.Path, "/api/v1/auth/roles/"))
-	if err != nil || strings.TrimSpace(id) == "" || strings.Contains(id, "/") {
-		writeError(w, http.StatusBadRequest, "角色标识无效。")
-		return
-	}
-	switch r.Method {
-	case http.MethodPut:
-		var role access.Role
-		if json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&role) != nil || role.ID != id {
-			writeError(w, http.StatusBadRequest, "角色配置无效。")
-			return
-		}
-		updated, updateErr := s.auth.SaveRole(role)
-		if updateErr != nil {
-			writeError(w, http.StatusBadRequest, updateErr.Error())
-			return
-		}
-		writeJSON(w, http.StatusOK, updated)
-	case http.MethodDelete:
-		if err := s.auth.DeleteRole(id); err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -1534,7 +1483,7 @@ func (s *server) requireSuperAdmin(w http.ResponseWriter, r *http.Request) bool 
 		return true
 	}
 	if !status.Authenticated || !status.SuperAdmin {
-		writeError(w, http.StatusForbidden, "仅超级管理员可以管理账户与角色。")
+		writeError(w, http.StatusForbidden, "仅超级管理员可以管理账户。")
 		return false
 	}
 	return true
@@ -2129,10 +2078,7 @@ func (s *server) setupPluginActionHandler(w http.ResponseWriter, r *http.Request
 	}
 	s.taskControls[created.ID] = &operationControl{cancel: cancel, request: payload, path: r.URL.Path}
 
-	s.operations = append([]operationTask{created}, s.operations...)
-	if len(s.operations) > 40 {
-		s.operations = s.operations[:40]
-	}
+	s.prependOperationLocked(created)
 	s.mu.Unlock()
 	go func() {
 		defer cancel()
@@ -2218,10 +2164,7 @@ func (s *server) setupPluginUploadHandler(w http.ResponseWriter, r *http.Request
 		return
 	}
 	created := operationTask{ID: "setup-" + time.Now().Format("20060102150405.000000000"), Action: "setup:" + pluginID + ":" + action, Status: "running", CreatedAt: time.Now()}
-	s.operations = append([]operationTask{created}, s.operations...)
-	if len(s.operations) > 40 {
-		s.operations = s.operations[:40]
-	}
+	s.prependOperationLocked(created)
 	s.mu.Unlock()
 
 	staging, err := os.MkdirTemp("", "alx-plugin-upload-")
@@ -2376,7 +2319,7 @@ func (s *server) handleManifestNativeAction(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if status.Enabled && (!status.Authenticated || !s.auth.Authorize(s.authToken(r), "system.manage")) {
+	if status.Enabled && !status.Authenticated {
 		writeError(w, http.StatusForbidden, "当前账户没有系统变更权限。")
 		return
 	}
@@ -2454,10 +2397,7 @@ func (s *server) handleManifestNativeAction(w http.ResponseWriter, r *http.Reque
 	}
 	created := operationTask{ID: "setup-" + time.Now().Format("20060102150405.000000000"), Action: "setup:" + pluginID + ":" + input.Action, Status: "running", Output: "正在请求系统管理员授权…", CreatedAt: time.Now()}
 	s.mu.Lock()
-	s.operations = append([]operationTask{created}, s.operations...)
-	if len(s.operations) > 40 {
-		s.operations = s.operations[:40]
-	}
+	s.prependOperationLocked(created)
 	s.mu.Unlock()
 	go func() {
 		var result setupplugin.ActionResult
@@ -2749,7 +2689,7 @@ func (s *server) buildPrivilegePreflight(r *http.Request, input privilegePreflig
 		response.Reason = "当前工作台未允许系统权限操作。请联系管理员将 ALX_PRIVILEGED_MODE 设为 enabled，或在 local 模式下从本机工作台操作。"
 		return response, account, source
 	}
-	if status.Enabled && (!status.Authenticated || !s.auth.Authorize(s.authToken(r), "system.manage")) {
+	if status.Enabled && !status.Authenticated {
 		response.Reason = "当前账户没有系统变更权限。"
 		return response, account, source
 	}
@@ -2771,15 +2711,6 @@ func (s *server) buildPrivilegePreflight(r *http.Request, input privilegePreflig
 			}
 			if !operationSupportsPlatform(operation, runtime.GOOS) {
 				response.Reason = "当前平台不支持该插件声明的系统授权方式。"
-				return response, account, source
-			}
-			// Authentication is optional. On a fresh local workbench with no
-			// account system configured, the local privileged-mode policy is the
-			// authority; requiring a non-existent super-admin would permanently
-			// block declared system operations. Once authentication is enabled,
-			// retain the stricter logged-in super-admin requirement.
-			if status.Enabled && (!status.Authenticated || !status.SuperAdmin) {
-				response.Reason = "只有已登录的超级管理员可以执行系统操作。"
 				return response, account, source
 			}
 			if operation.PlanAction != "" {
@@ -2889,8 +2820,8 @@ func (s *server) handleManifestSudoAction(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if status.Enabled && (!status.Authenticated || !status.SuperAdmin) {
-		writeError(w, http.StatusForbidden, "只有已登录的超级管理员可以安装系统依赖。")
+	if status.Enabled && !status.Authenticated {
+		writeError(w, http.StatusForbidden, "请先登录工作台。")
 		return
 	}
 	account := status.Account
@@ -2932,10 +2863,7 @@ func (s *server) handleManifestSudoAction(w http.ResponseWriter, r *http.Request
 	}
 	created := operationTask{ID: "setup-" + time.Now().Format("20060102150405.000000000"), Root: "", Action: "setup:" + pluginID + ":" + input.Action, Status: "running", Output: "等待管理员授权…", CreatedAt: time.Now()}
 	s.mu.Lock()
-	s.operations = append([]operationTask{created}, s.operations...)
-	if len(s.operations) > 40 {
-		s.operations = s.operations[:40]
-	}
+	s.prependOperationLocked(created)
 	s.mu.Unlock()
 	go func() {
 		s.updateOperation(created.ID, 5, "正在验证管理员授权…", "", false)
@@ -3628,9 +3556,6 @@ func (s *server) systemNetworkHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 405, "该操作暂不支持")
 		return
 	}
-	if !s.requireSuperAdmin(w, r) {
-		return
-	}
 	if r.Method == http.MethodPost && r.URL.Query().Get("action") == "detect" {
 		c := s.network.ConfigSnapshot()
 		if c == nil {
@@ -3729,9 +3654,6 @@ func (s *server) dependencySourcesHandler(w http.ResponseWriter, r *http.Request
 		status.FrontendBuild = s.frontendBuild
 		writeJSON(w, http.StatusOK, status)
 	case http.MethodPost:
-		if s.auth != nil && !s.requireSuperAdmin(w, r) {
-			return
-		}
 		var input struct {
 			Action string `json:"action"`
 			Preset string `json:"preset"`
@@ -5566,24 +5488,38 @@ func (s *server) robotEventsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+type robotTaskRequest struct {
+	mcp.ProjectAction
+	Ready   string `json:"ready"`
+	Value   string `json:"value"`
+	Token   string `json:"token"`
+	Confirm string `json:"confirm"`
+}
+
 func (s *server) robotTasksHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
 		id := r.URL.Query().Get("id")
 		s.mu.RLock()
-		defer s.mu.RUnlock()
 		if id == "" {
 			operations := s.operations
 			if operations == nil {
 				operations = []operationTask{}
 			}
 			writeJSON(w, http.StatusOK, operations)
+			s.mu.RUnlock()
 			return
 		}
 		for _, item := range s.operations {
 			if item.ID == id {
 				writeJSON(w, http.StatusOK, item)
+				s.mu.RUnlock()
 				return
 			}
+		}
+		s.mu.RUnlock()
+		if task, ok := s.operationEvents.mcpTaskByID(r.Context(), id); ok {
+			writeJSON(w, http.StatusOK, task)
+			return
 		}
 		writeError(w, http.StatusNotFound, "操作任务不存在或已过期。")
 		return
@@ -5592,22 +5528,15 @@ func (s *server) robotTasksHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
 		return
 	}
-	var input struct {
-		Root    string `json:"root"`
-		Action  string `json:"action"`
-		Ready   string `json:"ready"`
-		Value   string `json:"value"`
-		Message string `json:"message"`
-		Package string `json:"package"`
-		Version string `json:"version"`
-		Tag     string `json:"tag"`
-		Token   string `json:"token"`
-		Confirm string `json:"confirm"`
-	}
+	var input robotTaskRequest
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 		writeError(w, http.StatusBadRequest, "请求内容无法识别。")
 		return
 	}
+	s.submitRobotTask(w, r.Context(), input, "")
+}
+
+func (s *server) submitRobotTask(w http.ResponseWriter, requestContext context.Context, input robotTaskRequest, account string) {
 	if input.Root == "" || input.Action == "" {
 		writeError(w, http.StatusBadRequest, "请选择机器人目录和操作。")
 		return
@@ -5656,7 +5585,33 @@ func (s *server) robotTasksHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	created := operationTask{ID: "robot-" + time.Now().Format("20060102150405.000000000"), Root: input.Root, Action: input.Action, Status: "running", CreatedAt: time.Now()}
+	accepted := false
+	accept := func() bool {
+		if account == "" {
+			return true
+		}
+		created.Account, created.Source = account, "mcp"
+		if _, err := s.operationEvents.recordMCPTask(created, mcpTaskAccepted); err != nil {
+			writeError(w, http.StatusServiceUnavailable, "任务存储暂不可用，操作未受理。")
+			return false
+		}
+		accepted = true
+		return true
+	}
+	reject := func(status int, message string) {
+		if !accepted {
+			writeError(w, status, message)
+			return
+		}
+		now := time.Now()
+		created.Status, created.Error, created.FinishedAt = "failed", robot.BoundedDiagnosticText(message, 4096), &now
+		s.addOperation(created)
+		writeJSON(w, http.StatusAccepted, created)
+	}
 	if input.Action == "dev-stop" || input.Action == "app-stop" {
+		if !accept() {
+			return
+		}
 		mode := map[string]string{"dev-stop": "开发模式", "app-stop": "前台运行"}[input.Action]
 		if !s.developmentRunning(input.Root) {
 			s.settleUnmanagedLocalOperations(input.Root, "未检测到受管本机进程，已结束遗留运行状态。")
@@ -5682,22 +5637,25 @@ func (s *server) robotTasksHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if input.Action == "dev" || input.Action == "app" || input.Action == "app-open" {
-		release, err := robot.BeginOperation(r.Context(), input.Root)
+		release, err := robot.BeginOperation(requestContext, input.Root)
 		if err != nil {
-			writeError(w, http.StatusConflict, err.Error())
+			reject(http.StatusConflict, err.Error())
 			return
 		}
 		defer release()
+		if !accept() {
+			return
+		}
 		// Starting a robot owns the dependency lifecycle. A new clone or a
 		// changed workspace must not make beginners detour to a separate
 		// "install dependencies" button before they can run it.
 		dependencyOutput, dependencyErr := s.robots.EnsureRuntimeDependencies(input.Root)
 		if dependencyErr != nil {
-			writeError(w, http.StatusBadRequest, dependencyErr.Error())
+			reject(http.StatusBadRequest, dependencyErr.Error())
 			return
 		}
 		if s.developmentRunning(input.Root) {
-			writeError(w, http.StatusConflict, "当前目录已有前台或开发进程正在运行；请先停止后再启动。")
+			reject(http.StatusConflict, "当前目录已有前台或开发进程正在运行；请先停止后再启动。")
 			return
 		}
 		// An app launch takes over its own configured web port from PM2. A test
@@ -5705,7 +5663,7 @@ func (s *server) robotTasksHandler(w http.ResponseWriter, r *http.Request) {
 		// running application merely because it belongs to the same project.
 		if readyKind == "app" {
 			if err := s.stopPM2ForStart(input.Root); err != nil {
-				writeError(w, http.StatusConflict, "停止后台（PM2）服务失败："+err.Error())
+				reject(http.StatusConflict, "停止后台（PM2）服务失败："+err.Error())
 				return
 			}
 		}
@@ -5714,14 +5672,14 @@ func (s *server) robotTasksHandler(w http.ResponseWriter, r *http.Request) {
 		if readyKind == "app" {
 			info, _ := s.robots.AppPort(input.Root)
 			if !s.autoPortEnabled(input.Root) && !s.waitPortFreeOn(info.Port, 0) {
-				writeError(w, http.StatusConflict, "应用端口仍被占用；请停止当前机器人自己的进程后重试。")
+				reject(http.StatusConflict, "应用端口仍被占用；请停止当前机器人自己的进程后重试。")
 				return
 			}
 		}
 		if readyKind == "test" {
 			info, _ := s.robots.TestPort(input.Root)
 			if !s.autoPortEnabled(input.Root) && !s.waitPortFreeOn(info.Port, 0) {
-				writeError(w, http.StatusConflict, "服务端口仍被占用；请停止当前机器人的测试进程后重试。")
+				reject(http.StatusConflict, "服务端口仍被占用；请停止当前机器人的测试进程后重试。")
 				return
 			}
 		}
@@ -5736,7 +5694,7 @@ func (s *server) robotTasksHandler(w http.ResponseWriter, r *http.Request) {
 			created.Action = "app"
 		}
 		if err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
+			reject(http.StatusBadRequest, err.Error())
 			return
 		}
 		configureManagedProcess(command)
@@ -5751,7 +5709,7 @@ func (s *server) robotTasksHandler(w http.ResponseWriter, r *http.Request) {
 		if readyKind == "test" {
 			sandboxPath, cleanup, sandboxErr := s.robots.SandboxConfig(input.Root)
 			if sandboxErr != nil {
-				writeError(w, http.StatusBadRequest, "准备无 login 测试配置失败："+sandboxErr.Error())
+				reject(http.StatusBadRequest, "准备无 login 测试配置失败："+sandboxErr.Error())
 				return
 			}
 			sandboxCleanup = cleanup
@@ -5772,12 +5730,12 @@ func (s *server) robotTasksHandler(w http.ResponseWriter, r *http.Request) {
 		command.Stderr = newOperationWriter(created.ID, s)
 		startedAt := time.Now()
 		if err := command.Start(); err != nil {
-			writeError(w, http.StatusBadRequest, "运行启动失败："+err.Error())
+			reject(http.StatusBadRequest, "运行启动失败："+err.Error())
 			return
 		}
 		if !s.registerDevelopment(input.Root, created.ID, created.Action, command, processGroupID(command), sandboxCleanup) {
 			_ = command.Process.Kill()
-			writeError(w, http.StatusConflict, "当前目录已有前台或开发进程正在运行；请先停止后再启动。")
+			reject(http.StatusConflict, "当前目录已有前台或开发进程正在运行；请先停止后再启动。")
 			return
 		}
 		if readyKind != "test" {
@@ -5789,7 +5747,7 @@ func (s *server) robotTasksHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		created.Output += map[bool]string{true: "开发模式已启动，正在等待进程输出…\n", false: "前台运行已启动，正在等待进程输出…\n"}[created.Action == "dev"]
 		payload, _ := json.Marshal(input)
-		created.CanCancel, created.CanRetry = true, input.Token == ""
+		created.CanCancel, created.CanRetry = true, account == "" && input.Token == ""
 		s.mu.Lock()
 		if s.taskControls == nil {
 			s.taskControls = map[string]*operationControl{}
@@ -5803,26 +5761,44 @@ func (s *server) robotTasksHandler(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusAccepted, created)
 		return
 	}
-	if input.Action == "pm2" || input.Action == "pm2-reload" {
-		// "谁最后启动谁为准": a running local process holds the app port, so a
-		// background start first stops the local process and waits for release.
-		// An absent serverPort is intentionally not substituted with a global
-		// default: it may belong to another robot directory.
-		s.stopLocalForStart(input.Root)
-		if info, err := s.robots.AppPort(input.Root); err == nil && info.Configured && !s.autoPortEnabled(input.Root) && !s.waitPortFreeOn(info.Port, 0) {
-			writeError(w, http.StatusConflict, "应用端口仍被占用；请停止当前机器人自己的进程后重试。")
-			return
+	prepareBackgroundStart := func() bool {
+		if input.Action == "pm2" || input.Action == "pm2-reload" {
+			// "谁最后启动谁为准": a running local process holds the app port, so a
+			// background start first stops the local process and waits for release.
+			// An absent serverPort is intentionally not substituted with a global
+			// default: it may belong to another robot directory.
+			s.stopLocalForStart(input.Root)
+			if info, err := s.robots.AppPort(input.Root); err == nil && info.Configured && !s.autoPortEnabled(input.Root) && !s.waitPortFreeOn(info.Port, 0) {
+				return false
+			}
 		}
+		return true
+	}
+	const portBusy = "应用端口仍被占用；请停止当前机器人自己的进程后重试。"
+	if account == "" && !prepareBackgroundStart() {
+		reject(http.StatusConflict, portBusy)
+		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	release, scopeErr := robot.BeginOperation(ctx, input.Root)
 	if scopeErr != nil {
 		cancel()
-		writeError(w, http.StatusConflict, scopeErr.Error())
+		reject(http.StatusConflict, scopeErr.Error())
+		return
+	}
+	if !accept() {
+		release()
+		cancel()
+		return
+	}
+	if accepted && !prepareBackgroundStart() {
+		release()
+		cancel()
+		reject(http.StatusConflict, portBusy)
 		return
 	}
 	payload, _ := json.Marshal(input)
-	created.CanCancel, created.CanRetry = true, input.Token == ""
+	created.CanCancel, created.CanRetry = true, account == "" && input.Token == ""
 	s.mu.Lock()
 	if s.taskControls == nil {
 		s.taskControls = map[string]*operationControl{}
@@ -5850,29 +5826,30 @@ func (s *server) robotTasksHandler(w http.ResponseWriter, r *http.Request) {
 		release()
 		finished := time.Now()
 		s.mu.Lock()
-		var snapshot operationTask
+		snapshot := created
+		snapshot.Status, snapshot.Output, snapshot.FinishedAt = "completed", result.Output, &finished
+		if err != nil {
+			snapshot.Status, snapshot.Error = "failed", err.Error()
+		}
+		if ctx.Err() != nil {
+			snapshot.Status, snapshot.Error = "cancelled", ""
+			snapshot.Output += "\n任务已取消。"
+		}
+		snapshot.CanCancel = false
+		if snapshot.Source == "mcp" {
+			snapshot.Output = robot.BoundedDiagnosticText(snapshot.Output, 32*1024)
+			snapshot.Error = robot.BoundedDiagnosticText(snapshot.Error, 4096)
+		}
 		for index := range s.operations {
 			if s.operations[index].ID == created.ID {
-				s.operations[index].Status = "completed"
-				s.operations[index].Output = result.Output
-				s.operations[index].FinishedAt = &finished
-				if err != nil {
-					s.operations[index].Status = "failed"
-					s.operations[index].Error = err.Error()
-				}
-				if ctx.Err() != nil {
-					s.operations[index].Status = "cancelled"
-					s.operations[index].Error = ""
-					s.operations[index].Output += "\n任务已取消。"
-				}
-				s.operations[index].CanCancel = false
-				snapshot = s.operations[index]
+				s.operations[index] = snapshot
 				break
 			}
 		}
 		s.mu.Unlock()
-		if snapshot.ID != "" {
-			s.publishRobotEvent(robotEvent{Type: "task", TaskID: snapshot.ID, Task: &snapshot})
+		s.publishRobotEvent(robotEvent{Type: "task", TaskID: snapshot.ID, Task: &snapshot})
+		if snapshot.Source == "mcp" {
+			return
 		}
 		if err != nil {
 			log.Printf("[ROBOT %s] 失败 action=%s root=%q error=%s", created.ID, created.Action, created.Root, err)
@@ -5885,12 +5862,23 @@ func (s *server) robotTasksHandler(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) addOperation(created operationTask) {
 	s.mu.Lock()
-	s.operations = append([]operationTask{created}, s.operations...)
-	if len(s.operations) > 40 {
-		s.operations = s.operations[:40]
-	}
+	s.prependOperationLocked(created)
 	s.mu.Unlock()
 	s.publishRobotEvent(robotEvent{Type: "task", TaskID: created.ID, Task: &created})
+}
+
+func (s *server) prependOperationLocked(created operationTask) {
+	s.operations = append([]operationTask{created}, s.operations...)
+	if len(s.operations) > operationHistoryLimit {
+		// Runtime and stop watchers still need the live rows of accepted MCP jobs.
+		recent := s.operations[:operationHistoryLimit]
+		for _, task := range s.operations[operationHistoryLimit:] {
+			if task.Source == "mcp" && task.Status == "running" {
+				recent = append(recent, task)
+			}
+		}
+		s.operations = recent
+	}
 }
 
 // startTestSandbox launches the isolated testone sandbox: it probes a free
@@ -6534,7 +6522,7 @@ func (s *server) watchDevelopmentTask(id, root, action string, command *exec.Cmd
 	}
 	// A pending stop task only becomes "completed" once the process has really
 	// exited, which is exactly the moment we reach here.
-	s.completePendingStopTasks(root, finished)
+	stopTasks := s.completePendingStopTasks(root, finished)
 	var snapshot operationTask
 	for index := range s.operations {
 		if s.operations[index].ID != id {
@@ -6573,6 +6561,10 @@ func (s *server) watchDevelopmentTask(id, root, action string, command *exec.Cmd
 	}
 	if wasManaged {
 		s.forgetProcess(root, id)
+	}
+	for _, task := range stopTasks {
+		snapshot := task
+		s.publishRobotEvent(robotEvent{Type: "task", TaskID: snapshot.ID, Task: &snapshot})
 	}
 	if snapshot.ID != "" {
 		s.publishRobotEvent(robotEvent{Type: "task", TaskID: snapshot.ID, Task: &snapshot})
@@ -6615,7 +6607,8 @@ func (s *server) waitForManagedProcessExit(root string, waitResult <-chan error)
 
 // completePendingStopTasks marks every in-flight dev-stop/app-stop task for a
 // root as completed once the supervised process has really exited.
-func (s *server) completePendingStopTasks(root string, finished time.Time) {
+func (s *server) completePendingStopTasks(root string, finished time.Time) []operationTask {
+	var completed []operationTask
 	for index := range s.operations {
 		item := &s.operations[index]
 		if item.Root != root || item.Status != "running" {
@@ -6627,7 +6620,9 @@ func (s *server) completePendingStopTasks(root string, finished time.Time) {
 		item.Status = "completed"
 		item.FinishedAt = &finished
 		item.Output = "已停止" + map[string]string{"dev-stop": "开发模式", "app-stop": "前台运行"}[item.Action] + "。"
+		completed = append(completed, *item)
 	}
+	return completed
 }
 
 // reconcileRecoveredOperations finalizes operations that were persisted as
@@ -6648,7 +6643,7 @@ func (s *server) settleRecoveredRobotTasks() {
 	for i := range s.operations {
 		item := &s.operations[i]
 		item.CanCancel, item.CanRetry = false, false
-		if item.Status == "running" && (strings.HasPrefix(item.ID, "robot-") || strings.HasPrefix(item.ID, "script-") || strings.HasPrefix(item.ID, "clone-")) {
+		if item.Source != "mcp" && item.Status == "running" && (strings.HasPrefix(item.ID, "robot-") || strings.HasPrefix(item.ID, "script-") || strings.HasPrefix(item.ID, "clone-")) {
 			item.Status = "failed"
 			item.Error = "工作台重启，任务已中断；请到对应功能页面重新执行。"
 			item.FinishedAt = &now
@@ -6720,7 +6715,7 @@ func (s *server) settleUnmanagedLocalOperations(root, message string) {
 	updated := make([]operationTask, 0, 2)
 	for index := range s.operations {
 		item := &s.operations[index]
-		if item.Status != "running" || (root != "" && item.Root != root) {
+		if item.Status != "running" || (root == "" && item.Source == "mcp") || (root != "" && item.Root != root) {
 			continue
 		}
 		switch item.Action {
@@ -9520,17 +9515,6 @@ func (s *server) environmentInstallHandler(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusBadRequest, "请确认在服务器安装此环境。")
 		return
 	}
-	if s.auth != nil {
-		status, err := s.auth.Status(s.authToken(r))
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "无法读取当前账户权限。")
-			return
-		}
-		if status.Enabled && (!status.Authenticated || !status.SuperAdmin) {
-			writeError(w, http.StatusForbidden, "只有已登录的超级管理员可以安装服务器环境。")
-			return
-		}
-	}
 	install := s.installEnvironment
 	if install == nil {
 		install = system.InstallEnvironment
@@ -9582,17 +9566,6 @@ func (s *server) nodeNVMHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "NodeJS 版本管理暂不支持 Windows。")
 		return
 	}
-	if s.auth != nil {
-		status, err := s.auth.Status(s.authToken(r))
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "无法读取当前账户权限。")
-			return
-		}
-		if status.Enabled && (!status.Authenticated || !status.SuperAdmin) {
-			writeError(w, http.StatusForbidden, "只有已登录的超级管理员可以管理 NodeJS 版本。")
-			return
-		}
-	}
 	var input struct {
 		Action  string `json:"action"`
 		Version string `json:"version"`
@@ -9639,17 +9612,6 @@ func (s *server) pythonRuntimeHandler(w http.ResponseWriter, r *http.Request) {
 	if system.InContainer() {
 		writeError(w, http.StatusBadRequest, "Docker 环境中的 Python 由镜像固定，不能在容器内安装或切换版本。")
 		return
-	}
-	if s.auth != nil {
-		status, err := s.auth.Status(s.authToken(r))
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "无法读取当前账户权限。")
-			return
-		}
-		if status.Enabled && (!status.Authenticated || !status.SuperAdmin) {
-			writeError(w, http.StatusForbidden, "只有已登录的超级管理员可以管理 Python 版本。")
-			return
-		}
 	}
 	var input struct {
 		Action  string `json:"action"`
@@ -9734,68 +9696,19 @@ func (s *server) ginAccess() gin.HandlerFunc {
 			c.Next()
 			return
 		}
-		status, err := s.auth.Status("")
+		status, err := s.auth.Status(s.authToken(c.Request))
 		if err != nil {
 			writeError(c.Writer, http.StatusInternalServerError, err.Error())
 			c.Abort()
 			return
 		}
-		if !status.Enabled {
-			c.Next()
-			return
-		}
-		token := s.authToken(c.Request)
-		if !s.auth.Authenticate(token) {
+		if status.Enabled && !status.Authenticated {
 			writeError(c.Writer, http.StatusUnauthorized, "请先登录身份认证账户。")
-			c.Abort()
-			return
-		}
-		if permission := requiredPermissionForRequest(c.Request); permission != "" && !s.auth.Authorize(token, permission) {
-			writeError(c.Writer, http.StatusForbidden, "当前账户没有此操作权限。")
 			c.Abort()
 			return
 		}
 		c.Next()
 	}
-}
-
-// requiredPermissionForRequest gives every authenticated management endpoint
-// a server-enforced baseline. Fine-grained operations retain their local
-// checks (for example /ops), while this mapping ensures a viewer cannot turn
-// a read-only workbench into a write-capable one through a handcrafted call.
-func requiredPermissionForRequest(r *http.Request) string {
-	path := r.URL.Path
-	if !strings.HasPrefix(path, "/api/v1/") || strings.HasPrefix(path, "/api/v1/auth/status") || strings.HasPrefix(path, "/api/v1/auth/setup") || strings.HasPrefix(path, "/api/v1/auth/login") || strings.HasPrefix(path, "/api/v1/auth/logout") {
-		return ""
-	}
-	if strings.HasPrefix(path, "/api/v1/auth/") {
-		return ""
-	}
-	// A terminal is a local-shell capability. Its read endpoints include live
-	// process output, so they are never viewer-readable merely because they use
-	// GET.
-	if strings.HasPrefix(path, "/api/v1/terminal/") {
-		return "workbench.manage"
-	}
-	// The main dashboard updates only its own validated active-project context
-	// here. This is safe for a viewer and lets a plugin later read the same
-	// narrow context only if its own capability and endpoint permissions allow.
-	if path == "/api/v1/system/context/robot" {
-		return "workbench.view"
-	}
-	if strings.HasPrefix(path, "/api/v1/ops") {
-		if r.Method == http.MethodGet || r.Method == http.MethodHead {
-			return "operations.view"
-		}
-		return "operations.manage"
-	}
-	if strings.HasPrefix(path, "/api/v1/update") || strings.HasPrefix(path, "/api/v1/system/") || strings.HasPrefix(path, "/api/v1/setup/plugins") {
-		return "system.manage"
-	}
-	if r.Method == http.MethodGet || r.Method == http.MethodHead {
-		return "workbench.view"
-	}
-	return "workbench.manage"
 }
 
 func (s *server) ginRequestLog() gin.HandlerFunc {

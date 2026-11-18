@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -101,6 +102,9 @@ func (s *OperationEventStore) open(path string) error {
 CREATE TABLE IF NOT EXISTS schema_meta(version INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS event_journal(id INTEGER PRIMARY KEY AUTOINCREMENT, topic TEXT NOT NULL, type TEXT NOT NULL, payload BLOB NOT NULL, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS operation_snapshots(id TEXT PRIMARY KEY, payload BLOB NOT NULL, created_at TEXT NOT NULL, position INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS mcp_operation_tasks(id TEXT PRIMARY KEY, root TEXT NOT NULL, status TEXT NOT NULL, payload BLOB NOT NULL, created_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS mcp_operation_tasks_root ON mcp_operation_tasks(root,created_at DESC);
+CREATE INDEX IF NOT EXISTS mcp_operation_tasks_status ON mcp_operation_tasks(status,created_at DESC);
 CREATE INDEX IF NOT EXISTS event_journal_topic_id ON event_journal(topic,id);
 CREATE INDEX IF NOT EXISTS event_journal_created_at ON event_journal(created_at);
 INSERT INTO schema_meta(version) SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM schema_meta);`); err != nil {
@@ -407,7 +411,9 @@ func (s *OperationEventStore) snapshot() []operationTask {
 	if s.db == nil {
 		return nil
 	}
-	rows, err := s.db.Query(`SELECT payload FROM operation_snapshots ORDER BY position ASC`)
+	rows, err := s.db.Query(`SELECT CASE WHEN mcp.status != 'running' THEN mcp.payload ELSE snapshot.payload END
+		FROM operation_snapshots AS snapshot LEFT JOIN mcp_operation_tasks AS mcp ON snapshot.id=mcp.id
+		ORDER BY snapshot.position ASC`)
 	if err != nil {
 		if isStructuralSQLiteError(err) {
 			go s.fail(err)
@@ -489,6 +495,42 @@ func (s *OperationEventStore) append(topic, kind string, data any, operations []
 	s.maintenanceLocked(now, false)
 	s.mu.Unlock()
 	return eventEnvelope{ID: id, Topic: topic, Type: kind, CreatedAt: now, Data: payload}, nil
+}
+
+// diagnosticTasks reuses the bounded event journal to recover task details
+// that have aged out of the workbench's global in-memory snapshot.
+func (s *OperationEventStore) diagnosticTasks(ctx context.Context, field, value string, limit int) []operationTask {
+	if s == nil || value == "" {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.db == nil {
+		return nil
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT json_extract(CAST(payload AS TEXT), '$.task')
+		FROM event_journal WHERE topic = 'robot' AND type = 'task'
+		AND created_at >= ? AND json_extract(CAST(payload AS TEXT), ?) = ? ORDER BY id DESC`,
+		time.Now().UTC().Add(-operationEventRetention).Format(time.RFC3339Nano), field, value)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	seen := make(map[string]bool)
+	tasks := make([]operationTask, 0, limit)
+	for len(tasks) < limit && rows.Next() {
+		var raw string
+		var task operationTask
+		if rows.Scan(&raw) != nil || json.Unmarshal([]byte(raw), &task) != nil ||
+			task.ID == "" || task.Root == "" || seen[task.ID] {
+			continue
+		}
+		seen[task.ID] = true
+		tasks = append(tasks, task)
+	}
+	return tasks
 }
 
 func (s *OperationEventStore) after(id int64, topics map[string]bool) []eventEnvelope {

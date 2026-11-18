@@ -1,6 +1,8 @@
 package access
 
 import (
+	"bytes"
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -40,7 +42,7 @@ func TestResetSuperAdminRevokesSessionsAndOtherAdministrators(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := manager.CreateAccount("other", "password", "password", nil); err != nil {
+	if _, err := manager.CreateAccount("other", "password", "password"); err != nil {
 		t.Fatal(err)
 	}
 	manager.mu.Lock()
@@ -75,45 +77,38 @@ func TestResetSuperAdminRevokesSessionsAndOtherAdministrators(t *testing.T) {
 	}
 }
 
-func TestAccountsRolesAndPermissions(t *testing.T) {
+func TestLegacyRolesDoNotAffectAccountSession(t *testing.T) {
 	manager, err := NewAt(filepath.Join(t.TempDir(), "auth.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	superToken, err := manager.Enable("root", "secret", "secret")
+	if _, err := manager.Enable("root", "secret", "secret"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.CreateAccount("alice", "password", "password"); err != nil {
+		t.Fatal(err)
+	}
+	token, err := manager.Login("alice", "password")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status, err := manager.Status(superToken); err != nil || !status.SuperAdmin || !manager.Authorize(superToken, "system.manage") {
-		t.Fatalf("super administrator status = %#v, %v", status, err)
-	}
-	if _, err := manager.SaveRole(Role{ID: "reader", Name: "只读", Permissions: []string{"workbench.view"}}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := manager.SaveRole(Role{ID: "operator", Name: "操作员", Permissions: []string{"workbench.manage", "operations.view"}}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := manager.CreateAccount("alice", "password", "password", []string{"reader"}); err != nil {
-		t.Fatal(err)
-	}
-	aliceToken, err := manager.Login("alice", "password")
+	before, err := manager.Status(token)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !manager.Authorize(aliceToken, "workbench.view") || manager.Authorize(aliceToken, "workbench.manage") || manager.Authorize(aliceToken, "system.manage") {
-		t.Fatal("reader permissions were not applied exactly")
-	}
-	if _, err := manager.UpdateAccount("alice", []string{"reader", "operator"}, nil, nil); err != nil {
+	// Add fields persisted by older versions without changing account identity.
+	raw, err := os.ReadFile(manager.Path())
+	if err != nil {
 		t.Fatal(err)
 	}
-	if !manager.Authorize(aliceToken, "workbench.manage") || !manager.Authorize(aliceToken, "operations.view") {
-		t.Fatal("multiple roles should combine their permissions")
-	}
-	if err := manager.DeleteRole("operator"); err != nil {
+	legacy := bytes.Replace(raw, []byte(`"account": "alice"`), []byte(`"account": "alice", "roles": ["operator"]`), 1)
+	legacy = bytes.Replace(legacy, []byte(`"accounts":`), []byte(`"roles": [{"id": "operator", "name": "Operator", "permissions": ["system.manage"]}], "accounts":`), 1)
+	if err := os.WriteFile(manager.Path(), legacy, 0600); err != nil {
 		t.Fatal(err)
 	}
-	if manager.Authorize(aliceToken, "workbench.manage") {
-		t.Fatal("deleting a role should revoke its permission from bound accounts")
+	after, err := manager.Status(token)
+	if err != nil || !after.Authenticated || after.SuperAdmin || after != before {
+		t.Fatalf("legacy account status = %#v, %v", after, err)
 	}
 }
 
@@ -126,7 +121,7 @@ func TestGitHubBindingLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := manager.CreateAccount("reader", "password", "password", nil); err != nil {
+	if _, err := manager.CreateAccount("reader", "password", "password"); err != nil {
 		t.Fatal(err)
 	}
 	reader, err := manager.Login("reader", "password")
@@ -155,7 +150,7 @@ func TestGitHubBindingLifecycle(t *testing.T) {
 		t.Fatal("duplicate GitHub binding succeeded")
 	}
 	session, account, err := manager.LoginWithGitHub(123)
-	if err != nil || account != "root" || !manager.Authorize(session, "system.manage") {
+	if err != nil || account != "root" || !manager.Authenticate(session) {
 		t.Fatalf("GitHub session for %q failed: %v", account, err)
 	}
 	if _, err := manager.ResetSuperAdmin("root", "new-secret", "new-secret"); err != nil {

@@ -241,13 +241,6 @@ func (s *server) ensureDSHRuntime(requestCtx context.Context, runtime *dsh.Runti
 }
 
 func (s *server) relocateDSH(w http.ResponseWriter, r *http.Request) {
-	if s.auth != nil {
-		status, err := s.auth.Status(s.authToken(r))
-		if err != nil || status.Enabled && (!status.Authenticated || !status.SuperAdmin) {
-			writeError(w, 403, "只有超级管理员可以迁移 DSH 数据。")
-			return
-		}
-	}
 	var input struct {
 		OldRoot string `json:"oldRoot"`
 		NewRoot string `json:"newRoot"`

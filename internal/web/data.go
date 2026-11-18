@@ -34,9 +34,6 @@ func (s *server) isSystemSQLite(path string) bool {
 
 func (s *server) dataHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
-	if !s.requireSuperAdmin(w, r) {
-		return
-	}
 	if r.Method == http.MethodGet && r.URL.Path == "/api/v1/data/catalog" {
 		paths := []string{}
 		path := s.systemSQLitePath()

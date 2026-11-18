@@ -52,10 +52,12 @@ function QuickActions({ developerMode, open }: { developerMode: boolean; open: b
   const [mcpError, setMcpError] = useState('')
   const [networkMessage, setNetworkMessage] = useState('')
 
+  const mcpPending = mcp?.autoStart && !mcp.managed
+
   const toggleMcp = async () => {
     setMcpError('')
     try {
-      await controlMcp(mcp?.running ? 'stop' : 'start').unwrap()
+      await controlMcp(mcp?.autoStart || mcp?.managed ? 'stop' : 'start').unwrap()
     } catch (error) {
       setMcpError(networkError(error))
     }
@@ -87,17 +89,25 @@ function QuickActions({ developerMode, open }: { developerMode: boolean; open: b
         {developerMode && <Check className="ml-auto size-4" aria-hidden="true" />}
       </Button>
       <div className="workbench-action-divider" aria-hidden="true" />
-      <Button
-        className="workbench-action-item"
-        disabled={!mcp || mcpUnavailable || checkingMcp || controlling || (mcp.running && !mcp.managed)}
-        onClick={() => void toggleMcp()}
-      >
-        <Cable className="size-4" aria-hidden="true" />
-        {mcpUnavailable ? 'MCP HTTP 状态不可用' : mcp?.running && !mcp.managed
-          ? 'MCP HTTP 由外部运行'
-          : mcp?.running ? '停止 MCP HTTP' : '启动 MCP HTTP'}
-      </Button>
-      {mcpError && <p role="alert" className="px-2 text-xs text-red-600">{mcpError}</p>}
+      {mcp?.canControl && (
+        <>
+          <Button
+            className="workbench-action-item"
+            disabled={mcpUnavailable || checkingMcp || controlling || (mcp.running && !mcp.managed && !mcpPending)}
+            onClick={() => void toggleMcp()}
+          >
+            <Cable className="size-4" aria-hidden="true" />
+            {mcpUnavailable
+              ? 'MCP HTTP 状态不可用'
+              : mcpPending
+                ? '取消 MCP 自动恢复'
+                : mcp.running && !mcp.managed
+                  ? 'MCP HTTP 由外部运行'
+                  : mcp.managed ? '停止 MCP HTTP' : '启动 MCP HTTP'}
+          </Button>
+          {mcpError && <p role="alert" className="px-2 text-xs text-red-600">{mcpError}</p>}
+        </>
+      )}
       <GitHubAuthControl visible={open} menuItem />
       <div className="workbench-action-divider" aria-hidden="true" />
       <div ref={networkRow}>

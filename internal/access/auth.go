@@ -1,4 +1,4 @@
-// Package access implements local accounts and role-based access control for alx.
+// Package access implements local accounts and authentication for alx.
 package access
 
 import (
@@ -21,22 +21,11 @@ import (
 
 const sessionDuration = 12 * time.Hour
 
-// Permissions is the complete, stable list of permissions that can be granted
-// to a role. Permission checks are server-side; the UI list is only an editor.
-var Permissions = []string{
-	"workbench.view",
-	"workbench.manage",
-	"system.manage",
-	"operations.view",
-	"operations.manage",
-}
-
 type Account struct {
 	GitHubID       int64     `json:"githubId,omitempty"`
 	GitHubLogin    string    `json:"githubLogin,omitempty"`
 	Account        string    `json:"account"`
 	PasswordHash   string    `json:"passwordHash,omitempty"`
-	Roles          []string  `json:"roles"`
 	SuperAdmin     bool      `json:"superAdmin,omitempty"`
 	Enabled        bool      `json:"enabled"`
 	Created        time.Time `json:"created"`
@@ -44,33 +33,30 @@ type Account struct {
 	LegacyRegistry bool      `json:"legacyRegistry,omitempty"`
 }
 
-type Role struct {
-	ID          string   `json:"id"`
-	Name        string   `json:"name"`
-	Permissions []string `json:"permissions"`
-}
-
 // Status deliberately contains no password material.
 type Status struct {
-	GitHubLogin   string   `json:"githubLogin,omitempty"`
-	RobotScope    string   `json:"-"`
-	Enabled       bool     `json:"enabled"`
-	Authenticated bool     `json:"authenticated"`
-	Account       string   `json:"account,omitempty"`
-	Roles         []string `json:"roles,omitempty"`
-	Permissions   []string `json:"permissions,omitempty"`
-	SuperAdmin    bool     `json:"superAdmin,omitempty"`
+	GitHubLogin         string `json:"githubLogin,omitempty"`
+	RobotScope          string `json:"-"`
+	Enabled             bool   `json:"enabled"`
+	Authenticated       bool   `json:"authenticated"`
+	Account             string `json:"account,omitempty"`
+	SuperAdmin          bool   `json:"superAdmin,omitempty"`
+	HasMCPDiagnosticKey bool   `json:"-"`
+	MCPDiagnostic       bool   `json:"-"`
+	HasMCPKey           bool   `json:"-"`
 }
 
 type config struct {
 	Enabled bool `json:"enabled"`
 	// Account and PasswordHash are retained solely to migrate the old
 	// single-account file without locking an existing installation out.
-	Account      string    `json:"account,omitempty"`
-	PasswordHash string    `json:"passwordHash,omitempty"`
-	SessionKey   string    `json:"sessionKey,omitempty"`
-	Accounts     []Account `json:"accounts,omitempty"`
-	Roles        []Role    `json:"roles,omitempty"`
+	Account           string            `json:"account,omitempty"`
+	PasswordHash      string            `json:"passwordHash,omitempty"`
+	SessionKey        string            `json:"sessionKey,omitempty"`
+	Accounts          []Account         `json:"accounts,omitempty"`
+	MCPDiagnosticKeys map[string]string `json:"mcpDiagnosticKeys,omitempty"`
+	MCPKeys           map[string]string `json:"mcpKeys,omitempty"`
+	MCPAutoStart      bool              `json:"mcpAutoStart,omitempty"`
 }
 
 type Manager struct {
@@ -151,40 +137,6 @@ func normalizeAccount(account string) (string, error) {
 	return account, nil
 }
 
-func normalizeRole(role Role) (Role, error) {
-	role.ID = strings.TrimSpace(role.ID)
-	role.Name = strings.TrimSpace(role.Name)
-	if role.ID == "" || len(role.ID) > 64 || strings.ContainsAny(role.ID, "\r\n/") {
-		return Role{}, errors.New("角色标识需为 1 到 64 个非换行字符")
-	}
-	if role.Name == "" || len(role.Name) > 64 || strings.ContainsAny(role.Name, "\r\n") {
-		return Role{}, errors.New("请填写角色名称")
-	}
-	seen := map[string]bool{}
-	permissions := make([]string, 0, len(role.Permissions))
-	for _, value := range role.Permissions {
-		if !isKnownPermission(value) {
-			return Role{}, fmt.Errorf("未知权限：%s", value)
-		}
-		if !seen[value] {
-			seen[value] = true
-			permissions = append(permissions, value)
-		}
-	}
-	sort.Strings(permissions)
-	role.Permissions = permissions
-	return role, nil
-}
-
-func isKnownPermission(permission string) bool {
-	for _, value := range Permissions {
-		if value == permission {
-			return true
-		}
-	}
-	return false
-}
-
 func accountIndex(items []Account, account string) int {
 	for index, item := range items {
 		if item.Account == account {
@@ -194,59 +146,39 @@ func accountIndex(items []Account, account string) int {
 	return -1
 }
 
-func roleIndex(items []Role, id string) int {
-	for index, item := range items {
-		if item.ID == id {
-			return index
-		}
-	}
-	return -1
-}
-
-func permissionsFor(data config, account Account) []string {
-	if account.SuperAdmin {
-		return append([]string(nil), Permissions...)
-	}
-	allowed := map[string]bool{}
-	for _, roleID := range account.Roles {
-		if index := roleIndex(data.Roles, roleID); index >= 0 {
-			for _, permission := range data.Roles[index].Permissions {
-				allowed[permission] = true
-			}
-		}
-	}
-	items := make([]string, 0, len(allowed))
-	for permission := range allowed {
-		items = append(items, permission)
-	}
-	sort.Strings(items)
-	return items
-}
-
 func (m *Manager) Status(token string) (Status, error) {
 	data, err := m.current()
 	if err != nil {
 		return Status{}, err
 	}
-	status := Status{Enabled: data.Enabled}
+	return m.sessionStatus(data, token), nil
+}
+
+func (m *Manager) sessionStatus(data config, token string) Status {
 	if !data.Enabled {
-		return status, nil
+		return Status{HasMCPKey: data.MCPKeys[""] != "", HasMCPDiagnosticKey: data.MCPDiagnosticKeys[""] != ""}
 	}
 	account, ok := m.tokenAccount(data, token)
 	if !ok {
-		return status, nil
+		return Status{Enabled: true}
 	}
-	status.Authenticated, status.Account = true, account.Account
-	status.GitHubLogin = account.GitHubLogin
-	// Include the account creation time so recreating a username cannot
-	// inherit a deleted account's saved robot list.
-	status.RobotScope = account.Account + "\x00" + account.Created.UTC().Format(time.RFC3339Nano)
+	return authenticatedStatus(data, account)
+}
+
+func authenticatedStatus(data config, account Account) Status {
+	scope := robotScope(account)
+	return Status{Enabled: true, Authenticated: true, Account: account.Account,
+		GitHubLogin: account.GitHubLogin, RobotScope: scope, SuperAdmin: account.SuperAdmin,
+		HasMCPKey: data.MCPKeys[scope] != "", HasMCPDiagnosticKey: data.MCPDiagnosticKeys[scope] != "",
+	}
+}
+
+func robotScope(account Account) string {
 	if account.LegacyRegistry {
-		status.RobotScope = account.Account + "\x00legacy"
+		return account.Account + "\x00legacy"
 	}
-	status.Roles = append([]string(nil), account.Roles...)
-	status.Permissions, status.SuperAdmin = permissionsFor(data, account), account.SuperAdmin
-	return status, nil
+	// A recreated username must not inherit the previous account's data.
+	return account.Account + "\x00" + account.Created.UTC().Format(time.RFC3339Nano)
 }
 
 func (m *Manager) Enable(account, password, confirmation string) (string, error) {
@@ -260,8 +192,11 @@ func (m *Manager) Enable(account, password, confirmation string) (string, error)
 	if password != confirmation {
 		return "", errors.New("两次输入的密码不一致")
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	unlock, err := m.lockWrite()
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
 	if err := m.reload(); err != nil {
 		return "", err
 	}
@@ -277,7 +212,7 @@ func (m *Manager) Enable(account, password, confirmation string) (string, error)
 		return "", fmt.Errorf("无法生成登录密钥：%w", err)
 	}
 	now := time.Now()
-	m.data = config{Enabled: true, SessionKey: base64.RawURLEncoding.EncodeToString(key), Accounts: []Account{{Account: account, PasswordHash: string(hash), SuperAdmin: true, Enabled: true, Created: now, Updated: now}}}
+	m.data = config{Enabled: true, MCPAutoStart: m.data.MCPAutoStart, SessionKey: base64.RawURLEncoding.EncodeToString(key), Accounts: []Account{{Account: account, PasswordHash: string(hash), SuperAdmin: true, Enabled: true, Created: now, Updated: now}}}
 	if err := m.persist(); err != nil {
 		return "", err
 	}
@@ -285,14 +220,20 @@ func (m *Manager) Enable(account, password, confirmation string) (string, error)
 }
 
 func (m *Manager) Disable() error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.data = config{}
+	unlock, err := m.lockWrite()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	if err := m.reload(); err != nil {
+		return err
+	}
+	m.data = config{MCPAutoStart: m.data.MCPAutoStart}
 	return m.persist()
 }
 
 // ResetSuperAdmin is the emergency recovery path for a lost or leaked
-// super-administrator credential. It preserves roles and ordinary accounts,
+// super-administrator credential. It preserves ordinary accounts,
 // but rotates the session key and disables every other super administrator so
 // an old password cannot immediately regain control.
 func (m *Manager) ResetSuperAdmin(account, password, confirmation string) (string, error) {
@@ -314,8 +255,11 @@ func (m *Manager) ResetSuperAdmin(account, password, confirmation string) (strin
 	if _, err := rand.Read(key); err != nil {
 		return "", fmt.Errorf("无法生成登录密钥：%w", err)
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	unlock, err := m.lockWrite()
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
 	if err := m.reload(); err != nil {
 		return "", err
 	}
@@ -327,6 +271,8 @@ func (m *Manager) ResetSuperAdmin(account, password, confirmation string) (strin
 	if index < 0 {
 		m.data.Accounts = append(m.data.Accounts, Account{Account: account, PasswordHash: string(hash), SuperAdmin: true, Enabled: true, Created: now, Updated: now})
 	} else {
+		delete(m.data.MCPKeys, robotScope(m.data.Accounts[index]))
+		delete(m.data.MCPDiagnosticKeys, robotScope(m.data.Accounts[index]))
 		m.data.Accounts[index].PasswordHash = string(hash)
 		m.data.Accounts[index].GitHubID = 0
 		m.data.Accounts[index].GitHubLogin = ""
@@ -336,6 +282,8 @@ func (m *Manager) ResetSuperAdmin(account, password, confirmation string) (strin
 	}
 	for index := range m.data.Accounts {
 		if m.data.Accounts[index].Account != account && m.data.Accounts[index].SuperAdmin {
+			delete(m.data.MCPKeys, robotScope(m.data.Accounts[index]))
+			delete(m.data.MCPDiagnosticKeys, robotScope(m.data.Accounts[index]))
 			m.data.Accounts[index].SuperAdmin = false
 			m.data.Accounts[index].Enabled = false
 			m.data.Accounts[index].Updated = now
@@ -371,26 +319,6 @@ func (m *Manager) Authenticate(token string) bool {
 	return !data.Enabled || func() bool { _, ok := m.tokenAccount(data, token); return ok }()
 }
 
-func (m *Manager) Authorize(token, permission string) bool {
-	data, err := m.current()
-	if err != nil || !data.Enabled {
-		return err == nil
-	}
-	account, ok := m.tokenAccount(data, token)
-	if !ok {
-		return false
-	}
-	if account.SuperAdmin {
-		return true
-	}
-	for _, value := range permissionsFor(data, account) {
-		if value == permission {
-			return true
-		}
-	}
-	return false
-}
-
 func (m *Manager) ListAccounts() ([]Account, error) {
 	data, err := m.current()
 	if err != nil {
@@ -402,23 +330,12 @@ func (m *Manager) ListAccounts() ([]Account, error) {
 	items := append([]Account{}, data.Accounts...)
 	for index := range items {
 		items[index].PasswordHash = ""
-		sort.Strings(items[index].Roles)
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].Account < items[j].Account })
 	return items, nil
 }
 
-func (m *Manager) ListRoles() ([]Role, error) {
-	data, err := m.current()
-	if err != nil {
-		return nil, err
-	}
-	items := append([]Role{}, data.Roles...)
-	sort.Slice(items, func(i, j int) bool { return items[i].Name < items[j].Name })
-	return items, nil
-}
-
-func (m *Manager) CreateAccount(account, password, confirmation string, roles []string) (Account, error) {
+func (m *Manager) CreateAccount(account, password, confirmation string) (Account, error) {
 	account, err := normalizeAccount(account)
 	if err != nil {
 		return Account{}, err
@@ -429,23 +346,23 @@ func (m *Manager) CreateAccount(account, password, confirmation string, roles []
 	if password != confirmation {
 		return Account{}, errors.New("两次输入的密码不一致")
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	unlock, err := m.lockWrite()
+	if err != nil {
+		return Account{}, err
+	}
+	defer unlock()
 	if err := m.reload(); err != nil {
 		return Account{}, err
 	}
 	if accountIndex(m.data.Accounts, account) >= 0 {
 		return Account{}, errors.New("账户已存在")
 	}
-	if err := m.validateRoles(roles); err != nil {
-		return Account{}, err
-	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
 		return Account{}, fmt.Errorf("无法保护密码：%w", err)
 	}
 	now := time.Now()
-	value := Account{Account: account, PasswordHash: string(hash), Roles: uniqueRoles(roles), Enabled: true, Created: now, Updated: now}
+	value := Account{Account: account, PasswordHash: string(hash), Enabled: true, Created: now, Updated: now}
 	m.data.Accounts = append(m.data.Accounts, value)
 	if err := m.persist(); err != nil {
 		return Account{}, err
@@ -454,9 +371,12 @@ func (m *Manager) CreateAccount(account, password, confirmation string, roles []
 	return value, nil
 }
 
-func (m *Manager) UpdateAccount(account string, roles []string, password, confirmation *string) (Account, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+func (m *Manager) UpdateAccount(account string, password, confirmation *string) (Account, error) {
+	unlock, err := m.lockWrite()
+	if err != nil {
+		return Account{}, err
+	}
+	defer unlock()
 	if err := m.reload(); err != nil {
 		return Account{}, err
 	}
@@ -466,12 +386,6 @@ func (m *Manager) UpdateAccount(account string, roles []string, password, confir
 	}
 	if m.data.Accounts[index].SuperAdmin {
 		return Account{}, errors.New("超级管理员账户不能在此修改")
-	}
-	if roles != nil {
-		if err := m.validateRoles(roles); err != nil {
-			return Account{}, err
-		}
-		m.data.Accounts[index].Roles = uniqueRoles(roles)
 	}
 	if password != nil {
 		if *password == "" {
@@ -498,8 +412,11 @@ func (m *Manager) UpdateAccount(account string, roles []string, password, confir
 }
 
 func (m *Manager) DeleteAccount(account string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	unlock, err := m.lockWrite()
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	if err := m.reload(); err != nil {
 		return err
 	}
@@ -510,111 +427,52 @@ func (m *Manager) DeleteAccount(account string) error {
 	if m.data.Accounts[index].SuperAdmin {
 		return errors.New("不能删除超级管理员账户")
 	}
+	delete(m.data.MCPKeys, robotScope(m.data.Accounts[index]))
+	delete(m.data.MCPDiagnosticKeys, robotScope(m.data.Accounts[index]))
 	m.data.Accounts = append(m.data.Accounts[:index], m.data.Accounts[index+1:]...)
 	return m.persist()
 }
 
-func (m *Manager) SaveRole(role Role) (Role, error) {
-	role, err := normalizeRole(role)
+func (m *Manager) lockWrite() (func(), error) {
+	m.mu.Lock()
+	if err := os.MkdirAll(filepath.Dir(m.path), 0700); err != nil {
+		m.mu.Unlock()
+		return nil, fmt.Errorf("无法创建身份认证配置目录：%w", err)
+	}
+	lock, err := os.OpenFile(m.path+".lock", os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
-		return Role{}, err
+		m.mu.Unlock()
+		return nil, err
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if err := m.reload(); err != nil {
-		return Role{}, err
+	if err := lockConfigFile(lock); err != nil {
+		lock.Close()
+		m.mu.Unlock()
+		return nil, err
 	}
-	if index := roleIndex(m.data.Roles, role.ID); index >= 0 {
-		m.data.Roles[index] = role
-	} else {
-		m.data.Roles = append(m.data.Roles, role)
-	}
-	if err := m.persist(); err != nil {
-		return Role{}, err
-	}
-	return role, nil
-}
-
-// CreateRole makes accidental replacement impossible. Updating an existing
-// role is intentionally a separate operation because its permissions apply to
-// every bound account immediately.
-func (m *Manager) CreateRole(role Role) (Role, error) {
-	role, err := normalizeRole(role)
-	if err != nil {
-		return Role{}, err
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if err := m.reload(); err != nil {
-		return Role{}, err
-	}
-	if roleIndex(m.data.Roles, role.ID) >= 0 {
-		return Role{}, errors.New("角色标识已存在")
-	}
-	m.data.Roles = append(m.data.Roles, role)
-	if err := m.persist(); err != nil {
-		return Role{}, err
-	}
-	return role, nil
-}
-
-func (m *Manager) DeleteRole(id string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if err := m.reload(); err != nil {
-		return err
-	}
-	index := roleIndex(m.data.Roles, strings.TrimSpace(id))
-	if index < 0 {
-		return errors.New("角色不存在")
-	}
-	m.data.Roles = append(m.data.Roles[:index], m.data.Roles[index+1:]...)
-	for index := range m.data.Accounts {
-		m.data.Accounts[index].Roles = withoutRole(m.data.Accounts[index].Roles, id)
-	}
-	return m.persist()
-}
-
-func (m *Manager) validateRoles(roles []string) error {
-	for _, id := range uniqueRoles(roles) {
-		if roleIndex(m.data.Roles, id) < 0 {
-			return fmt.Errorf("角色不存在：%s", id)
-		}
-	}
-	return nil
-}
-func uniqueRoles(roles []string) []string {
-	seen := map[string]bool{}
-	out := make([]string, 0, len(roles))
-	for _, role := range roles {
-		role = strings.TrimSpace(role)
-		if role != "" && !seen[role] {
-			seen[role] = true
-			out = append(out, role)
-		}
-	}
-	sort.Strings(out)
-	return out
-}
-func withoutRole(roles []string, deleted string) []string {
-	out := roles[:0]
-	for _, role := range roles {
-		if role != deleted {
-			out = append(out, role)
-		}
-	}
-	return out
+	return func() {
+		lock.Close()
+		m.mu.Unlock()
+	}, nil
 }
 
 func (m *Manager) persist() error {
-	if err := os.MkdirAll(filepath.Dir(m.path), 0700); err != nil {
-		return fmt.Errorf("无法创建身份认证配置目录：%w", err)
-	}
 	encoded, err := json.MarshalIndent(m.data, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(m.path, append(encoded, '\n'), 0600)
+	file, err := os.CreateTemp(filepath.Dir(m.path), ".alx-auth-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(file.Name())
+	_, writeErr := file.Write(append(encoded, '\n'))
+	if writeErr == nil {
+		writeErr = file.Sync()
+	}
+	if err := errors.Join(writeErr, file.Close()); err != nil {
+		return err
+	}
+	return os.Rename(file.Name(), m.path)
 }
 
 func (m *Manager) issueToken(data config, account string) (string, error) {

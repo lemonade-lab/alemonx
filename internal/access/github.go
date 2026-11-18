@@ -31,8 +31,11 @@ func githubBindingKey(token, hash string) string {
 }
 
 func (m *Manager) SetGitHubBinding(token, bindingKey string, id int64, login string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	unlock, err := m.lockWrite()
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	if err := m.reload(); err != nil {
 		return err
 	}

@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -61,14 +62,14 @@ func TestWriteToolRequiresConfirmation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := NewServer("test", nil).execute("alemonjs_start_project_action", arguments)
+	result, err := NewServer("test", nil).execute(context.Background(), "alemonjs_start_project_action", arguments)
 	if err == nil || result != "" || !strings.Contains(err.Error(), "confirm=true") {
 		t.Fatalf("execute() = %q, %v; want confirmation error", result, err)
 	}
 }
 
 func TestUnknownToolReturnsMCPToolError(t *testing.T) {
-	response := NewServer("test", nil).handle(rpcRequest{JSONRPC: "2.0", ID: json.RawMessage("1"), Method: "tools/call", Params: json.RawMessage(`{"name":"unknown","arguments":{}}`)})
+	response := NewServer("test", nil).handle(context.Background(), rpcRequest{JSONRPC: "2.0", ID: json.RawMessage("1"), Method: "tools/call", Params: json.RawMessage(`{"name":"unknown","arguments":{}}`)})
 	encoded, err := json.Marshal(response.Result)
 	if err != nil {
 		t.Fatal(err)
@@ -84,7 +85,7 @@ func TestProjectActionRunsAsPollableTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	text, err := server.execute("alemonjs_start_project_action", arguments)
+	text, err := server.execute(context.Background(), "alemonjs_start_project_action", arguments)
 	if err != nil {
 		t.Fatalf("start task: %v", err)
 	}
@@ -164,7 +165,7 @@ func TestPolicyRejectsProjectOutsideAllowedRoots(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = server.execute("alemonjs_project_status", arguments)
+	_, err = server.execute(context.Background(), "alemonjs_project_status", arguments)
 	if err == nil || !strings.Contains(err.Error(), "MCP_ALLOWED_ROOTS") {
 		t.Fatalf("policy error = %v", err)
 	}
@@ -184,7 +185,7 @@ func TestPolicyRejectsSymlinkEscapingAllowedRoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = server.execute("alemonjs_project_status", arguments)
+	_, err = server.execute(context.Background(), "alemonjs_project_status", arguments)
 	if err == nil || !strings.Contains(err.Error(), "MCP_ALLOWED_ROOTS") {
 		t.Fatalf("symlink policy error = %v", err)
 	}
@@ -206,7 +207,7 @@ func TestOfficialResourceToolsAreDiscoverableAndValidateInput(t *testing.T) {
 		{"alemonjs_search_resources", `{"pageSize":101}`},
 		{"alemonjs_get_resource", `{"id":"https://github.com/example/repo"}`},
 	} {
-		if _, err := server.execute(test.name, json.RawMessage(test.args)); err == nil {
+		if _, err := server.execute(context.Background(), test.name, json.RawMessage(test.args)); err == nil {
 			t.Fatalf("invalid input accepted: %s", test.args)
 		}
 	}

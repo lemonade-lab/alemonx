@@ -20,13 +20,14 @@ import (
 // Page 1 is always the newest matching lines, matching the previous viewer
 // semantics while adding date/time-range, source and text filters for audit.
 type PM2AuditQuery struct {
-	Date    string // YYYY-MM-DD, local time
-	Since   string // "2006-01-02 15:04:05" or RFC3339
-	Until   string
-	Source  string // "out", "err" or empty for both
-	Query   string // case-insensitive substring
-	Page    int
-	PerPage int
+	Date              string // YYYY-MM-DD, local time
+	Since             string // "2006-01-02 15:04:05" or RFC3339
+	Until             string
+	Source            string // "out", "err" or empty for both
+	Query             string // case-insensitive substring
+	Page              int
+	PerPage           int
+	includeTimestamps bool
 }
 
 // Validate rejects ambiguous filters before reading files or starting SSE.
@@ -86,8 +87,9 @@ type PM2AuditPage struct {
 // PM2AuditLine is one log line with its source stream ("out" or "err") so the
 // viewer can render and audit stdout/stderr separately.
 type PM2AuditLine struct {
-	Source string `json:"source"`
-	Text   string `json:"text"`
+	Source    string     `json:"source"`
+	Text      string     `json:"text"`
+	Timestamp *time.Time `json:"timestamp,omitempty"`
 }
 
 // PM2LogDay is one calendar day's worth of PM2 log lines, used to build a
@@ -176,6 +178,8 @@ var (
 	pm2SensitiveJSField    = regexp.MustCompile(`(?i)('(?:` + pm2SensitiveFieldNames + `)'\s*:\s*')([^']*)(')`)
 	pm2SensitiveTokenPair  = regexp.MustCompile(`(?i)((?:authorization|cookie|access[_-]?token|refresh[_-]?token|token)\s*[:=]\s*(?:bearer\s+)?)([A-Za-z0-9._~+/\-=]{8,})`)
 	pm2SensitiveDataPair   = regexp.MustCompile(`(?i)((?:password|passwd|api[_-]?key|client[_-]?secret|aid|mid|account_name|email|unmasked_email|mobile|safe_mobile|rebind_mobile|identity_code|realname|union_id|sub_union_id|nickname)\s*[:=]\s*)([^,\s}\]]+)`)
+	pm2URLCredentials      = regexp.MustCompile(`(?i)([a-z][a-z0-9+.-]*://)[^\s/"'@]+:[^\s/"'@]+@`)
+	pm2BearerValue         = regexp.MustCompile(`(?i)(\bBearer[ \t]+)[A-Za-z0-9._~+/=\-]{8,}`)
 	pm2MissingModulePath   = regexp.MustCompile(`(?i)Cannot find module\s+['"]([^'"]+)['"]`)
 )
 
@@ -288,6 +292,9 @@ func parsePM2LogTimestamp(line string) (time.Time, bool) {
 // guard avoids running four regex replacements on ordinary log messages.
 func pm2MayContainSensitiveData(text string) bool {
 	lower := strings.ToLower(text)
+	if strings.Contains(lower, "://") || strings.Contains(lower, "bearer") {
+		return true
+	}
 	for _, field := range pm2SensitiveFields {
 		if strings.Contains(lower, field) {
 			return true
@@ -317,6 +324,8 @@ func redactPM2LogText(text string) string {
 	if !pm2MayContainSensitiveData(text) {
 		return text
 	}
+	text = pm2URLCredentials.ReplaceAllString(text, "${1}[REDACTED]@")
+	text = pm2BearerValue.ReplaceAllString(text, "${1}[REDACTED]")
 	text = pm2SensitiveJSONField.ReplaceAllString(text, `${1}[REDACTED]${3}`)
 	text = pm2SensitiveJSField.ReplaceAllString(text, `${1}[REDACTED]${3}`)
 	text = pm2SensitiveTokenPair.ReplaceAllString(text, `${1}[REDACTED]`)
@@ -758,7 +767,12 @@ func buildPM2AuditPageContext(ctx context.Context, allLines []pm2AuditLogLine, s
 	lines := make([]PM2AuditLine, 0, len(pageLines))
 	for i := len(pageLines) - 1; i >= 0; i-- {
 		text := redactPM2LogText(pageLines[i].Text)
-		lines = append(lines, PM2AuditLine{Source: pageLines[i].Source, Text: text})
+		entry := PM2AuditLine{Source: pageLines[i].Source, Text: text}
+		if q.includeTimestamps && pageLines[i].HasTime {
+			stamp := pageLines[i].Timestamp.UTC()
+			entry.Timestamp = &stamp
+		}
+		lines = append(lines, entry)
 		builder.WriteString(text)
 		if i > 0 {
 			builder.WriteByte('\n')

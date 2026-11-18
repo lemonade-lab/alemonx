@@ -273,7 +273,7 @@ Docker 部署也默认启用 Redis；它仅监听容器内 `127.0.0.1`，不会�
 
 **Q14：忘记工作台管理员密码？**
 
-认证已开启时，使用紧急恢复命令重设超级管理员：`alx auth reset-super-admin --account ... --password ... --confirm-password ... --yes`。它会立即使旧会话失效，并禁用其他超级管理员账号；普通账号、角色和工作台数据会保留。`alx auth status` 可查看当前状态。生产部署建议配合防火墙限制访问来源。
+认证已开启时，使用紧急恢复命令重设超级管理员：`alx auth reset-super-admin --account ... --password ... --confirm-password ... --yes`。它会立即使旧会话失效，并禁用其他超级管理员账号；普通账号和工作台数据会保留。`alx auth status` 可查看当前状态。生产部署建议配合防火墙限制访问来源。
 
 为避免密码出现在 shell 历史和进程参数中，请使用 `--password-stdin` 并通过标准输入连续传入两次密码。Docker 部署必须在容器内执行，保证写入实际运行服务的认证文件：`docker compose exec -T alx /app/alx auth reset-super-admin --account <账户> --password-stdin --yes`。先执行 `docker compose exec -T alx /app/alx auth status` 可确认配置路径。
 
@@ -285,7 +285,7 @@ Docker 部署也默认启用 Redis；它仅监听容器内 `127.0.0.1`，不会�
 
 **Q16：Codex 连不上 MCP？**
 
-在「设置 → MCP」中启动流式 HTTP 服务，复制连接地址与 Bearer Token。STDIO 方式由客户端启动，填写命令 `alx` 和参数 `mcp`。可选设置 `MCP_ALLOWED_ROOTS` 限制可管理目录。
+各账户可在「设置 → MCP」中创建、撤销或重新生成自己的连接密钥。超级管理员启动流式 HTTP 服务后，客户端即可用密钥连接。STDIO 方式由客户端启动，填写命令 `alx` 和参数 `mcp`。可选设置 `MCP_ALLOWED_ROOTS` 限制可管理目录。
 
 **Q17：AI 能对我的机器人做什么，不能做什么？**
 

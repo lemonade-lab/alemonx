@@ -88,6 +88,10 @@ func pm2SnapshotKey(root string) string {
 	if socket := os.Getenv("PM2_DAEMON_RPC_PORT"); runtime.GOOS != "windows" && socket != "" {
 		return pm2AbsolutePath(root, socket)
 	}
+	return filepath.Join(pm2HomePath(root), "rpc.sock")
+}
+
+func pm2HomePath(root string) string {
 	home := os.Getenv("PM2_HOME")
 	if home == "" {
 		home = os.Getenv("HOME")
@@ -107,7 +111,7 @@ func pm2SnapshotKey(root string) string {
 		}
 		home = filepath.Join(home, ".pm2")
 	}
-	return pm2AbsolutePath(root, filepath.Join(home, "rpc.sock"))
+	return pm2AbsolutePath(root, home)
 }
 
 func pm2AbsolutePath(root, path string) string {
