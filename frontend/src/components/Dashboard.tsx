@@ -1137,6 +1137,11 @@ export function Dashboard({
   const [page, setPage] = useStoreState<Page>(() => navigationFromURL.page)
   const [sidebarCollapsed, setSidebarCollapsed] = useStoreState(false)
   const [robotNavigationHidden, setRobotNavigationHidden] = useStoreState(false)
+  const isCompact = useIsMobileViewport()
+  const [mobilePanel, setMobilePanel] = useStoreState<'projects' | 'robot' | null>(null)
+  useEffect(() => {
+    if (!isCompact) setMobilePanel(null)
+  }, [isCompact, setMobilePanel])
   const [systemFeature, setSystemFeature] = useStoreState<SystemFeature | null>(
     null
   )
@@ -3138,6 +3143,7 @@ export function Dashboard({
   }
 
   function openSection(nextSection: Section) {
+    setMobilePanel(null)
     markUserNavigation()
     closeTemporaryContentPage()
     setSection(nextSection)
@@ -3160,6 +3166,7 @@ export function Dashboard({
     setConfigEditor('visual')
   }
   function selectPage(nextPage: Page) {
+    setMobilePanel(null)
     markUserNavigation()
     closeTemporaryContentPage()
     setSystemFeature(null)
@@ -3169,6 +3176,7 @@ export function Dashboard({
     setPage(nextPage)
   }
   function openAI() {
+    setMobilePanel(null)
     markUserNavigation()
     closeTemporaryContentPage()
     setSystemFeature(null)
@@ -3724,12 +3732,12 @@ export function Dashboard({
               </Button>
               <Button
                 variant="icon"
-                onClick={() => setSidebarCollapsed(value => !value)}
-                aria-label={sidebarCollapsed ? '展开侧边栏' : '折叠侧边栏'}
-                aria-pressed={!sidebarCollapsed}
-                title={sidebarCollapsed ? '展开侧边栏' : '折叠侧边栏'}
+                onClick={() => isCompact ? setMobilePanel('projects') : setSidebarCollapsed(value => !value)}
+                aria-label={isCompact ? '打开机器人与系统导航' : sidebarCollapsed ? '展开侧边栏' : '折叠侧边栏'}
+                aria-pressed={isCompact ? mobilePanel === 'projects' : !sidebarCollapsed}
+                title={isCompact ? '打开机器人与系统导航' : sidebarCollapsed ? '展开侧边栏' : '折叠侧边栏'}
               >
-                {sidebarCollapsed ? (
+                {isCompact || sidebarCollapsed ? (
                   <PanelLeftOpen className="size-4" />
                 ) : (
                   <PanelLeftClose className="size-4" />
@@ -3749,16 +3757,16 @@ export function Dashboard({
               {robotNavigationProject && (
                 <Button
                   variant="icon"
-                  onClick={() => setRobotNavigationHidden(value => !value)}
+                  onClick={() => isCompact ? setMobilePanel('robot') : setRobotNavigationHidden(value => !value)}
                   aria-label={
-                    robotNavigationHidden ? '显示机器人导航' : '隐藏机器人导航'
+                    isCompact ? '打开机器人功能导航' : robotNavigationHidden ? '显示机器人导航' : '隐藏机器人导航'
                   }
-                  aria-pressed={!robotNavigationHidden}
+                  aria-pressed={isCompact ? mobilePanel === 'robot' : !robotNavigationHidden}
                   title={
-                    robotNavigationHidden ? '显示机器人导航' : '隐藏机器人导航'
+                    isCompact ? '打开机器人功能导航' : robotNavigationHidden ? '显示机器人导航' : '隐藏机器人导航'
                   }
                 >
-                  {robotNavigationHidden ? (
+                  {isCompact || robotNavigationHidden ? (
                     <PanelRightOpen className="size-4" />
                   ) : (
                     <PanelRightClose className="size-4" />
@@ -3986,6 +3994,8 @@ export function Dashboard({
             }
           />
           <RobotWorkspaceSplitter
+            mobilePanel={mobilePanel}
+            onCloseMobilePanel={() => setMobilePanel(null)}
             listHidden={sidebarCollapsed}
             list={
               <ProjectRail
@@ -3996,14 +4006,16 @@ export function Dashboard({
                 checking={checking}
                 environmentWarning={environmentWarning}
                 onFeature={feature => {
+                  setMobilePanel(null)
                   selectSystemFeature(feature)
                   if (feature === 'environment' && !bridge) onCheck()
                 }}
                 onPinProject={pinProject}
                 onReorderProject={reorderProject}
-                onAdd={chooseDirectories}
-                onClone={openRobotClone}
+                onAdd={() => { setMobilePanel(null); chooseDirectories() }}
+                onClone={() => { setMobilePanel(null); openRobotClone() }}
                 onSelect={id => {
+                  setMobilePanel(null)
                   openProject(id)
                   setSystemFeature(null)
                 }}
@@ -4011,7 +4023,7 @@ export function Dashboard({
               />
             }
             controls={
-              robotNavigationProject && !robotNavigationHidden ? (
+              robotNavigationProject && (isCompact || !robotNavigationHidden) ? (
                 <ControlCard
                   page={page}
                   section={section}
@@ -4022,23 +4034,25 @@ export function Dashboard({
                   catalogLoading={catalogLoading}
                   developerMode={developerMode}
                   dshOpen={aiOpen}
-                  onOpenConsole={openTerminal}
+                  onOpenConsole={() => { setMobilePanel(null); openTerminal() }}
                   onOpenAI={openAI}
                   onOpenOps={() => {
+                    setMobilePanel(null)
                     if (openNativeRobotTool('ops', root)) return
                     setOpsOpen(true)
                     setOpsMinimized(false)
                     activateFloatingWindow('ops')
                   }}
                   appLaunching={appLaunching}
-                  onOpenApp={() => void openApp()}
+                  onOpenApp={() => { setMobilePanel(null); void openApp() }}
                   appPages={botAppPages}
                   onOpenAppPage={id => {
+                    setMobilePanel(null)
                     openWorkbenchBrowserPage(`/api/v1/robot/webview/${robotAppToken(root)}/${encodeURIComponent(id)}/`)
                   }}
                   testLaunching={testLaunching}
-                  onOpenTest={() => void openTest()}
-                  onOpenLive={() => void openLive()}
+                  onOpenTest={() => { setMobilePanel(null); void openTest() }}
+                  onOpenLive={() => { setMobilePanel(null); void openLive() }}
                   onPage={selectPage}
                   onSection={openSection}
                   onBuildMode={mode => {
@@ -4049,6 +4063,7 @@ export function Dashboard({
                     setCatalogTitle(title)
                   }}
                   onGit={() => {
+                    setMobilePanel(null)
                     if (openNativeGit(robotNavigationProject)) return
                     setGitProject(robotNavigationProject)
                     setGitMinimized(false)
@@ -4419,7 +4434,7 @@ function ProjectRail({
     robot: boolean
     plugins: boolean
     system: boolean
-  }>({ robot: false, plugins: false, system: false })
+  }>({ robot: true, plugins: false, system: false })
   const toggleMobileGroup = (group: 'robot' | 'plugins' | 'system') =>
     setMobileOpen(current => ({ ...current, [group]: !current[group] }))
   useEffect(() => {
@@ -9765,14 +9780,14 @@ function PM2RuntimeCard({
                   重启 {item.restarts}
                 </span>
               </div>
-              <div className="ml-auto flex items-center gap-1">
+              <div className="ml-auto flex max-w-full flex-wrap items-center justify-end gap-2">
                 {processActionsFor(item.status).map(
                   ({ action, icon: ProcessIcon, label }) => {
                     return (
                       <button
                         aria-label={`${label} ${item.name}`}
                         className={cn(
-                          'icon-button size-7 p-0',
+                          'secondary-button gap-1.5',
                           action === 'pm2-process-delete' &&
                             'text-rose-600 hover:bg-rose-50 dark:text-rose-300 dark:hover:bg-rose-950'
                         )}
@@ -9789,16 +9804,18 @@ function PM2RuntimeCard({
                         title={label}
                       >
                         <ProcessIcon className="size-3.5" />
+                        <span>{label}</span>
                       </button>
                     )
                   }
                 )}
                 <button
-                  className="icon-button size-7 p-0"
+                  className="secondary-button gap-1.5"
                   onClick={onOpenLogs}
                   title="日志"
                 >
                   <ClipboardList className="size-3.5" />
+                  <span>日志</span>
                 </button>
               </div>
             </div>
@@ -14629,7 +14646,7 @@ function PM2ProcessesPanel({
                     <td className="px-3 py-2">
                       <div className="flex items-center gap-1">
                         <button
-                          className="icon-button size-7 p-0"
+                          className="secondary-button gap-1.5"
                           disabled={actionBusy}
                           onClick={() =>
                             requestAction(
@@ -14643,9 +14660,10 @@ function PM2ProcessesPanel({
                           title="启动"
                         >
                           <Play className="size-3.5" />
+                          <span>启动</span>
                         </button>
                         <button
-                          className="icon-button size-7 p-0"
+                          className="secondary-button gap-1.5"
                           disabled={actionBusy}
                           onClick={() =>
                             requestAction(
@@ -14659,9 +14677,10 @@ function PM2ProcessesPanel({
                           title="重启"
                         >
                           <RefreshCw className="size-3.5" />
+                          <span>重启</span>
                         </button>
                         <button
-                          className="icon-button size-7 p-0"
+                          className="secondary-button gap-1.5"
                           disabled={actionBusy}
                           onClick={() =>
                             requestAction(
@@ -14675,9 +14694,10 @@ function PM2ProcessesPanel({
                           title="重载"
                         >
                           <RefreshCw className="size-3.5" />
+                          <span>重载</span>
                         </button>
                         <button
-                          className="icon-button size-7 p-0"
+                          className="secondary-button gap-1.5"
                           disabled={actionBusy}
                           onClick={() =>
                             requestAction(
@@ -14691,9 +14711,10 @@ function PM2ProcessesPanel({
                           title="停止"
                         >
                           <X className="size-3.5" />
+                          <span>停止</span>
                         </button>
                         <button
-                          className="icon-button size-7 p-0 text-rose-600 hover:bg-rose-50 hover:text-rose-700 dark:text-rose-300 dark:hover:bg-rose-950"
+                          className="secondary-button gap-1.5 text-rose-600 hover:bg-rose-50 hover:text-rose-700 dark:text-rose-300 dark:hover:bg-rose-950"
                           disabled={actionBusy}
                           onClick={() =>
                             requestAction(
@@ -14707,6 +14728,7 @@ function PM2ProcessesPanel({
                           title="删除"
                         >
                           <Trash2 className="size-3.5" />
+                          <span>删除</span>
                         </button>
                       </div>
                     </td>
