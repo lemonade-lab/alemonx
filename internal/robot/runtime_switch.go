@@ -461,7 +461,7 @@ func (m Manager) preparePM2RuntimeChange(root, target string) (bool, error) {
 			return false, err
 		}
 	}
-	processes, err := m.PM2ProjectProcesses(root)
+	processes, err := m.pm2ProjectProcesses(context.Background(), root, false)
 	if err != nil {
 		return false, err
 	}

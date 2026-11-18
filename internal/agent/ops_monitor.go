@@ -48,7 +48,7 @@ type OpsMonitor struct {
 	// BatchRootsFn is evaluated for every poll so enabling or disabling a
 	// project takes effect without restarting the workbench.
 	BatchRootsFn    func() []string
-	BatchProcess    func(string) []string
+	BatchProcess    func(context.Context, string) []string
 	Lease           LeaseManager
 	LeaseKey        string
 	LeaseOwner      string
@@ -170,8 +170,10 @@ func (m *OpsMonitor) poll(ctx context.Context) {
 	if m.BatchSource != nil && !fallbackActive {
 		for _, root := range m.batchRoots() {
 			processes := []string{"pm2"}
-			if m.BatchProcess != nil && len(m.BatchProcess(root)) > 0 {
-				processes = m.BatchProcess(root)
+			if m.BatchProcess != nil {
+				if names := m.BatchProcess(ctx, root); len(names) > 0 {
+					processes = names
+				}
 			}
 			for _, process := range processes {
 				if err := m.ingestBatch(ctx, root, process); err != nil && m.Stream != nil {
@@ -211,8 +213,10 @@ func (m *OpsMonitor) tryRestoreBatch(ctx context.Context) {
 	m.mu.Unlock()
 	for _, root := range m.batchRoots() {
 		processes := []string{"pm2"}
-		if m.BatchProcess != nil && len(m.BatchProcess(root)) > 0 {
-			processes = m.BatchProcess(root)
+		if m.BatchProcess != nil {
+			if names := m.BatchProcess(ctx, root); len(names) > 0 {
+				processes = names
+			}
 		}
 		for _, process := range processes {
 			var cursor LogCursor
@@ -250,8 +254,10 @@ func (m *OpsMonitor) startFallback(ctx context.Context) {
 	if m.CursorStore != nil {
 		for _, root := range m.batchRoots() {
 			processes := []string{"pm2"}
-			if m.BatchProcess != nil && len(m.BatchProcess(root)) > 0 {
-				processes = m.BatchProcess(root)
+			if m.BatchProcess != nil {
+				if names := m.BatchProcess(ctx, root); len(names) > 0 {
+					processes = names
+				}
 			}
 			for _, process := range processes {
 				cursor, _ := m.CursorStore.GetLogCursor(root, process)

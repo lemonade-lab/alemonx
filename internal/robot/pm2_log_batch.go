@@ -24,7 +24,7 @@ func (s PM2LogBatchSource) ReadBatch(ctx context.Context, root, process string, 
 	if err := ctx.Err(); err != nil {
 		return agent.LogBatch{}, err
 	}
-	processes, err := s.Robots.PM2Processes(root)
+	processes, err := s.Robots.PM2ProjectProcessesContext(ctx, root)
 	if err != nil {
 		return agent.LogBatch{}, err
 	}

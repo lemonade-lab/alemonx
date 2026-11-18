@@ -282,13 +282,14 @@ func TestPM2LogPaginationStartsWithNewestPage(t *testing.T) {
 
 func TestParsePM2StatusMatchesOnlyCurrentProject(t *testing.T) {
 	root := filepath.Join(string(filepath.Separator), "robots", "current")
-	status, err := parsePM2Status(root, `[
+	processes, err := parsePM2Processes(`[
   {"pm2_env":{"pm_cwd":"/robots/other","status":"online"}},
   {"pm2_env":{"pm_cwd":"/robots/current","status":"online"}}
 ]`)
 	if err != nil {
 		t.Fatal(err)
 	}
+	status := pm2StatusFromProcesses(root, processes)
 	if !status.Configured || !status.Managed || !status.Running || status.Status != "online" {
 		t.Fatalf("PM2 status = %#v", status)
 	}

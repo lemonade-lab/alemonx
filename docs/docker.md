@@ -50,7 +50,7 @@ docker compose up -d
 | `./data` | `/root` | 工作台状态：账户、配置、SQLite、下载缓存 |
 | `./workspace` | `/app/workspace` | 统一工作区：模板、机器人、内置工具、系统插件及 QQ 动态运行文件 |
 
-容器内统一工作区为 `/app/workspace`：首次启动会把内嵌模板物化到其中的 `templates/`（可编辑，持久保存在宿主机 `./workspace`），新建机器人默认落在 `bots/`。内置 Yarn 物化到 `packages/yarn`；PM2 不随镜像嵌入，首次需要时用内置 Yarn 安装到 `packages/pm2`（位置固定，持久保存在宿主机目录）。通过工作台或 `alx plugin install` 安装的系统插件只写入 `plugins/`；程序随镜像提供的 `/app/plugins` 只用于兼容读取，且优先级低于工作区插件。每个系统插件的默认持久数据目录为 `store/<插件 ID>/`，容器重建后仍保留。QQ 插件会将动态下载的 QQ、NapCat、LLBot、SnowLuma 和登录运行态保存到 `store/alemonx-qq/runtimes/<系统-架构>/`；旧共享目录只迁移可读日志，不会复用其他系统的可执行文件。
+容器内统一工作区为 `/app/workspace`：首次启动会把内嵌模板物化到其中的 `templates/`（可编辑，持久保存在宿主机 `./workspace`），新建机器人默认落在 `bots/`。内置 Yarn 物化到 `packages/yarn`；Docker 镜像提供 `/usr/local/bin/pm2`，工作台优先使用机器人目录中已安装的 PM2。通过工作台或 `alx plugin install` 安装的系统插件只写入 `plugins/`；程序随镜像提供的 `/app/plugins` 只用于兼容读取，且优先级低于工作区插件。每个系统插件的默认持久数据目录为 `store/<插件 ID>/`，容器重建后仍保留。QQ 插件会将动态下载的 QQ、NapCat、LLBot、SnowLuma 和登录运行态保存到 `store/alemonx-qq/runtimes/<系统-架构>/`；旧共享目录只迁移可读日志，不会复用其他系统的可执行文件。
 
 容器进程以 root 运行，挂载目录开箱即用，无需在宿主机执行 `chown`/`chmod`。
 

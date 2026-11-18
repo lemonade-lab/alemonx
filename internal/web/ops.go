@@ -253,8 +253,8 @@ func (s *server) newOpsMonitor() *agent.OpsMonitor {
 		CursorStore:  s.opsStore,
 		BatchSource:  robot.PM2LogBatchSource{Robots: s.robots},
 		BatchRootsFn: s.monitorableRoots,
-		BatchProcess: func(root string) []string {
-			items, err := s.robots.PM2Processes(root)
+		BatchProcess: func(ctx context.Context, root string) []string {
+			items, err := s.robots.PM2ProjectProcessesContext(ctx, root)
 			if err != nil || len(items) == 0 {
 				return []string{"pm2"}
 			}
@@ -298,7 +298,7 @@ func (s *server) newOpsMonitor() *agent.OpsMonitor {
 							}
 						}
 						processName := "pm2"
-						if processes, err := s.robots.PM2Processes(root); err == nil && len(processes) > 0 && processes[0].Name != "" {
+						if processes, err := s.robots.PM2ProjectProcessesContext(ctx, root); err == nil && len(processes) > 0 && processes[0].Name != "" {
 							processName = processes[0].Name
 						}
 						name := processName
@@ -337,7 +337,7 @@ func (s *server) newOpsMonitor() *agent.OpsMonitor {
 					return signals, ctx.Err()
 				default:
 				}
-				status, err := s.robots.PM2Status(root)
+				status, err := s.robots.PM2StatusContext(ctx, root)
 				if err != nil {
 					signals = append(signals, agent.OpsSignal{ProjectRoot: root, ProcessName: "pm2", Kind: "health", Status: "error", Message: err.Error(), Timestamp: time.Now()})
 					continue

@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -394,39 +393,30 @@ func diagnosePM2LogLinesContext(ctx context.Context, lines []pm2AuditLogLine) ([
 
 // pm2LogFiles resolves the out/err log file paths belonging to the given
 // robot directory. Results are cached briefly because pm2 jlist is not free.
-func (Manager) pm2LogFiles(root string) ([]pm2LogFile, error) {
+func (Manager) pm2LogFiles(ctx context.Context, root string) ([]pm2LogFile, error) {
 	project, err := projectPath(root)
 	if err != nil {
 		return nil, err
 	}
 	pm2LogPathCache.Lock()
-	defer pm2LogPathCache.Unlock()
-	if entry, ok := pm2LogPathCache.entries[root]; ok && time.Since(entry.fetchedAt) < pm2LogPathCacheTTL {
+	entry := pm2LogPathCache.entries[root]
+	pm2LogPathCache.Unlock()
+	if time.Since(entry.fetchedAt) < pm2LogPathCacheTTL {
 		return entry.files, nil
 	}
-	output, err := pm2JList(project)
+	processes, err := pm2JList(ctx, project, true)
 	if err != nil {
 		return nil, fmt.Errorf("无法读取 PM2 进程：%w", err)
 	}
-	var raw []struct {
-		PM2Env struct {
-			CWD       string `json:"pm_cwd"`
-			ErrorLog  string `json:"pm_err_log_path"`
-			OutputLog string `json:"pm_out_log_path"`
-		} `json:"pm2_env"`
-	}
-	if err := json.Unmarshal([]byte(output), &raw); err != nil {
-		return nil, fmt.Errorf("无法解析 PM2 进程：%w", err)
-	}
 	var files []pm2LogFile
 	seen := make(map[string]bool)
-	for _, p := range raw {
-		if !sameWorkspacePath(p.PM2Env.CWD, root) {
+	for _, p := range processes {
+		if !sameWorkspacePath(p.CWD, root) {
 			continue
 		}
 		for _, candidate := range []pm2LogFile{
-			{Source: "out", Path: p.PM2Env.OutputLog},
-			{Source: "err", Path: p.PM2Env.ErrorLog},
+			{Source: "out", Path: p.OutputLog},
+			{Source: "err", Path: p.ErrorLog},
 		} {
 			if candidate.Path == "" || seen[candidate.Path] {
 				continue
@@ -441,7 +431,9 @@ func (Manager) pm2LogFiles(root string) ([]pm2LogFile, error) {
 	if len(files) == 0 {
 		return nil, fmt.Errorf("未找到当前机器人的 PM2 日志文件，请确认已用 PM2 启动。")
 	}
+	pm2LogPathCache.Lock()
 	pm2LogPathCache.entries[root] = pm2LogPathCacheEntry{files: files, fetchedAt: time.Now()}
+	pm2LogPathCache.Unlock()
 	return files, nil
 }
 
@@ -558,7 +550,7 @@ func (m Manager) readPM2AuditLines(root string) ([]pm2AuditLogLine, []string, bo
 }
 
 func (m Manager) readPM2AuditLinesContext(ctx context.Context, root string) ([]pm2AuditLogLine, []string, bool, error) {
-	files, err := m.pm2LogFiles(root)
+	files, err := m.pm2LogFiles(ctx, root)
 	if err != nil {
 		return nil, nil, false, err
 	}
@@ -798,7 +790,7 @@ func (m Manager) PM2LogDays(root string) ([]PM2LogDay, error) {
 }
 
 func (m Manager) PM2LogDaysContext(ctx context.Context, root string) ([]PM2LogDay, error) {
-	files, err := m.pm2LogFiles(root)
+	files, err := m.pm2LogFiles(ctx, root)
 	if err != nil {
 		return nil, err
 	}
@@ -884,7 +876,7 @@ func (m Manager) DeletePM2Logs(root string, q PM2AuditQuery) (PM2LogDeleteResult
 	if q.Source != "" && q.Source != "out" && q.Source != "err" {
 		return PM2LogDeleteResult{}, errors.New("日志来源无效")
 	}
-	files, err := m.pm2LogFiles(root)
+	files, err := m.pm2LogFiles(context.Background(), root)
 	if err != nil {
 		return PM2LogDeleteResult{}, err
 	}
@@ -1076,7 +1068,7 @@ func (m Manager) streamPM2LogFiles(ctx context.Context, root string, q PM2AuditQ
 	if err := q.Validate(); err != nil {
 		return err
 	}
-	files, err := m.pm2LogFiles(root)
+	files, err := m.pm2LogFiles(ctx, root)
 	if err != nil {
 		return err
 	}

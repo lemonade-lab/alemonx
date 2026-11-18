@@ -71,6 +71,7 @@ var tools = map[string]Tool{
 
 var (
 	mu              sync.Mutex
+	toolLocationMu  sync.RWMutex
 	embedded        fs.FS
 	workspaceRoot   string
 	materialized    = map[string]string{}
@@ -114,7 +115,9 @@ func Init(root fs.FS, layout workspace.Layout) {
 	mu.Lock()
 	defer mu.Unlock()
 	embedded = root
+	toolLocationMu.Lock()
 	workspaceRoot = layout.Root
+	toolLocationMu.Unlock()
 	materialized = map[string]string{}
 	provisionErrors = map[string]string{}
 }
@@ -124,7 +127,9 @@ func Init(root fs.FS, layout workspace.Layout) {
 func SetNodeRuntime(program string, environment []string) {
 	mu.Lock()
 	defer mu.Unlock()
+	toolLocationMu.Lock()
 	nodeProgram = program
+	toolLocationMu.Unlock()
 	nodeEnvironment = append([]string(nil), environment...)
 }
 
@@ -153,6 +158,26 @@ func ToolCommand(name string) (string, []string, bool) {
 		return "", nil, false
 	}
 	return nodeProgram, []string{entry}, true
+}
+
+// ExistingToolCommand resolves a materialized tool without installing it.
+// A concurrent provisioning operation can finish independently of a read.
+func ExistingToolCommand(name string) (string, []string, bool) {
+	tool, ok := tools[name]
+	if !ok {
+		return "", nil, false
+	}
+	toolLocationMu.RLock()
+	root, program := workspaceRoot, nodeProgram
+	toolLocationMu.RUnlock()
+	if root == "" {
+		return "", nil, false
+	}
+	entry := filepath.Join(root, "packages", name, tool.Entry)
+	if info, err := os.Stat(entry); err != nil || info.IsDir() {
+		return "", nil, false
+	}
+	return program, []string{entry}, true
 }
 
 // MaterializeNVM writes the reviewed, embedded NVM bundle to target. The

@@ -48,7 +48,7 @@ COPY . ./
 # runner) before this build starts. Keeping Vite out of BuildKit avoids the
 # virtualized/emulated CPU bottleneck, especially during multi-platform builds.
 COPY dist ./dist
-COPY --from=resources /out ./resources/packages
+COPY --from=resources /out/yarn ./resources/packages/yarn
 COPY --from=dsh-runtime /out/dsh ./resources/packages/dsh
 RUN go run ./scripts/pack-dsh.go
 
@@ -87,6 +87,11 @@ RUN mkdir -p /app /app/plugins /app/workspace /data /root/.ssh
 
 WORKDIR /app
 COPY --from=builder /out/alx /app/alx
+COPY --from=resources /out/pm2/node_modules /opt/alx-pm2/node_modules
+RUN chmod 755 /opt/alx-pm2/node_modules/pm2/bin/pm2 && \
+    ln -sf /opt/alx-pm2/node_modules/pm2/bin/pm2 /usr/local/bin/pm2 && \
+    test -x /usr/local/bin/pm2 && \
+    /usr/local/bin/node -e 'require("/opt/alx-pm2/node_modules/pm2/lib/API")'
 
 # 授权
 # docker-compose 会将持久数据挂载到 /root；启动脚本会在挂载完成后写入

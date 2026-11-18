@@ -141,7 +141,7 @@ func (s *server) dshBridgePM2(w http.ResponseWriter, r *http.Request, runtime *d
 	action = strings.ToLower(strings.TrimSpace(action))
 	switch action {
 	case "status":
-		status, err := s.robots.PM2Status(root)
+		status, err := s.robots.PM2StatusContext(r.Context(), root)
 		if err != nil {
 			writeError(w, http.StatusBadGateway, "无法读取 PM2 状态。")
 			return

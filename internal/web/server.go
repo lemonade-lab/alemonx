@@ -375,15 +375,14 @@ type server struct {
 	operations         []operationTask
 	taskControls       map[string]*operationControl
 	development        map[string]developmentProcess
+	loginWatchers      map[string]*robotLoginWatcher
 	scriptProcesses    map[string]scriptProcess
 	botAppPageRuntimes map[string]*botAppPageRuntime
 	stopping           map[string]bool
 	consoleCache       map[string]consoleSnapshot
 	outputBuffers      map[string]*operationOutputBuffer
 	runtimePorts       map[string]runtimePortState
-	// pm2Status lets tests substitute a fake PM2 state. The default read runs a
-	// real `npx pm2 jlist` behind a short timeout so a missing pm2 never blocks
-	// a local start request for the full package-manager timeout.
+	// pm2Status lets tests substitute the fresh PM2 state used by startup checks.
 	pm2Status             func(string) (robot.PM2Status, error)
 	requestID             atomic.Uint64
 	nodeID                string
@@ -658,12 +657,6 @@ func cleanupStaleProcesses() {
 		}
 	}
 	savePersistedProcesses(nil)
-}
-
-// pm2StatusResult carries the outcome of a bounded PM2 status read.
-type pm2StatusResult struct {
-	status robot.PM2Status
-	err    error
 }
 
 // consoleSnapshot is a short-lived copy of the terminal's static context
@@ -4939,7 +4932,7 @@ func (s *server) robotPM2StatusHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
 		return
 	}
-	result, err := s.robots.PM2Status(r.URL.Query().Get("root"))
+	result, err := s.robots.PM2StatusContext(r.Context(), r.URL.Query().Get("root"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -4956,9 +4949,9 @@ func (s *server) robotPM2ProcessesHandler(w http.ResponseWriter, r *http.Request
 	var result []robot.PM2Process
 	var err error
 	if r.URL.Query().Get("scope") == "project" {
-		result, err = s.robots.PM2ProjectProcesses(root)
+		result, err = s.robots.PM2ProjectProcessesContext(r.Context(), root)
 	} else {
-		result, err = s.robots.PM2Processes(root)
+		result, err = s.robots.PM2ProcessesContext(r.Context(), root)
 	}
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -4995,7 +4988,10 @@ func (s *server) robotPM2ProcessesStreamHandler(w http.ResponseWriter, r *http.R
 	w.Header().Set("X-Accel-Buffering", "no")
 	var previous []byte
 	emit := func() bool {
-		items, err := s.robots.PM2ProjectProcesses(root)
+		items, err := s.robots.PM2ProjectProcessesContext(r.Context(), root)
+		if r.Context().Err() != nil {
+			return false
+		}
 		payload := map[string]any{"items": items}
 		if err != nil {
 			payload = map[string]any{"error": err.Error()}
@@ -5014,7 +5010,7 @@ func (s *server) robotPM2ProcessesStreamHandler(w http.ResponseWriter, r *http.R
 	if !emit() {
 		return
 	}
-	ticker := time.NewTicker(time.Second)
+	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 	heartbeat := time.NewTicker(20 * time.Second)
 	defer heartbeat.Stop()
@@ -5068,12 +5064,13 @@ func (s *server) robotPM2RegistrationHandler(w http.ResponseWriter, r *http.Requ
 			writeError(w, http.StatusConflict, "应用端口仍被占用；请停止当前机器人自己的进程后重试。")
 			return
 		}
+		startedAt := time.Now()
 		result, err := s.robots.RegisterPM2(root, input.Settings, input.Overwrite)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		go s.watchRobotLoginEvents(root, time.Now())
+		s.startRobotLoginWatcher(root, startedAt, true)
 		writeJSON(w, http.StatusOK, result)
 		return
 	}
@@ -5773,17 +5770,18 @@ func (s *server) robotTasksHandler(w http.ResponseWriter, r *http.Request) {
 		// already closed" error). It also cannot lose the final lines.
 		command.Stdout = newOperationWriter(created.ID, s)
 		command.Stderr = newOperationWriter(created.ID, s)
+		startedAt := time.Now()
 		if err := command.Start(); err != nil {
 			writeError(w, http.StatusBadRequest, "运行启动失败："+err.Error())
 			return
-		}
-		if readyKind != "test" {
-			go s.watchRobotLoginEvents(input.Root, time.Now())
 		}
 		if !s.registerDevelopment(input.Root, created.ID, created.Action, command, processGroupID(command), sandboxCleanup) {
 			_ = command.Process.Kill()
 			writeError(w, http.StatusConflict, "当前目录已有前台或开发进程正在运行；请先停止后再启动。")
 			return
+		}
+		if readyKind != "test" {
+			s.startRobotLoginWatcher(input.Root, startedAt, false)
 		}
 		created.Output = strings.TrimSpace(dependencyOutput)
 		if created.Output != "" {
@@ -5841,9 +5839,13 @@ func (s *server) robotTasksHandler(w http.ResponseWriter, r *http.Request) {
 		// A user-initiated PM2 action is an ordinary robot runtime action. It
 		// must never require an AI-operations lease, budget, policy or key.
 		// GuardedPM2Executor remains reserved for advanced automatic maintenance.
+		startedAt := time.Now()
 		result, err = s.robots.Run(input.Root, input.Action, input.Message, input.Package, input.Version, input.Tag, input.Token, input.Confirm == "true")
-		if err == nil && strings.HasPrefix(input.Action, "pm2-") && input.Action != "pm2-stop" && input.Action != "pm2-delete" && input.Action != "pm2-process-stop" && input.Action != "pm2-process-delete" {
-			go s.watchRobotLoginEvents(input.Root, time.Now())
+		if err == nil {
+			switch input.Action {
+			case "pm2", "pm2-restart", "pm2-reload", "pm2-process-start", "pm2-process-restart", "pm2-process-reload":
+				s.startRobotLoginWatcher(input.Root, startedAt, true)
+			}
 		}
 		release()
 		finished := time.Now()
@@ -6018,19 +6020,9 @@ func (s *server) pm2StatusFor(root string) (robot.PM2Status, error) {
 }
 
 func (s *server) pm2StatusWithin(root string, window time.Duration) (robot.PM2Status, error) {
-	done := make(chan pm2StatusResult, 1)
-	go func() {
-		status, err := s.robots.PM2Status(root)
-		done <- pm2StatusResult{status: status, err: err}
-	}()
-	select {
-	case result := <-done:
-		return result.status, result.err
-	case <-time.After(window):
-		// The goroutine may still be reading; it only queries PM2 and never
-		// mutates server state, so it is safe to abandon.
-		return robot.PM2Status{}, fmt.Errorf("读取 PM2 状态超时")
-	}
+	ctx, cancel := context.WithTimeout(context.Background(), window)
+	defer cancel()
+	return s.robots.FreshPM2Status(ctx, root)
 }
 
 // localStartBlockedByPM2 reports whether a local (dev/app) process must not be

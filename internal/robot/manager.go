@@ -136,14 +136,14 @@ func (Manager) StreamPM2Logs(ctx context.Context, root string, onLine func(strin
 	if err != nil {
 		return err
 	}
-	name, args := pm2Launcher(path)
-	command := exec.CommandContext(ctx, name, append(args, "logs", "--raw", "--lines", "0")...)
-	command.Dir = path
-	applyRuntimeCommandEnvironment(command)
-	if err := applyPM2SocketEnvironment(command); err != nil {
+	name, args, err := pm2ReadLauncher(path)
+	if err != nil {
 		return err
 	}
-	HideWindow(command)
+	command, err := pm2ReadCommand(ctx, path, name, append(args, "logs", "--raw", "--lines", "0")...)
+	if err != nil {
+		return err
+	}
 	stdout, err := command.StdoutPipe()
 	if err != nil {
 		return err
@@ -1245,80 +1245,58 @@ func (Manager) UpdatePackageScript(root, previousName, name, command string) err
 // PM2Processes lists every process managed by the local PM2 daemon. Unlike
 // PM2Status it does not filter by this robot's directory, so the panel can
 // show the full picture; the UI highlights processes for the current root.
-func (Manager) PM2Processes(root string) ([]PM2Process, error) {
+func (m Manager) PM2Processes(root string) ([]PM2Process, error) {
+	return m.PM2ProcessesContext(context.Background(), root)
+}
+
+func (Manager) PM2ProcessesContext(ctx context.Context, root string) ([]PM2Process, error) {
 	if _, err := projectPath(root); err != nil {
 		return nil, err
 	}
-	output, err := pm2JList(root)
+	processes, err := pm2JList(ctx, root, true)
 	if err != nil {
 		return nil, fmt.Errorf("无法读取 PM2 进程：%w", err)
 	}
-	processes, err := parsePM2Processes(output)
-	if err != nil {
-		return nil, err
-	}
-	for i := range processes {
-		observePM2Runtime(&processes[i])
-	}
-	return processes, nil
+	return observePM2Processes(processes), nil
 }
 
 // PM2ProjectProcesses returns only the PM2 entries whose working directory is
 // the selected robot. The global list remains available for the system-wide
 // PM2 window, while runtime cards must not mix in other projects.
 func (m Manager) PM2ProjectProcesses(root string) ([]PM2Process, error) {
-	items, err := m.PM2Processes(root)
+	return m.PM2ProjectProcessesContext(context.Background(), root)
+}
+
+func (m Manager) PM2ProjectProcessesContext(ctx context.Context, root string) ([]PM2Process, error) {
+	return m.pm2ProjectProcesses(ctx, root, true)
+}
+
+func (m Manager) pm2ProjectProcesses(ctx context.Context, root string, shared bool) ([]PM2Process, error) {
+	path, err := projectPath(root)
 	if err != nil {
 		return nil, err
 	}
+	items, err := pm2JList(ctx, path, shared)
+	if err != nil {
+		return nil, fmt.Errorf("无法读取 PM2 进程：%w", err)
+	}
 	result := make([]PM2Process, 0, len(items))
 	for _, item := range items {
-		if sameWorkspacePath(item.CWD, root) {
+		if sameWorkspacePath(item.CWD, path) {
+			observePM2Runtime(&item)
 			result = append(result, item)
 		}
 	}
 	return result, nil
 }
 
-// pm2JList reads `pm2 jlist` and tolerates a non-zero exit code: a PM2 daemon
-// version mismatch prints warnings and may exit non-zero even though stdout
-// still carries a valid JSON array. Those banners can be written to stdout as
-// well, so before returning we strip everything before the JSON array so the
-// caller always sees a parseable payload.
-func pm2JList(root string) (string, error) {
-	name, args := pm2Launcher(root)
-	timeout := commandTimeout(name, args...)
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, name, append(args, "jlist")...)
-	cmd.Dir = root
-	cmd.Env = os.Environ()
-	applyRuntimeCommandEnvironment(cmd)
-	if err := applyPM2SocketEnvironment(cmd); err != nil {
-		return "", err
+func observePM2Processes(processes []PM2Process) []PM2Process {
+	result := make([]PM2Process, len(processes))
+	copy(result, processes)
+	for i := range result {
+		observePM2Runtime(&result[i])
 	}
-	HideWindow(cmd)
-	output, err := cmd.Output()
-	text := strings.TrimSpace(string(output))
-	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		return text, fmt.Errorf("操作超时（%s）；请检查网络、登录状态或代理后重试", timeout.Round(time.Second))
-	}
-	if err != nil && text == "" {
-		if commandNotFound(err, text) {
-			// The fallback invokes npx, while local and bundled PM2 invoke Node
-			// directly. Report the missing executable instead of incorrectly
-			// telling users to install PM2 when their Node runtime is missing.
-			missing := filepath.Base(name)
-			if missing != "node" && missing != "npx" && missing != "npm" && missing != "bun" && missing != "bun.exe" {
-				missing = "pm2"
-			}
-			return text, pm2UnavailableHint(missingCommandAdvice(missing))
-		}
-		return text, pm2UnavailableHint(fmt.Errorf("pm2 jlist 失败：%w", err))
-	}
-	// Cut any banner/notice that PM2 wrote to stdout ahead of the JSON array
-	// (for example ">>>> In-memory PM2 is out-of-date ...").
-	return stripPM2Banner(text), nil
+	return result
 }
 
 // pm2Launcher resolves how to run PM2. Project-local installations are
@@ -1330,6 +1308,12 @@ func pm2Launcher(root string) (string, []string) {
 		bun := bunToolPath()
 		if localPM2(root) {
 			return bun, []string{filepath.Join(root, "node_modules", "pm2", "bin", "pm2")}
+		}
+		if command, err := resolvePM2Command("pm2"); err == nil {
+			return command, nil
+		}
+		if _, args, ok := resources.ExistingToolCommand("pm2"); ok {
+			return bun, args
 		}
 		return bun, []string{"x", "--bun", "--package", "pm2@5", "pm2"}
 	}
@@ -1366,8 +1350,8 @@ func pm2UnavailableHint(err error) error {
 }
 
 func localPM2(root string) bool {
-	_, err := os.Stat(filepath.Join(root, "node_modules", "pm2"))
-	return err == nil
+	info, err := os.Stat(filepath.Join(root, "node_modules", "pm2", "bin", "pm2"))
+	return err == nil && !info.IsDir()
 }
 
 var pm2ConfigNamePattern = regexp.MustCompile("name:\\s*[`\"]([^`\"]+)[`\"]")
@@ -1410,11 +1394,7 @@ func reconcilePM2Registration(root string) (bool, error) {
 	if appName == "" {
 		return false, nil
 	}
-	output, err := pm2JList(root)
-	if err != nil {
-		return false, nil
-	}
-	processes, err := parsePM2Processes(output)
+	processes, err := pm2JList(context.Background(), root, false)
 	if err != nil {
 		return false, nil
 	}
@@ -1553,7 +1533,19 @@ func parsePM2Processes(output string) ([]PM2Process, error) {
 	return processes, nil
 }
 
-func (Manager) PM2Status(root string) (PM2Status, error) {
+func (m Manager) PM2Status(root string) (PM2Status, error) {
+	return m.PM2StatusContext(context.Background(), root)
+}
+
+func (m Manager) PM2StatusContext(ctx context.Context, root string) (PM2Status, error) {
+	return m.pm2Status(ctx, root, true)
+}
+
+func (m Manager) FreshPM2Status(ctx context.Context, root string) (PM2Status, error) {
+	return m.pm2Status(ctx, root, false)
+}
+
+func (Manager) pm2Status(ctx context.Context, root string, shared bool) (PM2Status, error) {
 	path, err := projectPath(root)
 	if err != nil {
 		return PM2Status{}, err
@@ -1564,32 +1556,20 @@ func (Manager) PM2Status(root string) (PM2Status, error) {
 		}
 		return PM2Status{}, fmt.Errorf("无法读取 PM2 配置：%w", err)
 	}
-	// pm2 jlist emits a JSON array on stdout; PM2's own warnings (for example
-	// "In-memory PM2 is out-of-date") go to stderr. pm2JList reads stdout only
-	// and tolerates a non-zero exit so banner text cannot corrupt the payload.
-	output, err := pm2JList(path)
+	processes, err := pm2JList(ctx, path, shared)
 	if err != nil {
 		return PM2Status{}, fmt.Errorf("无法读取 PM2 状态：%w", err)
 	}
-	return parsePM2Status(path, output)
+	return pm2StatusFromProcesses(path, processes), nil
 }
 
-func parsePM2Status(root, output string) (PM2Status, error) {
-	var processes []struct {
-		PM2Env struct {
-			CWD    string `json:"pm_cwd"`
-			Status string `json:"status"`
-		} `json:"pm2_env"`
-	}
-	if err := json.Unmarshal([]byte(output), &processes); err != nil {
-		return PM2Status{}, fmt.Errorf("无法解析 PM2 状态：%w", err)
-	}
+func pm2StatusFromProcesses(root string, processes []PM2Process) PM2Status {
 	result := PM2Status{Configured: true, Status: "not-found"}
 	for _, process := range processes {
-		if !sameWorkspacePath(process.PM2Env.CWD, root) {
+		if !sameWorkspacePath(process.CWD, root) {
 			continue
 		}
-		status := strings.ToLower(process.PM2Env.Status)
+		status := process.Status
 		current := PM2Status{
 			Configured: true,
 			Managed:    true,
@@ -1597,13 +1577,13 @@ func parsePM2Status(root, output string) (PM2Status, error) {
 			Status:     status,
 		}
 		if current.Running {
-			return current, nil
+			return current
 		}
 		if !result.Managed || status == "stopping" || status == "waiting restart" {
 			result = current
 		}
 	}
-	return result, nil
+	return result
 }
 
 func paginatePM2LogLines(lines []string, page int) PM2LogPage {
@@ -1984,7 +1964,7 @@ func (m Manager) Run(root, action, message, packageName, version, tag, token str
 	case "pm2-stop":
 		name, args = manager, []string{"run", "stop"}
 	case "pm2-stop-project":
-		processes, processErr := m.PM2ProjectProcesses(root)
+		processes, processErr := m.pm2ProjectProcesses(context.Background(), root, false)
 		if processErr != nil {
 			return Result{}, processErr
 		}

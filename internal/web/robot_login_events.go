@@ -2,12 +2,18 @@ package web
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
+
+	"alemonx/internal/robot"
 )
 
 const robotCBPDirectory = ".alemon/cbp"
@@ -36,95 +42,173 @@ type robotCBPStatus struct {
 	Login     map[string]interface{} `json:"login"`
 }
 
-func (s *server) watchRobotLoginEvents(root string, startedAt time.Time) {
+type robotLoginWatcher struct {
+	cancel    context.CancelFunc
+	startedAt time.Time
+}
+
+func (s *server) startRobotLoginWatcher(root string, startedAt time.Time, background bool) {
+	key := filepath.Clean(root)
+	if resolved, err := filepath.EvalSymlinks(key); err == nil {
+		key = resolved
+	}
+	if runtime.GOOS == "windows" {
+		key = strings.ToLower(key)
+	}
+	s.mu.Lock()
+	previous := s.loginWatchers[key]
+	if previous != nil && previous.startedAt.After(startedAt) {
+		s.mu.Unlock()
+		return
+	}
+	if previous != nil {
+		previous.cancel()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	watcher := &robotLoginWatcher{cancel: cancel, startedAt: startedAt}
+	if s.loginWatchers == nil {
+		s.loginWatchers = make(map[string]*robotLoginWatcher)
+	}
+	s.loginWatchers[key] = watcher
+	s.mu.Unlock()
+
+	go func() {
+		defer cancel()
+		defer func() {
+			s.mu.Lock()
+			if s.loginWatchers[key] == watcher {
+				delete(s.loginWatchers, key)
+			}
+			s.mu.Unlock()
+		}()
+		s.watchRobotLoginEvents(ctx, root, startedAt, background)
+	}()
+}
+
+func (s *server) watchRobotLoginEvents(ctx context.Context, root string, startedAt time.Time, background bool) {
 	directory := filepath.Join(root, robotCBPDirectory)
 	eventsPath := filepath.Join(directory, "events.jsonl")
-	statusPath := filepath.Join(directory, "status.json")
-	seen := map[string]bool{}
-	var lastStatus int64
-	var lastEventsSize int64
-
-	publish := func(name string, data map[string]interface{}, at int64) {
-		if name == "" || data == nil {
+	var journal robotLoginJournal
+	pending := map[string]bool{}
+	var readyAt time.Time
+	publish := func(name string, data map[string]interface{}) {
+		if ctx.Err() != nil || data == nil {
+			return
+		}
+		platform, _ := data["Platform"].(string)
+		switch name {
+		case "login.qrcode":
+			pending[platform] = true
+		case "login.success", "connection.ready":
+			delete(pending, platform)
+			readyAt = time.Now()
+		default:
 			return
 		}
 		data["root"] = root
 		s.publishEvent("robot", name, data, nil)
 	}
-
-	readStatus := func() {
-		content, err := os.ReadFile(statusPath)
-		if err != nil {
-			return
-		}
+	if content, err := os.ReadFile(filepath.Join(directory, "status.json")); err == nil {
 		var status robotCBPStatus
-		if json.Unmarshal(content, &status) != nil || status.UpdatedAt <= lastStatus || status.UpdatedAt < startedAt.UnixMilli()-1000 {
-			return
-		}
-		lastStatus = status.UpdatedAt
-		if status.Login != nil {
+		if json.Unmarshal(content, &status) == nil && status.UpdatedAt >= startedAt.UnixMilli()-1000 {
 			if _, ok := status.Login["QRCode"]; ok {
-				publish("login.qrcode", status.Login, status.UpdatedAt)
+				publish("login.qrcode", status.Login)
 			}
 		}
 	}
-
 	readEvents := func() {
-		file, err := os.Open(eventsPath)
-		if err != nil {
-			return
-		}
-		defer file.Close()
-		info, err := file.Stat()
-		if err != nil {
-			return
-		}
-		if info.Size() < lastEventsSize {
-			lastEventsSize = 0
-		}
-		lastEventsSize = info.Size()
-		scanner := bufio.NewScanner(file)
-		scanner.Buffer(make([]byte, 4096), 2*1024*1024)
-		for scanner.Scan() {
-			var record robotCBPFileRecord
-			if json.Unmarshal(scanner.Bytes(), &record) != nil || record.ID == "" || seen[record.ID] || record.At < startedAt.UnixMilli()-1000 {
-				continue
+		journal.read(ctx, eventsPath, func(record robotCBPFileRecord) {
+			if record.At >= startedAt.UnixMilli()-1000 {
+				publish(record.Name, record.Data)
 			}
-			seen[record.ID] = true
-			if record.Name == "login.qrcode" || record.Name == "login.success" || record.Name == "connection.ready" {
-				publish(record.Name, record.Data, record.At)
+		})
+	}
+	readEvents()
+	events := time.NewTicker(time.Second)
+	defer events.Stop()
+	liveness := time.NewTicker(15 * time.Second)
+	defer liveness.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-events.C:
+			readEvents()
+			if len(pending) == 0 && !readyAt.IsZero() && time.Since(readyAt) >= 30*time.Second {
+				return
+			}
+			if !background && !s.developmentRunning(root) {
+				return
+			}
+		case <-liveness.C:
+			if background && (readyAt.IsZero() || len(pending) > 0) {
+				processes, err := s.robots.PM2ProjectProcessesContext(ctx, root)
+				if err == nil && !robotLoginProcessActive(processes) {
+					return
+				}
 			}
 		}
 	}
+}
 
-	// Read the current snapshot first, then tail the journal. This handles a
-	// QR challenge emitted before the dashboard's SSE connection was ready.
-	readStatus()
-	readEvents()
-	// PM2 processes are not registered in s.development. Keep observing while
-	// either a foreground process or this project's PM2 process is alive.
-	active := func() bool {
-		if s.developmentRunning(root) {
+func robotLoginProcessActive(processes []robot.PM2Process) bool {
+	for _, process := range processes {
+		switch process.Status {
+		case "online", "launching", "waiting restart":
 			return true
 		}
-		processes, err := s.robots.PM2ProjectProcesses(root)
-		if err != nil {
-			return false
-		}
-		for _, process := range processes {
-			if process.Status == "online" || process.Status == "launching" {
-				return true
-			}
-		}
-		return false
 	}
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
-	for range ticker.C {
-		if !active() {
+	return false
+}
+
+type robotLoginJournal struct {
+	file   os.FileInfo
+	offset int64
+}
+
+func (journal *robotLoginJournal) read(ctx context.Context, path string, consume func(robotCBPFileRecord)) {
+	file, err := os.Open(path)
+	if err != nil {
+		return
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return
+	}
+	if journal.file == nil || !os.SameFile(journal.file, info) || info.Size() < journal.offset {
+		journal.offset = 0
+	}
+	journal.file = info
+	if info.Size() == journal.offset {
+		return
+	}
+	if _, err := file.Seek(journal.offset, io.SeekStart); err != nil {
+		return
+	}
+	reader := bufio.NewReader(io.LimitReader(file, info.Size()-journal.offset))
+	const maxRecordSize = 2 << 20
+	var line []byte
+	var size int
+	for ctx.Err() == nil {
+		part, err := reader.ReadSlice('\n')
+		size += len(part)
+		if size <= maxRecordSize {
+			line = append(line, part...)
+		}
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
+		}
+		if err != nil {
+			// Retry an incomplete final record when its newline arrives.
 			return
 		}
-		readEvents()
+		journal.offset += int64(size)
+		var record robotCBPFileRecord
+		if size <= maxRecordSize && json.Unmarshal(line, &record) == nil && record.ID != "" {
+			consume(record)
+		}
+		line, size = line[:0], 0
 	}
 }
 

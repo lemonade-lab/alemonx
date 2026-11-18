@@ -215,7 +215,7 @@ func (testLogBatchSource) ReadBatch(context.Context, string, string, LogCursor) 
 
 func TestOpsMonitorLogBatchPersistsFileCursor(t *testing.T) {
 	store := NewOpsStoreAt(t.TempDir())
-	monitor := &OpsMonitor{Aggregator: NewIncidentAggregator(store), CursorStore: store, BatchSource: testLogBatchSource{}, BatchRoots: []string{"/project"}, BatchProcess: func(string) []string { return []string{"app"} }, Interval: time.Hour}
+	monitor := &OpsMonitor{Aggregator: NewIncidentAggregator(store), CursorStore: store, BatchSource: testLogBatchSource{}, BatchRoots: []string{"/project"}, BatchProcess: func(context.Context, string) []string { return []string{"app"} }, Interval: time.Hour}
 	if err := monitor.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
