@@ -1,59 +1,54 @@
-import { Plus, X } from 'lucide-react'
-import { useState } from 'react'
+import { ChevronDown, Plus, X } from 'lucide-react'
 import type { PackageConfigField } from '../store/workspaceApi'
 import { validateFieldValue } from './configFieldUtils'
 
 function defaultText(value: unknown): string {
   if (value === undefined) return ''
+  if (typeof value === 'boolean') return value ? '开启' : '关闭'
   if (typeof value === 'object') return JSON.stringify(value)
   return String(value)
 }
 
+const fieldClass =
+  'grid min-w-0 gap-2 text-sm font-medium text-(--theme-text-primary)'
+
 function inputClass(invalid = false) {
-  return `min-h-9 w-full rounded-md border bg-white px-2.5 text-sm font-normal text-slate-800 outline-none transition focus:ring-2 ${
+  return `min-h-11 min-w-0 w-full rounded-md border bg-(--theme-surface-input) px-3 text-base font-normal text-(--theme-text-primary) outline-none focus:ring-2 sm:text-sm ${
     invalid
-      ? 'border-red-400 focus:border-red-500 focus:ring-red-100'
-      : 'border-slate-300 focus:border-brand-600 focus:ring-brand-100'
+      ? 'border-(--theme-danger) focus:ring-(--theme-danger)'
+      : 'border-(--theme-border-strong) focus:ring-(--theme-accent)'
   }`
 }
 
 function FieldLabel({
   field,
-  tone,
   messages = []
 }: {
   field: PackageConfigField
-  tone?: 'orange' | 'amber'
   messages?: string[]
 }) {
   const defaultValue =
     field.default !== undefined && field.default !== null
       ? `默认：${defaultText(field.default)}`
       : ''
-  const status = messages.length ? '输入有误' : defaultValue
-  const statusTitle = messages.length ? messages.join('\n') : defaultValue
   return (
-    <span className="flex min-w-0 items-center justify-between gap-2">
-      <span className="flex min-w-0 items-center gap-1.5">
-        <span className="truncate">{field.description || field.name}</span>
+    <span className="grid min-w-0 gap-0.5 wrap-anywhere">
+      <span className="leading-relaxed">
+        {field.description || field.name}
         {field.required && (
-          <em
-            className={`not-italic ${
-              tone === 'orange' ? 'text-orange-700' : 'text-amber-700'
-            }`}
-          >
+          <span className="ms-2 inline-block text-xs text-(--theme-accent-text)">
             必填
-          </em>
+          </span>
         )}
       </span>
-      {status && (
-        <span
-          className={`max-w-[52%] shrink truncate font-normal ${
-            messages.length ? 'text-red-600' : 'text-slate-400'
-          }`}
-          title={statusTitle}
-        >
-          {status}
+      {defaultValue && (
+        <span className="text-xs font-normal leading-relaxed text-(--theme-text-muted)">
+          {defaultValue}
+        </span>
+      )}
+      {messages.length > 0 && (
+        <span className="text-xs font-normal leading-relaxed text-(--theme-danger-text)">
+          {messages.join('；')}
         </span>
       )}
     </span>
@@ -69,7 +64,6 @@ function FieldControl({
   value: unknown
   onChange: (value: unknown) => void
 }) {
-  const [expanded, setExpanded] = useState(false)
   const type = field.type
 
   if (type === 'object') {
@@ -79,19 +73,16 @@ function FieldControl({
         : {}
     const children = field.config ?? []
     return (
-      <details
-        className="grid gap-1 rounded-lg border border-slate-200 bg-slate-50/60 p-2.5"
-        open={expanded}
-        onToggle={event => setExpanded(event.currentTarget.open)}
-      >
-        <summary className="flex cursor-pointer list-none items-center gap-2 text-xs font-semibold text-slate-700 marker:content-none [&::-webkit-details-marker]:hidden">
+      <details className="group/config col-span-full min-w-0 rounded-lg border border-(--theme-border-default) bg-(--theme-surface-panel)">
+        <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 rounded-lg px-3 py-2.5 text-sm font-semibold text-(--theme-text-primary) marker:content-none hover:bg-(--theme-surface-hover) focus-visible:outline-2 focus-visible:outline-(--theme-accent) [&::-webkit-details-marker]:hidden">
           <FieldLabel field={field} />
-          <i className="ml-auto text-sm font-normal text-slate-400 transition-transform group-open:rotate-90">
-            ›
-          </i>
+          <ChevronDown
+            aria-hidden="true"
+            className="size-4 shrink-0 text-(--theme-text-secondary) group-open/config:rotate-180"
+          />
         </summary>
         {children.length ? (
-          <div className="grid gap-2.5 pt-2">
+          <div className="min-w-0 border-t border-(--theme-border-default) p-3 sm:p-4">
             <ConfigFieldsEditor
               fields={children}
               values={objectValue}
@@ -102,7 +93,9 @@ function FieldControl({
             />
           </div>
         ) : (
-          <p className="pt-1 text-[11px] text-slate-400">自由对象，暂无子配置声明。</p>
+          <p className="border-t border-(--theme-border-default) p-3 text-xs text-(--theme-text-muted)">
+            自由对象，暂无子配置声明。
+          </p>
         )}
       </details>
     )
@@ -113,13 +106,16 @@ function FieldControl({
     const isNumber = type === 'array<number>'
     const messages = validateFieldValue(field, items)
     return (
-      <label className="grid gap-1 text-xs font-semibold text-slate-600">
-        <FieldLabel field={field} messages={messages} />
-        <div className="grid gap-1.5">
+      <fieldset className={fieldClass}>
+        <legend className="mb-2 w-full">
+          <FieldLabel field={field} messages={messages} />
+        </legend>
+        <div className="grid min-w-0 gap-2">
           {items.map((item, index) => (
             <div className="flex gap-1.5" key={index}>
               <input
                 className={inputClass(messages.length > 0)}
+                aria-label={`${field.description || field.name}，第 ${index + 1} 项`}
                 aria-invalid={messages.length > 0}
                 type={isNumber ? 'number' : 'text'}
                 value={String(item ?? '')}
@@ -136,13 +132,13 @@ function FieldControl({
               />
               <button
                 type="button"
-                className="config-field-action inline-flex size-9 shrink-0 items-center justify-center rounded-md text-slate-500"
+                className="config-field-action inline-flex size-11 shrink-0 items-center justify-center rounded-md text-(--theme-text-secondary)"
                 onClick={() => {
                   const next = [...items]
                   next.splice(index, 1)
                   onChange(next)
                 }}
-                aria-label="移除一项"
+                aria-label={`移除第 ${index + 1} 项`}
               >
                 <X className="size-4" />
               </button>
@@ -150,13 +146,14 @@ function FieldControl({
           ))}
           <button
             type="button"
-            className="config-field-action inline-flex h-8 items-center justify-center gap-1.5 rounded-md px-2.5 text-xs text-slate-500"
+            className="config-field-action inline-flex min-h-11 w-fit items-center justify-center gap-2 rounded-md px-3 text-sm text-(--theme-text-secondary)"
             onClick={() => onChange([...items, isNumber ? 0 : ''])}
           >
-            <Plus className="size-3.5" />添加一项
+            <Plus className="size-3.5" />
+            添加一项
           </button>
         </div>
-      </label>
+      </fieldset>
     )
   }
 
@@ -164,10 +161,10 @@ function FieldControl({
     const current = value === true ? 'true' : value === false ? 'false' : ''
     const messages = validateFieldValue(field, value)
     return (
-      <label className="grid gap-1 text-xs font-semibold text-slate-600">
+      <label className={fieldClass}>
         <FieldLabel field={field} messages={messages} />
         <select
-          className={inputClass(messages.length > 0)}
+          className={`${inputClass(messages.length > 0)} sm:max-w-48`}
           aria-invalid={messages.length > 0}
           value={current}
           onChange={event => {
@@ -187,7 +184,7 @@ function FieldControl({
   const textValue = value === undefined || value === null ? '' : String(value)
   const messages = validateFieldValue(field, value)
   return (
-    <label className="grid gap-1 text-xs font-semibold text-slate-600">
+    <label className={fieldClass}>
       <FieldLabel field={field} messages={messages} />
       <input
         className={inputClass(messages.length > 0)}
@@ -213,7 +210,7 @@ export function ConfigFieldsEditor({
   fields,
   values,
   onChange,
-  className = 'grid gap-3 sm:grid-cols-2'
+  className = 'grid min-w-0 gap-5'
 }: {
   fields: PackageConfigField[]
   values: Record<string, unknown>
@@ -253,7 +250,7 @@ export function ConfigSourceLinks({
       {links.map(link => (
         <a
           key={link.href}
-          className="rounded-md border border-slate-200 px-2.5 py-1 text-[11px] font-semibold text-slate-600 hover:border-brand-600 hover:text-brand-600"
+          className="inline-flex min-h-9 items-center rounded-md border border-(--theme-border-default) px-2.5 text-xs font-medium text-(--theme-text-secondary) hover:border-(--theme-accent) hover:text-(--theme-accent-text)"
           href={link.href}
           target="_blank"
           rel="noreferrer"

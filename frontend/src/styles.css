@@ -3298,35 +3298,6 @@ select.git-clone-input {
   padding: 13px;
   white-space: pre;
 }
-.package-config-panel {
-  background: var(--theme-surface-raised);
-  border: 1px solid var(--theme-border-default);
-  border-radius: 10px;
-  padding: 14px;
-}
-.package-config-panel > header {
-  align-items: center;
-  display: flex;
-  justify-content: space-between;
-}
-.package-config-panel header strong,
-.package-config-panel header span {
-  display: block;
-}
-.package-config-panel header strong {
-  color: var(--theme-text-primary);
-  font-size: 0.85rem;
-}
-.package-config-panel header span,
-.package-config-panel > p {
-  color: var(--theme-text-muted);
-  font-size: 0.76rem;
-  margin: 4px 0 0;
-}
-.package-config-panel .primary-button {
-  font-size: 0.78rem;
-  padding: 8px 10px;
-}
 .project-config-panel {
   background: var(--theme-surface-raised);
   border: 1px solid var(--theme-border-default);

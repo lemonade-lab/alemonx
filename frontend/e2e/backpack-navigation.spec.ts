@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
+import type { PackageConfigField } from '../src/store/workspaceApi'
 import {
   migrateNavigationValues,
   navigationKey
@@ -19,6 +20,7 @@ async function fixture(
     fail?: boolean
     delayList?: boolean
     sortable?: boolean
+    fields?: PackageConfigField[]
   } = {}
 ) {
   const operations: Array<{ name: string; version: string; force?: boolean }> =
@@ -30,6 +32,8 @@ async function fixture(
   }
   let appOrder = options.sortable ? [sample.name, second.name] : [sample.name]
   const moves: Array<{ source: string; target: string; after: boolean }> = []
+  const configSaves: Array<{ name: string; values: Record<string, unknown> }> =
+    []
   let version = sample.version
   let versionQueries = 0
   await page.route('**/api/v1/**', async route => {
@@ -98,11 +102,24 @@ async function fixture(
       return route.fulfill({ json: { items: appOrder } })
     }
     if (url.pathname.endsWith('/package-config'))
-      return route.fulfill({ json: { fields: [], values: {} } })
+      return route.fulfill({
+        json: {
+          namespace: sample.name,
+          fields: options.fields ?? [],
+          values: {}
+        }
+      })
     if (url.pathname.endsWith('/package-readme'))
       return route.fulfill({ json: { output: '# 示例插件文档' } })
     return route.fulfill({ json: { items: [] } })
   })
+  await page.exposeFunction(
+    'saveFixtureConfig',
+    (name: string, values: Record<string, unknown>) => {
+      configSaves.push({ name, values })
+      return true
+    }
+  )
   await page.exposeFunction(
     'replaceFixturePackage',
     (input: { name: string; version: string; force?: boolean }) => {
@@ -130,7 +147,7 @@ async function fixture(
     const root=new URLSearchParams(location.search).get('root')||'/test/robot';
     function Fixture(){const [moveApp]=useMoveAppMutation();const {currentData,isFetching,error,refetch}=useLocalPackagesQuery(root);return React.createElement(BackpackPanel,{
       root,items:currentData?.items??[],loading:isFetching,failed:!!error,busy:false,onRefresh:refetch,
-      onSetPrivate:async()=>true,onSaveConfig:async()=>true,onConfigChanged:async()=>{},onSetAppEnabled:async()=>{},onMoveApp:(source,target,after)=>moveApp({root,source,target,after}).unwrap(),onRemove:async()=>{},
+      onSetPrivate:async()=>true,onSaveConfig:window.saveFixtureConfig,onConfigChanged:async()=>{},onSetAppEnabled:async()=>{},onMoveApp:(source,target,after)=>moveApp({root,source,target,after}).unwrap(),onRemove:async()=>{},
       onReplace:(name,version,force)=>window.replaceFixturePackage({name,version,force}),onPackageAction:async()=>true,onOpenLogs:()=>{},onClone:()=>{},onOpenPlugins:()=>{}
     })}
     ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(Provider,{store},React.createElement(Fixture)));
@@ -138,8 +155,87 @@ async function fixture(
     })
   )
   await page.goto('/backpack-regression')
-  return { operations, moves, versionQueries: () => versionQueries }
+  return {
+    operations,
+    moves,
+    configSaves,
+    versionQueries: () => versionQueries
+  }
 }
+
+test('plugin configuration groups fit a narrow panel and save nested edits', async ({
+  page
+}) => {
+  const address = 'https://example.test/' + 'long-address'.repeat(16)
+  await page.setViewportSize({ width: 720, height: 800 })
+  const { configSaves } = await fixture(page, {
+    fields: [
+      {
+        name: 'login',
+        type: 'object',
+        required: false,
+        description: '网页登录服务',
+        config: [
+          {
+            name: 'publicUrl',
+            type: 'string',
+            required: false,
+            description: '登录页地址',
+            default: address
+          }
+        ]
+      },
+      {
+        name: 'help',
+        type: 'object',
+        required: false,
+        description: 'QQ 可点击 Markdown 帮助',
+        config: [
+          {
+            name: 'enabled',
+            type: 'boolean',
+            required: false,
+            description: '启用帮助'
+          }
+        ]
+      }
+    ]
+  })
+  await page.evaluate(() => {
+    document.documentElement.dataset.theme = 'dark'
+  })
+  await page.getByRole('button', { name: /fixture-plugin.*v1.2.3/ }).click()
+  await page.getByRole('tab', { name: '配置', exact: true }).click()
+  const panel = page.getByRole('region', { name: '插件配置' })
+  const login = panel.locator('details').filter({ hasText: '网页登录服务' })
+  const help = panel
+    .locator('details')
+    .filter({ hasText: 'QQ 可点击 Markdown 帮助' })
+  const addressField = login.getByRole('textbox', { name: /登录页地址/ })
+  await expect(addressField).toBeHidden()
+  await login.locator('summary').click()
+  await expect(login).toHaveCSS('background-color', 'rgb(29, 28, 26)')
+  await expect(addressField).toHaveValue('')
+  const loginBox = (await login.boundingBox())!
+  const helpBox = (await help.boundingBox())!
+  expect(helpBox.y).toBeGreaterThanOrEqual(loginBox.y + loginBox.height)
+  expect(helpBox.width).toBe(loginBox.width)
+  await page.setViewportSize({ width: 360, height: 800 })
+  await expect(login.getByText(`默认：${address}`)).toBeVisible()
+  expect(await panel.evaluate(el => el.scrollWidth)).toBe(
+    await panel.evaluate(el => el.clientWidth)
+  )
+  await addressField.fill('https://login.example.test')
+  await expect
+    .poll(() => configSaves)
+    .toEqual([
+      {
+        name: sample.name,
+        values: { login: { publicUrl: 'https://login.example.test' } }
+      }
+    ])
+  await expect(panel.getByRole('status')).toHaveText('已保存')
+})
 
 test('dragging an enabled plugin saves and reloads its loading order', async ({
   page
