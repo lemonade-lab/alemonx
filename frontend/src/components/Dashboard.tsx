@@ -8974,22 +8974,29 @@ function BackpackPackageManager({
               <ConfigSourceLinks source={data?.configSource} />
             </div>
           ) : (
-            <div className="package-config-panel grid gap-4 rounded-xl border border-slate-200 bg-white p-4">
-              <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3">
-                <div className="grid gap-1">
-                  <strong className="flex items-center gap-2 text-sm font-semibold text-slate-800">
-                    <PlatformLogo logo={data.logo} className="size-4" />
+            <section
+              aria-label="插件配置"
+              className="grid min-w-0 gap-5 rounded-xl border border-(--theme-border-default) bg-(--theme-surface-raised) p-3 sm:p-4"
+            >
+              <header className="flex flex-wrap items-start justify-between gap-3 border-b border-(--theme-border-default) pb-3">
+                <div className="grid min-w-0 gap-1">
+                  <strong className="flex items-center gap-2 text-sm font-semibold text-(--theme-text-primary)">
+                    <PlatformLogo logo={data.logo} className="size-4 shrink-0" />
                     插件配置
                   </strong>
-                  <span className="text-xs text-slate-500">
-                    保存到当前机器人的 alemon.config.yaml · {data.namespace}.*
-                  </span>
+                  <p className="m-0 wrap-anywhere text-xs leading-relaxed text-(--theme-text-muted)">
+                    保存到当前机器人的 <code>alemon.config.yaml</code> ·{' '}
+                    <code>{data.namespace}.*</code>
+                  </p>
                 </div>
-                <div className="flex items-center gap-3">
+                <div className="flex min-w-0 flex-wrap items-center gap-2">
                   <span
+                    role="status"
                     className={cn(
-                      'text-xs',
-                      saveState === 'failed' ? 'text-red-700' : 'text-slate-500'
+                      'wrap-anywhere text-xs',
+                      saveState === 'failed'
+                        ? 'text-(--theme-danger-text)'
+                        : 'text-(--theme-text-muted)'
                     )}
                   >
                     {saveState === 'pending'
@@ -9008,7 +9015,7 @@ function BackpackPackageManager({
                 values={values}
                 onChange={updateValue}
               />
-            </div>
+            </section>
           )
         ) : tab === 'changes' ? (
           <section className="grid gap-3 rounded-xl border border-slate-200 bg-white p-4 text-sm">
