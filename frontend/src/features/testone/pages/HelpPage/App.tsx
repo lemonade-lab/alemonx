@@ -77,7 +77,7 @@ const Kbd = ({ children }: { children: React.ReactNode }) => (
   <span style={S.kbd}>{children}</span>
 );
 
-export default function HelpPage() {
+export default function HelpPage({ shortcutModifier }: { shortcutModifier?: string }) {
   return (
     <div className="scrollbar" style={S.wrapper}>
       {/* ===== 标题 ===== */}
@@ -317,12 +317,17 @@ export default function HelpPage() {
         <tbody>
           {(
             [
-              ['Cmd/Ctrl + 1', '切换群聊'],
-              ['Cmd/Ctrl + 2', '切换私聊'],
-              ['Cmd/Ctrl + 3', '切换连接'],
-              ['Cmd/Ctrl + K', '清空当前消息'],
+              ...(shortcutModifier
+                ? [
+                    [`${shortcutModifier}+1`, '切换群聊'],
+                    [`${shortcutModifier}+2`, '切换私聊'],
+                    [`${shortcutModifier}+3`, '切换配置页'],
+                    [`${shortcutModifier}+4`, '切换帮助页'],
+                    [`${shortcutModifier}+K`, '清空当前聊天的消息（焦点在输入框外时）']
+                  ]
+                : []),
               ['Enter', '发送消息'],
-              ['Shift + Enter', '换行'],
+              ['Shift+Enter / Ctrl+Enter', '换行'],
               ['↑ / ↓', '输入历史回溯 / 前进'],
               ['Escape', '关闭弹窗'],
               ['@', '触发用户提及补全'],

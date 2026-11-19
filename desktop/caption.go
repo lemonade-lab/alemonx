@@ -22,6 +22,18 @@ func isWorkbenchMessage(origin *application.OriginInfo, workbenchURL string) boo
 	return err == nil && page.Scheme+"://"+page.Host == workbenchURL && !strings.HasPrefix(page.Path, "/api/")
 }
 
+func windowKeyBindings() map[string]func(application.Window) {
+	// macOS dispatches window shortcuts through the native menu.
+	if runtime.GOOS == "darwin" {
+		return nil
+	}
+	return map[string]func(application.Window){
+		"CmdOrCtrl+w":       application.Window.Close,
+		"CmdOrCtrl+m":       func(window application.Window) { window.Minimise() },
+		"CmdOrCtrl+Shift+m": application.Window.ToggleMaximise,
+	}
+}
+
 func handleCaptionAction(window application.Window, message string) {
 	switch message {
 	case "alx:window:minimise":

@@ -12665,8 +12665,6 @@ function ControlCard({
   developerMode,
   dshOpen,
   appLaunching,
-  appPages,
-  onOpenAppPage,
   testLaunching,
   onOpenConsole,
   onOpenAI,
@@ -12870,21 +12868,6 @@ function ControlCard({
             </button>
           )}
         </ProjectNavigation>
-        {project && appPages.length > 0 && (
-            <label className="grid gap-1 text-xs text-(--theme-text-secondary)">
-              机器人应用页
-              <select
-                className="min-w-0 rounded border border-(--theme-border-default) bg-(--theme-surface-panel) px-2 py-1"
-                value=""
-                onChange={event => {
-                  if (event.target.value) onOpenAppPage(event.target.value)
-                }}
-              >
-                <option value="">选择应用页</option>
-                {appPages.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
-              </select>
-            </label>
-        )}
         {project && (
           <footer
             className="control-quick-actions grid-cols-5"

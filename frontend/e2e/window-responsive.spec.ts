@@ -360,6 +360,36 @@ test('robot workbench resizes the left rail and keeps the right card fixed', asy
   await expect.poll(() => width('机器人列表')).toBe(resizedList)
 })
 
+test('browser workbench leaves window shortcuts to the browser', async ({ page }) => {
+  await page.route('**/api/v1/auth/status', route =>
+    route.fulfill({ json: { enabled: false, authenticated: false } })
+  )
+  await page.goto('/dashboard/robot')
+  const workbench = page.locator('.dashboard-window')
+  await expect(workbench).toBeVisible()
+  await page.getByRole('button', { name: '打开设置', exact: true }).click()
+  const settings = page.getByRole('dialog', { name: '设置', exact: true })
+  await expect(settings).toBeVisible()
+
+  const handled = await page.evaluate(() =>
+    ['metaKey', 'ctrlKey'].flatMap(modifier =>
+      [{ key: 'w' }, { key: 'm' }, { key: 'M', shiftKey: true }].map(keys =>
+        !document.activeElement!.dispatchEvent(
+          new KeyboardEvent('keydown', {
+            ...keys,
+            [modifier]: true,
+            bubbles: true,
+            cancelable: true
+          })
+        )
+      )
+    )
+  )
+  expect(handled).toEqual(Array(6).fill(false))
+  await expect(settings).toBeVisible()
+  await expect(workbench).toBeVisible()
+})
+
 for (const platform of ['mac', 'windows', 'linux'] as const) {
   test(`native ${platform} header fits the minimum workbench width`, async ({
     page

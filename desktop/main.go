@@ -40,6 +40,7 @@ func main() {
 	app := application.New(application.Options{
 		Name:        "ALemonX Desktop",
 		Description: "AlemonX 工作台",
+		KeyBindings: windowKeyBindings(),
 		PostShutdown: func() {
 			// Wails releases the single-instance lock before running this hook.
 			if cmd := restartCommand.Load(); cmd != nil {
@@ -208,6 +209,16 @@ func main() {
 		} {
 			editMenu.FindByRole(item.role).SetLabel(item.label)
 		}
+		windowMenu := applicationMenu.AddSubmenu("窗口")
+		windowMenu.AddRole(application.CloseWindow)
+		windowMenu.FindByRole(application.CloseWindow).SetLabel("关闭窗口")
+		windowMenu.AddRole(application.Minimise)
+		windowMenu.FindByRole(application.Minimise).SetLabel("最小化窗口")
+		windowMenu.Add("最大化或还原窗口").SetAccelerator("CmdOrCtrl+Shift+m").OnClick(func(*application.Context) {
+			if focused := app.Window.Current(); focused != nil {
+				focused.ToggleMaximise()
+			}
+		})
 		app.Menu.SetApplicationMenu(applicationMenu)
 
 		trayWindow = app.Window.NewWithOptions(application.WebviewWindowOptions{

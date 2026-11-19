@@ -24,7 +24,6 @@ import { AppSettingsPanel } from './components/AppSettingsPanel'
 import type { SettingsSection } from './components/settingsSections'
 import { navigationKey, setNavigationValue } from './store/navigationStore'
 import { isWindowHeaderInteractiveTarget } from './components/desktopWindowInteraction'
-import { registerDesktopWindowShortcut } from './components/desktopWindowShortcuts'
 import { EnvironmentFixDialog } from './components/EnvironmentFixDialog'
 import { DownloadProgress } from './components/DownloadProgress'
 import { ErrorNotice } from './components/ErrorNotice'
@@ -215,18 +214,6 @@ export default function App() {
     left: number
     top: number
   } | null>(null)
-
-  useEffect(
-    () =>
-      registerDesktopWindowShortcut({
-        id: 'workbench',
-        zIndex: workbenchLayer,
-        minimized: mainWindowHidden,
-        onClose: () => setMainWindowHidden(true),
-        onMinimize: () => setMainWindowHidden(true)
-      }),
-    [mainWindowHidden, workbenchLayer]
-  )
 
   function activateWorkbench() {
     const layer = ++nextWindowLayer.current

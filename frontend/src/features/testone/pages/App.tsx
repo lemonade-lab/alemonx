@@ -1,4 +1,5 @@
-import React, { useEffect, useCallback } from 'react';
+import type { KeyboardEvent, ReactNode } from 'react';
+import { desktopPlatform } from '../../../components/nativeWindow';
 
 import ChatWindow from '@testone/pages/ChatWindow/App';
 import HelpPage from '@testone/pages/HelpPage/App';
@@ -12,68 +13,54 @@ import {
 } from '@testone/store/slices/chatSlice';
 import Footer from './common/Footer';
 
+const shortcutTabs = { '1': 'group', '2': 'private', '3': 'config', '4': 'help' } as const;
+
 export default function App({ theme }: { theme: 'light' | 'dark' }) {
   const dispatch = useAppDispatch();
   const { tab } = useAppSelector(s => s.chat);
   const { lastConfig } = useAppSelector(s => s.socket);
 
-  // 快捷键
-  const handleKeyDown = useCallback(
-    (e: KeyboardEvent) => {
-      const isMod = e.metaKey || e.ctrlKey;
-      if (!isMod) return;
-      if (e.isComposing) return;
-      // 仅在“正在工作台的其他输入框里打字”时让出快捷键，避免劫持终端/编辑
-      // 器的按键；焦点在按钮、空白处或测试台内部时快捷键照常生效。
-      const target = e.target as HTMLElement | null;
-      const typingElsewhere =
-        target &&
-        (target instanceof HTMLInputElement ||
-          target instanceof HTMLTextAreaElement ||
-          target instanceof HTMLSelectElement ||
-          target.isContentEditable) &&
-        typeof target.closest === 'function' &&
-        !target.closest('.testone-root');
-      if (typingElsewhere) return;
+  const shortcutModifier = desktopPlatform
+    ? desktopPlatform === 'mac' ? '⌘' : 'Ctrl'
+    : undefined;
 
-      switch (e.key) {
-        case '1':
-          e.preventDefault();
-          dispatch(setTab('group'));
-          break;
-        case '2':
-          e.preventDefault();
-          dispatch(setTab('private'));
-          break;
-        case '3':
-          e.preventDefault();
-          dispatch(setTab('config'));
-          break;
-        case '4':
-          e.preventDefault();
-          dispatch(setTab('help'));
-          break;
-        case 'k':
-          // Cmd/Ctrl+K 清空当前聊天
-          e.preventDefault();
-          if (tab === 'group') dispatch(clearGroupMessages());
-          else if (tab === 'private') dispatch(clearPrivateMessages());
-          break;
-      }
-    },
-    [dispatch, tab]
-  );
+  function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    const matchesModifier = desktopPlatform === 'mac'
+      ? event.metaKey && !event.ctrlKey
+      : event.ctrlKey && !event.metaKey;
+    if (
+      !matchesModifier ||
+      event.defaultPrevented ||
+      event.nativeEvent.isComposing ||
+      event.altKey ||
+      event.shiftKey ||
+      event.repeat
+    ) return;
 
-  useEffect(() => {
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleKeyDown]);
+    const nextTab = /^[1-4]$/.test(event.key)
+      ? shortcutTabs[event.key as keyof typeof shortcutTabs]
+      : undefined;
+    if (nextTab) {
+      event.preventDefault();
+      dispatch(setTab(nextTab));
+      return;
+    }
+
+    if (event.key.toLowerCase() !== 'k' || (tab !== 'group' && tab !== 'private')) return;
+    const target = event.target;
+    if (target instanceof HTMLElement && (
+      target.isContentEditable || target.closest('input, textarea, select')
+    )) return;
+
+    event.preventDefault();
+    dispatch(tab === 'group' ? clearGroupMessages() : clearPrivateMessages());
+  }
 
   // Tab 页面映射
-  const tabMap: Record<typeof tab, React.ReactNode> = {
+  const tabMap: Record<typeof tab, ReactNode> = {
     group: <ChatWindow pageType="public" />,
     private: <ChatWindow pageType="private" />,
-    help: <HelpPage />,
+    help: <HelpPage shortcutModifier={shortcutModifier} />,
     config: <ConfigEditor />
   };
 
@@ -81,6 +68,10 @@ export default function App({ theme }: { theme: 'light' | 'dark' }) {
     <div
       className="overflow-hidden flex flex-1 flex-col bg-[var(--sideBar-background)]"
       data-theme={theme}
+      role="region"
+      aria-label="机器人测试台"
+      tabIndex={shortcutModifier ? 0 : undefined}
+      onKeyDown={shortcutModifier ? handleKeyDown : undefined}
     >
       <Header />
       {tabMap[tab]}

@@ -457,7 +457,7 @@ export default function SlateTextarea({
         }
       }
 
-      if (e.key === 'Enter' && e.ctrlKey) {
+      if (e.key === 'Enter' && (e.shiftKey || e.ctrlKey)) {
         e.preventDefault();
         Editor.insertBreak(editor);
       } else if (e.key === 'Enter') {
@@ -938,7 +938,7 @@ export default function SlateTextarea({
         {/* 底部工具栏 */}
         <div className="flex flex-row justify-between">
           <div className="text-[var(--textPreformat-background)] text-sm">
-            Ctrl+Enter 换行
+            Shift+Enter 换行
           </div>
           <div
             className="cursor-pointer"

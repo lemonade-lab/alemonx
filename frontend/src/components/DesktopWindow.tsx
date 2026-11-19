@@ -11,7 +11,6 @@ import {
 } from 'react'
 import { Minus, X } from 'lucide-react'
 import { Modal } from './Modal'
-import { registerDesktopWindowShortcut } from './desktopWindowShortcuts'
 import { isWindowHeaderInteractiveTarget } from './desktopWindowInteraction'
 import { useIsPadViewport, useIsPhoneViewport } from '../hooks/useIsPadViewport'
 import { clampWindowRectToViewport } from '../lib/windowRect'
@@ -309,20 +308,6 @@ export function DesktopWindow({
     })
     setMaximized(true)
   }, [isPadView, maximized])
-
-  useEffect(() => {
-    if (!open || native) return
-    return registerDesktopWindowShortcut({
-      id,
-      zIndex,
-      minimized,
-      onClose,
-      // Phone windows are full-screen task pages. Keyboard shortcuts must not
-      // put them into a hidden/minimized state with no desktop dock to restore.
-      onMinimize: isPhoneView ? undefined : onMinimize,
-      onToggleMaximize: isPhoneView ? undefined : toggleMaximize
-    })
-  }, [id, isPhoneView, minimized, native, onClose, onMinimize, open, toggleMaximize, zIndex])
 
   // A persisted window must not paint at its fallback coordinates first. Read
   // its saved geometry before the browser paints, otherwise users see a brief
