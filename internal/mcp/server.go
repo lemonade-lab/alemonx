@@ -50,7 +50,6 @@ type Server struct {
 // Policy limits which local filesystem roots this MCP process may manage.
 // An empty list preserves the legacy local-client behaviour.
 type Policy struct {
-	DiagnosticOnly        bool
 	CheckAccount          func() error
 	OnToolCall            func(name string, success bool)
 	WorkbenchTask         func(context.Context, string) (root, payload string, ok bool)
@@ -240,20 +239,15 @@ func (s *Server) handle(ctx context.Context, request rpcRequest) rpcResponse {
 	}
 	switch request.Method {
 	case "initialize":
-		instructions := "此服务只能管理本机 AlemonJS 项目。项目源码可在受限范围内读写；所有会修改项目或执行命令的工具都必须传 confirm=true。密钥文件、依赖目录、Git 元数据和任意宿主机命令始终不可访问。"
-		if s.policy.DiagnosticOnly {
-			instructions = "此连接使用只读诊断密钥，可查询账户机器人、状态、脱敏日志和任务历史。"
-		}
 		return resultResponse(request.ID, map[string]any{
 			"protocolVersion": protocolVersion,
 			"capabilities":    map[string]any{"tools": map[string]any{"listChanged": false}, "resources": map[string]any{"listChanged": false}},
 			"serverInfo":      map[string]string{"name": "alemonx", "version": s.version},
-			"instructions":    instructions,
 		})
 	case "ping":
 		return resultResponse(request.ID, map[string]any{})
 	case "tools/list":
-		return resultResponse(request.ID, map[string]any{"tools": s.availableTools()})
+		return resultResponse(request.ID, map[string]any{"tools": tools()})
 	case "tools/call":
 		return s.callTool(ctx, request.ID, request.Params)
 	case "resources/list":
@@ -263,29 +257,6 @@ func (s *Server) handle(ctx context.Context, request rpcRequest) rpcResponse {
 	default:
 		return errorResponse(request.ID, -32601, "不支持的 MCP 方法")
 	}
-}
-
-func diagnosticToolAllowed(name string) bool {
-	switch name {
-	case "alemonjs_list_robots", "alemonjs_get_robot_diagnostics", "alemonjs_get_robot_logs",
-		"alemonjs_list_robot_operations", "alemonjs_get_project_task":
-		return true
-	}
-	return false
-}
-
-func (s *Server) availableTools() []map[string]any {
-	registered := tools()
-	if !s.policy.DiagnosticOnly {
-		return registered
-	}
-	selected := make([]map[string]any, 0, 5)
-	for _, tool := range registered {
-		if diagnosticToolAllowed(tool["name"].(string)) {
-			selected = append(selected, tool)
-		}
-	}
-	return selected
 }
 
 func tools() []map[string]any {
@@ -389,9 +360,6 @@ func (s *Server) callTool(ctx context.Context, id json.RawMessage, params json.R
 }
 
 func (s *Server) execute(ctx context.Context, name string, arguments json.RawMessage) (string, error) {
-	if s.policy.DiagnosticOnly && !diagnosticToolAllowed(name) {
-		return "", errors.New("诊断密钥无权调用此工具")
-	}
 	if s.policy.CheckAccount != nil {
 		if err := s.policy.CheckAccount(); err != nil {
 			return "", err
@@ -1221,15 +1189,6 @@ func (s *Server) readResource(id json.RawMessage, params json.RawMessage) rpcRes
 	}
 	if err := json.Unmarshal(params, &input); err != nil || input.URI != "alemonjs://mcp/capabilities" {
 		return errorResponse(id, -32602, "资源不存在")
-	}
-	if s.policy.DiagnosticOnly {
-		content, _ := encodeResult(map[string]any{
-			"version": s.version, "profile": "diagnostic",
-			"scopes": []string{"account-robots", "robot-diagnostics", "robot-logs", "robot-operations"},
-		})
-		return resultResponse(id, map[string]any{"contents": []map[string]string{
-			{"uri": input.URI, "mimeType": "application/json", "text": content},
-		}})
 	}
 	workspaceInfo := map[string]any{}
 	if root, resolveErr := workspace.ResolveRoot(s.workspaceRoot); resolveErr == nil {

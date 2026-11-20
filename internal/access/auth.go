@@ -35,28 +35,25 @@ type Account struct {
 
 // Status deliberately contains no password material.
 type Status struct {
-	GitHubLogin         string `json:"githubLogin,omitempty"`
-	RobotScope          string `json:"-"`
-	Enabled             bool   `json:"enabled"`
-	Authenticated       bool   `json:"authenticated"`
-	Account             string `json:"account,omitempty"`
-	SuperAdmin          bool   `json:"superAdmin,omitempty"`
-	HasMCPDiagnosticKey bool   `json:"-"`
-	MCPDiagnostic       bool   `json:"-"`
-	HasMCPKey           bool   `json:"-"`
+	GitHubLogin   string `json:"githubLogin,omitempty"`
+	RobotScope    string `json:"-"`
+	Enabled       bool   `json:"enabled"`
+	Authenticated bool   `json:"authenticated"`
+	Account       string `json:"account,omitempty"`
+	SuperAdmin    bool   `json:"superAdmin,omitempty"`
+	HasMCPKey     bool   `json:"-"`
 }
 
 type config struct {
 	Enabled bool `json:"enabled"`
 	// Account and PasswordHash are retained solely to migrate the old
 	// single-account file without locking an existing installation out.
-	Account           string            `json:"account,omitempty"`
-	PasswordHash      string            `json:"passwordHash,omitempty"`
-	SessionKey        string            `json:"sessionKey,omitempty"`
-	Accounts          []Account         `json:"accounts,omitempty"`
-	MCPDiagnosticKeys map[string]string `json:"mcpDiagnosticKeys,omitempty"`
-	MCPKeys           map[string]string `json:"mcpKeys,omitempty"`
-	MCPAutoStart      bool              `json:"mcpAutoStart,omitempty"`
+	Account      string            `json:"account,omitempty"`
+	PasswordHash string            `json:"passwordHash,omitempty"`
+	SessionKey   string            `json:"sessionKey,omitempty"`
+	Accounts     []Account         `json:"accounts,omitempty"`
+	MCPKeys      map[string]string `json:"mcpKeys,omitempty"`
+	MCPAutoStart bool              `json:"mcpAutoStart,omitempty"`
 }
 
 type Manager struct {
@@ -156,7 +153,7 @@ func (m *Manager) Status(token string) (Status, error) {
 
 func (m *Manager) sessionStatus(data config, token string) Status {
 	if !data.Enabled {
-		return Status{HasMCPKey: data.MCPKeys[""] != "", HasMCPDiagnosticKey: data.MCPDiagnosticKeys[""] != ""}
+		return Status{HasMCPKey: data.MCPKeys[""] != ""}
 	}
 	account, ok := m.tokenAccount(data, token)
 	if !ok {
@@ -169,7 +166,7 @@ func authenticatedStatus(data config, account Account) Status {
 	scope := robotScope(account)
 	return Status{Enabled: true, Authenticated: true, Account: account.Account,
 		GitHubLogin: account.GitHubLogin, RobotScope: scope, SuperAdmin: account.SuperAdmin,
-		HasMCPKey: data.MCPKeys[scope] != "", HasMCPDiagnosticKey: data.MCPDiagnosticKeys[scope] != "",
+		HasMCPKey: data.MCPKeys[scope] != "",
 	}
 }
 
@@ -272,7 +269,6 @@ func (m *Manager) ResetSuperAdmin(account, password, confirmation string) (strin
 		m.data.Accounts = append(m.data.Accounts, Account{Account: account, PasswordHash: string(hash), SuperAdmin: true, Enabled: true, Created: now, Updated: now})
 	} else {
 		delete(m.data.MCPKeys, robotScope(m.data.Accounts[index]))
-		delete(m.data.MCPDiagnosticKeys, robotScope(m.data.Accounts[index]))
 		m.data.Accounts[index].PasswordHash = string(hash)
 		m.data.Accounts[index].GitHubID = 0
 		m.data.Accounts[index].GitHubLogin = ""
@@ -283,7 +279,6 @@ func (m *Manager) ResetSuperAdmin(account, password, confirmation string) (strin
 	for index := range m.data.Accounts {
 		if m.data.Accounts[index].Account != account && m.data.Accounts[index].SuperAdmin {
 			delete(m.data.MCPKeys, robotScope(m.data.Accounts[index]))
-			delete(m.data.MCPDiagnosticKeys, robotScope(m.data.Accounts[index]))
 			m.data.Accounts[index].SuperAdmin = false
 			m.data.Accounts[index].Enabled = false
 			m.data.Accounts[index].Updated = now
@@ -428,7 +423,6 @@ func (m *Manager) DeleteAccount(account string) error {
 		return errors.New("不能删除超级管理员账户")
 	}
 	delete(m.data.MCPKeys, robotScope(m.data.Accounts[index]))
-	delete(m.data.MCPDiagnosticKeys, robotScope(m.data.Accounts[index]))
 	m.data.Accounts = append(m.data.Accounts[:index], m.data.Accounts[index+1:]...)
 	return m.persist()
 }

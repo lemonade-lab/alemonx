@@ -22,9 +22,6 @@ export function McpSettingsPanel() {
   })
   const [control, { isLoading: controlling }] = useControlSystemMcpMutation()
   const [token, setToken] = useState('')
-  const [keyType, setKeyType] = useState<'diagnostic' | 'operator'>(
-    'diagnostic'
-  )
   const tokenRequest = useRef<AbortController | null>(null)
   const [savingKey, setSavingKey] = useState(false)
   const [keyChange, setKeyChange] = useState<'rotate' | 'revoke' | null>(null)
@@ -84,7 +81,7 @@ export function McpSettingsPanel() {
         method: 'POST',
         signal: request.signal,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action, keyType })
+        body: JSON.stringify({ action })
       })
       const result =
         response.status === 204
@@ -122,9 +119,8 @@ export function McpSettingsPanel() {
 
   const external = data?.running && !data.managed
   const pending = data?.autoStart && !data.managed
-  const hasSelectedKey =
-    keyType === 'diagnostic' ? data?.hasDiagnosticToken : data?.hasToken
-  const keyLabel = keyType === 'diagnostic' ? '只读诊断密钥' : '操作密钥'
+  const local = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(window.location.hostname)
+  const url = local ? data?.url || '' : new URL('/mcp', window.location.origin).href
   const locked = controlling || savingKey || isFetching
   return (
     <SettingsPage title="MCP">
@@ -171,55 +167,19 @@ export function McpSettingsPanel() {
                     ? 'MCP HTTP 服务正在运行'
                     : 'MCP HTTP 服务已停止'}
             </p>
-            {pending && <p>如果端口被占用，服务会在端口释放后重试。</p>}
-            {data.canControl && data.managed && data.autoStart && (
-              <p>工作台重启时会自动恢复。手动停止后会保持停止。</p>
-            )}
-            {!data.canControl && !data.managed && !pending && (
-              <p>超级管理员启动工作台服务后，客户端即可使用密钥连接。</p>
-            )}
             <div className="flex flex-wrap items-center gap-2">
               <p className="wrap-break-word">
-                连接地址 <code>{data.url}</code>
+                连接地址 <code>{url}</code>
               </p>
-              <Button onClick={() => void copy(data.url, '连接地址')}>
+              <Button onClick={() => void copy(url, '连接地址')}>
                 复制地址
               </Button>
             </div>
             {data.canIssueToken && (
               <>
-                <label className="flex flex-wrap items-center gap-2">
-                  密钥类型
-                  <select
-                    className="settings-input"
-                    value={keyType}
-                    disabled={locked || keyChange !== null}
-                    onChange={event => {
-                      setToken('')
-                      setMessage(null)
-                      setKeyType(
-                        event.target.value === 'operator'
-                          ? 'operator'
-                          : 'diagnostic'
-                      )
-                    }}
-                  >
-                    <option value="diagnostic">只读诊断密钥</option>
-                    <option value="operator">操作密钥</option>
-                  </select>
-                </label>
-                <p>
-                  {keyType === 'diagnostic'
-                    ? '仅用于查询机器人状态、脱敏日志和任务历史。'
-                    : '用于账户范围内的完整 MCP 操作，包括修改和发布。'}
-                </p>
-                <p>
-                  {data.account || '本机账户'}
-                  {hasSelectedKey ? ' 已配置此密钥。' : ' 尚未配置此密钥。'}
-                  在客户端将它填为 Bearer Token。
-                </p>
+                <p>{data.hasToken ? '已配置 Bearer Token' : '尚未配置 Bearer Token'}</p>
                 <div className="flex flex-wrap gap-2">
-                  {hasSelectedKey ? (
+                  {data.hasToken ? (
                     <>
                       <Button
                         disabled={locked}
@@ -249,7 +209,7 @@ export function McpSettingsPanel() {
             )}
             {data.canIssueToken && token && (
               <div className="mt-2 flex flex-wrap items-center gap-2">
-                <p className="basis-full">明文只在本次显示，请立即复制。</p>
+                <p className="basis-full">密钥只显示一次。</p>
                 <input
                   aria-label="连接密钥"
                   className="min-w-0 flex-1 rounded border border-(--theme-border-default) bg-(--theme-surface-panel) p-2 font-mono"
@@ -274,17 +234,12 @@ export function McpSettingsPanel() {
             </Button>
           }
         >
-          <p>
-            在 MCP 客户端选择 STDIO，由客户端启动本机的 <code>alx mcp</code>。
-            工作台开启账户认证后，客户端环境需配置超级管理员的{' '}
-            <code>ALX_AUTH_TOKEN</code>。
-          </p>
+          <p>启用工作台认证时，设置 <code>ALX_AUTH_TOKEN</code>。</p>
           <pre className="overflow-x-auto">{stdioConfig}</pre>
         </SettingsCard>
       )}
       <ConfirmDialog
         open={keyChange !== null}
-        subtitle={keyLabel}
         title={keyChange === 'revoke' ? '撤销 MCP 密钥' : '重新生成 MCP 密钥'}
         message={
           keyChange === 'revoke'

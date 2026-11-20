@@ -68,6 +68,10 @@ func TestDeviceFlowEndToEnd(t *testing.T) {
 	}))
 	defer deviceServer.Close()
 	userServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer gho_test_token" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"login":"octocat"}`))
 	}))
@@ -100,6 +104,9 @@ func TestDeviceFlowEndToEnd(t *testing.T) {
 	if err != nil || strings.TrimSpace(string(data)) != "gho_test_token" {
 		t.Fatalf("token file = %q, %v", data, err)
 	}
+	// Start without the in-memory login name or cached /user response.
+	cacheLogin("")
+	httpcache.Evict(userServer.URL)
 	status, err := Status()
 	if err != nil || !status.LoggedIn || status.Login != "octocat" {
 		t.Fatalf("status = %#v, %v", status, err)

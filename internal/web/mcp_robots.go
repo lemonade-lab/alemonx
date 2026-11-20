@@ -16,7 +16,7 @@ import (
 func (s *server) accountMCPPolicy(policy mcp.Policy, root string, identity access.Status, token string) mcp.Policy {
 	policy = mcp.WithRobotAccount(policy, root, func() (string, error) {
 		current, valid, err := s.auth.MCPKeyStatus(token)
-		if err != nil || !valid || current.RobotScope != identity.RobotScope || current.Enabled != identity.Enabled || current.MCPDiagnostic != identity.MCPDiagnostic {
+		if err != nil || !valid || current.RobotScope != identity.RobotScope || current.Enabled != identity.Enabled {
 			return "", errors.New("MCP 连接密钥已失效。")
 		}
 		return identity.RobotScope, nil
@@ -25,9 +25,8 @@ func (s *server) accountMCPPolicy(policy mcp.Policy, root string, identity acces
 	if account == "" {
 		account = "local"
 	}
-	policy.DiagnosticOnly = identity.MCPDiagnostic
 	policy.OnToolCall = func(tool string, success bool) {
-		logging.InfoEvent("mcp.tool.called", logging.Fields{"account": account, "diagnostic_key": identity.MCPDiagnostic, "tool": tool, "success": success})
+		logging.InfoEvent("mcp.tool.called", logging.Fields{"account": account, "tool": tool, "success": success})
 	}
 	policy.ControlRobot = func(root, mode, action string) (string, error) {
 		return s.controlMCPRobot(account, root, mode, action)

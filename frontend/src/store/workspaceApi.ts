@@ -653,7 +653,6 @@ type SystemMcpStatus = {
   canControl: boolean
   canIssueToken: boolean
   hasToken: boolean
-  hasDiagnosticToken: boolean
   account?: string
   running: boolean
   autoStart: boolean

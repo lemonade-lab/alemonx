@@ -148,11 +148,7 @@ func TestMCPPersistsSuccessfulPublications(t *testing.T) {
 	if err := s.addCreatedRobot(fixture, identity.RobotScope, root); err != nil {
 		t.Fatal(err)
 	}
-	operator, err := s.auth.UpdateMCPKey(session, identity, "token", false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	diagnostic, err := s.auth.UpdateMCPKey(session, identity, "token", true)
+	operator, err := s.auth.UpdateMCPKey(session, identity, "token")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +194,7 @@ func TestMCPPersistsSuccessfulPublications(t *testing.T) {
 	if err := s.operationEvents.Close(); err != nil {
 		t.Fatal(err)
 	}
-	lookup := publicationLookup{Workspace: fixture, Robot: root, Account: account, DiagnosticKey: diagnostic}
+	lookup := publicationLookup{Workspace: fixture, Robot: root, Account: account, Key: operator}
 	for _, entry := range actions {
 		lookup.Tasks = append(lookup.Tasks, publishedTask{ID: taskIDs[entry.action], Action: entry.action, Expected: entry.expected})
 	}
@@ -228,8 +224,8 @@ func TestMCPPersistsSuccessfulPublications(t *testing.T) {
 type publishedTask struct{ ID, Action, Expected string }
 
 type publicationLookup struct {
-	Workspace, Robot, Account, DiagnosticKey string
-	Tasks                                    []publishedTask
+	Workspace, Robot, Account, Key string
+	Tasks                          []publishedTask
 }
 
 func openPublicationWorkbench(t *testing.T, dir string) *server {
@@ -255,7 +251,7 @@ func verifyPublishedTasks(t *testing.T) {
 	}
 	s := openPublicationWorkbench(t, lookup.Workspace)
 	for _, entry := range lookup.Tasks {
-		result, failed := callTaskMCP(t, s, lookup.Workspace, lookup.DiagnosticKey, "alemonjs_get_project_task", map[string]any{"taskId": entry.ID})
+		result, failed := callTaskMCP(t, s, lookup.Workspace, lookup.Key, "alemonjs_get_project_task", map[string]any{"taskId": entry.ID})
 		var task operationTask
 		if failed || json.Unmarshal([]byte(result), &task) != nil || task.ID != entry.ID ||
 			task.Action != entry.Action || task.Account != lookup.Account || task.Root != lookup.Robot ||

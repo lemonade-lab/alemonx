@@ -19,7 +19,7 @@ var (
 
 // UpdateMCPKey updates only the account from the authenticated workbench request.
 // The plaintext is returned on creation or rotation and is never written to disk.
-func (m *Manager) UpdateMCPKey(session string, identity Status, action string, diagnostic bool) (string, error) {
+func (m *Manager) UpdateMCPKey(session string, identity Status, action string) (string, error) {
 	unlock, err := m.lockWrite()
 	if err != nil {
 		return "", err
@@ -35,9 +35,6 @@ func (m *Manager) UpdateMCPKey(session string, identity Status, action string, d
 	}
 	scope := status.RobotScope
 	keys := &m.data.MCPKeys
-	if diagnostic {
-		keys = &m.data.MCPDiagnosticKeys
-	}
 	exists := (*keys)[scope] != ""
 	switch action {
 	case "revoke":
@@ -84,23 +81,15 @@ func (m *Manager) MCPKeyStatus(token string) (Status, bool, error) {
 		return Status{}, false, err
 	}
 	digest := mcpKeyDigest(token)
-	match := func(scope string) (bool, bool) {
-		if hmac.Equal([]byte(data.MCPDiagnosticKeys[scope]), []byte(digest)) {
-			return true, true
-		}
-		return hmac.Equal([]byte(data.MCPKeys[scope]), []byte(digest)), false
+	match := func(scope string) bool {
+		return hmac.Equal([]byte(data.MCPKeys[scope]), []byte(digest))
 	}
 	if !data.Enabled {
-		ok, diagnostic := match("")
-		return Status{MCPDiagnostic: diagnostic}, ok, nil
+		return Status{}, match(""), nil
 	}
 	for _, account := range data.Accounts {
-		if account.Enabled {
-			if ok, diagnostic := match(robotScope(account)); ok {
-				status := authenticatedStatus(data, account)
-				status.MCPDiagnostic = diagnostic
-				return status, true, nil
-			}
+		if account.Enabled && match(robotScope(account)) {
+			return authenticatedStatus(data, account), true, nil
 		}
 	}
 	return Status{}, false, nil

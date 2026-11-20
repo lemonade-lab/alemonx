@@ -30,18 +30,18 @@ ALemonX supports both standard MCP transports: **stdio** and **Streamable HTTP**
 
 ### Streamable HTTP
 
-In **Settings → MCP**, a super administrator starts the HTTP service when workbench authentication is enabled. The workbench restores the HTTP listener on restart if it was last started manually. A manual stop persists across restarts. Each signed-in user can choose **Create Connection Key** and enter the displayed address and their own key in the client’s Streamable HTTP form on the computer running ALemonX.
+In **Settings → MCP**, a super administrator starts the HTTP service when workbench authentication is enabled. The workbench restores the HTTP listener on restart if it was last started manually. A manual stop persists across restarts. Each signed-in user can choose **Create Connection Key** and enter the displayed address and their own key in the client’s Streamable HTTP form.
 
-Each account can keep a separate read-only diagnostic key alongside its operator key. The server enforces a diagnostic allowlist consisting of robot discovery, status, redacted logs, and task history and detail. The two keys can be rotated or revoked independently.
+Each account has one key for all tools within its account scope. Existing operator keys remain valid. Legacy diagnostic keys expire. Use the address shown in Settings. For remote access, the HTTPS proxy must preserve the `/mcp` path and `Authorization` header. The workbench endpoint requires account authentication.
 
 | Field | Value |
 | --- | --- |
 | Name | `alemonx` |
 | Type | Streamable HTTP |
-| URL | `http://127.0.0.1:17391/mcp` |
+| URL | HTTPS workbench URL plus `/mcp`, or `http://127.0.0.1:17391/mcp` locally |
 | Auth | `Bearer <connection token>` |
 
-The endpoint implements the Streamable HTTP `POST /mcp` request/response mode; standalone SSE push streams do not apply to this control plane and `GET /mcp` is rejected with `405` per the spec. It validates `Origin`, protocol version, and the Bearer token, and never listens on LAN or public addresses.
+The endpoint implements the Streamable HTTP `POST /mcp` request/response mode; standalone SSE push streams do not apply to this control plane and `GET /mcp` is rejected with `405` per the spec. It validates `Origin`, protocol version, and the Bearer token. The dedicated listener remains bound to loopback.
 
 Optionally use `MCP_ALLOWED_ROOTS` to restrict the agent to specific workspaces; join multiple paths with the OS path separator (`:` on macOS/Linux, `;` on Windows):
 

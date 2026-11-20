@@ -175,41 +175,10 @@ func TestAccountRobotsAndMCPUseIsolatedLists(t *testing.T) {
 		t.Helper()
 		return rpc(token, "tools/call", map[string]any{"name": name, "arguments": args}, status)
 	}
-	diagnosticKey := func(action string, expected int) string {
-		t.Helper()
-		response := request(s.systemMCPHandler, http.MethodPost, alice, map[string]string{
-			"action": action, "keyType": "diagnostic",
-		}, expected)
-		if expected != http.StatusOK {
-			return ""
-		}
-		var result struct{ Token string }
-		if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil || result.Token == "" {
-			t.Fatal("missing diagnostic key")
-		}
-		return result.Token
-	}
-	readKey := diagnosticKey("token", http.StatusOK)
-	saved, err := os.ReadFile(identity.Path())
-	if err != nil || bytes.Contains(saved, []byte(readKey)) {
-		t.Fatal("only the diagnostic key digest should be stored")
-	}
-	if status := readMCPStatus(alice); !status.HasToken || !status.HasDiagnosticToken {
-		t.Fatal("operator and diagnostic keys must coexist")
-	}
-	var listed struct {
-		Result struct{ Tools []struct{ Name string } }
-	}
-	if err := json.Unmarshal([]byte(rpc(readKey, "tools/list", nil, 200)), &listed); err != nil || len(listed.Result.Tools) != 5 {
-		t.Fatalf("diagnostic discovery: %+v (%v)", listed, err)
-	}
-	for _, tool := range []string{
-		"alemonjs_read_project_file", "alemonjs_get_package_runtime_config", "alemonjs_control_robot_runtime",
-		"alemonjs_start_project_action", "alemonjs_write_project_file",
-	} {
-		args := map[string]any{"root": robotPath, "path": "package.json", "confirm": true}
-		if output := call(readKey, tool, args, 200); !strings.Contains(output, "诊断密钥无权调用此工具") {
-			t.Fatalf("diagnostic key was not rejected for %s", tool)
+	listed := rpc(aliceMCP, "tools/list", nil, http.StatusOK)
+	for _, tool := range []string{"alemonjs_get_robot_diagnostics", "alemonjs_start_project_action", "alemonjs_list_robot_operations"} {
+		if !strings.Contains(listed, tool) {
+			t.Fatalf("missing MCP tool %s: %s", tool, listed)
 		}
 	}
 	if output := call(bobMCP, "alemonjs_list_robots", nil, 200); strings.Contains(output, "alice-robot") {
@@ -251,18 +220,18 @@ func TestAccountRobotsAndMCPUseIsolatedLists(t *testing.T) {
 	if _, err := store.append("robot", "task", robotEvent{Type: "task", Task: &failed}, nil); err != nil {
 		t.Fatal(err)
 	}
-	operations := call(readKey, "alemonjs_list_robot_operations", map[string]any{"root": robotPath, "status": "failed"}, 200)
+	operations := call(aliceMCP, "alemonjs_list_robot_operations", map[string]any{"root": robotPath, "status": "failed"}, 200)
 	if !strings.Contains(operations, "evicted-build") || strings.Contains(operations, "fixture-secret") {
 		t.Fatalf("failed operation history was missing or unsafe: %s", operations)
 	}
-	detail := call(readKey, "alemonjs_get_project_task", map[string]any{"taskId": "evicted-build"}, 200)
+	detail := call(aliceMCP, "alemonjs_get_project_task", map[string]any{"taskId": "evicted-build"}, 200)
 	if !strings.Contains(detail, "compile stage") || !strings.Contains(detail, "cannot resolve dependency") || strings.Contains(detail, "fixture-secret") {
 		t.Fatalf("failed operation detail was missing or unsafe: %s", detail)
 	}
 	if output := call(bobMCP, "alemonjs_get_project_task", map[string]any{"taskId": "evicted-build"}, 200); !strings.Contains(output, `"isError":true`) || strings.Contains(output, "compile stage") {
 		t.Fatal("task details escaped the account robot scope")
 	}
-	diagnostics := call(readKey, "alemonjs_get_robot_diagnostics", map[string]any{"root": robotPath}, 200)
+	diagnostics := call(aliceMCP, "alemonjs_get_robot_diagnostics", map[string]any{"root": robotPath}, 200)
 	if !strings.Contains(diagnostics, "evicted-build") || !strings.Contains(diagnostics, "recent_operation_failed") ||
 		!strings.Contains(diagnostics, "robot-test-log") || strings.Contains(diagnostics, "fixture-secret") {
 		t.Fatalf("production diagnostic report incomplete: %s", diagnostics)
@@ -307,14 +276,6 @@ func TestAccountRobotsAndMCPUseIsolatedLists(t *testing.T) {
 		t.Fatalf("expected automatic restore to open MCP listener: %+v", status)
 	}
 	call(bobMCP, "alemonjs_list_robots", nil, http.StatusOK)
-	call(aliceMCP, "alemonjs_list_robots", nil, http.StatusOK)
-
-	call(readKey, "alemonjs_list_robots", nil, http.StatusOK)
-	rotatedReadKey := diagnosticKey("rotate", http.StatusOK)
-	call(readKey, "alemonjs_list_robots", nil, http.StatusUnauthorized)
-	call(rotatedReadKey, "alemonjs_list_robots", nil, http.StatusOK)
-	diagnosticKey("revoke", http.StatusNoContent)
-	call(rotatedReadKey, "alemonjs_list_robots", nil, http.StatusUnauthorized)
 	call(aliceMCP, "alemonjs_list_robots", nil, http.StatusOK)
 
 	newKey := issueToken(bob, "rotate")

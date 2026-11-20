@@ -20,17 +20,12 @@ type managedMCP struct {
 	mu             sync.Mutex
 	port           string
 	accountHandler func(string, access.Status) http.Handler
-	handlers       map[mcpHandlerKey]mcpAccountHandler
+	handlers       map[string]mcpAccountHandler
 	server         *http.Server
 	listener       net.Listener
 	closed         bool
 	autoStart      bool
 	restoreFailed  bool
-}
-
-type mcpHandlerKey struct {
-	scope      string
-	diagnostic bool
 }
 
 type mcpAccountHandler struct {
@@ -39,15 +34,14 @@ type mcpAccountHandler struct {
 }
 
 type mcpHTTPStatus struct {
-	CanControl         bool   `json:"canControl"`
-	CanIssueToken      bool   `json:"canIssueToken"`
-	HasDiagnosticToken bool   `json:"hasDiagnosticToken"`
-	HasToken           bool   `json:"hasToken"`
-	Account            string `json:"account,omitempty"`
-	Running            bool   `json:"running"`
-	AutoStart          bool   `json:"autoStart"`
-	Managed            bool   `json:"managed"`
-	URL                string `json:"url"`
+	CanControl    bool   `json:"canControl"`
+	CanIssueToken bool   `json:"canIssueToken"`
+	HasToken      bool   `json:"hasToken"`
+	Account       string `json:"account,omitempty"`
+	Running       bool   `json:"running"`
+	AutoStart     bool   `json:"autoStart"`
+	Managed       bool   `json:"managed"`
+	URL           string `json:"url"`
 }
 
 func (m *managedMCP) address() string {
@@ -64,7 +58,7 @@ func (m *managedMCP) status() mcpHTTPStatus {
 		if err == nil {
 			response.Body.Close()
 			status.Running = response.StatusCode == http.StatusUnauthorized &&
-				response.Header.Get("MCP-Protocol-Version") != ""
+				(response.Header.Get("MCP-Protocol-Version") != "" || response.Header.Get("WWW-Authenticate") == `Bearer realm="AlemonX MCP"`)
 		}
 	}
 	return status
@@ -97,10 +91,11 @@ func (s *server) systemMCPHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var input struct {
-		Action  string `json:"action"`
-		KeyType string `json:"keyType"`
+		Action string `json:"action"`
 	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&input); err != nil {
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil {
 		writeError(w, http.StatusBadRequest, "无法读取 MCP 服务操作。")
 		return
 	}
@@ -148,12 +143,7 @@ func (s *server) systemMCPHandler(w http.ResponseWriter, r *http.Request) {
 			m.stop()
 		}
 	case "token", "rotate", "revoke":
-		if input.KeyType != "" && input.KeyType != "operator" && input.KeyType != "diagnostic" {
-			writeError(w, http.StatusBadRequest, "无效的 MCP 密钥类型。")
-			return
-		}
-		diagnostic := input.KeyType == "diagnostic"
-		token, err := s.auth.UpdateMCPKey(authToken, identity, input.Action, diagnostic)
+		token, err := s.auth.UpdateMCPKey(authToken, identity, input.Action)
 		if err != nil {
 			switch {
 			case errors.Is(err, access.ErrMCPKeyExists):
@@ -165,7 +155,7 @@ func (s *server) systemMCPHandler(w http.ResponseWriter, r *http.Request) {
 			}
 			return
 		}
-		delete(m.handlers, mcpHandlerKey{scope: identity.RobotScope, diagnostic: diagnostic})
+		delete(m.handlers, identity.RobotScope)
 		if input.Action == "revoke" {
 			w.WriteHeader(http.StatusNoContent)
 		} else {
@@ -186,32 +176,50 @@ func (m *managedMCP) accountStatus(identity access.Status, canControl, canIssueT
 	status.CanControl = canControl
 	status.CanIssueToken = canIssueToken
 	status.HasToken = canIssueToken && identity.HasMCPKey
-	status.HasDiagnosticToken = canIssueToken && identity.HasMCPDiagnosticKey
 	status.Account = identity.Account
 	return status
 }
 
-func (s *server) serveMCPAccount(w http.ResponseWriter, r *http.Request) {
-	token, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+// Both listeners share the same account authentication, handler cache and stop state.
+func (s *server) serveWorkbenchMCP(w http.ResponseWriter, r *http.Request) {
+	s.serveMCPAccount(w, r, true)
+}
+
+func (s *server) serveMCPAccount(w http.ResponseWriter, r *http.Request, requireAccount bool) {
+	w.Header().Set("Cache-Control", "no-store")
+	if r.URL.Path != "/mcp" {
+		writeError(w, http.StatusNotFound, "MCP 端点是 /mcp")
+		return
+	}
 	m := &s.mcpHTTP
 	m.mu.Lock()
+	if m.server == nil {
+		m.mu.Unlock()
+		writeError(w, http.StatusServiceUnavailable, "MCP 服务已停止")
+		return
+	}
+	scheme, token, _ := strings.Cut(r.Header.Get("Authorization"), " ")
+	if !strings.EqualFold(scheme, "Bearer") {
+		token = ""
+	}
 	identity, valid, err := s.auth.MCPKeyStatus(token)
 	var handler http.Handler
-	if err == nil && valid && m.server != nil {
-		key := mcpHandlerKey{scope: identity.RobotScope, diagnostic: identity.MCPDiagnostic}
-		cached := m.handlers[key]
+	if err == nil && valid && (identity.Authenticated || (!requireAccount && allowMCPRequest(r, identity))) {
+		cached := m.handlers[identity.RobotScope]
 		if cached.token != token {
 			cached = mcpAccountHandler{token: token, handler: m.accountHandler(token, identity)}
-			m.handlers[key] = cached
+			m.handlers[identity.RobotScope] = cached
 		}
 		handler = cached.handler
 	}
 	m.mu.Unlock()
 	if handler == nil {
-		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("WWW-Authenticate", `Bearer realm="AlemonX MCP"`)
 		writeError(w, http.StatusUnauthorized, "MCP HTTP 认证失败")
 		return
 	}
+	// Normalize the scheme for the transport's existing bearer validation.
+	r.Header.Set("Authorization", "Bearer "+token)
 	handler.ServeHTTP(w, r)
 }
 
@@ -236,7 +244,7 @@ func allowMCPRequest(r *http.Request, status access.Status) bool {
 	host = strings.Trim(host, "[]")
 	ip := net.ParseIP(host)
 	return requestIsLoopback(r) && (strings.EqualFold(host, "localhost") || (ip != nil && ip.IsLoopback())) &&
-		r.Header.Get("Forwarded") == "" && r.Header.Get("X-Forwarded-For") == "" && r.Header.Get("X-Forwarded-Host") == ""
+		r.Header.Get("Forwarded") == "" && r.Header.Get("X-Forwarded-For") == "" && r.Header.Get("X-Forwarded-Host") == "" && r.Header.Get("X-Forwarded-Proto") == ""
 }
 
 var errMCPPort = errors.New("MCP 端口必须在 1 到 65535 之间。")
@@ -252,9 +260,11 @@ func (s *server) openMCPListener() error {
 	if err != nil {
 		return errors.New("无法监听 MCP 端口，请检查端口是否已被占用。")
 	}
-	server := &http.Server{Handler: http.HandlerFunc(s.serveMCPAccount), ReadHeaderTimeout: 10 * time.Second}
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.serveMCPAccount(w, r, false)
+	}), ReadHeaderTimeout: 10 * time.Second}
 	m.server, m.listener = server, listener
-	m.handlers = make(map[mcpHandlerKey]mcpAccountHandler)
+	m.handlers = make(map[string]mcpAccountHandler)
 	go s.serveManagedMCP(server, listener)
 	return nil
 }

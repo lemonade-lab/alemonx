@@ -80,7 +80,7 @@ test('settings navigation opens SSH and manages HTTP MCP with developer mode off
   page
 }) => {
   let managed = false
-  let hasDiagnosticToken = false
+  let hasToken = false
   let networkMode = 'auto'
   let githubLogin = ''
   await page.route('**/api/v1/**', route => {
@@ -100,20 +100,21 @@ test('settings navigation opens SSH and manages HTTP MCP with developer mode off
       case '/api/v1/system/mcp':
         if (request.method() === 'POST') {
           const { action } = request.postDataJSON() as { action: string }
+          expect(request.postDataJSON()).toEqual({ action })
           if (action === 'token') {
-            hasDiagnosticToken = true
+            hasToken = true
             return route.fulfill({ json: { token: 'test-token' } })
           }
           if (action === 'rotate')
             return route.fulfill({ json: { token: 'rotated-token' } })
           if (action === 'revoke') {
-            hasDiagnosticToken = false
+            hasToken = false
             return route.fulfill({ status: 204 })
           }
           managed = action === 'start'
         }
         return route.fulfill({
-          json: { canControl: true, canIssueToken: true, hasDiagnosticToken, autoStart: managed, running: managed, managed, url: 'http://127.0.0.1:17391/mcp' }
+          json: { canControl: true, canIssueToken: true, hasToken, autoStart: managed, running: managed, managed, url: 'http://127.0.0.1:17391/mcp' }
         })
       case '/api/v1/github/auth/device':
         return route.fulfill({ json: {
@@ -215,6 +216,7 @@ test('settings navigation opens SSH and manages HTTP MCP with developer mode off
   await expect(
     page.getByText('MCP HTTP 服务正在运行', { exact: true })
   ).toBeVisible()
+  await expect(page.getByText('密钥类型', { exact: true })).toHaveCount(0)
   await page.getByRole('button', { name: '创建连接密钥' }).click()
   await expect(
     page.getByRole('textbox', { name: '连接密钥', exact: true })

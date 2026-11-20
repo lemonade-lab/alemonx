@@ -149,6 +149,14 @@ func TestGitHubBindingLifecycle(t *testing.T) {
 	if err := manager.SetGitHubBinding(reader, readerKey, 123, "original-name"); err == nil {
 		t.Fatal("duplicate GitHub binding succeeded")
 	}
+	manager, err = NewAt(manager.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, err := manager.Status(root)
+	if err != nil || !status.Authenticated || status.GitHubLogin != "original-name" {
+		t.Fatalf("binding after reopening auth store: %+v (%v)", status, err)
+	}
 	session, account, err := manager.LoginWithGitHub(123)
 	if err != nil || account != "root" || !manager.Authenticate(session) {
 		t.Fatalf("GitHub session for %q failed: %v", account, err)

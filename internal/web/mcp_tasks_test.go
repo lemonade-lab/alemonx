@@ -61,13 +61,13 @@ printf 'fixture %s token=fixture-secret-value\n' "$*"
 		return &server{auth: auth, operationEvents: store, operations: store.snapshot(), events: newRobotEventHub(), eventGateway: newEventGateway()}
 	}
 	s := open()
-	issue := func(session string, diagnostic bool) string {
+	issue := func(session string) string {
 		t.Helper()
 		identity, err := auth.Status(session)
 		if err != nil {
 			t.Fatal(err)
 		}
-		token, err := auth.UpdateMCPKey(session, identity, "token", diagnostic)
+		token, err := auth.UpdateMCPKey(session, identity, "token")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -80,9 +80,8 @@ printf 'fixture %s token=fixture-secret-value\n' "$*"
 	if err := s.addCreatedRobot(root, operatorIdentity.RobotScope, root); err != nil {
 		t.Fatal(err)
 	}
-	operatorKey := issue(operator, false)
-	readKey := issue(operator, true)
-	adminKey := issue(session, false)
+	operatorKey := issue(operator)
+	adminKey := issue(session)
 	call := func(token, name string, args map[string]any) (string, bool) {
 		t.Helper()
 		return callTaskMCP(t, s, root, token, name, args)
@@ -92,9 +91,6 @@ printf 'fixture %s token=fixture-secret-value\n' "$*"
 		return call(key, "alemonjs_start_project_action", map[string]any{
 			"root": root, "action": action, "tag": tag, "confirm": true, "account": "spoofed",
 		})
-	}
-	if output, failed := start(readKey, "install", ""); !failed || !strings.Contains(output, "诊断密钥无权") {
-		t.Fatalf("diagnostic write: %s", output)
 	}
 	ctx := context.Background()
 	taskIDs := map[string]string{}
@@ -142,7 +138,7 @@ printf 'fixture %s token=fixture-secret-value\n' "$*"
 		t.Fatal(err)
 	}
 	for action, id := range taskIDs {
-		result, failed := call(readKey, "alemonjs_get_project_task", map[string]any{"taskId": id})
+		result, failed := call(operatorKey, "alemonjs_get_project_task", map[string]any{"taskId": id})
 		if failed || !strings.Contains(result, "fixture-operator") || !strings.Contains(result, action) ||
 			!strings.Contains(result, "finishedAt") || !strings.Contains(result, root) {
 			t.Fatalf("missing durable task for %s: %s", action, result)
@@ -151,7 +147,7 @@ printf 'fixture %s token=fixture-secret-value\n' "$*"
 			t.Fatalf("another account read a task outside its robot list: %s", id)
 		}
 	}
-	if result, failed := call(readKey, "alemonjs_list_robot_operations", map[string]any{"root": root, "status": "interrupted"}); failed ||
+	if result, failed := call(operatorKey, "alemonjs_list_robot_operations", map[string]any{"root": root, "status": "interrupted"}); failed ||
 		!strings.Contains(result, pending.ID) || !strings.Contains(result, "执行结果未知") {
 		t.Fatalf("interrupted task status: %s", result)
 	}

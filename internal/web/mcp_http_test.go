@@ -1,13 +1,19 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"alemonx/internal/access"
@@ -98,6 +104,13 @@ func TestWorkbenchManagedMCPHTTP(t *testing.T) {
 	}
 	requestMCP("", http.StatusUnauthorized)
 	requestMCP(token, http.StatusOK)
+	workbench := httptest.NewRequest(http.MethodPost, "https://workbench.example/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize"}`))
+	workbench.Header.Set("Authorization", "Bearer "+token)
+	denied := httptest.NewRecorder()
+	s.serveWorkbenchMCP(denied, workbench)
+	if denied.Code != http.StatusUnauthorized {
+		t.Fatalf("local-only key was accepted by the workbench endpoint: %d", denied.Code)
+	}
 	post("stop", local, http.StatusOK)
 	post("token", local, http.StatusConflict)
 	post("start", local, http.StatusOK)
@@ -107,4 +120,90 @@ func TestWorkbenchManagedMCPHTTP(t *testing.T) {
 	requestMCP(readToken(), http.StatusOK)
 	s.shutdownMCP()
 	post("start", local, http.StatusServiceUnavailable)
+}
+
+func TestWorkbenchMCPThroughHTTPSProxy(t *testing.T) {
+	t.Setenv("ALX_TEST_CACHE_DIR", t.TempDir())
+	identity, err := access.NewAt(filepath.Join(t.TempDir(), "auth.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	runtime := newServerRuntimeWithAuth("test", fstest.MapFS{
+		"dist/index.html": &fstest.MapFile{Data: []byte("<!doctype html>fixture")},
+	}, identity, false, ServerOptions{MCPPort: strconv.Itoa(port), WorkspaceRoot: t.TempDir(), RedisDisabled: true})
+	t.Cleanup(func() { _ = runtime.Shutdown(context.Background()) })
+	upstream := httptest.NewServer(runtime.Handler)
+	defer upstream.Close()
+	target, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reverse := httputil.NewSingleHostReverseProxy(target)
+	proxy := httptest.NewTLSServer(reverse)
+	defer proxy.Close()
+	client := proxy.Client()
+	client.Timeout = 3 * time.Second
+
+	post := func(path, token, jsonBody string, status int) (string, http.Header) {
+		t.Helper()
+		req, err := http.NewRequest(http.MethodPost, proxy.URL+path, strings.NewReader(jsonBody))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json, text/event-stream")
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		result, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer result.Body.Close()
+		body, err := io.ReadAll(result.Body)
+		if err != nil || result.StatusCode != status || (status != http.StatusNoContent && status != http.StatusAccepted && !strings.HasPrefix(result.Header.Get("Content-Type"), "application/json")) {
+			t.Fatalf("%s: status %d want %d: %s (%v)", path, result.StatusCode, status, body, err)
+		}
+		return string(body), result.Header
+	}
+
+	const init = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"remote-client","version":"1"}}}`
+	const list = `{"jsonrpc":"2.0","id":2,"method":"tools/list"}`
+	post("/mcp", "", init, http.StatusServiceUnavailable)
+	session, err := identity.Enable("proxy-test", "test-password", "test-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const settings = "/api/v1/system/mcp"
+	post(settings, session, `{"action":"start"}`, http.StatusOK)
+	_, headers := post("/mcp", "", init, http.StatusUnauthorized)
+	if !strings.HasPrefix(headers.Get("WWW-Authenticate"), "Bearer") {
+		t.Fatal("missing bearer authentication challenge")
+	}
+	post("/mcp", session, init, http.StatusUnauthorized)
+	post(settings, session, `{"action":"token","keyType":"diagnostic"}`, http.StatusBadRequest)
+	raw, _ := post(settings, session, `{"action":"token"}`, http.StatusOK)
+	var credentials struct{ Token string }
+	if err := json.Unmarshal([]byte(raw), &credentials); err != nil || credentials.Token == "" {
+		t.Fatal("missing MCP key")
+	}
+	body, _ := post("/mcp", credentials.Token, init, http.StatusOK)
+	if !strings.Contains(body, `"protocolVersion":"2025-06-18"`) || !strings.Contains(body, `"name":"alemonx"`) {
+		t.Fatalf("invalid MCP initialize response: %s", body)
+	}
+	post("/mcp", credentials.Token, `{"jsonrpc":"2.0","method":"notifications/initialized"}`, http.StatusAccepted)
+	body, _ = post("/mcp", credentials.Token, list, http.StatusOK)
+	if !strings.Contains(body, "alemonjs_start_project_action") || !strings.Contains(body, "alemonjs_get_robot_diagnostics") {
+		t.Fatal("MCP key did not discover the full tool list")
+	}
+	post(settings, session, `{"action":"stop"}`, http.StatusOK)
+	post("/mcp", credentials.Token, list, http.StatusServiceUnavailable)
 }

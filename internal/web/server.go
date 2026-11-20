@@ -721,7 +721,7 @@ type ServerOptions struct {
 	// FrontendBuild identifies the web assets embedded in this binary. It is
 	// compared by the browser with its own compile-time marker after upgrades.
 	FrontendBuild string
-	// MCPPort and MCPPolicy apply to the workbench-managed loopback listener.
+	// MCPPort sets the managed loopback port. MCPPolicy applies to both HTTP endpoints.
 	MCPPort   string
 	MCPPolicy mcp.Policy
 }
@@ -1102,6 +1102,7 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.health)
+	mux.HandleFunc("/mcp", s.serveWorkbenchMCP)
 	mux.HandleFunc("/api/v1/auth/status", s.authStatusHandler)
 	mux.HandleFunc("/api/v1/auth/setup", s.authSetupHandler)
 	mux.HandleFunc("/api/v1/auth/login", s.authLoginHandler)
@@ -7258,7 +7259,7 @@ func browserHTTPLogicalReferer(value string) string {
 func (s *server) browserHTTPRecovery(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		const mount = "/api/v1/browser/http/"
-		if strings.HasPrefix(r.URL.Path, mount) {
+		if r.URL.Path == "/mcp" || strings.HasPrefix(r.URL.Path, mount) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -9723,7 +9724,7 @@ func (s *server) ginRequestLog() gin.HandlerFunc {
 			"content_type":  c.GetHeader("Content-Type"),
 			"request_bytes": c.Request.ContentLength,
 		}
-		if query := loggableQuery(c.Request.URL.Query()); len(query) > 0 {
+		if query := loggableQuery(c.Request.URL.Query()); c.Request.URL.Path != "/mcp" && len(query) > 0 {
 			requestFields["query"] = query
 		}
 		if body := s.loggableRequestBody(c); body != "" {
@@ -9812,7 +9813,7 @@ func (w *captureWriter) message() string {
 // redacted; the body is capped to keep logs readable.
 func (s *server) loggableRequestBody(c *gin.Context) string {
 	// SQL, Redis values and credentials must never enter request logs.
-	if strings.HasPrefix(c.Request.URL.Path, "/api/v1/data/") || c.Request.URL.Path == "/api/v1/system/network" ||
+	if c.Request.URL.Path == "/mcp" || strings.HasPrefix(c.Request.URL.Path, "/api/v1/data/") || c.Request.URL.Path == "/api/v1/system/network" ||
 		c.Request.URL.Path == authGitHubLoginPath || c.Request.URL.Path == authGitHubBindingPath {
 		return ""
 	}
