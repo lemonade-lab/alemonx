@@ -1,6 +1,9 @@
 package githubauth
 
 import (
+	"context"
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -67,7 +70,7 @@ func TestDeviceFlowEndToEnd(t *testing.T) {
 		_, _ = w.Write([]byte(`{"device_code":"dc-1","user_code":"ABCD-1234","verification_uri":"https://github.com/login/device","expires_in":900,"interval":5}`))
 	}))
 	defer deviceServer.Close()
-	userServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	userServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer gho_test_token" {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
@@ -78,11 +81,30 @@ func TestDeviceFlowEndToEnd(t *testing.T) {
 	defer userServer.Close()
 	deviceCodeURL = deviceServer.URL
 	tokenURL = tokenServer.URL
-	userURL = userServer.URL
+	// Keep the production URL so httpcache exercises its GitHub-only bearer
+	// header rule. Route the request to the TLS fixture without external DNS.
+	originalTransport := http.DefaultTransport
+	transport := userServer.Client().Transport.(*http.Transport).Clone()
+	transport.TLSClientConfig.ServerName = userServer.Certificate().DNSNames[0]
+	dialer := &net.Dialer{}
+	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		switch address {
+		case "api.github.com:443":
+			address = userServer.Listener.Addr().String()
+		case deviceServer.Listener.Addr().String(), tokenServer.Listener.Addr().String():
+		default:
+			return nil, fmt.Errorf("unexpected fixture destination: %s", address)
+		}
+		return dialer.DialContext(ctx, network, address)
+	}
+	http.DefaultTransport = transport
+	httpcache.Evict(userURL)
 	t.Cleanup(func() {
+		http.DefaultTransport = originalTransport
+		transport.CloseIdleConnections()
+		httpcache.Evict(userURL)
 		deviceCodeURL = "https://github.com/login/device/code"
 		tokenURL = "https://github.com/login/oauth/access_token"
-		userURL = "https://api.github.com/user"
 	})
 
 	flow, err := StartDeviceFlow()
@@ -106,7 +128,7 @@ func TestDeviceFlowEndToEnd(t *testing.T) {
 	}
 	// Start without the in-memory login name or cached /user response.
 	cacheLogin("")
-	httpcache.Evict(userServer.URL)
+	httpcache.Evict(userURL)
 	status, err := Status()
 	if err != nil || !status.LoggedIn || status.Login != "octocat" {
 		t.Fatalf("status = %#v, %v", status, err)
