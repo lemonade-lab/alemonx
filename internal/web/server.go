@@ -9387,14 +9387,14 @@ var workbenchAssetPattern = regexp.MustCompile(`^/assets/[^/]+-[A-Za-z0-9_-]{8}\
 
 func workbenchEncodings(header string) [2]string {
 	quality := map[string]float64{"gzip": -1, "br": -1, "*": 0}
-	for entry := range strings.SplitSeq(header, ",") {
+	for _, entry := range strings.Split(header, ",") {
 		name, params, _ := strings.Cut(entry, ";")
 		name = strings.ToLower(strings.TrimSpace(name))
 		if _, supported := quality[name]; !supported {
 			continue
 		}
 		weight := 1.0
-		for param := range strings.SplitSeq(params, ";") {
+		for _, param := range strings.Split(params, ";") {
 			key, value, _ := strings.Cut(strings.TrimSpace(param), "=")
 			if strings.EqualFold(strings.TrimSpace(key), "q") {
 				q, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
