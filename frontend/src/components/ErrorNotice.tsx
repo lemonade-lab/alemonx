@@ -19,7 +19,7 @@ export function ErrorNotice({
       <span className="min-w-0 wrap-break-word">{message}</span>
       <Button
         variant="icon"
-        className="-mr-1 -mt-0.5 size-7 shrink-0 border-transparent bg-transparent text-red-700 hover:bg-red-100 focus:outline-none focus:ring-2 focus:ring-red-300"
+        className="-mr-1 -mt-0.5 size-7 shrink-0 bg-transparent text-red-700 hover:bg-red-100 focus:outline-none focus:ring-2 focus:ring-red-300"
         onClick={onClose}
         aria-label="关闭错误提示"
       >

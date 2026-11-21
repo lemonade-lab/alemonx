@@ -5,10 +5,22 @@ import { useViewportPopoverPosition } from '../hooks/useViewportPopoverPosition'
 
 export function WorkbenchTools({
   children,
-  keepMounted = false
+  keepMounted = false,
+  label = '操作',
+  menuLabel = '操作菜单',
+  icon = <MoreHorizontal className="size-4" aria-hidden="true" />,
+  menuClassName,
+  align,
+  restoreFocusOnClose = false
 }: {
   children: ReactNode | ((close: () => void, open: boolean) => ReactNode)
   keepMounted?: boolean
+  label?: string
+  menuLabel?: string
+  icon?: ReactNode
+  menuClassName?: string
+  align?: 'start' | 'end'
+  restoreFocusOnClose?: boolean
 }) {
   const [open, setOpen] = useStoreState(false)
   const id = useId()
@@ -17,11 +29,15 @@ export function WorkbenchTools({
   const menu = useRef<HTMLDivElement>(null)
   const style = useViewportPopoverPosition({
     anchor: trigger.current?.getBoundingClientRect() ?? null,
+    anchorRef: trigger,
     open,
+    align,
+    keepBelowAnchor: true,
     popoverRef: menu
   })
   const close = () => {
     setOpen(false)
+    if (restoreFocusOnClose) trigger.current?.focus()
     window.dispatchEvent(
       new CustomEvent('alx:top-tool-open', { detail: 'close' })
     )
@@ -40,49 +56,50 @@ export function WorkbenchTools({
     return () => document.removeEventListener('pointerdown', outside)
   }, [open, setOpen])
   return (
-    <div ref={root} className="workbench-tools relative">
+    <div
+      ref={root}
+      className="workbench-tools relative"
+      onKeyDown={event => {
+        if (!open || event.key !== 'Escape' || event.defaultPrevented) return
+        const expanded = menu.current?.querySelector<HTMLButtonElement>(
+          'button[aria-haspopup="dialog"][aria-expanded="true"]'
+        )
+        event.preventDefault()
+        event.stopPropagation()
+        if (expanded) {
+          window.dispatchEvent(
+            new CustomEvent('alx:top-tool-open', { detail: 'close' })
+          )
+          expanded.focus()
+        } else {
+          close()
+          trigger.current?.focus()
+        }
+      }}
+    >
       <button
         ref={trigger}
         type="button"
-        className="icon-button size-8 p-0"
-        aria-label="操作"
-        title="操作"
+        className="icon-button workbench-menu-trigger size-8 p-0"
+        aria-label={label}
+        title={label}
         aria-haspopup="true"
         aria-expanded={open}
         aria-controls={id}
         onClick={() => (open ? close() : setOpen(true))}
       >
-        <MoreHorizontal className="size-4" aria-hidden="true" />
+        {icon}
       </button>
       <div
         ref={menu}
         id={id}
         role="region"
-        aria-label="操作菜单"
+        aria-label={menuLabel}
         hidden={!open}
         style={style}
         className={
-          typeof children === 'function'
-            ? 'workbench-tools-menu workbench-settings-menu'
-            : 'workbench-tools-menu'
+          `workbench-tools-menu ${menuClassName ?? (typeof children === 'function' ? 'workbench-settings-menu' : '')}`
         }
-        onKeyDown={event => {
-          if (event.key !== 'Escape' || event.defaultPrevented) return
-          const expanded = menu.current?.querySelector<HTMLButtonElement>(
-            'button[aria-haspopup="dialog"][aria-expanded="true"]'
-          )
-          event.preventDefault()
-          event.stopPropagation()
-          if (expanded) {
-            window.dispatchEvent(
-              new CustomEvent('alx:top-tool-open', { detail: 'close' })
-            )
-            expanded.focus()
-          } else {
-            close()
-            trigger.current?.focus()
-          }
-        }}
       >
         {typeof children === 'function' ? (open || keepMounted) && children(close, open) : children}
       </div>

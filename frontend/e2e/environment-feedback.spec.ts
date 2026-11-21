@@ -57,6 +57,69 @@ test('installation stays open while pending and supports retry after long errors
   expect(attempts).toBe(2)
 })
 
+test('long extension steps scroll inside the guide with the continue button fixed', async ({ page }) => {
+  const capabilities = Array.from({ length: 24 }, (_, index) => ({
+    id: `extension-${index + 1}`,
+    name: `扩展 ${index + 1}`,
+    installMode: 'npm',
+    packageName: `fixture-extension-${index + 1}`
+  }))
+  await page.route('**/api/v1/**', route => {
+    switch (new URL(route.request().url()).pathname) {
+      case '/api/v1/auth/status':
+        return route.fulfill({ json: { enabled: false } })
+      case '/api/v1/goals':
+        return route.fulfill({ json: [
+          {
+            id: 'develop', title: '开发机器人', description: '',
+            steps: ['环境检查', '项目名称', '开发语言', '代码规范', '版本管理', '本地运行', '包管理器', '开发能力包', '图片开发', '样式方案', '开发技能', '确认创建']
+          },
+          { id: 'install', title: '安装机器人', description: '', steps: ['环境检查', '机器人名称与位置', '确认安装'] }
+        ] })
+      case '/api/v1/workspace/robots':
+        return route.fulfill({ json: { scope: 'test', initialized: true, local: true, projects: [], activeProjectID: '' } })
+      case '/api/v1/catalog/options':
+        return route.fulfill({ json: { data: capabilities } })
+      default:
+        return route.fulfill({ status: 503, json: { error: '测试未启用此接口' } })
+    }
+  })
+
+  for (const width of [1280, 390]) {
+    await page.setViewportSize({ width, height: 600 })
+    for (const path of ['/guide/develop/step/8', '/guide/install/step/2']) {
+      await page.goto(path)
+      if (path.includes('/install/')) await page.getByText('选择扩展包（可选）', { exact: true }).click()
+      const scroll = page.locator('.wizard-scroll')
+      const first = scroll.getByRole('button', { name: /^扩展 1 点击添加$/ })
+      const last = scroll.getByRole('button', { name: /^扩展 24 / })
+      const actions = page.locator('.wizard-actions')
+      const next = actions.getByRole('button', { name: '继续', exact: true })
+      await expect(actions).toHaveCSS('position', 'absolute')
+      await expect(first).toBeInViewport()
+      await expect(last).not.toBeInViewport()
+      const footerBounds = await next.boundingBox()
+      await expect(next).toBeInViewport()
+
+      const bounds = (await scroll.boundingBox())!
+      await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2)
+      await page.mouse.wheel(0, 4000)
+      await expect(last).toBeInViewport()
+      await expect.poll(() => scroll.evaluate(node => node.scrollTop)).toBeGreaterThan(0)
+      expect(await next.boundingBox()).toEqual(footerBounds)
+      const lastBounds = (await last.boundingBox())!
+      expect(lastBounds.y + lastBounds.height).toBeLessThanOrEqual(footerBounds!.y)
+      expect(await page.evaluate(() => window.scrollY)).toBe(0)
+      const selected = await last.getAttribute('aria-pressed')
+      await last.click()
+      await expect(last).toHaveAttribute('aria-pressed', selected === 'true' ? 'false' : 'true')
+      await next.click()
+      await expect(page).toHaveURL(path.replace(/\d+$/, step => String(Number(step) + 1)))
+      await expect.poll(() => scroll.evaluate(node => node.scrollTop)).toBe(0)
+    }
+  }
+})
+
 test('clean web guide rechecks Node.js and Git after an upgrade', async ({
   page
 }) => {
@@ -108,13 +171,17 @@ test('clean web guide rechecks Node.js and Git after an upgrade', async ({
   })
 
   await page.goto('/guide/web/step/1')
+  const actions = page.locator('.wizard-actions')
+  const next = actions.getByRole('button', { name: '继续', exact: true })
+  await expect(next).toBeDisabled()
+  const initialBounds = await next.boundingBox()
   await page.getByRole('button', { name: /纯净版/ }).click()
-  await page.getByRole('button', { name: '继续', exact: true }).click()
+  await expect(next).toBeEnabled()
+  await next.click()
   await expect(page.getByText('git version 2.50.1')).toBeVisible()
   await expect(page.getByText('建议升级', { exact: true })).toBeVisible()
-  await expect(
-    page.getByRole('button', { name: '继续', exact: true })
-  ).toBeEnabled()
+  await expect(next).toBeEnabled()
+  expect(await next.boundingBox()).toEqual(initialBounds)
   await page.getByRole('button', { name: '升级 Node.js', exact: true }).click()
   const dialog = page.getByRole('dialog')
   await dialog.getByRole('button', { name: '升级', exact: true }).click()

@@ -1171,6 +1171,7 @@ func newServerRuntimeWithAuth(version string, staticFiles fs.FS, identity *acces
 	mux.HandleFunc("/api/v1/directories", s.directoryHandler)
 	mux.HandleFunc("/api/v1/workspace", s.workspaceHandler)
 	mux.HandleFunc("/api/v1/workspace/robots", s.robotListHandler)
+	mux.HandleFunc("/api/v1/workspace/project-files", s.workspaceProjectFilesHandler)
 	mux.HandleFunc("/api/v1/workspace/open", s.workspaceOpenHandler)
 	mux.HandleFunc("/api/v1/catalog", s.catalogHandler)
 	mux.HandleFunc("/api/v1/catalog/resources", s.catalogResourcesHandler)

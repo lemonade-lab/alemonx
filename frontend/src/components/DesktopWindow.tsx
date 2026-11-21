@@ -331,8 +331,8 @@ export function DesktopWindow({
       open
       zIndex={zIndex}
       className="floating-window-backdrop"
-      trapFocus={isPhoneView}
-      lockScroll={isPhoneView}
+      trapFocus={isPhoneView && !minimized}
+      lockScroll={isPhoneView && !minimized}
     >
       <section
         ref={windowRef}

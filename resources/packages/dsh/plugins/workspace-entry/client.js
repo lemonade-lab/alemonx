@@ -46,12 +46,30 @@ window.__ModuleLoader__.load({
             opening = false;
           });
       };
+      // AlemonX adds robot folders through the same official action as
+      // the workspace picker. It never removes or selects imported folders.
+      const imported = new Set();
+      const receiveRobotWorkspaces = (event) => {
+        if (window.parent === window || event.source !== window.parent ||
+            event.origin !== window.location.origin ||
+            event.data?.type !== "alx:dsh-robot-workspaces" ||
+            !Array.isArray(event.data.roots)) return;
+        for (const path of event.data.roots) {
+          if (typeof path !== "string" || !path || imported.has(path)) continue;
+          imported.add(path);
+          void workspaces.create({ path }).catch(() => imported.delete(path));
+        }
+      };
+      window.addEventListener("message", receiveRobotWorkspaces);
+      if (window.parent !== window)
+        window.parent.postMessage({ type: "alx:dsh-workspaces-ready" }, window.location.origin);
       const stopWorkspaces = workspaces.list.subscribe(reconcile);
       const stopSessions = sessions.list.subscribe(reconcile);
       const stopReconnect = ctx.on("connection/reset", reconcile);
       ctx.effect(
         () => () => {
           disposed = true;
+          window.removeEventListener("message", receiveRobotWorkspaces);
           stopWorkspaces();
           stopSessions();
           stopReconnect();

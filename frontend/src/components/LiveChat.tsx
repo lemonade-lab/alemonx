@@ -7,6 +7,7 @@ import {
   useState
 } from 'react'
 import {
+  AtSign,
   Bot,
   Bell,
   ContactRound,
@@ -18,9 +19,11 @@ import {
   Menu,
   MessageCircle,
   Paperclip,
+  Pin,
   Search,
   Send,
   Settings2,
+  ThumbsUp,
   Trash2,
   Undo2,
   UsersRound,
@@ -3738,7 +3741,7 @@ function QQ9ChatShell(props: QQ9ShellProps) {
           </div>
           <div className="relative justify-self-center">
             <button
-              className="inline-flex size-10 items-center justify-center overflow-hidden rounded-full border border-(--theme-border-default) bg-(--theme-surface-active) text-(--theme-text-secondary) transition hover:border-(--theme-accent-soft-border) hover:bg-(--theme-accent-soft) [&_img]:size-full [&_img]:object-cover"
+              className="inline-flex size-10 items-center justify-center overflow-hidden rounded-full bg-(--theme-surface-active) text-(--theme-text-secondary) transition hover:bg-(--theme-accent-soft) [&_img]:size-full [&_img]:object-cover"
               aria-label="查看当前机器人资料"
               aria-expanded={botCardOpen}
               title={`当前机器人：${props.botIdentity.name}`}
@@ -4195,7 +4198,7 @@ function QQ9Message({
 }) {
   const articleRef = useRef<HTMLElement | null>(null)
   const avatarButtonRef = useRef<HTMLButtonElement | null>(null)
-  const avatarMenuRef = useRef<HTMLSpanElement | null>(null)
+  const avatarMenuRef = useRef<HTMLDivElement>(null)
   const messageMenuRef = useRef<HTMLDivElement | null>(null)
   const [menuOpen, setMenuOpen] = useState(false)
   const [avatarMenuOpen, setAvatarMenuOpen] = useState(false)
@@ -4224,10 +4227,31 @@ function QQ9Message({
         name: event.UserName || event.UserId || '未知用户',
         avatar: event.UserAvatar
       }
-  const closeMenus = () => {
+  const closeMenus = useCallback(() => {
     setMenuOpen(false)
     setAvatarMenuOpen(false)
-  }
+  }, [])
+  useEffect(() => {
+    if (!menuOpen && !avatarMenuOpen) return
+    const activeMenu = avatarMenuOpen ? avatarMenuRef : messageMenuRef
+    const previousFocus = document.activeElement
+    activeMenu.current?.querySelector('button')?.focus({ preventScroll: true })
+    const onPointerDown = (event: PointerEvent) => {
+      if (event.target instanceof Node && !activeMenu.current?.contains(event.target)) closeMenus()
+    }
+    const onEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return
+      event.preventDefault()
+      closeMenus()
+      if (previousFocus instanceof HTMLElement) previousFocus.focus({ preventScroll: true })
+    }
+    document.addEventListener('pointerdown', onPointerDown)
+    document.addEventListener('keydown', onEscape)
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown)
+      document.removeEventListener('keydown', onEscape)
+    }
+  }, [avatarMenuOpen, closeMenus, menuOpen])
   const copyMessage = () => {
     const value = eventText(event)
     if (value) void writeClipboardText(value)
@@ -4252,6 +4276,8 @@ function QQ9Message({
         disabled={!contact}
         onContextMenu={contextEvent => {
           contextEvent.preventDefault()
+          contextEvent.stopPropagation()
+          setMenuOpen(false)
           setAvatarMenuOpen(true)
         }}
         onClick={() => contact && onOpenDirect(contact)}
@@ -4265,41 +4291,48 @@ function QQ9Message({
         ) : (
           sender.name.slice(0, 1)
         )}
-        {avatarMenuOpen && contact ? (
-          <span
-            ref={avatarMenuRef}
-            className="qq9-popover-menu qq9-avatar-menu"
-            role="menu"
-            style={avatarMenuStyle}
-            onClick={menuEvent => menuEvent.stopPropagation()}
-          >
-            <button
-              onClick={() => {
-                onMention(contact)
-                closeMenus()
-              }}
-            >
-              提及 @{contact.label}
-            </button>
-            <button
-              onClick={() => {
-                onOpenDirect(contact)
-                closeMenus()
-              }}
-            >
-              打开私聊
-            </button>
-            <button
-              onClick={() => {
-                onReadProfile()
-                closeMenus()
-              }}
-            >
-              读取完整资料
-            </button>
-          </span>
-        ) : null}
       </button>
+      {avatarMenuOpen && contact ? (
+        <div
+          ref={avatarMenuRef}
+          className="workbench-tools-menu fixed overflow-auto"
+          role="menu"
+          aria-label="联系人操作"
+          style={avatarMenuStyle}
+          onClick={menuEvent => menuEvent.stopPropagation()}
+        >
+          <button
+            className="workbench-action-item"
+            onClick={() => {
+              onMention(contact)
+              closeMenus()
+            }}
+          >
+            <AtSign className="size-4 shrink-0" aria-hidden="true" />
+            <span className="min-w-0 truncate" title={contact.label}>提及 @{contact.label}</span>
+          </button>
+          <button
+            className="workbench-action-item"
+            onClick={() => {
+              onOpenDirect(contact)
+              closeMenus()
+            }}
+          >
+            <MessageCircle className="size-4 shrink-0" aria-hidden="true" />
+            打开私聊
+          </button>
+          <button
+            className="workbench-action-item"
+            onClick={() => {
+              onReadProfile()
+              closeMenus()
+            }}
+          >
+            <ContactRound className="size-4 shrink-0" aria-hidden="true" />
+            读取完整资料
+          </button>
+        </div>
+      ) : null}
       <div className="min-w-0">
         <header
           className={`mb-1 flex items-baseline gap-1.5 ${mine ? 'flex-row-reverse' : ''}`}
@@ -4346,33 +4379,39 @@ function QQ9Message({
         {menuOpen ? (
           <div
             ref={messageMenuRef}
-            className="qq9-popover-menu qq9-message-menu"
+            className="workbench-tools-menu fixed overflow-auto"
             role="menu"
+            aria-label="消息操作"
             style={messageMenuStyle}
           >
-            <button onClick={copyMessage}>
-              <Copy className="size-3.5" aria-hidden="true" />
+            <button className="workbench-action-item" onClick={copyMessage}>
+              <Copy className="size-4 shrink-0" aria-hidden="true" />
               复制消息
             </button>
             <button
+              className="workbench-action-item"
               onClick={() => {
                 onFavorite()
                 closeMenus()
               }}
             >
+              <Heart className="size-4 shrink-0" aria-hidden="true" />
               {favorite ? '取消收藏' : '收藏消息'}
             </button>
             {canDecorate ? (
               <>
                 <button
+                  className="workbench-action-item"
                   onClick={() => {
                     onDecorate('reaction.add', '👍')
                     closeMenus()
                   }}
                 >
+                  <ThumbsUp className="size-4 shrink-0" aria-hidden="true" />
                   添加 👍 表态
                 </button>
                 <button
+                  className="workbench-action-item"
                   onClick={() => {
                     onDecorate(
                       decoration?.pinned ? 'message.unpin' : 'message.pin'
@@ -4380,18 +4419,21 @@ function QQ9Message({
                     closeMenus()
                   }}
                 >
+                  <Pin className="size-4 shrink-0" aria-hidden="true" />
                   {decoration?.pinned ? '取消精华' : '设为精华'}
                 </button>
               </>
             ) : null}
             {canDelete ? (
               <button
-                className="danger"
+                className="workbench-action-item"
+                data-destructive
                 onClick={() => {
                   onDelete()
                   closeMenus()
                 }}
               >
+                <Undo2 className="size-4 shrink-0" aria-hidden="true" />
                 撤回消息
               </button>
             ) : null}
@@ -4693,13 +4735,14 @@ function QQ9Composer({
         {canMention && mentionOpen && (
           <div
             ref={mentionMenuRef}
-            className="qq9-mention-menu"
+            className="workbench-tools-menu workbench-settings-menu qq9-mention-menu absolute overflow-auto"
             role="listbox"
             style={mentionMenuStyle}
           >
             {mentionCandidates.map(contact => (
               <button
                 key={contact.id}
+                className="workbench-action-item"
                 onClick={() => {
                   setText(text.replace(/@[^\s@]*$/, `@${contact.label} `))
                   setMentionOpen(false)
@@ -4712,7 +4755,7 @@ function QQ9Composer({
                     contact.label.slice(0, 1)
                   )}
                 </span>
-                <span>{contact.label}</span>
+                <span className="min-w-0 truncate">{contact.label}</span>
               </button>
             ))}
             {!mentionCandidates.length && (
@@ -4842,7 +4885,7 @@ function MemberRows({
             key={`${name}:${index}`}
           >
             <button
-              className="inline-flex size-6 shrink-0 items-center justify-center overflow-hidden rounded-full border border-(--theme-border-default) bg-(--theme-surface-active) text-(--theme-text-secondary) [&_img]:size-full [&_img]:object-cover"
+              className="inline-flex size-6 shrink-0 items-center justify-center overflow-hidden rounded-full bg-(--theme-surface-active) text-(--theme-text-secondary) [&_img]:size-full [&_img]:object-cover"
               onClick={() => openContact(contact)}
               title={`打开与 ${name} 的私聊`}
               aria-label={`打开与 ${name} 的私聊`}

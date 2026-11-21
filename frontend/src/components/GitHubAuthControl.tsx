@@ -160,7 +160,7 @@ export function GitHubAuthControl({
           <button
             ref={errorTrigger}
             type="button"
-            className="icon-button size-7 shrink-0 border-0 p-0 text-red-600 dark:text-red-400"
+            className="icon-button size-7 shrink-0 p-0 text-red-600 dark:text-red-400"
             aria-label="查看 GitHub 登录错误"
             title="查看 GitHub 登录错误"
             aria-expanded={detailsOpen}

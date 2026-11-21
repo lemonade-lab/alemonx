@@ -313,10 +313,10 @@ export function SetupUpdateButton({ embedded = false }: { embedded?: boolean }) 
     <div className={embedded ? 'settings-update-panel grid gap-4' : 'relative'}>
       {!embedded && (
         <button
-        className={`inline-flex size-8 items-center justify-center rounded-md border transition disabled:cursor-wait disabled:opacity-70 ${
+        className={`inline-flex size-8 items-center justify-center rounded-md transition disabled:cursor-wait disabled:opacity-70 ${
           updateAvailable
-            ? 'border-brand-100 bg-brand-50 text-brand-600 hover:bg-brand-100'
-            : 'border-transparent text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800'
+            ? 'bg-brand-50 text-brand-600 hover:bg-brand-100'
+            : 'text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800'
         }`}
         onClick={openPanel}
         disabled={isFetching}

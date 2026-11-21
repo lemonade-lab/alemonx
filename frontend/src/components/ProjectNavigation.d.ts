@@ -17,5 +17,6 @@ export type ProjectNavigationItem = {
 export type ProjectNavigationProps = {
   items: ProjectNavigationItem[]
   activeID: string | null
+  dropdown?: boolean
   children?: ReactNode
 }

@@ -1,4 +1,4 @@
-import { ChevronRight } from 'lucide-react'
+import { Check, ChevronRight } from 'lucide-react'
 import { Fragment, useEffect, useId, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useViewportPopoverPosition } from '../hooks/useViewportPopoverPosition'
@@ -14,10 +14,13 @@ const normalClass = 'text-(--theme-text-secondary)'
 export function ProjectNavigation({
   items,
   activeID,
+  dropdown = false,
   children
 }: ProjectNavigationProps) {
   const id = useId()
-  const isCompact = useIsMobileViewport()
+  const isMobile = useIsMobileViewport()
+  const inlineSubmenu = isMobile && !dropdown
+  const rowClass = dropdown ? 'workbench-action-item' : itemClass
   const [expandedID, setExpandedID] = useState<string | null>(null)
   const trigger = useRef<HTMLButtonElement>(null)
   const panel = useRef<HTMLDivElement>(null)
@@ -29,9 +32,10 @@ export function ProjectNavigation({
     : null
   const position = useViewportPopoverPosition({
     anchor,
-    open: Boolean(expanded) && !isCompact,
+    anchorRef: dropdown ? trigger : undefined,
+    open: Boolean(expanded) && !inlineSubmenu,
     popoverRef: panel,
-    placement: anchor && anchor.left >= 230 ? 'left' : 'bottom',
+    placement: dropdown ? 'side' : anchor && anchor.left >= 230 ? 'left' : 'bottom',
     gap: 6
   })
 
@@ -52,7 +56,7 @@ export function ProjectNavigation({
   }, [expandedID])
 
   useEffect(() => {
-    if (expandedID) panel.current?.querySelector('button')?.focus()
+    if (expandedID) panel.current?.querySelector('button')?.focus({ preventScroll: true })
   }, [expandedID])
 
   const submenu = expanded && (
@@ -62,25 +66,28 @@ export function ProjectNavigation({
       role="group"
       aria-label={`${expanded.label}子菜单`}
       className={
-        isCompact
-          ? 'grid gap-1 border-l-2 border-(--theme-accent-soft-border) pl-3'
-          : 'fixed z-[10003] grid w-[min(210px,calc(100vw-24px))] gap-0.5 overflow-auto rounded-xl border border-(--theme-border-default) bg-(--theme-surface-panel) p-1 shadow-(--theme-shadow-pop)'
+        dropdown
+          ? 'workbench-tools-menu workbench-side-submenu fixed'
+          : inlineSubmenu
+            ? 'grid gap-1 border-l-2 border-(--theme-accent-soft-border) pl-3'
+            : 'workbench-tools-menu workbench-settings-menu fixed overflow-auto [--workbench-menu-layer:10003]'
       }
-      style={isCompact ? undefined : position}
+      style={inlineSubmenu ? undefined : position}
     >
       {expanded.children?.map(child => (
         <button
           key={child.id}
           type="button"
           onClick={() => {
-            child.onSelect()
-            setExpandedID(null)
             trigger.current?.focus()
+            setExpandedID(null)
+            child.onSelect()
           }}
-          className={`${itemClass} ${child.active ? selectedClass : normalClass}`}
+          className={inlineSubmenu ? `${itemClass} ${child.active ? selectedClass : normalClass}` : 'workbench-action-item'}
           aria-current={child.active ? 'page' : undefined}
         >
           {child.label}
+          {!inlineSubmenu && child.active && <Check className="ml-auto size-4 shrink-0" aria-hidden="true" />}
         </button>
       ))}
     </div>
@@ -90,7 +97,7 @@ export function ProjectNavigation({
     <nav
       aria-label="机器人功能"
       data-project-navigation
-      className="grid gap-1"
+      className={dropdown ? 'grid' : 'grid gap-1'}
       onKeyDown={event => {
         if (event.key !== 'Escape' || !expandedID || event.defaultPrevented)
           return
@@ -117,7 +124,7 @@ export function ProjectNavigation({
                 trigger.current = event.currentTarget
                 setExpandedID(open ? null : item.id)
               }}
-              className={`${itemClass} ${active || open ? selectedClass : normalClass}`}
+              className={dropdown ? rowClass : `${rowClass} ${active || open ? selectedClass : normalClass}`}
               aria-current={active ? 'page' : undefined}
               aria-expanded={hasSubitems ? open : undefined}
               aria-controls={open ? id : undefined}
@@ -137,13 +144,14 @@ export function ProjectNavigation({
                   aria-hidden="true"
                 />
               )}
+              {dropdown && active && !hasSubitems && <Check className="ml-auto size-4 shrink-0" aria-hidden="true" />}
             </button>
-            {isCompact && open && submenu}
+            {(dropdown || inlineSubmenu) && open && submenu}
           </Fragment>
         )
       })}
       {children}
-      {expanded && !isCompact && createPortal(submenu, document.body)}
+      {expanded && !dropdown && !inlineSubmenu && createPortal(submenu, document.body)}
     </nav>
   )
 }

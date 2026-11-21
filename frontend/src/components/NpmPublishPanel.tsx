@@ -251,7 +251,7 @@ export function NpmPublishPanel({ root, busy, onRun }: Props) {
           </label>
           {confirming && (
             <button
-              className="inline-flex size-9 items-center justify-center rounded-lg border border-slate-200 text-slate-500 dark:border-slate-600 dark:text-slate-300"
+              className="inline-flex size-9 items-center justify-center rounded-lg text-slate-500 dark:text-slate-300 hover:bg-(--theme-surface-hover)"
               onClick={() => setConfirming(false)}
               aria-label="取消发布"
               title="取消"
@@ -260,7 +260,7 @@ export function NpmPublishPanel({ root, busy, onRun }: Props) {
             </button>
           )}
           <button
-            className="inline-flex size-9 items-center justify-center rounded-lg border border-slate-200 text-slate-500 disabled:opacity-40 dark:border-slate-600 dark:text-slate-300"
+            className="inline-flex size-9 items-center justify-center rounded-lg text-slate-500 enabled:hover:bg-(--theme-surface-hover) disabled:opacity-40 dark:text-slate-300"
             disabled={busy}
             onClick={() => void refresh()}
             aria-label="刷新发布状态"

@@ -2,7 +2,7 @@ import { createPortal } from 'react-dom'
 import { useEffect, useRef } from 'react'
 import type { ReactNode } from 'react'
 
-// Desktop windows and the dock use the lower application layer. Any modal
+// Desktop windows use the lower application layer. Any modal
 // rendered through this component is a system-level interaction barrier and
 // therefore always sits above every application window.
 export const GLOBAL_MODAL_Z_INDEX = 2_147_483_000

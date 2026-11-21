@@ -1,10 +1,10 @@
 import { memo, useEffect, useRef, useCallback, useState } from 'react';
+import { Code2, ListChecks, Pencil, Trash2, Undo2, X } from 'lucide-react';
 import { MessageItem } from '@testone/typing';
 import MessageRow from './MessageRow';
 import { buildMessageKey } from '@testone/core/messageKey';
 import VirtualizedList from './VirtualizedList';
 import logger from '@testone/core/logger';
-import { Button } from '../ui/Button';
 import { useViewportPopoverPosition } from '../../../hooks/useViewportPopoverPosition';
 
 // 定义类型
@@ -109,13 +109,18 @@ function MessageWindow({
   // 全局点击 / ESC 关闭菜单
   useEffect(() => {
     if (!menu) return;
+    const previousFocus = document.activeElement;
+    menuRef.current?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus({ preventScroll: true });
     const onGlobal = (e: MouseEvent) => {
-      const target = e.target as HTMLElement;
-      if (target.closest && target.closest('.msg-context-menu')) return;
+      if (e.target instanceof Node && menuRef.current?.contains(e.target)) return;
       closeMenu();
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') closeMenu();
+      if (e.key !== 'Escape') return;
+      e.preventDefault();
+      e.stopPropagation();
+      closeMenu();
+      if (previousFocus instanceof HTMLElement) previousFocus.focus({ preventScroll: true });
     };
     window.addEventListener('click', onGlobal, true);
     window.addEventListener('contextmenu', onGlobal, true);
@@ -214,13 +219,17 @@ function MessageWindow({
       {menu && menu.item && (
         <div
           ref={menuRef}
-          className="msg-context-menu fixed z-50  text-sm text-[var(--foreground,#eee)] shadow-lg rounded-md  p-2 flex flex-col gap-2 min-w-20"
+          className="workbench-tools-menu workbench-side-submenu fixed"
           style={menuStyle}
+          role="menu"
+          aria-label="消息操作"
         >
           {selectMode ? (
             <>
-              <Button
-                className="text-xs"
+              <button
+                type="button"
+                className="workbench-action-item"
+                data-destructive
                 disabled={!selectedKeys.length}
                 onClick={() => {
                   if (!selectedKeys.length) return;
@@ -229,71 +238,86 @@ function MessageWindow({
                   closeMenu();
                 }}
               >
+                <Trash2 className="size-4 shrink-0" aria-hidden="true" />
                 删除({selectedKeys.length})
-              </Button>
-              <Button
-                className="text-xs"
+              </button>
+              <button
+                type="button"
+                className="workbench-action-item"
                 onClick={() => {
                   onExitSelectMode && onExitSelectMode();
                   closeMenu();
                 }}
               >
+                <X className="size-4 shrink-0" aria-hidden="true" />
                 关闭
-              </Button>
+              </button>
             </>
           ) : (
             <>
-              <Button
-                className="text-xs"
+              <button
+                type="button"
+                className="workbench-action-item"
+                data-destructive
                 onClick={() => {
                   if (onConfirmDelete) onConfirmDelete(menu.item!);
                   else onDelete(menu.item!);
                   closeMenu();
                 }}
               >
+                <Trash2 className="size-4 shrink-0" aria-hidden="true" />
                 删除
-              </Button>
+              </button>
               {onRecall && (
-                <Button
-                  className="text-xs"
+                <button
+                  type="button"
+                  className="workbench-action-item"
+                  data-destructive
                   onClick={() => {
                     onRecall(menu.item!);
                     closeMenu();
                   }}
                 >
+                  <Undo2 className="size-4 shrink-0" aria-hidden="true" />
                   撤回
-                </Button>
+                </button>
               )}
               {onEdit && UserId === menu.item?.UserId && (
-                <Button
-                  className="text-xs"
+                <button
+                  type="button"
+                  className="workbench-action-item"
                   onClick={() => {
                     onEdit(menu.item!);
                     closeMenu();
                   }}
                 >
+                  <Pencil className="size-4 shrink-0" aria-hidden="true" />
                   编辑
-                </Button>
+                </button>
               )}
-              <Button
-                className="text-xs"
+              <button
+                type="button"
+                className="workbench-action-item"
                 onClick={() => {
                   onEnterSelectMode && onEnterSelectMode(menu.item!);
                   closeMenu();
                 }}
               >
+                <ListChecks className="size-4 shrink-0" aria-hidden="true" />
                 多选
-              </Button>
+              </button>
               {onInspect && (
-                <Button
-                  className="text-xs"
+                <button
+                  type="button"
+                  className="workbench-action-item"
                   onClick={() => {
                     onInspect(menu.item!);
                     closeMenu();
                   }}
                 >
+                  <Code2 className="size-4 shrink-0" aria-hidden="true" />
                   查看结构
-                </Button>
+                </button>
               )}
             </>
           )}

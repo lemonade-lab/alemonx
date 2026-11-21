@@ -137,6 +137,7 @@ export function useAccountRobots() {
     canImport,
     loading,
     error,
+    scope: current.current?.scope,
     ready: !loading && current.current !== null,
     retry: () => setReload(value => value + 1)
   }

@@ -1,79 +1,244 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type Page } from '@playwright/test'
 
-async function mount(
-  page: import('@playwright/test').Page,
-  root = '/mock/project'
-) {
-  await page.route('**/dsh-regression', route =>
-    route.fulfill({
-      contentType: 'text/html; charset=utf-8',
-      body: `<div id="root"></div><script type="module">
-      import RefreshRuntime from '/@react-refresh';
-      RefreshRuntime.injectIntoGlobalHook(window);
-      window.$RefreshReg$ = () => {};
-      window.$RefreshSig$ = () => type => type;
-      window.__vite_plugin_react_preamble_installed__ = true;
-      const { default: React } = await import('/node_modules/.vite/deps/react.js');
-      const { default: ReactDOM } = await import('/node_modules/.vite/deps/react-dom_client.js');
-      const { DSHWorkspace } = await import('/src/components/DSHWorkspace.tsx');
-      const { Provider } = await import('/node_modules/.vite/deps/react-redux.js');
-      const { store } = await import('/src/store/guideStore.ts');
-      ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(Provider, {store}, React.createElement(DSHWorkspace, {root:${JSON.stringify(root)},onOpenWeb:url=>{document.body.dataset.openedUrl=url}})));
-    </script>`
-    })
-  )
-  await page.goto('/dsh-regression')
+const root = 'C:\\机器人\\demo'
+const secondRoot = '/mock/second-project'
+const token = Buffer.from(root).toString('base64url')
+const originToken = Buffer.from('http://127.0.0.1:4242').toString('base64url')
+
+async function mount(page: Page, selectedRoot = root) {
+  let activeRoot = selectedRoot
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.route('**/api/v1/**', route => {
+    const { pathname } = new URL(route.request().url())
+    if (pathname === '/api/v1/goals' || pathname === '/api/v1/robot/tasks')
+      return route.fulfill({ json: [] })
+    if (pathname === '/api/v1/checks')
+      return route.fulfill({ json: { checks: [] } })
+    if (pathname === '/api/v1/auth/status')
+      return route.fulfill({ json: { enabled: false } })
+    if (pathname === '/api/v1/workspace/robots') {
+      if (route.request().method() === 'POST') {
+        const { action, id } = route.request().postDataJSON()
+        if (action === 'select') activeRoot = id
+      }
+      return route.fulfill({
+        json: {
+          scope: 'test',
+          local: true,
+          initialized: true,
+          activeProjectID: activeRoot,
+          projects: selectedRoot
+            ? [
+                { id: root, path: root, name: 'demo' },
+                { id: secondRoot, path: secondRoot, name: 'second-project' }
+              ]
+            : []
+        }
+      })
+    }
+    if (pathname === '/api/v1/robot/validate')
+      return route.fulfill({ json: { valid: true } })
+    if (pathname === '/api/v1/dsh/status')
+      return route.fulfill({ json: { ready: true } })
+    return route.fulfill({ json: {} })
+  })
 }
 
-test('opens official Web UI through the browser without custom chat or configuration', async ({
+function launchButton(page: Page) {
+  return page
+    .getByRole('navigation', { name: '工作台工具' })
+    .getByRole('button', { name: 'DSH', exact: true })
+}
+
+test('DSH opens the official Web UI in the workbench and offers robot folders additively', async ({
   page
 }) => {
-  const requests: string[] = []
-  await page.route('**/api/v1/dsh/**', async route => {
-    requests.push(
-      route.request().method() + ' ' + new URL(route.request().url()).pathname
-    )
-    await route.fulfill({
-      json: { url: 'http://127.0.0.1:4242/?token=launch' }
+  await mount(page)
+  let launches = 0
+  await page.route(`**/api/v1/dsh/runtimes/${token}/web`, route => {
+    expect(route.request().method()).toBe('POST')
+    launches++
+    return route.fulfill({
+      json: { url: 'http://127.0.0.1:4242/?token=fixture' }
     })
   })
-  const root = 'C:\\机器人\\demo'
-  await mount(page, root)
-  await page.getByRole('button', { name: '打开 Web 版' }).click()
-  await expect(page.locator('body')).toHaveAttribute(
-    'data-opened-url',
-    'http://127.0.0.1:4242/?token=launch'
+  await page.route('**/api/v1/terminal/sessions', route =>
+    route.fulfill({
+      json: { id: 'dsh-terminal', key: 'fixture', cwd: root, shell: '/bin/sh' }
+    })
   )
-  const token = Buffer.from(root).toString('base64url')
-  expect(requests).toEqual([`POST /api/v1/dsh/runtimes/${token}/web`])
-  await expect(page.getByRole('textbox')).toHaveCount(0)
+  await page.route('**/api/v1/terminal/sessions/dsh-terminal/stream**', route =>
+    route.fulfill({ contentType: 'text/event-stream', body: ': fixture\n\n' })
+  )
+  await page.route(
+    `**/api/v1/browser/http/${originToken}/?token=fixture`,
+    route =>
+      route.fulfill({
+        contentType: 'text/html',
+        body: `<p>官方 DSH 工作区</p><script>
+      window.addEventListener('message', event => {
+        if (event.source === parent && event.data?.type === 'alx:dsh-robot-workspaces')
+          document.body.dataset.robotRoots = JSON.stringify(event.data.roots)
+      });
+      parent.postMessage({type: 'alx:dsh-workspaces-ready'}, location.origin);
+    </script>`
+      })
+  )
+  await page.goto('/dashboard/robot')
+  await expect(
+    page.getByRole('button', { name: '使用 Agent 协助当前机器人' })
+  ).toHaveCount(0)
+  await launchButton(page).click()
+  await expect(page.locator('.robot-workspace-list')).toBeHidden()
+  const header = page.locator('.workbench-content-header')
+  await expect(header).toHaveCSS('position', 'absolute')
+  await expect(header.getByRole('button', { name: '打开终端' })).toBeVisible()
+  const frame = page.frameLocator('iframe[title="DSH Web 工作区"]')
+  await expect(frame.getByText('官方 DSH 工作区')).toBeVisible()
+  const workspace = page.locator('.workbench-content-column')
+  const iframe = page.getByTitle('DSH Web 工作区', { exact: true })
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 900 })
+    const workspaceBounds = (await workspace.boundingBox())!
+    expect(await iframe.boundingBox()).toEqual(workspaceBounds)
+    expect((await header.boundingBox())!.width).toBeLessThan(
+      workspaceBounds.width / 2
+    )
+  }
+  const operations = header.getByRole('button', { name: '操作', exact: true })
+  const menu = header.getByRole('region', { name: '操作菜单' })
+  await expect(header.getByRole('button', { name: '打开终端' })).toBeHidden()
+  await operations.click()
+  await menu.getByRole('button', { name: '打开终端' }).click()
+  await expect(menu).toBeHidden()
+  const terminal = page.getByRole('complementary', { name: '终端面板' })
+  await expect(
+    terminal.getByRole('button', { name: 'demo', exact: true })
+  ).toBeVisible()
+  const floatingBounds = (await header.boundingBox())!
+  expect((await terminal.boundingBox())!.y).toBe(
+    floatingBounds.y + floatingBounds.height
+  )
+  expect(await iframe.boundingBox()).toEqual(await workspace.boundingBox())
+  await operations.click()
+  await menu.getByRole('button', { name: '收起终端面板' }).click()
+  await expect(terminal).toBeHidden()
+  await expect(frame.locator('body')).toHaveAttribute(
+    'data-robot-roots',
+    JSON.stringify([root, secondRoot])
+  )
+  await expect(page.getByRole('dialog', { name: '浏览器' })).toHaveCount(0)
+  await page.getByRole('button', { name: '主页', exact: true }).click()
+  await expect(frame.getByText('官方 DSH 工作区')).toBeHidden()
+  await expect(header).toHaveCSS('position', 'relative')
+  await launchButton(page).click()
+  await expect(frame.getByText('官方 DSH 工作区')).toBeVisible()
+  expect(launches).toBe(1)
 })
 
-test('startup failure is retryable and does not open a browser tab', async ({
+test('the robot row opens its own directory in DSH', async ({ page }) => {
+  await mount(page, secondRoot)
+  const launches: string[] = []
+  await page.route('**/api/v1/dsh/runtimes/*/web', route => {
+    launches.push(new URL(route.request().url()).pathname)
+    return route.fulfill({
+      json: { url: 'http://127.0.0.1:4242/?token=fixture' }
+    })
+  })
+  await page.route(
+    `**/api/v1/browser/http/${originToken}/?token=fixture`,
+    route =>
+      route.fulfill({
+        contentType: 'text/html',
+        body: '<p>机器人 DSH 工作区</p>'
+      })
+  )
+
+  await page.goto('/dashboard/robot')
+  const robots = page.getByRole('navigation', { name: '机器人列表' })
+  const open = robots.getByRole('button', {
+    name: '在 DSH 中打开 demo',
+    exact: true
+  })
+  const more = robots.getByRole('button', {
+    name: 'demo 的更多操作',
+    exact: true
+  })
+  await expect(
+    robots.getByRole('button', { name: 'second-project', exact: true })
+  ).toHaveAttribute('aria-current', 'page')
+  await expect(open).toBeVisible()
+  const openBounds = (await open.boundingBox())!
+  const moreBounds = (await more.boundingBox())!
+  expect(openBounds.x + openBounds.width).toBeLessThanOrEqual(moreBounds.x)
+  expect(openBounds.y + openBounds.height / 2).toBeCloseTo(
+    moreBounds.y + moreBounds.height / 2,
+    0
+  )
+
+  await open.click()
+  await expect(launchButton(page)).toHaveAttribute('aria-current', 'page')
+  await expect(
+    page
+      .frameLocator('iframe[title="DSH Web 工作区"]')
+      .getByText('机器人 DSH 工作区')
+  ).toBeVisible()
+  await expect
+    .poll(() => new URL(page.url()).searchParams.get('root'))
+    .toBe(root)
+  expect(launches).toEqual([`/api/v1/dsh/runtimes/${token}/web`])
+})
+
+test('DSH shows an installation prompt without launching when the runtime is unavailable', async ({
   page
 }) => {
-  let attempts = 0
-  await page.route('**/api/v1/dsh/**', async route => {
-    attempts++
-    await route.fulfill(
-      attempts === 1
-        ? { status: 503, json: { error: 'DSH Web 版启动失败，请重试' } }
-        : { json: { url: 'http://127.0.0.1:4242/?token=retry' } }
-    )
-  })
   await mount(page)
-  await page.getByRole('button', { name: '打开 Web 版' }).click()
-  await expect(page.getByRole('alert')).toContainText('DSH Web 版启动失败')
-  await expect(page.locator('body')).not.toHaveAttribute('data-opened-url')
-  await page.getByRole('button', { name: '重试打开 Web 版' }).click()
-  await expect(page.locator('body')).toHaveAttribute(
-    'data-opened-url',
-    'http://127.0.0.1:4242/?token=retry'
+  await page.route('**/api/v1/dsh/status', route =>
+    route.fulfill({ json: { ready: false, message: '尚未安装 DSH' } })
   )
+  let launches = 0
+  await page.route('**/api/v1/dsh/runtimes/**', route => {
+    launches++
+    return route.fulfill({ status: 503 })
+  })
+  await page.goto('/dashboard/robot')
+  await launchButton(page).click()
+  await expect(page.getByRole('alert')).toContainText('尚未安装 DSH')
+  await expect(page.getByRole('button', { name: '重新检查' })).toBeVisible()
+  expect(launches).toBe(0)
 })
 
-test('requires a selected robot project', async ({ page }) => {
+test('DSH startup failure can be retried in place', async ({ page }) => {
+  await mount(page)
+  let attempts = 0
+  await page.route(`**/api/v1/dsh/runtimes/${token}/web`, route => {
+    attempts++
+    return route.fulfill(
+      attempts === 1
+        ? { status: 503, json: { error: 'DSH Web 版启动失败，请重试' } }
+        : { json: { url: 'http://127.0.0.1:4242/?token=fixture' } }
+    )
+  })
+  await page.route(
+    `**/api/v1/browser/http/${originToken}/?token=fixture`,
+    route =>
+      route.fulfill({ contentType: 'text/html', body: '<p>DSH 已打开</p>' })
+  )
+  await page.goto('/dashboard/robot')
+  await launchButton(page).click()
+  await expect(page.getByRole('alert')).toContainText('DSH Web 版启动失败')
+  await page.getByRole('button', { name: '重试打开 DSH' }).click()
+  await expect(
+    page.frameLocator('iframe[title="DSH Web 工作区"]').getByText('DSH 已打开')
+  ).toBeVisible()
+  expect(attempts).toBe(2)
+})
+
+test('DSH asks for a robot directory when none is selected', async ({
+  page
+}) => {
   await mount(page, '')
-  await expect(page.getByRole('button', { name: '打开 Web 版' })).toBeDisabled()
-  await expect(page.getByText('请先选择机器人项目。')).toBeVisible()
+  await page.goto('/dashboard/robot')
+  await launchButton(page).click()
+  await expect(page.getByText('请先在主页选择机器人目录。')).toBeVisible()
 })

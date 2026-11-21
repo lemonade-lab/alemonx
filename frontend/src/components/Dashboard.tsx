@@ -2,6 +2,9 @@ import { RobotRuntimeSwitch } from './RobotRuntimeSwitch'
 import { RobotDiagnostics } from './RobotDiagnostics'
 import { BackpackPackageUpdate } from './BackpackPackageUpdate'
 import { WorkbenchQuickActions } from './WorkbenchQuickActions'
+import { TerminalPanel } from './TerminalPanel'
+import { WorkbenchTerminalSplitter } from './WorkbenchTerminalSplitter'
+import { WorkbenchToolRail, type WorkbenchToolAction } from './WorkbenchToolRail'
 import { RobotDirectoryTree } from './RobotDirectoryTree'
 import { RobotWorkspaceSplitter } from './RobotWorkspaceSplitter'
 import { useAccountRobots } from '../hooks/useAccountRobots'
@@ -20,12 +23,12 @@ import {
   useCallback,
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type MouseEvent,
   type PointerEvent as ReactPointerEvent,
-  type CSSProperties,
   type ReactNode,
   type SyntheticEvent
 } from 'react'
@@ -40,6 +43,7 @@ import {
   type DashboardSection
 } from '../lib/dashboardNavigation'
 import { createRandomID } from '../lib/randomId'
+import { directoryName } from '../lib/directoryName'
 import {
   collapseForegroundLog,
   filterForegroundLog,
@@ -86,6 +90,7 @@ import {
   Folder,
   FolderGit2,
   FolderOpen,
+  FolderPlus,
   Gamepad2,
   GitBranch,
   Globe,
@@ -93,6 +98,7 @@ import {
   HardDrive,
   Headphones,
   KeyRound,
+  LayoutDashboard,
   Link,
   MessageSquare,
   Monitor,
@@ -143,12 +149,14 @@ import { OpsOverview } from './OpsOverview'
 import { NpmPublishPanel } from './NpmPublishPanel'
 import { PackageManifestPanel } from './PackageManifestPanel'
 import { DSHWorkspace } from './DSHWorkspace'
+import { DSHWhaleIcon } from './DSHWhaleIcon'
 import { ErrorNotice } from './ErrorNotice'
 import { EmptyState } from './EmptyState'
 import { WorkspaceWelcome } from './WorkspaceWelcome'
 import { BackpackFolderInstall } from './BackpackFolderInstall'
-import { openNativeWindow, bridge, markNativeRuntimeReady, type AuxiliaryWindowName } from './nativeWindow'
-import { WorkbenchHeader } from './WorkbenchHeader'
+import { openNativeWindow, bridge, desktopPlatform, markNativeRuntimeReady, type AuxiliaryWindowName } from './nativeWindow'
+import { WorkbenchDragRegion, WorkbenchHeader } from './WorkbenchHeader'
+import { WorkbenchTools } from './WorkbenchTools'
 import type { SettingsSection } from './settingsSections'
 import { ProjectNavigation } from './ProjectNavigation'
 import { ConfirmDialog } from './ConfirmDialog'
@@ -167,6 +175,7 @@ import { useCanManageAccounts } from '../hooks/useCanManageAccounts'
 import { AccountManagementPage } from './AccountManagement'
 import { RobotGitControl } from './RobotGitControl'
 import { useIsMobileViewport } from '../hooks/useIsMobileViewport'
+import { useIsPadViewport } from '../hooks/useIsPadViewport'
 import { useViewportPopoverPosition } from '../hooks/useViewportPopoverPosition'
 import { TestCenter } from './TestCenter'
 import { LiveChat } from './LiveChat'
@@ -285,7 +294,6 @@ type SystemFeature = string
 type SystemWindowState = { minimized: boolean }
 
 type FloatingWindowID =
-  | 'terminal'
   | 'foregroundLogs'
   | 'serviceWebview'
   | 'git'
@@ -303,30 +311,28 @@ type Props = {
   defaultPage: string
   onCreateRobot: () => void
   onOpenGuide: () => void
+  guide?: {
+    renderContent: (
+      stepsTarget: HTMLDivElement | null,
+      progressTarget: HTMLDivElement | null,
+      onStepSelect: () => void
+    ) => ReactNode
+    onClose: () => void
+  }
   onOpenSettings: (section?: SettingsSection) => void
+  onMinimizeSettings: () => void
   onClearError: () => void
   onCheck: () => void
   onFix: (check: Check) => void
-  windowStyle?: CSSProperties
-  windowControls?: ReactNode
-  onWindowStateChange?: (state: {
-    terminal: { open: boolean; minimized: boolean }
-    foregroundLogs: { open: boolean; minimized: boolean }
-    git: { open: boolean; minimized: boolean }
-    app: { open: boolean; minimized: boolean }
-    test: { open: boolean; minimized: boolean }
-    live: { open: boolean; minimized: boolean }
-    pm2Logs: { open: boolean; minimized: boolean }
-    pm2Status: { open: boolean; minimized: boolean }
-    ops: { open: boolean; minimized: boolean }
-    system: Record<string, { open: boolean; minimized: boolean; label: string }>
-  }) => void
   goals?: unknown
   goal?: unknown
   onSelect?: (id: string) => void
 }
 
 const DataWorkspace = lazy(() => import('./data/DataWorkspace'))
+const ResourceExplorer = lazy(() => import('./explorer/ResourceExplorer').then(
+  module => ({ default: module.ResourceExplorer })
+))
 
 const coreFeatureCatalog: Array<{
   id: SystemFeature
@@ -423,12 +429,6 @@ function PlatformLogo({
 }) {
   const Icon = platformLogoIcon(logo)
   return <Icon className={className ?? 'size-4'} />
-}
-
-function projectName(path: string) {
-  const cleaned = path.replace(/[\\/]+$/, '')
-  const leaf = cleaned.split(/[\\/]/).filter(Boolean).pop()
-  return leaf || cleaned || path
 }
 
 function formatTaskTime(value?: string) {
@@ -742,6 +742,7 @@ export function DirectoryPicker({
         className="directory-picker finder-picker theme-finder grid h-[min(700px,calc(100dvh-32px))] w-full max-w-5xl grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_24px_70px_rgb(28_26_23/0.26)]"
         role="dialog"
         aria-label={title}
+        onPointerDown={contextMenu ? () => setContextMenu(null) : undefined}
       >
         <header className="finder-header grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-4 border-b border-slate-200 px-4 py-3">
           <div className="finder-header-navigation flex flex-row items-center gap-2">
@@ -1027,28 +1028,32 @@ export function DirectoryPicker({
       {contextMenu && (
         <div
           ref={contextMenuRef}
-          className="fixed z-210 grid min-w-32 overflow-hidden rounded-md border border-slate-200 bg-white py-1 shadow-lg"
+          className="workbench-tools-menu workbench-side-submenu fixed [--workbench-menu-layer:210]"
           style={contextMenuStyle}
           role="menu"
+          aria-label="目录操作"
           onClick={event => event.stopPropagation()}
         >
           <button
-            className="px-3 py-2 text-left text-xs text-slate-700 hover:bg-slate-100"
+            className="workbench-action-item"
             onClick={() => {
               setNewFolderName(' ')
               setContextMenu(null)
             }}
           >
+            <FolderPlus className="size-4 shrink-0" aria-hidden="true" />
             新建文件夹
           </button>
           {contextMenu.target && (
             <button
-              className="px-3 py-2 text-left text-xs text-red-700 hover:bg-red-50"
+              className="workbench-action-item"
+              data-destructive
               onClick={() => {
                 setDeleteTarget(contextMenu.target ?? null)
                 setContextMenu(null)
               }}
             >
+              <Trash2 className="size-4 shrink-0" aria-hidden="true" />
               删除文件夹
             </button>
           )}
@@ -1120,27 +1125,41 @@ export function Dashboard({
   defaultPage,
   onCreateRobot,
   onOpenGuide,
+  guide,
   onOpenSettings,
+  onMinimizeSettings,
   onClearError,
   onCheck,
-  onFix,
-  windowStyle,
-  windowControls,
-  onWindowStateChange
+  onFix
 }: Props) {
   const dispatch = useDispatch()
   const navigate = useNavigate()
   const dataTab = useSelector((state: RootState) => state.dataPreferences.tab)
   const location = useLocation()
+  const guideActive = Boolean(guide)
   const navigationFromURL = useMemo(
     () => readDashboardNavigation(location.search),
     [location.search]
   )
   const [page, setPage] = useStoreState<Page>(() => navigationFromURL.page)
   const [sidebarCollapsed, setSidebarCollapsed] = useStoreState(false)
+  const [guideStepsCollapsed, setGuideStepsCollapsed] = useStoreState(false)
   const [robotNavigationHidden, setRobotNavigationHidden] = useStoreState(false)
   const isCompact = useIsMobileViewport()
-  const [mobilePanel, setMobilePanel] = useStoreState<'projects' | 'robot' | null>(null)
+  const isTablet = useIsPadViewport()
+  const [mobilePanel, setMobilePanel] = useStoreState<'projects' | null>(null)
+  const contentColumn = useRef<HTMLDivElement>(null)
+  const [narrowContent, setNarrowContent] = useState(false)
+  const robotMenuInHeader = isCompact || narrowContent
+  useLayoutEffect(() => {
+    const column = contentColumn.current
+    if (!column) return
+    const measure = () => setNarrowContent(column.clientWidth <= 700)
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(column)
+    return () => observer.disconnect()
+  }, [])
   useEffect(() => {
     if (!isCompact) setMobilePanel(null)
   }, [isCompact, setMobilePanel])
@@ -1149,9 +1168,6 @@ export function Dashboard({
   )
   const [systemWindowFeature, setSystemWindowFeature] =
     useStoreState<SystemFeature | null>(null)
-  const selectSystemFeatureRef = useRef<
-    (feature: SystemFeature, resetBrowserHome?: boolean) => void
-  >(() => {})
   const [systemWindows, setSystemWindows] = useStoreState<
     Record<SystemFeature, SystemWindowState>
   >({})
@@ -1167,8 +1183,8 @@ export function Dashboard({
     root: string
     revision: string
   } | null>(null)
-  const [consoleOpen, setConsoleOpen] = useStoreState(false)
-  const [consoleMinimized, setConsoleMinimized] = useStoreState(false)
+  const [terminalOpen, setTerminalOpen] = useStoreState(false)
+  const [terminalRoot, setTerminalRoot] = useStoreState<string | null>(null)
   const [foregroundLogsOpen, setForegroundLogsOpen] = useStoreState(false)
   const [foregroundLogsMinimized, setForegroundLogsMinimized] =
     useStoreState(false)
@@ -1236,7 +1252,6 @@ export function Dashboard({
   const [opsMinimized, setOpsMinimized] = useStoreState(false)
   const [windowLayers, setWindowLayers] = useStoreState<Record<string, number>>(
     {
-      terminal: 101,
       foregroundLogs: 109,
       serviceWebview: 110,
       git: 102,
@@ -1249,15 +1264,26 @@ export function Dashboard({
     }
   )
   const nextWindowLayer = useRef(108)
-  const openAppRef = useRef<() => void>(() => {})
-  const openTestRef = useRef<() => void>(() => {})
-  const openLiveRef = useRef<() => void>(() => {})
   const [invalidDirectory, setInvalidDirectory] = useStoreState('')
   const [pendingBackpackRemoval, setPendingBackpackRemoval] = useStoreState('')
   const [pendingProjectRemoval, setPendingProjectRemoval] = useStoreState<
     string | null
   >(null)
   const [aiOpen, setAIOpen] = useStoreState(() => navigationFromURL.dshOpen)
+  const [dshRoot, setDSHRoot] = useStoreState('')
+  const [explorerOpen, setExplorerOpen] = useStoreState(false)
+  const [explorerMounted, setExplorerMounted] = useStoreState(false)
+  const workbenchView = guideActive ? 'guide' : aiOpen ? 'dsh' : explorerOpen ? 'explorer' : 'home'
+  const explorerActive = workbenchView === 'explorer'
+  const [sourceControlOpen, setSourceControlOpen] = useStoreState(false)
+  const [fileTabsTarget, setFileTabsTarget] = useState<HTMLDivElement | null>(null)
+  const [directoryTarget, setDirectoryTarget] = useState<HTMLDivElement | null>(null)
+  const [guideStepsTarget, setGuideStepsTarget] = useState<HTMLDivElement | null>(null)
+  const [guideProgressTarget, setGuideProgressTarget] = useState<HTMLDivElement | null>(null)
+  const [sourceControlTarget, setSourceControlTarget] = useState<HTMLDivElement | null>(null)
+  const [terminalToolbarTarget, setTerminalToolbarTarget] = useState<HTMLDivElement | null>(null)
+  const sourceControlVisible = explorerActive && sourceControlOpen
+  const terminalVisible = terminalOpen && !sourceControlVisible
   const activateFloatingWindow = useCallback(
     (id: FloatingWindowID) => {
       const layer = ++nextWindowLayer.current
@@ -1294,70 +1320,6 @@ export function Dashboard({
     () => (Array.isArray(setupPluginsData) ? setupPluginsData : []),
     [setupPluginsData]
   )
-  useEffect(() => {
-    const registeredSystemWindows: Record<
-      string,
-      { open: boolean; minimized: boolean; label: string }
-    > = Object.fromEntries(
-      [
-        ...coreFeatureCatalog.map(item => [item.id, item.label] as const),
-        ...setupPlugins.map(item => [`setup:${item.id}`, item.name] as const)
-      ].map(([feature, label]) => [
-        feature,
-        { open: false, minimized: false, label }
-      ])
-    )
-    onWindowStateChange?.({
-      terminal: { open: consoleOpen, minimized: consoleMinimized },
-      foregroundLogs: {
-        open: foregroundLogsOpen,
-        minimized: foregroundLogsMinimized
-      },
-      git: { open: Boolean(gitProject), minimized: gitMinimized },
-      app: {
-        open: Boolean(systemWindows.browser),
-        minimized: Boolean(systemWindows.browser?.minimized)
-      },
-      test: { open: testContentOpen, minimized: testMinimized },
-      live: { open: liveContentOpen, minimized: liveMinimized },
-      pm2Logs: { open: pm2LogsOpen, minimized: pm2LogsMinimized },
-      pm2Status: { open: pm2ProcessesOpen, minimized: pm2ProcessesMinimized },
-      ops: { open: opsOpen, minimized: opsMinimized },
-      system: {
-        ...registeredSystemWindows,
-        ...Object.fromEntries(
-          Object.entries(systemWindows).map(([feature, state]) => [
-            feature,
-            {
-              open: true,
-              minimized: state.minimized,
-              label: systemFeatureLabel(feature, setupPlugins)
-            }
-          ])
-        )
-      }
-    })
-  }, [
-    consoleMinimized,
-    consoleOpen,
-    foregroundLogsMinimized,
-    foregroundLogsOpen,
-    gitMinimized,
-    gitProject,
-    onWindowStateChange,
-    opsMinimized,
-    opsOpen,
-    pm2LogsMinimized,
-    pm2LogsOpen,
-    pm2ProcessesMinimized,
-    pm2ProcessesOpen,
-    setupPlugins,
-    systemWindows,
-    testContentOpen,
-    testMinimized,
-    liveContentOpen,
-    liveMinimized
-  ])
   const environmentChecked = useRef(false)
   const eventsRef = useRef<EventSource | null>(null)
   const opsRefreshTimer = useRef<number | null>(null)
@@ -1386,6 +1348,7 @@ export function Dashboard({
     }
   }
   const {
+    scope: robotScope,
     change: changeRobotList,
     ready: robotListReady,
     loading: robotListLoading,
@@ -1406,7 +1369,7 @@ export function Dashboard({
     () =>
       ((rawProjects ?? []) as Project[]).map(project => ({
         ...project,
-        name: projectName(project.path)
+        name: directoryName(project.path)
       })),
     [rawProjects]
   )
@@ -1423,27 +1386,29 @@ export function Dashboard({
   }, [developerMode, dispatch])
   const activeProject = projects.find(item => item.id === activeProjectID)
   const root = activeProject?.path ?? ''
-  const openTerminal = () => {
-    if (openNativeRobotTool('terminal', root)) return
-    setConsoleOpen(true)
-    setConsoleMinimized(false)
-    activateFloatingWindow('terminal')
-  }
+  const dshRobotRoots = useMemo(() => projects.map(project => project.path), [projects])
+  const requestedDSHRoot = aiOpen ? navigationFromURL.root || root : dshRoot
+  const dshTarget = dshRobotRoots.includes(requestedDSHRoot) ? requestedDSHRoot : ''
   useEffect(() => {
-    const toggleTerminal = () => {
-      if (openNativeRobotTool('terminal', root)) return
-      activateFloatingWindow('terminal')
-      if (!consoleOpen) {
-        setConsoleOpen(true)
-        setConsoleMinimized(false)
-      } else {
-        setConsoleMinimized(value => !value)
-      }
+    if (aiOpen && dshTarget) setDSHRoot(dshTarget)
+  }, [aiOpen, dshTarget, setDSHRoot])
+
+  function openTerminal() {
+    if (!terminalOpen) {
+      setTerminalRoot(root)
+      setTerminalOpen(true)
     }
-    window.addEventListener('alx:desktop-terminal-toggle', toggleTerminal)
-    return () =>
-      window.removeEventListener('alx:desktop-terminal-toggle', toggleTerminal)
-  }, [activateFloatingWindow, consoleOpen, root, setConsoleMinimized, setConsoleOpen])
+    setSourceControlOpen(false)
+  }
+
+  function toggleTerminal() {
+    if (terminalVisible) {
+      setTerminalOpen(false)
+      setSourceControlOpen(explorerActive)
+      return
+    }
+    openTerminal()
+  }
   const [setSystemCurrentRobot] = useSetSystemCurrentRobotMutation()
   useEffect(() => {
     void setSystemCurrentRobot({ root })
@@ -1468,23 +1433,23 @@ export function Dashboard({
   // first prevents the URL restoration effect from immediately selecting the
   // previous project again.
   const openProject = useCallback(
-    (id: string) => {
+    (id: string, dshOpen = false) => {
       const project = projects.find(item => item.id === id)
       if (!project) return
-      const search = writeDashboardNavigation(location.search, {
+      const search = writeDashboardNavigation(guideActive ? '' : location.search, {
         root: project.path,
         page: 'robot',
         section: 'runtime',
         buildMode,
         configEditor,
-        dshOpen: false
+        dshOpen
       })
-      if (search === location.search) {
+      if (!guideActive && search === location.search) {
         void changeRobotList({ action: 'select', id })
         return
       }
       navigate(
-        { pathname: location.pathname, search, hash: location.hash },
+        { pathname: guideActive ? '/dashboard/robot' : location.pathname, search, hash: location.hash },
         { replace: false }
       )
     },
@@ -1492,6 +1457,7 @@ export function Dashboard({
       buildMode,
       configEditor,
       changeRobotList,
+      guideActive,
       location.hash,
       location.pathname,
       location.search,
@@ -1516,6 +1482,7 @@ export function Dashboard({
   // effect then deliberately skips one turn to avoid replacing that history
   // entry with stale state.
   useEffect(() => {
+    if (guideActive) return
     if (lastURLNavigationSearch.current === location.search) return
     lastURLNavigationSearch.current = location.search
     let changed = false
@@ -1544,6 +1511,7 @@ export function Dashboard({
     aiOpen,
     buildMode,
     configEditor,
+    guideActive,
     location.search,
     navigationFromURL,
     page,
@@ -1556,6 +1524,7 @@ export function Dashboard({
   ])
 
   useEffect(() => {
+    if (guideActive) return
     if (applyingURLNavigation.current) {
       applyingURLNavigation.current = false
       return
@@ -1584,6 +1553,7 @@ export function Dashboard({
     aiOpen,
     buildMode,
     configEditor,
+    guideActive,
     location.hash,
     location.pathname,
     location.search,
@@ -1664,14 +1634,14 @@ export function Dashboard({
       skip: !root || section !== 'config' || configEditor !== 'visual'
     })
   const extensionConfigs = extensionConfigsData?.items ?? []
-  const watchDevelopmentTask = page === 'robot' && section === 'runtime'
+  const watchDevelopmentTask = !guideActive && page === 'robot' && section === 'runtime'
   const { data: operationTasksData } = useRobotTasksQuery(undefined, {
     skip: !watchDevelopmentTask,
     // Task state is driven by SSE task events (invalidateTags); no polling.
     pollingInterval: 0,
     refetchOnMountOrArgChange: true
   })
-  const operationTasks = operationTasksData ?? []
+  const operationTasks = Array.isArray(operationTasksData) ? operationTasksData : []
   const [loadRobotTask] = useLazyRobotTaskQuery()
   const [readRobotFile] = useLazyRobotFileQuery()
   const [validateRobot, { data: projectValidation }] =
@@ -2002,7 +1972,6 @@ export function Dashboard({
       setAppLaunching(false)
     }
   }
-  openAppRef.current = () => void openApp()
   const confirmAppPort = async () => {
     if (!root) return
     const port = Number(appPortValue.trim())
@@ -2106,7 +2075,6 @@ export function Dashboard({
       setTestLaunching(false)
     }
   }
-  openTestRef.current = () => void openTest()
   const confirmTestPort = async () => {
     if (!root) return
     const port = Number(testPortValue.trim())
@@ -2209,7 +2177,6 @@ export function Dashboard({
       )
     }
   }
-  openLiveRef.current = () => void openLive()
   const confirmLivePort = async () => {
     if (!root) return
     const port = Number(livePortValue.trim())
@@ -2232,157 +2199,6 @@ export function Dashboard({
       setLivePortBusy(false)
     }
   }
-  useEffect(() => {
-    const toggleGit = () => {
-      if (activeProject && openNativeGit(activeProject)) return
-      activateFloatingWindow('git')
-      if (!gitProject && activeProject) {
-        setGitProject(activeProject)
-        setGitMinimized(false)
-        return
-      }
-      if (gitProject) setGitMinimized(value => !value)
-    }
-    const toggleApp = () => {
-      const browser = systemWindows.browser
-      if (browser) {
-        setSystemWindows(current => ({
-          ...current,
-          browser: { minimized: !browser.minimized }
-        }))
-        activateFloatingWindow('system:browser')
-        return
-      }
-      openAppRef.current()
-    }
-    const toggleTest = () => {
-      activateFloatingWindow('test')
-      if (testContentOpen) {
-        setTestMinimized(value => !value)
-        return
-      }
-      openTestRef.current()
-    }
-    const toggleLive = () => {
-      activateFloatingWindow('live')
-      if (liveContentOpen) {
-        setLiveMinimized(value => !value)
-        return
-      }
-      openLiveRef.current()
-    }
-    const togglePM2Logs = () => {
-      if (openNativeRobotTool('pm2-logs', root)) return
-      activateFloatingWindow('pm2Logs')
-      if (!pm2LogsOpen) {
-        setPM2LogsOpen(true)
-        setPM2LogsMinimized(false)
-        return
-      }
-      setPM2LogsMinimized(value => !value)
-    }
-    const toggleForegroundLogs = () => {
-      if (openNativeRobotTool('foreground-logs', root)) return
-      activateFloatingWindow('foregroundLogs')
-      if (!foregroundLogsOpen) {
-        setForegroundLogsOpen(true)
-        setForegroundLogsMinimized(false)
-        return
-      }
-      setForegroundLogsMinimized(value => !value)
-    }
-    const togglePM2Status = () => {
-      if (openNativeRobotTool('pm2-processes', root)) return
-      activateFloatingWindow('pm2Status')
-      if (!pm2ProcessesOpen) {
-        setPM2ProcessesOpen(true)
-        setPM2ProcessesMinimized(false)
-        return
-      }
-      setPM2ProcessesMinimized(value => !value)
-    }
-    const toggleOps = () => {
-      if (openNativeRobotTool('ops', root)) return
-      activateFloatingWindow('ops')
-      if (!opsOpen) {
-        setOpsOpen(true)
-        setOpsMinimized(false)
-        return
-      }
-      setOpsMinimized(value => !value)
-    }
-    const toggleSystem = (event: Event) => {
-      const feature = (event as CustomEvent<string>).detail
-      if (!feature || !systemWindows[feature]) return
-      setSystemWindowFeature(feature)
-      activateFloatingWindow(`system:${feature}`)
-      setSystemWindows(current => ({
-        ...current,
-        [feature]: { minimized: !current[feature].minimized }
-      }))
-    }
-    const openSystem = (event: Event) => {
-      const feature = (event as CustomEvent<string>).detail as SystemFeature
-      if (feature) selectSystemFeatureRef.current(feature)
-    }
-    window.addEventListener('alx:desktop-git-toggle', toggleGit)
-    window.addEventListener('alx:desktop-app-toggle', toggleApp)
-    window.addEventListener('alx:desktop-test-toggle', toggleTest)
-    window.addEventListener('alx:desktop-live-toggle', toggleLive)
-    window.addEventListener('alx:desktop-pm2-logs-toggle', togglePM2Logs)
-    window.addEventListener(
-      'alx:desktop-foreground-logs-toggle',
-      toggleForegroundLogs
-    )
-    window.addEventListener('alx:desktop-pm2-status-toggle', togglePM2Status)
-    window.addEventListener('alx:desktop-ops-toggle', toggleOps)
-    window.addEventListener('alx:desktop-system-toggle', toggleSystem)
-    window.addEventListener('alx:desktop-system-open', openSystem)
-    return () => {
-      window.removeEventListener('alx:desktop-git-toggle', toggleGit)
-      window.removeEventListener('alx:desktop-app-toggle', toggleApp)
-      window.removeEventListener('alx:desktop-test-toggle', toggleTest)
-      window.removeEventListener('alx:desktop-live-toggle', toggleLive)
-      window.removeEventListener('alx:desktop-pm2-logs-toggle', togglePM2Logs)
-      window.removeEventListener(
-        'alx:desktop-foreground-logs-toggle',
-        toggleForegroundLogs
-      )
-      window.removeEventListener(
-        'alx:desktop-pm2-status-toggle',
-        togglePM2Status
-      )
-      window.removeEventListener('alx:desktop-ops-toggle', toggleOps)
-      window.removeEventListener('alx:desktop-system-toggle', toggleSystem)
-      window.removeEventListener('alx:desktop-system-open', openSystem)
-    }
-  }, [
-    activeProject,
-    activateFloatingWindow,
-    gitProject,
-    setGitMinimized,
-    setGitProject,
-    setTestMinimized,
-    testContentOpen,
-    liveContentOpen,
-    setLiveMinimized,
-    pm2LogsOpen,
-    foregroundLogsOpen,
-    pm2ProcessesOpen,
-    root,
-    setPM2LogsMinimized,
-    setPM2LogsOpen,
-    setForegroundLogsOpen,
-    setForegroundLogsMinimized,
-    setPM2ProcessesMinimized,
-    setPM2ProcessesOpen,
-    setOpsMinimized,
-    setOpsOpen,
-    setSystemWindowFeature,
-    opsOpen,
-    setSystemWindows,
-    systemWindows
-  ])
   const refreshConfigDraft = async () => {
     if (!root) return
     const result = await readRobotFile(
@@ -2658,6 +2474,7 @@ export function Dashboard({
   // The URL selects a saved robot. A URL left behind by another account
   // cannot add a robot to the current account's list.
   useEffect(() => {
+    if (guideActive) return
     const path = navigationFromURL.root
     if (!robotListReady || !path || path === root) return
     const project = projects.find(item => item.path === path)
@@ -2678,6 +2495,7 @@ export function Dashboard({
     )
   }, [
     changeRobotList,
+    guideActive,
     location.hash,
     location.pathname,
     location.search,
@@ -2688,10 +2506,10 @@ export function Dashboard({
     root
   ])
   useEffect(() => {
-    if (report || checking || environmentChecked.current) return
+    if (guideActive || report || checking || environmentChecked.current) return
     environmentChecked.current = true
     onCheck()
-  }, [checking, onCheck, page, report])
+  }, [checking, guideActive, onCheck, page, report])
   useEffect(() => {
     if (catalog.length && !catalog.some(group => group.title === catalogTitle))
       setCatalogTitle(catalog[0].title)
@@ -2729,8 +2547,7 @@ export function Dashboard({
     if (developerMode) return
     if (page === 'build') setPage('robot')
     if (section === 'npmrc' || section === 'env') setSection('config')
-    setConsoleOpen(false)
-  }, [developerMode, page, section, setConsoleOpen, setPage, setSection])
+  }, [developerMode, page, section, setPage, setSection])
 
   async function api(
     method: string,
@@ -2968,7 +2785,7 @@ export function Dashboard({
         projects: validPaths.map(path => ({
           id: path,
           path,
-          name: projectName(path)
+          name: directoryName(path)
         }))
       })
       if (!saved) {
@@ -2977,7 +2794,7 @@ export function Dashboard({
       }
       const active = saved.projects.find(item => item.id === saved.activeProjectID)
       if (active) {
-        const search = writeDashboardNavigation(location.search, {
+        const search = writeDashboardNavigation(guideActive ? '' : location.search, {
           root: active.path,
           page: 'robot',
           section: 'runtime',
@@ -2985,7 +2802,7 @@ export function Dashboard({
           configEditor,
           dshOpen: false
         })
-        navigate({ pathname: location.pathname, search, hash: location.hash })
+        navigate({ pathname: guideActive ? '/dashboard/robot' : location.pathname, search, hash: location.hash })
       }
     }
     setDirectoryPickerOpen(false)
@@ -3177,13 +2994,28 @@ export function Dashboard({
     setTaskWindowTarget(null)
     setPage(nextPage)
   }
+  function leaveGuideForTool(dshOpen: boolean) {
+    navigate({
+      pathname: '/dashboard/robot',
+      search: writeDashboardNavigation('', { root, page, section, buildMode, configEditor, dshOpen })
+    })
+  }
+
   function openAI() {
     setMobilePanel(null)
-    markUserNavigation()
-    closeTemporaryContentPage()
-    setSystemFeature(null)
-    setPage('robot')
+    if (guideActive) leaveGuideForTool(true)
+    else markUserNavigation()
+    setExplorerOpen(false)
     setAIOpen(true)
+  }
+  function openExplorer() {
+    setMobilePanel(null)
+    if (guideActive) leaveGuideForTool(false)
+    else if (aiOpen) markUserNavigation()
+    setAIOpen(false)
+    if (!explorerActive) setSourceControlOpen(!isTablet && !terminalOpen)
+    setExplorerMounted(true)
+    setExplorerOpen(true)
   }
   function openOperationTask(taskRoot: string, taskId: string) {
     if (openNativeRobotTool('tasks', taskRoot, taskId)) return
@@ -3228,7 +3060,6 @@ export function Dashboard({
     }))
     activateFloatingWindow(`system:${nextFeature}`)
   }
-  selectSystemFeatureRef.current = selectSystemFeature
   function openMiniBrowser(
     url: string,
     tabID?: string,
@@ -3267,13 +3098,7 @@ export function Dashboard({
 
   const currentCatalog =
     catalog.find(group => group.title === catalogTitle) ?? catalog[0]
-  const robotContent = aiOpen ? (
-    <DSHWorkspace
-      key={root}
-      root={root}
-      onOpenWeb={url => openMiniBrowser(url, undefined, true)}
-    />
-  ) : (
+  const robotContent = (
     <>
       {section === 'backpack' && (
         <BackpackPanel
@@ -3649,6 +3474,232 @@ export function Dashboard({
     report?.checks.some(item => item.status !== 'ready' && !item.optional)
   )
 
+  const openWindows: (WorkbenchToolAction & {
+    minimized: boolean
+    minimize: () => void
+  })[] = []
+  function addOpenWindow(
+    id: FloatingWindowID,
+    open: boolean,
+    minimized: boolean,
+    label: string,
+    icon: ReactNode,
+    setMinimized: (value: boolean) => void
+  ) {
+    if (!open) return
+    openWindows.push({
+      id,
+      minimized,
+      label: `${minimized ? '恢复' : '切换到'}${label}`,
+      icon,
+      minimize: () => setMinimized(true),
+      activate: () => {
+        if (minimized) setMinimized(false)
+        if (id.startsWith('system:'))
+          setSystemWindowFeature(id.slice('system:'.length))
+        activateFloatingWindow(id)
+      }
+    })
+  }
+  addOpenWindow('foregroundLogs', foregroundLogsOpen, foregroundLogsMinimized, '前台日志', <ClipboardList />, setForegroundLogsMinimized)
+  addOpenWindow('serviceWebview', Boolean(serviceWebview), serviceWebviewMinimized, serviceWebview?.title ?? '服务页面', <Monitor />, setServiceWebviewMinimized)
+  addOpenWindow('git', Boolean(gitProject), gitMinimized, 'Git 窗口', <GitBranch />, setGitMinimized)
+  addOpenWindow('test', testContentOpen, testMinimized, '测试窗口', <FlaskConical />, setTestMinimized)
+  addOpenWindow('live', liveContentOpen, liveMinimized, '在线聊天', <MessageSquare />, setLiveMinimized)
+  addOpenWindow('pm2Logs', pm2LogsOpen, pm2LogsMinimized, 'PM2 日志', <Terminal />, setPM2LogsMinimized)
+  addOpenWindow('pm2Status', pm2ProcessesOpen, pm2ProcessesMinimized, 'PM2 进程', <Activity />, setPM2ProcessesMinimized)
+  addOpenWindow('ops', opsOpen, opsMinimized, '机器人运维', <ShieldCheck />, setOpsMinimized)
+  for (const [feature, state] of Object.entries(systemWindows)) {
+    addOpenWindow(
+      `system:${feature}`,
+      true,
+      state.minimized,
+      feature === 'browser' ? '浏览器' : systemFeatureLabel(feature, setupPlugins),
+      coreFeatureCatalog.find(item => item.id === feature)?.icon ?? <Settings />,
+      minimized => setSystemWindows(current => ({
+        ...current,
+        [feature]: { minimized }
+      }))
+    )
+  }
+  function showWorkbenchHome() {
+    for (const window of openWindows) {
+      if (!window.minimized) window.minimize()
+    }
+    setSystemWindowFeature(null)
+    if (guideActive) leaveGuideForTool(false)
+    else if (aiOpen) markUserNavigation()
+    setAIOpen(false)
+    setExplorerOpen(false)
+    setTerminalOpen(false)
+    onMinimizeSettings()
+  }
+
+  const workbarCollapsed = guideActive ? guideStepsCollapsed : sidebarCollapsed
+  const setWorkbarCollapsed = guideActive ? setGuideStepsCollapsed : setSidebarCollapsed
+  const workbarToggleLabel = isCompact
+    ? guideActive ? '打开引导流程' : explorerActive ? '打开文件目录' : '打开机器人与系统导航'
+    : guideActive
+      ? workbarCollapsed ? '展开引导流程' : '折叠引导流程'
+      : workbarCollapsed ? '展开侧边栏' : '折叠侧边栏'
+  const inlineCaption = desktopPlatform === 'mac'
+  const floatingHeader = workbenchView === 'dsh'
+  const panelActions = [
+    {
+      title: '终端',
+      label: terminalVisible ? '收起终端面板' : '打开终端',
+      icon: <Terminal className="size-4" aria-hidden="true" />,
+      expanded: terminalVisible,
+      toggle: toggleTerminal
+    },
+    ...(explorerActive ? [{
+      title: '仓库',
+      label: sourceControlVisible ? '收起仓库' : '打开仓库',
+      icon: <GitBranch className="size-4" aria-hidden="true" />,
+      expanded: sourceControlVisible,
+      toggle: () => setSourceControlOpen(value => !value)
+    }] : [])
+  ]
+
+  function renderRobotControls(closeMenu?: () => void) {
+    if (workbenchView !== 'home' || !robotNavigationProject) return null
+    return (
+      <ControlCard
+        dropdown={Boolean(closeMenu)}
+        page={page}
+        section={section}
+        project={robotNavigationProject}
+        buildMode={buildMode}
+        catalog={catalog}
+        catalogTitle={catalogTitle}
+        catalogLoading={catalogLoading}
+        developerMode={developerMode}
+        onOpenOps={() => {
+          closeMenu?.()
+          if (openNativeRobotTool('ops', root)) return
+          setOpsOpen(true)
+          setOpsMinimized(false)
+          activateFloatingWindow('ops')
+        }}
+        appLaunching={appLaunching}
+        onOpenApp={() => { closeMenu?.(); void openApp() }}
+        appPages={botAppPages}
+        onOpenAppPage={id => {
+          closeMenu?.()
+          openWorkbenchBrowserPage(`/api/v1/robot/webview/${robotAppToken(root)}/${encodeURIComponent(id)}/`)
+        }}
+        testLaunching={testLaunching}
+        onOpenTest={() => { closeMenu?.(); void openTest() }}
+        onOpenLive={() => { closeMenu?.(); void openLive() }}
+        onPage={nextPage => { closeMenu?.(); selectPage(nextPage) }}
+        onSection={openSection}
+        onBuildMode={mode => {
+          markUserNavigation()
+          setBuildMode(mode)
+        }}
+        onCatalog={title => {
+          setCatalogTitle(title)
+        }}
+        onGit={() => {
+          closeMenu?.()
+          if (openNativeGit(robotNavigationProject)) return
+          setGitProject(robotNavigationProject)
+          setGitMinimized(false)
+          activateFloatingWindow('git')
+        }}
+      />
+    )
+  }
+
+  const contentHeader = (
+    <header
+      className="workbench-content-header topbar relative z-50 flex min-w-0 shrink-0 items-center justify-between gap-x-2 bg-(--theme-surface-panel) px-3"
+      data-floating={floatingHeader || undefined}
+    >
+      <div className={cn('flex min-w-0 items-center gap-1.5', !inlineCaption && !explorerActive && 'flex-1')}>
+        {workbenchView !== 'dsh' && (
+          <Button
+            variant="icon"
+            onClick={() => isCompact ? setMobilePanel('projects') : setWorkbarCollapsed(value => !value)}
+            aria-label={workbarToggleLabel}
+            aria-pressed={isCompact ? mobilePanel === 'projects' : !workbarCollapsed}
+            title={workbarToggleLabel}
+          >
+            {isCompact || workbarCollapsed ? (
+              <PanelLeftOpen className="size-4" />
+            ) : (
+              <PanelLeftClose className="size-4" />
+            )}
+          </Button>
+        )}
+        {guide && <div ref={setGuideProgressTarget} className="min-w-0" />}
+      </div>
+      {explorerActive && (
+        <div
+          ref={setFileTabsTarget}
+          className={cn('flex min-w-0 items-center', !inlineCaption && 'flex-1')}
+        />
+      )}
+      {inlineCaption && (
+        <WorkbenchDragRegion className={cn('workbench-content-drag flex-1 self-stretch', explorerActive ? 'min-w-6' : 'min-w-0')} />
+      )}
+      <div className="ml-auto flex shrink-0 items-center gap-1">
+        <WorkbenchQuickActions
+          developerMode={developerMode}
+          minimizedWindows={openWindows.filter(window => window.minimized)}
+          panelActions={isCompact ? panelActions : undefined}
+        />
+        {!isCompact && panelActions.map(action => (
+          <Button
+            key={action.title}
+            variant="icon"
+            onClick={action.toggle}
+            aria-label={action.label}
+            aria-expanded={action.expanded}
+            title={action.title}
+          >
+            {action.icon}
+          </Button>
+        ))}
+        {workbenchView === 'home' && robotNavigationProject && (
+          robotMenuInHeader ? (
+            <WorkbenchTools
+              label="打开机器人功能导航"
+              menuLabel="机器人功能菜单"
+              menuClassName="workbench-settings-menu workbench-robot-menu"
+              restoreFocusOnClose
+              icon={<PanelRightOpen className="size-4" aria-hidden="true" />}
+            >
+              {close => renderRobotControls(close)}
+            </WorkbenchTools>
+          ) : (
+            <Button
+              variant="icon"
+              onClick={() => setRobotNavigationHidden(value => !value)}
+              aria-label={robotNavigationHidden ? '显示机器人导航' : '隐藏机器人导航'}
+              aria-pressed={!robotNavigationHidden}
+              title={robotNavigationHidden ? '显示机器人导航' : '隐藏机器人导航'}
+            >
+              {robotNavigationHidden ? (
+                <PanelRightOpen className="size-4" />
+              ) : (
+                <PanelRightClose className="size-4" />
+              )}
+            </Button>
+          )
+        )}
+        <button
+          className="icon-button size-8 p-0"
+          onClick={guide ? guide.onClose : onOpenGuide}
+          aria-label={guide ? '返回工作台' : '打开引导'}
+          title={guide ? '返回工作台' : '打开引导'}
+        >
+          {guide ? <LayoutDashboard className="size-4" /> : <CircleQuestionMark className="size-4" />}
+        </button>
+      </div>
+    </header>
+  )
+
   return (
     <>
       <HostUiToasts
@@ -3719,72 +3770,9 @@ export function Dashboard({
       <main className="guide-shell">
         <section
           className="guide-window dashboard-window"
-          style={windowStyle}
           data-window-container="workbench"
         >
-          <WorkbenchHeader className="topbar flex min-h-11 min-w-0 flex-wrap items-center justify-between gap-x-2 border-b border-(--theme-border-default) bg-(--theme-surface-panel) px-3 py-1">
-            <div className="flex min-w-0 flex-1 items-center gap-1.5">
-              <Button
-                variant="icon"
-                onClick={() => onOpenSettings()}
-                aria-label="打开设置"
-                title="设置"
-              >
-                <Settings className="size-4" />
-              </Button>
-              <Button
-                variant="icon"
-                onClick={() => isCompact ? setMobilePanel('projects') : setSidebarCollapsed(value => !value)}
-                aria-label={isCompact ? '打开机器人与系统导航' : sidebarCollapsed ? '展开侧边栏' : '折叠侧边栏'}
-                aria-pressed={isCompact ? mobilePanel === 'projects' : !sidebarCollapsed}
-                title={isCompact ? '打开机器人与系统导航' : sidebarCollapsed ? '展开侧边栏' : '折叠侧边栏'}
-              >
-                {isCompact || sidebarCollapsed ? (
-                  <PanelLeftOpen className="size-4" />
-                ) : (
-                  <PanelLeftClose className="size-4" />
-                )}
-              </Button>
-            </div>
-            <div className="ml-auto flex shrink-0 items-center gap-1">
-              <WorkbenchQuickActions developerMode={developerMode} />
-              <Button
-                variant="icon"
-                onClick={openTerminal}
-                aria-label="打开终端"
-                title="终端"
-              >
-                <Terminal className="size-4" aria-hidden="true" />
-              </Button>
-              {robotNavigationProject && (
-                <Button
-                  variant="icon"
-                  onClick={() => isCompact ? setMobilePanel('robot') : setRobotNavigationHidden(value => !value)}
-                  aria-label={
-                    isCompact ? '打开机器人功能导航' : robotNavigationHidden ? '显示机器人导航' : '隐藏机器人导航'
-                  }
-                  aria-pressed={isCompact ? mobilePanel === 'robot' : !robotNavigationHidden}
-                  title={
-                    isCompact ? '打开机器人功能导航' : robotNavigationHidden ? '显示机器人导航' : '隐藏机器人导航'
-                  }
-                >
-                  {isCompact || robotNavigationHidden ? (
-                    <PanelRightOpen className="size-4" />
-                  ) : (
-                    <PanelRightClose className="size-4" />
-                  )}
-                </Button>
-              )}
-              <button
-                className="icon-button size-8 p-0"
-                onClick={onOpenGuide}
-                aria-label="打开引导"
-                title="打开引导"
-              >
-                <CircleQuestionMark className="size-4" />
-              </button>
-            </div>
-          </WorkbenchHeader>
+          {bridge && !inlineCaption && <WorkbenchHeader />}
           <ConfirmDialog
             open={Boolean(pendingBackpackRemoval)}
             title="从背包移除插件"
@@ -3995,96 +3983,154 @@ export function Dashboard({
                 : cloneRobotRepository
             }
           />
-          <RobotWorkspaceSplitter
-            mobilePanel={mobilePanel}
-            onCloseMobilePanel={() => setMobilePanel(null)}
-            listHidden={sidebarCollapsed}
-            list={
-              <ProjectRail
-                feature={systemWindowFeature}
-                setupPlugins={setupPlugins}
-                projects={projects}
-                activeID={activeProjectID}
-                checking={checking}
-                environmentWarning={environmentWarning}
-                onFeature={feature => {
-                  setMobilePanel(null)
-                  selectSystemFeature(feature)
-                  if (feature === 'environment' && !bridge) onCheck()
-                }}
-                onPinProject={pinProject}
-                onReorderProject={reorderProject}
-                onAdd={() => { setMobilePanel(null); chooseDirectories() }}
-                onClone={() => { setMobilePanel(null); openRobotClone() }}
-                onSelect={id => {
-                  setMobilePanel(null)
-                  openProject(id)
-                  setSystemFeature(null)
-                }}
-                onRemove={removeProject}
-              />
-            }
-            controls={
-              robotNavigationProject && (isCompact || !robotNavigationHidden) ? (
-                <ControlCard
-                  page={page}
-                  section={section}
-                  project={robotNavigationProject}
-                  buildMode={buildMode}
-                  catalog={catalog}
-                  catalogTitle={catalogTitle}
-                  catalogLoading={catalogLoading}
-                  developerMode={developerMode}
-                  dshOpen={aiOpen}
-                  onOpenConsole={() => { setMobilePanel(null); openTerminal() }}
-                  onOpenAI={openAI}
-                  onOpenOps={() => {
+          <div className="flex min-h-0 flex-1">
+            <WorkbenchToolRail
+              windows={openWindows}
+              activeView={workbenchView}
+              onShowHome={showWorkbenchHome}
+              onOpenDSH={openAI}
+              onOpenExplorer={openExplorer}
+              onOpenSettings={() => onOpenSettings()}
+            />
+            <RobotWorkspaceSplitter
+              mobilePanel={mobilePanel}
+              onCloseMobilePanel={() => setMobilePanel(null)}
+              listHidden={workbarCollapsed || workbenchView === 'dsh'}
+              listTitle={guideActive ? '引导流程' : explorerActive ? '文件目录' : undefined}
+              list={guideActive ? (
+                <div ref={setGuideStepsTarget} className="flex min-h-0 min-w-0 flex-1 bg-(--theme-surface-raised)" />
+              ) : explorerActive ? (
+                <div ref={setDirectoryTarget} className="flex min-h-0 min-w-0 flex-1" />
+              ) : (
+                <ProjectRail
+                  feature={systemWindowFeature}
+                  setupPlugins={setupPlugins}
+                  projects={projects}
+                  activeID={activeProjectID}
+                  checking={checking}
+                  environmentWarning={environmentWarning}
+                  onFeature={feature => {
                     setMobilePanel(null)
-                    if (openNativeRobotTool('ops', root)) return
-                    setOpsOpen(true)
-                    setOpsMinimized(false)
-                    activateFloatingWindow('ops')
+                    selectSystemFeature(feature)
+                    if (feature === 'environment' && !bridge) onCheck()
                   }}
-                  appLaunching={appLaunching}
-                  onOpenApp={() => { setMobilePanel(null); void openApp() }}
-                  appPages={botAppPages}
-                  onOpenAppPage={id => {
+                  onPinProject={pinProject}
+                  onReorderProject={reorderProject}
+                  onAdd={() => { setMobilePanel(null); chooseDirectories() }}
+                  onClone={() => { setMobilePanel(null); openRobotClone() }}
+                  onSelect={id => {
                     setMobilePanel(null)
-                    openWorkbenchBrowserPage(`/api/v1/robot/webview/${robotAppToken(root)}/${encodeURIComponent(id)}/`)
+                    setAIOpen(false)
+                    setExplorerOpen(false)
+                    openProject(id)
+                    setSystemFeature(null)
                   }}
-                  testLaunching={testLaunching}
-                  onOpenTest={() => { setMobilePanel(null); void openTest() }}
-                  onOpenLive={() => { setMobilePanel(null); void openLive() }}
-                  onPage={selectPage}
-                  onSection={openSection}
-                  onBuildMode={mode => {
-                    markUserNavigation()
-                    setBuildMode(mode)
-                  }}
-                  onCatalog={title => {
-                    setCatalogTitle(title)
-                  }}
-                  onGit={() => {
+                  onOpenDSH={id => {
                     setMobilePanel(null)
-                    if (openNativeGit(robotNavigationProject)) return
-                    setGitProject(robotNavigationProject)
-                    setGitMinimized(false)
-                    activateFloatingWindow('git')
+                    setExplorerOpen(false)
+                    openProject(id, true)
                   }}
+                  onRemove={removeProject}
                 />
-              ) : null
-            }
-          >
-            {workspace}
-            {robotListError && (
-              <div role="alert" className="p-3 text-sm">
-                {robotListError}{' '}
-                <Button onClick={retryRobotList}>重试读取</Button>
-              </div>
-            )}
-            {error && <ErrorNotice message={error} onClose={onClearError} />}
-          </RobotWorkspaceSplitter>
-          {windowControls}
+              )}
+              controls={!robotMenuInHeader && !robotNavigationHidden ? renderRobotControls() : null}
+              renderContent={body => (
+                <WorkbenchTerminalSplitter
+                  terminalOpen={terminalVisible || sourceControlVisible}
+                  terminal={(
+                    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+                      {explorerActive && (
+                        <header className="flex min-h-11 min-w-0 shrink-0 items-center gap-1 bg-(--theme-surface-panel) px-1">
+                          <button
+                            className={cn(
+                              'flex min-h-8 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs hover:bg-(--theme-surface-hover)',
+                              sourceControlVisible && 'bg-(--theme-surface-active)'
+                            )}
+                            aria-pressed={sourceControlVisible}
+                            onClick={() => setSourceControlOpen(true)}
+                          >
+                            <GitBranch className="size-4" aria-hidden="true" />
+                            仓库
+                          </button>
+                          <div ref={setTerminalToolbarTarget} className="flex min-w-0 flex-1 items-center gap-1" />
+                          {!terminalOpen && (
+                            <Button variant="icon" aria-label="添加终端" title="添加终端" onClick={openTerminal}>
+                              <Plus className="size-4" aria-hidden="true" />
+                            </Button>
+                          )}
+                        </header>
+                      )}
+                      {terminalRoot !== null && (
+                        <TerminalPanel
+                          key={terminalRoot}
+                          root={terminalRoot}
+                          visible={terminalVisible}
+                          toolbarTarget={explorerActive && terminalOpen ? terminalToolbarTarget : null}
+                          onActivate={() => setSourceControlOpen(false)}
+                          onClose={() => {
+                            setTerminalOpen(false)
+                            setTerminalRoot(null)
+                            setSourceControlOpen(explorerActive)
+                          }}
+                        />
+                      )}
+                      <div
+                        ref={setSourceControlTarget}
+                        className="flex min-h-0 min-w-0 flex-1"
+                        hidden={!sourceControlVisible}
+                      />
+                    </div>
+                  )}
+                >
+                  <div ref={contentColumn} className="workbench-content-column relative flex min-h-0 min-w-0 flex-1 flex-col">
+                    {contentHeader}
+                    <div className="workbench-content-body flex min-h-0 min-w-0 flex-1">
+                      <div className={cn('min-h-0 min-w-0 flex-1', workbenchView === 'home' ? 'flex' : 'hidden')}>
+                        {body}
+                      </div>
+                      {guide?.renderContent(guideStepsTarget, guideProgressTarget, () => setMobilePanel(null))}
+                      {(aiOpen || dshTarget) && (
+                        <div className={cn('min-h-0 min-w-0 flex-1', workbenchView !== 'dsh' && 'hidden')}>
+                          <DSHWorkspace key={JSON.stringify([robotScope, dshTarget])} root={dshTarget} robotRoots={dshRobotRoots} visible={workbenchView === 'dsh'} />
+                        </div>
+                      )}
+                      {explorerMounted && (
+                        <div className={cn('min-h-0 min-w-0 flex-1', workbenchView !== 'explorer' && 'hidden')}>
+                          <Suspense fallback={<p className="p-4 text-sm" role="status">正在打开资源管理器…</p>}>
+                            <ResourceExplorer
+                              key={robotScope}
+                              projects={projects}
+                              currentRoot={root}
+                              directoryTarget={directoryTarget}
+                              directoryInDrawer={isCompact}
+                              sourceControlTarget={sourceControlTarget}
+                              fileTabsTarget={fileTabsTarget}
+                              onOpenFile={() => {
+                                setMobilePanel(null)
+                                if (isTablet) {
+                                  setSourceControlOpen(false)
+                                  setTerminalOpen(false)
+                                }
+                              }}
+                            />
+                          </Suspense>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </WorkbenchTerminalSplitter>
+              )}
+            >
+              {workspace}
+              {robotListError && (
+                <div role="alert" className="p-3 text-sm">
+                  {robotListError}{' '}
+                  <Button onClick={retryRobotList}>重试读取</Button>
+                </div>
+              )}
+              {error && <ErrorNotice message={error} onClose={onClearError} />}
+            </RobotWorkspaceSplitter>
+          </div>
         </section>
       </main>
       {testContentOpen && (
@@ -4112,21 +4158,6 @@ export function Dashboard({
           onClose={() => {
             setLiveContentOpen(false)
             setLiveMinimized(false)
-          }}
-        />
-      )}
-      {consoleOpen && (
-        <ReadonlyConsole
-          open
-          terminalOnly
-          minimized={consoleMinimized}
-          root={root}
-          zIndex={windowLayers.terminal}
-          onActivate={() => activateFloatingWindow('terminal')}
-          onMinimize={() => setConsoleMinimized(true)}
-          onClose={() => {
-            setConsoleOpen(false)
-            setConsoleMinimized(false)
           }}
         />
       )}
@@ -4401,6 +4432,7 @@ function ProjectRail({
   onAdd,
   onClone,
   onSelect,
+  onOpenDSH,
   onRemove,
   onPinProject,
   onReorderProject
@@ -4415,6 +4447,7 @@ function ProjectRail({
   onAdd: () => void
   onClone: () => void
   onSelect: (id: string) => void
+  onOpenDSH: (id: string) => void
   onRemove: (id: string) => void
   onPinProject: (id: string) => void
   onReorderProject: (sourceID: string, targetID: string) => void
@@ -4430,13 +4463,12 @@ function ProjectRail({
   )
   const canManageAccounts = useCanManageAccounts()
   const isMobile = useIsMobileViewport()
-  const [mobileOpen, setMobileOpen] = useState<{
-    robot: boolean
-    plugins: boolean
-    system: boolean
-  }>({ robot: true, plugins: false, system: false })
-  const toggleMobileGroup = (group: 'robot' | 'plugins' | 'system') =>
-    setMobileOpen(current => ({ ...current, [group]: !current[group] }))
+  const mobileTabsID = useId()
+  const [mobileTab, setMobileTab] = useState<'robot' | 'plugins' | 'system'>(
+    'robot'
+  )
+  const activeMobileTab =
+    mobileTab === 'plugins' && !activePlugins.length ? 'robot' : mobileTab
   const clearLongPress = () => {
     if (longPressTimer.current === null) return
     window.clearTimeout(longPressTimer.current)
@@ -4489,7 +4521,10 @@ function ProjectRail({
   )
   const robotList = (
     <div
-      className="min-h-0 flex-1 overflow-auto overscroll-contain px-2 pb-2"
+      className={cn(
+        'px-2 pb-2',
+        !isMobile && 'min-h-0 flex-1 overflow-auto overscroll-contain'
+      )}
       onPointerUp={finishProjectDrag}
       onPointerCancel={finishProjectDrag}
     >
@@ -4507,6 +4542,7 @@ function ProjectRail({
               onSelect={id => {
                 if (!ignoreProjectSelect.current) onSelect(id)
               }}
+              onOpenDSH={onOpenDSH}
               onRemove={onRemove}
               onPin={onPinProject}
               onDragStart={startProjectDrag}
@@ -4614,39 +4650,59 @@ function ProjectRail({
       </button>
     </nav>
   )
+  const mobileTabs = [
+    {
+      id: 'robot' as const,
+      label: '机器人',
+      icon: <Bot className="size-3.5 shrink-0" aria-hidden="true" />,
+      meta: String(projects.length),
+      content: (
+        <>
+          <div className="flex justify-end px-2">{robotActions}</div>
+          {robotList}
+        </>
+      )
+    },
+    {
+      id: 'plugins' as const,
+      label: '插件',
+      icon: <Plug className="size-3.5 shrink-0" aria-hidden="true" />,
+      meta: activePlugins.length,
+      content: pluginNav
+    },
+    {
+      id: 'system' as const,
+      label: '系统',
+      icon: <Settings className="size-3.5 shrink-0" aria-hidden="true" />,
+      content: systemNav
+    }
+  ].filter(tab => tab.id !== 'plugins' || activePlugins.length > 0)
   return (
-    <aside className="project-rail flex min-h-0 min-w-0 flex-col border-r border-slate-200 bg-slate-50">
+    <aside className="project-rail flex min-h-0 min-w-0 flex-col border-r border-slate-200">
       {isMobile ? (
         <>
-          <MobileRailGroup
-            title="机器人"
-            count={projects.length}
-            icon={<Bot className="size-4" />}
-            actions={robotActions}
-            open={mobileOpen.robot}
-            onToggle={() => toggleMobileGroup('robot')}
-          >
-            {robotList}
-          </MobileRailGroup>
-          {activePlugins.length > 0 && (
-            <MobileRailGroup
-              title="插件"
-              count={activePlugins.length}
-              icon={<Plug className="size-4" />}
-              open={mobileOpen.plugins}
-              onToggle={() => toggleMobileGroup('plugins')}
+          <div className="sticky top-0 z-10 bg-(--theme-surface-panel) px-3 py-2">
+            <Tabs
+              items={mobileTabs}
+              value={activeMobileTab}
+              onChange={setMobileTab}
+              idPrefix={mobileTabsID}
+              ariaLabel="机器人与系统分类"
+              variant="inset"
+            />
+          </div>
+          {mobileTabs.map(tab => (
+            <div
+              key={tab.id}
+              id={`${mobileTabsID}-panel-${tab.id}`}
+              role="tabpanel"
+              aria-labelledby={`${mobileTabsID}-tab-${tab.id}`}
+              hidden={tab.id !== activeMobileTab}
+              className="px-2 pb-2"
             >
-              {pluginNav}
-            </MobileRailGroup>
-          )}
-          <MobileRailGroup
-            title="系统"
-            icon={<Settings className="size-4" />}
-            open={mobileOpen.system}
-            onToggle={() => toggleMobileGroup('system')}
-          >
-            {systemNav}
-          </MobileRailGroup>
+              {tab.id === activeMobileTab && tab.content}
+            </div>
+          ))}
         </>
       ) : (
         <>
@@ -4690,62 +4746,6 @@ function ProjectRail({
         </>
       )}
     </aside>
-  )
-}
-
-function MobileRailGroup({
-  title,
-  count,
-  icon,
-  actions,
-  open,
-  onToggle,
-  children
-}: {
-  title: string
-  count?: number
-  icon: ReactNode
-  actions?: ReactNode
-  open: boolean
-  onToggle: () => void
-  children: ReactNode
-}) {
-  return (
-    <section className="border-b border-slate-200 dark:border-slate-700">
-      <div className="flex min-h-10 items-center gap-0.5 py-0.5 pl-1 pr-2">
-        <button
-          type="button"
-          className={cn(
-            'mobile-rail-group-toggle flex min-h-9 min-w-0 flex-1 items-center gap-2 rounded-md px-2 text-left text-[0.8rem] font-semibold transition-colors',
-            open
-              ? 'workspace-nav-active'
-              : 'text-slate-700 hover:bg-slate-200/40 dark:text-slate-200 dark:hover:bg-slate-700/40'
-          )}
-          onClick={onToggle}
-          aria-expanded={open}
-        >
-          <i className="inline-flex size-4 shrink-0 items-center justify-center not-italic">
-            {icon}
-          </i>
-          <span className="min-w-0 flex-1 truncate">{title}</span>
-          {typeof count === 'number' && (
-            <small className="text-[10px] text-slate-300 dark:text-slate-600">
-              {count}
-            </small>
-          )}
-          <ChevronRight
-            className={cn(
-              'size-4 shrink-0 text-slate-400 transition-transform',
-              open && 'rotate-90'
-            )}
-          />
-        </button>
-        {actions}
-      </div>
-      {open && (
-        <div className="mobile-rail-group-content px-2 pb-2">{children}</div>
-      )}
-    </section>
   )
 }
 
@@ -5150,8 +5150,8 @@ function GitCloneDialog({
                 ]}
                 onChange={setConnection}
                 value={connection}
-                variant="segmented"
-                className="git-clone-protocol w-full rounded-lg bg-(--theme-surface-raised) p-1"
+                variant="inset"
+                className="w-full"
               />
               {connection === 'ssh' && (sshLoading || !sshKeys.length) && (
                 <p className="m-0 text-xs text-(--theme-text-muted)" role="status">
@@ -5419,6 +5419,7 @@ function ProjectItem({
   dragging,
   dragTarget,
   onSelect,
+  onOpenDSH,
   onRemove,
   onPin,
   onDragStart,
@@ -5429,6 +5430,7 @@ function ProjectItem({
   dragging: boolean
   dragTarget: boolean
   onSelect: (id: string) => void
+  onOpenDSH: (id: string) => void
   onRemove: (id: string) => void
   onPin: (id: string) => void
   onDragStart: (
@@ -5444,7 +5446,20 @@ function ProjectItem({
     y: number
   } | null>(null)
   const moreRef = useRef<HTMLDivElement | null>(null)
+  const moreButtonRef = useRef<HTMLButtonElement>(null)
+  const moreMenuRef = useRef<HTMLDivElement>(null)
+  const moreMenuStyle = useViewportPopoverPosition({
+    anchor: null,
+    anchorRef: moreButtonRef,
+    open: moreOpen,
+    popoverRef: moreMenuRef,
+    align: 'end',
+    gap: 4,
+    gutter: 8
+  })
   const projectMenuRef = useRef<HTMLDivElement | null>(null)
+  const projectButtonRef = useRef<HTMLButtonElement>(null)
+  const moreMenuId = useId()
   const projectMenuStyle = useViewportPopoverPosition({
     anchor: projectMenu
       ? new DOMRect(projectMenu.x, projectMenu.y, 0, 0)
@@ -5456,7 +5471,7 @@ function ProjectItem({
     void validate(project.path)
   }, [project.path, validate])
   useEffect(() => {
-    const close = (event: globalThis.MouseEvent) => {
+    const close = (event: PointerEvent) => {
       if (moreRef.current && !moreRef.current.contains(event.target as Node)) {
         setMoreOpen(false)
       }
@@ -5467,10 +5482,42 @@ function ProjectItem({
         setProjectMenu(null)
       }
     }
-    document.addEventListener('mousedown', close)
-    return () => document.removeEventListener('mousedown', close)
+    document.addEventListener('pointerdown', close)
+    return () => document.removeEventListener('pointerdown', close)
   }, [setMoreOpen, setProjectMenu])
+  useEffect(() => {
+    if (projectMenu) projectMenuRef.current?.querySelector('button')?.focus({ preventScroll: true })
+  }, [projectMenu])
   const invalid = data?.valid === false
+  function projectActions(close: () => void) {
+    return (
+      <>
+        <button
+          type="button"
+          className="workbench-action-item"
+          onClick={() => {
+            close()
+            onPin(project.id)
+          }}
+        >
+          <Pin className="size-4 shrink-0" aria-hidden="true" />
+          {project.pinned ? '取消置顶' : '置顶'}
+        </button>
+        <button
+          type="button"
+          className="workbench-action-item"
+          data-destructive
+          onClick={() => {
+            close()
+            onRemove(project.id)
+          }}
+        >
+          <Trash2 className="size-4 shrink-0" aria-hidden="true" />
+          移除
+        </button>
+      </>
+    )
+  }
   return (
     <article
       className={cn(
@@ -5486,7 +5533,8 @@ function ProjectItem({
       )}
     >
       <button
-        className="flex w-full min-w-0 items-center gap-2 pr-9 text-left"
+        ref={projectButtonRef}
+        className="flex w-full min-w-0 items-center gap-2 pr-17 text-left"
         aria-current={active ? 'page' : undefined}
         onClick={() => onSelect(project.id)}
         onPointerDown={event => onDragStart(event, project.id)}
@@ -5519,45 +5567,50 @@ function ProjectItem({
         </span>
       </button>
       <div className="absolute right-1.5 top-2 flex items-center gap-0.5">
-        <div ref={moreRef} className="relative">
+        <Button
+          variant="icon"
+          className="size-7! bg-transparent! hover:bg-(--theme-surface-hover)!"
+          aria-label={`在 DSH 中打开 ${project.name}`}
+          title="在 DSH 中打开"
+          onClick={() => onOpenDSH(project.id)}
+        >
+          <DSHWhaleIcon className="size-3.5" />
+        </Button>
+        <div
+          ref={moreRef}
+          onKeyDown={event => {
+            if (!moreOpen || event.key !== 'Escape') return
+            event.preventDefault()
+            event.stopPropagation()
+            setMoreOpen(false)
+            moreButtonRef.current?.focus()
+          }}
+        >
           <button
-            className={cn(
-              'inline-flex size-7 items-center justify-center rounded text-slate-400 transition-colors hover:bg-slate-200/60 hover:text-slate-600 dark:text-slate-500 dark:hover:bg-slate-700 dark:hover:text-slate-300',
-              moreOpen &&
-                'bg-slate-200/60 text-slate-600 dark:bg-slate-700 dark:text-slate-300'
-            )}
+            ref={moreButtonRef}
+            type="button"
+            className="icon-button workbench-menu-trigger size-7 p-0"
             onClick={() => setMoreOpen(value => !value)}
             aria-expanded={moreOpen}
+            aria-controls={moreOpen ? moreMenuId : undefined}
             aria-label={`${project.name} 的更多操作`}
             title="更多操作"
           >
-            <MoreVertical className="size-3.5" />
+            <MoreVertical className="size-3.5" aria-hidden="true" />
           </button>
           {moreOpen && (
             <div
-              className="workspace-context-menu absolute right-0 top-7 z-20"
+              ref={moreMenuRef}
+              id={moreMenuId}
+              className="workbench-tools-menu workbench-side-submenu fixed [--workbench-menu-layer:200]"
+              style={moreMenuStyle}
               role="menu"
+              aria-label={`${project.name} 的更多操作`}
             >
-              <button
-                className="flex min-h-8 items-center gap-2 rounded px-2 text-left text-xs text-slate-600 transition hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700"
-                onClick={() => {
-                  onPin(project.id)
-                  setMoreOpen(false)
-                }}
-              >
-                <Pin className="size-3.5 text-slate-400" />
-                {project.pinned ? '取消置顶' : '置顶'}
-              </button>
-              <button
-                className="flex min-h-8 items-center gap-2 rounded px-2 text-left text-xs text-red-600 transition hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950/30"
-                onClick={() => {
-                  onRemove(project.id)
-                  setMoreOpen(false)
-                }}
-              >
-                <Trash2 className="size-3.5" />
-                移除
-              </button>
+              {projectActions(() => {
+                setMoreOpen(false)
+                moreButtonRef.current?.focus({ preventScroll: true })
+              })}
             </div>
           )}
         </div>
@@ -5565,41 +5618,30 @@ function ProjectItem({
       {projectMenu && (
         <div
           ref={projectMenuRef}
-          className="workspace-context-menu fixed z-200"
+          className="workbench-tools-menu workbench-side-submenu fixed [--workbench-menu-layer:200]"
           style={projectMenuStyle}
           role="menu"
           aria-label={`${project.name} 的操作`}
+          onKeyDown={event => {
+            if (event.key !== 'Escape') return
+            event.preventDefault()
+            event.stopPropagation()
+            setProjectMenu(null)
+            projectButtonRef.current?.focus({ preventScroll: true })
+          }}
         >
           <button
-            className="flex min-h-8 items-center gap-2 rounded px-2 text-left text-xs text-slate-600 transition hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700"
+            type="button"
+            className="workbench-action-item"
             onClick={() => {
               onSelect(project.id)
               setProjectMenu(null)
             }}
           >
-            <Bot className="size-3.5 text-slate-400" />
+            <Bot className="size-4 shrink-0" aria-hidden="true" />
             打开
           </button>
-          <button
-            className="flex min-h-8 items-center gap-2 rounded px-2 text-left text-xs text-slate-600 transition hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700"
-            onClick={() => {
-              onPin(project.id)
-              setProjectMenu(null)
-            }}
-          >
-            <Pin className="size-3.5 text-slate-400" />
-            {project.pinned ? '取消置顶' : '置顶'}
-          </button>
-          <button
-            className="flex min-h-8 items-center gap-2 rounded px-2 text-left text-xs text-red-600 transition hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950/30"
-            onClick={() => {
-              onRemove(project.id)
-              setProjectMenu(null)
-            }}
-          >
-            <Trash2 className="size-3.5" />
-            移除
-          </button>
+          {projectActions(() => setProjectMenu(null))}
         </div>
       )}
     </article>
@@ -12655,6 +12697,7 @@ function LiveChatWindow({
 }
 
 function ControlCard({
+  dropdown,
   page,
   section,
   project,
@@ -12663,11 +12706,8 @@ function ControlCard({
   catalogTitle,
   catalogLoading,
   developerMode,
-  dshOpen,
   appLaunching,
   testLaunching,
-  onOpenConsole,
-  onOpenAI,
   onOpenOps,
   onOpenApp,
   onOpenTest,
@@ -12678,6 +12718,7 @@ function ControlCard({
   onCatalog,
   onGit
 }: {
+  dropdown: boolean
   page: Page
   section: Section
   project?: Project
@@ -12686,13 +12727,10 @@ function ControlCard({
   catalogTitle: string
   catalogLoading: boolean
   developerMode: boolean
-  dshOpen: boolean
   appLaunching: boolean
   appPages: Array<{ id: string; name: string }>
   onOpenAppPage: (id: string) => void
   testLaunching: boolean
-  onOpenConsole: () => void
-  onOpenAI: () => void
   onOpenOps: () => void
   onOpenApp: () => void
   onOpenTest: () => void
@@ -12713,18 +12751,16 @@ function ControlCard({
     [gitRoot]
   )
   const { data: gitBranches } = useGitWorkspaceQuery(gitOverviewBranchesArgs, {
-    skip: !gitRoot || page !== 'robot' || section !== 'runtime'
+    skip: dropdown || !gitRoot || page !== 'robot' || section !== 'runtime'
   })
   const { data: gitChanges } = useGitWorkspaceQuery(gitOverviewChangesArgs, {
-    skip: !gitRoot || page !== 'robot' || section !== 'runtime'
+    skip: dropdown || !gitRoot || page !== 'robot' || section !== 'runtime'
   })
   const gitOverview =
     gitBranches && gitChanges
       ? { ...gitBranches, changes: gitChanges.changes }
       : (gitBranches ?? gitChanges ?? undefined)
-  const activePrimary = dshOpen
-    ? null
-    : page === 'robot'
+  const activePrimary = page === 'robot'
       ? section === 'backpack'
         ? 'backpack'
         : section === 'runtime'
@@ -12732,9 +12768,7 @@ function ControlCard({
           : 'config'
       : page
   function subitemsFor(primary: Section | Page | null) {
-    return dshOpen
-      ? []
-      : primary === 'config'
+    return primary === 'config'
         ? developerMode
           ? [
               { id: 'config', label: '机器人' },
@@ -12786,6 +12820,97 @@ function ControlCard({
       onCatalog(id)
     }
   }
+  const navigation = (
+    <ProjectNavigation
+      dropdown={dropdown}
+      activeID={activePrimary}
+      items={directoryActions
+        .filter(item => developerMode || item.id !== 'build')
+        .map(item => ({
+          id: item.id,
+          label: item.label,
+          icon: item.icon,
+          onSelect: () => selectPrimary(item),
+          loading:
+            activePrimary === item.id &&
+            catalogLoading &&
+            ['plugins', 'connections', 'modules'].includes(item.id),
+          children: subitemsFor(item.id).map(child => ({
+            ...child,
+            active:
+              activePrimary === item.id && activeSecondary === child.id,
+            onSelect: () => selectSecondary(item.id, child.id)
+          }))
+        }))}
+    />
+  )
+  const spinner = <span className="inline-block size-3.5 animate-spin rounded-full border-2 border-slate-300 border-t-brand-600" />
+  const quickActions = [
+    {
+      label: '应用',
+      accessibleLabel: appLaunching ? '正在启动应用…' : '打开应用',
+      title: appLaunching ? '正在启动应用，请稍候…' : '打开应用（需配置应用端口并启动机器人）',
+      icon: appLaunching ? spinner : <Monitor className="size-3.5" />,
+      disabled: appLaunching,
+      onClick: onOpenApp
+    },
+    {
+      label: '测试',
+      accessibleLabel: testLaunching ? '正在启动测试…' : '打开测试',
+      title: testLaunching ? '正在启动测试，请稍候…' : '打开测试（需配置机器人端口并启动沙盒模式）',
+      icon: testLaunching ? spinner : <FlaskConical className="size-3.5" />,
+      disabled: testLaunching,
+      onClick: onOpenTest
+    },
+    {
+      label: '聊天',
+      accessibleLabel: '打开在线聊天',
+      title: '连接已登录机器人的 CBP 在线聊天',
+      icon: <MessageSquare className="size-3.5" />,
+      onClick: onOpenLive
+    },
+    {
+      label: '运维',
+      accessibleLabel: '打开运维',
+      title: '打开运维',
+      icon: <ShieldCheck className="size-3.5" />,
+      onClick: onOpenOps
+    }
+  ]
+  const quickActionButtons = quickActions.map(action => (
+    <button
+      key={action.label}
+      type="button"
+      className={dropdown
+        ? 'workbench-action-item'
+        : 'inline-flex min-h-8 items-center justify-center gap-1 rounded-md px-1 text-[11px] text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700 disabled:opacity-40 dark:text-slate-400 dark:hover:bg-slate-700 dark:hover:text-slate-200'}
+      onClick={action.onClick}
+      disabled={action.disabled}
+      aria-label={action.accessibleLabel}
+      title={action.title}
+    >
+      {action.icon}
+      <span>{action.label}</span>
+    </button>
+  ))
+  if (dropdown) {
+    return (
+      <>
+        {navigation}
+        <div className="workbench-action-divider" aria-hidden="true" />
+        <button
+          type="button"
+          className="workbench-action-item"
+          onClick={onGit}
+          aria-label={`管理 ${project?.name ?? '当前机器人'} 的 Git`}
+        >
+          <GitBranch className="size-3.5" aria-hidden="true" />
+          仓库
+        </button>
+        {quickActionButtons}
+      </>
+    )
+  }
   return (
     <aside className="control-dock flex min-h-0 flex-col" aria-label="目录操作">
       <section className="control-card control-navigation">
@@ -12829,113 +12954,10 @@ function ControlCard({
             <GitBranch className="size-3.5" />
           </button>
         </header>
-        <ProjectNavigation
-          activeID={activePrimary}
-          items={directoryActions
-            .filter(item => developerMode || item.id !== 'build')
-            .map(item => ({
-              id: item.id,
-              label: item.label,
-              icon: item.icon,
-              onSelect: () => selectPrimary(item),
-              loading:
-                activePrimary === item.id &&
-                catalogLoading &&
-                ['plugins', 'connections', 'modules'].includes(item.id),
-              children: subitemsFor(item.id).map(child => ({
-                ...child,
-                active:
-                  activePrimary === item.id && activeSecondary === child.id,
-                onSelect: () => selectSecondary(item.id, child.id)
-              }))
-            }))}
-        >
-          {project && (
-            <button
-              type="button"
-              className={cn(
-                'flex min-h-9 items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm transition hover:bg-(--theme-surface-hover)',
-                dshOpen
-                  ? 'bg-(--theme-accent-soft) font-semibold text-(--theme-accent-text)'
-                  : 'text-(--theme-text-secondary)'
-              )}
-              onClick={onOpenAI}
-              aria-current={dshOpen ? 'page' : undefined}
-              aria-label="使用 Agent 协助当前机器人"
-            >
-              <MessageSquare className="size-4" aria-hidden="true" />
-              <span>代码助手</span>
-            </button>
-          )}
-        </ProjectNavigation>
+        {navigation}
         {project && (
-          <footer
-            className="control-quick-actions grid-cols-5"
-            title={project.path}
-          >
-            <button
-              className="inline-flex min-h-8 items-center justify-center gap-1 rounded-md px-1 text-[11px] text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-700 dark:hover:text-slate-200"
-              onClick={onOpenConsole}
-              aria-label="查看运行终端"
-              title="查看运行终端"
-            >
-              <Terminal className="size-3.5" />
-              <span>终端</span>
-            </button>
-            <button
-              className="inline-flex min-h-8 items-center justify-center gap-1 rounded-md px-1 text-[11px] text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700 disabled:opacity-40 dark:text-slate-400 dark:hover:bg-slate-700 dark:hover:text-slate-200"
-              onClick={onOpenApp}
-              disabled={appLaunching}
-              aria-label={appLaunching ? '正在启动应用…' : '打开应用'}
-              title={
-                appLaunching
-                  ? '正在启动应用，请稍候…'
-                  : '打开应用（需配置应用端口并启动机器人）'
-              }
-            >
-              {appLaunching ? (
-                <span className="inline-block size-3.5 animate-spin rounded-full border-2 border-slate-300 border-t-brand-600" />
-              ) : (
-                <Monitor className="size-3.5" />
-              )}
-              <span>应用</span>
-            </button>
-            <button
-              className="inline-flex min-h-8 items-center justify-center gap-1 rounded-md px-1 text-[11px] text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700 disabled:opacity-40 dark:text-slate-400 dark:hover:bg-slate-700 dark:hover:text-slate-200"
-              onClick={onOpenTest}
-              disabled={testLaunching}
-              aria-label={testLaunching ? '正在启动测试…' : '打开测试'}
-              title={
-                testLaunching
-                  ? '正在启动测试，请稍候…'
-                  : '打开测试（需配置机器人端口并启动沙盒模式）'
-              }
-            >
-              {testLaunching ? (
-                <span className="inline-block size-3.5 animate-spin rounded-full border-2 border-slate-300 border-t-brand-600" />
-              ) : (
-                <FlaskConical className="size-3.5" />
-              )}
-              <span>测试</span>
-            </button>
-            <button
-              className="inline-flex min-h-8 items-center justify-center gap-1 rounded-md px-1 text-[11px] text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-700 dark:hover:text-slate-200"
-              onClick={onOpenLive}
-              aria-label="打开在线聊天"
-              title="连接已登录机器人的 CBP 在线聊天"
-            >
-              <MessageSquare className="size-3.5" />
-              <span>聊天</span>
-            </button>
-            <button
-              className="inline-flex min-h-8 items-center justify-center gap-1 rounded-md px-1 text-[11px] text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-700 dark:hover:text-slate-200"
-              onClick={onOpenOps}
-              aria-label="打开运维"
-              title="打开运维"
-            >
-              <ShieldCheck className="size-3.5" />
-              <span>运维</span>
-            </button>
+          <footer className="control-quick-actions grid-cols-4" title={project.path}>
+            {quickActionButtons}
           </footer>
         )}
       </section>
@@ -12979,7 +13001,7 @@ function StatusDot({
   )
 }
 
-function ReadonlyConsoleContent({
+function ReadonlyConsole({
   open,
   terminalOnly = false,
   logsOnly = false,
@@ -13909,386 +13931,6 @@ function ReadonlyConsoleContent({
   )
 }
 
-function ReadonlyConsole(props: Parameters<typeof ReadonlyConsoleContent>[0]) {
-  if (!props.terminalOnly) return <ReadonlyConsoleContent {...props} />
-  return (
-    <FullTerminal
-      open={props.open}
-      minimized={props.minimized}
-      root={props.root}
-      onClose={props.onClose}
-      onMinimize={props.onMinimize}
-      zIndex={props.zIndex}
-      onActivate={props.onActivate}
-    />
-  )
-}
-
-type LocalTerminal = {
-  id: string
-  key: string
-  cwd: string
-  shell: string
-  label: string
-  output: string
-  truncated?: boolean
-}
-
-function FullTerminal({
-  open,
-  minimized,
-  root,
-  onClose,
-  onMinimize,
-  zIndex,
-  onActivate,
-  native = false
-}: {
-  native?: boolean
-  open: boolean
-  minimized: boolean
-  root: string
-  onClose: () => void
-  onMinimize: () => void
-  zIndex: number
-  onActivate: () => void
-}) {
-  const storageKey = `alx-terminal-sessions:${root}`
-  const hostRef = useRef<HTMLDivElement>(null)
-  const xtermRef = useRef<XTerm | null>(null)
-  const fitRef = useRef<FitAddon | null>(null)
-  const writtenRef = useRef(0)
-  const creatingRef = useRef(false)
-  const restoredStorage = useRef('')
-  const [sessions, setSessions] = useState<LocalTerminal[]>([])
-  const [activeID, setActiveID] = useState('')
-  const active = sessions.find(item => item.id === activeID)
-  const activeOutputRef = useRef('')
-  useEffect(() => { activeOutputRef.current = active?.output ?? '' }, [active?.output])
-
-  const headersFor = (item: LocalTerminal) => ({
-    'Content-Type': 'application/json',
-    'X-ALX-Terminal-Key': item.key
-  })
-  const updateSession = useCallback(
-    (id: string, update: (current: LocalTerminal) => LocalTerminal) =>
-      setSessions(current =>
-        current.map(item => (item.id === id ? update(item) : item))
-      ),
-    []
-  )
-  const createTerminal = useCallback(async () => {
-    if (creatingRef.current) return
-    creatingRef.current = true
-    try {
-      const response = await fetch('/api/v1/terminal/sessions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cwd: root })
-      })
-      const result = await response.json()
-      if (!response.ok || typeof result.id !== 'string') {
-        window.alert(result.error || '无法创建终端。')
-        return
-      }
-      const item: LocalTerminal = {
-        id: result.id,
-        key: result.key,
-        cwd: result.cwd,
-        shell: result.shell,
-        label: `终端 ${sessions.length + 1}`,
-        output: ''
-      }
-      setSessions(current => [...current, item])
-      setActiveID(item.id)
-    } catch {
-      window.alert('无法连接终端服务。')
-    } finally {
-      creatingRef.current = false
-    }
-  }, [root, sessions.length])
-  const closeTerminal = useCallback(
-    (item: LocalTerminal) => {
-      void fetch(`/api/v1/terminal/sessions/${item.id}`, {
-        method: 'DELETE',
-        headers: headersFor(item)
-      })
-      setSessions(current => {
-        const next = current.filter(candidate => candidate.id !== item.id)
-        if (next.length === 0) {
-          sessionStorage.removeItem(storageKey)
-          if (!native) onClose()
-        }
-        return next
-      })
-      setActiveID(current => (current === item.id ? '' : current))
-    },
-    [native, onClose, storageKey]
-  )
-
-  // Restore only descriptors, never credentials in long-lived storage. The
-  // daemon keeps the PTY alive across a browser refresh and validates every
-  // descriptor before it becomes visible again.
-  useEffect(() => {
-    if (!open || restoredStorage.current === storageKey) return
-    restoredStorage.current = storageKey
-    const saved = sessionStorage.getItem(storageKey)
-    if (!saved) {
-      void createTerminal()
-      return
-    }
-    let descriptors: Array<Pick<LocalTerminal, 'id' | 'key' | 'label'>> = []
-    try {
-      descriptors = JSON.parse(saved)
-    } catch {
-      sessionStorage.removeItem(storageKey)
-    }
-    void Promise.all(
-      descriptors.map(async descriptor => {
-        const response = await fetch(
-          `/api/v1/terminal/sessions/${descriptor.id}`,
-          { headers: { 'X-ALX-Terminal-Key': descriptor.key } }
-        )
-        if (!response.ok) return null
-        const result = await response.json()
-        return {
-          ...descriptor,
-          cwd: result.cwd,
-          shell: result.shell,
-          output: result.output || '',
-          truncated: result.truncated
-        } as LocalTerminal
-      })
-    ).then(restored => {
-      const items = restored.filter(Boolean) as LocalTerminal[]
-      if (items.length) {
-        setSessions(items)
-        setActiveID(items[0].id)
-      } else void createTerminal()
-    }).catch(() => {})
-  }, [createTerminal, open, storageKey])
-  useEffect(() => {
-    if (!sessions.length) return
-    sessionStorage.setItem(
-      storageKey,
-      JSON.stringify(sessions.map(({ id, key, label }) => ({ id, key, label })))
-    )
-  }, [sessions, storageKey])
-  useEffect(() => {
-    if (!open || !sessions.length) return
-    const timer = window.setInterval(() => {
-      sessions.forEach(
-        item =>
-          void fetch(`/api/v1/terminal/sessions/${item.id}/heartbeat`, {
-            method: 'POST',
-            headers: headersFor(item)
-          })
-      )
-    }, 30_000)
-    return () => window.clearInterval(timer)
-  }, [open, sessions])
-  useEffect(() => {
-    if (!open || !active || !hostRef.current) return
-    const terminal = new XTerm({
-      cursorBlink: false,
-      cursorStyle: 'bar',
-      cursorWidth: 1,
-      convertEol: true,
-      fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-      fontSize: 13,
-      theme: { background: '#0f172a', foreground: '#e2e8f0' }
-    })
-    const fit = new FitAddon()
-    terminal.loadAddon(fit)
-    terminal.open(hostRef.current)
-    fit.fit()
-    terminal.write(active.output)
-    writtenRef.current = active.output.length
-    xtermRef.current = terminal
-    fitRef.current = fit
-    const send = (input: string) =>
-      void fetch(`/api/v1/terminal/sessions/${active.id}/input`, {
-        method: 'POST',
-        headers: headersFor(active),
-        body: JSON.stringify({ input })
-      })
-    const resize = ({ cols, rows }: { cols: number; rows: number }) =>
-      void fetch(`/api/v1/terminal/sessions/${active.id}/resize`, {
-        method: 'POST',
-        headers: headersFor(active),
-        body: JSON.stringify({ cols, rows })
-      })
-    const input = terminal.onData(send)
-    const size = terminal.onResize(resize)
-    resize({ cols: terminal.cols, rows: terminal.rows })
-    const observer = new ResizeObserver(() => {
-      try {
-        fit.fit()
-      } catch {
-        // A minimized window is measured as zero-width; the next resize fits it.
-      }
-    })
-    observer.observe(hostRef.current)
-    return () => {
-      observer.disconnect()
-      input.dispose()
-      size.dispose()
-      terminal.dispose()
-      xtermRef.current = null
-      fitRef.current = null
-    }
-  }, [active?.id, open])
-  useEffect(() => {
-    if (
-      !active ||
-      !xtermRef.current ||
-      active.output.length <= writtenRef.current
-    )
-      return
-    xtermRef.current.write(active.output.slice(writtenRef.current))
-    writtenRef.current = active.output.length
-  }, [active?.output, active?.id])
-  useEffect(() => {
-    if (!open || !active) return
-    const source = new EventSource(
-      `/api/v1/terminal/sessions/${active.id}/stream?key=${encodeURIComponent(active.key)}`
-    )
-    source.onmessage = event => {
-      const payload = JSON.parse(event.data) as {
-        text?: string
-        snapshot?: boolean
-        truncated?: boolean
-      }
-      if (payload.truncated)
-        updateSession(active.id, item => ({ ...item, truncated: true }))
-      if (payload.snapshot && typeof payload.text === 'string' && !payload.text.startsWith(activeOutputRef.current.slice(0, writtenRef.current))) {
-        xtermRef.current?.reset()
-        writtenRef.current = 0
-      }
-      if (payload.text)
-        updateSession(active.id, item => ({
-          ...item,
-          output: payload.snapshot
-            ? payload.text || ''
-            : `${item.output}${payload.text}`
-        }))
-    }
-    return () => source.close()
-  }, [active?.id, active?.key, open, updateSession])
-  useEffect(() => {
-    if (!open || minimized) return
-    window.requestAnimationFrame(() => {
-      fitRef.current?.fit()
-      xtermRef.current?.focus()
-    })
-  }, [active?.id, minimized, open])
-
-  const closeAll = () => {
-    sessions.forEach(closeTerminal)
-    setSessions([])
-    setActiveID('')
-    sessionStorage.removeItem(storageKey)
-    onClose()
-  }
-  const copyOutput = () =>
-    active && void navigator.clipboard?.writeText(active.output)
-  const downloadOutput = () => {
-    if (!active) return
-    const url = URL.createObjectURL(
-      new Blob([active.output], { type: 'text/plain;charset=utf-8' })
-    )
-    const anchor = document.createElement('a')
-    anchor.href = url
-    anchor.download = `${active.label}.log`
-    anchor.click()
-    URL.revokeObjectURL(url)
-  }
-  return (
-    <DesktopWindow
-      native={native}
-      id="terminal"
-      open={open}
-      minimized={minimized}
-      title="终端"
-      subtitle={active ? `${active.cwd} · ${active.shell}` : '本机交互式终端'}
-      icon={
-        <Terminal className="size-4 shrink-0 text-brand-600 dark:text-brand-200" />
-      }
-      onClose={closeAll}
-      onMinimize={onMinimize}
-      zIndex={zIndex}
-      onActivate={onActivate}
-      initialPosition={{ left: 16, top: 16 }}
-      width={760}
-      height={650}
-      headerLeft={
-        <nav className="readonly-console-tabs" aria-label="终端列表">
-          {sessions.map(item => (
-            <button
-              className={cn(
-                'readonly-console-tab',
-                activeID === item.id && 'active'
-              )}
-              key={item.id}
-              onClick={() => setActiveID(item.id)}
-            >
-              <span>{item.label}</span>
-              <X
-                className="size-3"
-                onClick={event => {
-                  event.stopPropagation()
-                  closeTerminal(item)
-                }}
-              />
-            </button>
-          ))}
-          <button
-            className="readonly-console-tab-add"
-            onClick={() => void createTerminal()}
-            aria-label="添加终端"
-            title="添加终端"
-          >
-            <Plus className="size-4" />
-          </button>
-        </nav>
-      }
-      actions={
-        <div className="flex items-center gap-1">
-          <button
-            className="icon-button size-8 p-0"
-            onClick={copyOutput}
-            title="复制输出"
-          >
-            <ClipboardList className="size-4" />
-          </button>
-          <button
-            className="icon-button size-8 p-0"
-            onClick={downloadOutput}
-            title="下载输出"
-          >
-            <Download className="size-4" />
-          </button>
-        </div>
-      }
-    >
-      <div className="flex h-full min-h-0 flex-col gap-2 p-2">
-        {active?.truncated && (
-          <p className="text-xs text-amber-600">
-            早期输出已被循环缓冲清理；终端仍在运行。
-          </p>
-        )}
-        <div className="readonly-console-shell min-h-0 flex-1">
-          <div
-            ref={hostRef}
-            className="h-full"
-            onPointerDown={() => xtermRef.current?.focus()}
-          />
-        </div>
-      </div>
-    </DesktopWindow>
-  )
-}
-
 // Kept as an exported compatibility surface while every caller uses the
 // shared window chrome, geometry and container-query contract.
 export function FloatingWindow({
@@ -14511,7 +14153,7 @@ function PM2ProcessesPanel({
           </div>
           <div className="flex items-center gap-1">
             <button
-              className="inline-flex size-8 items-center justify-center rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-800"
+              className="inline-flex size-8 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800"
               disabled={isFetching}
               onClick={() => void refetch()}
               aria-label="刷新 PM2 进程"
@@ -14520,7 +14162,7 @@ function PM2ProcessesPanel({
               <RefreshCw className="size-4" />
             </button>
             <button
-              className="inline-flex size-8 items-center justify-center rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-800"
+              className="inline-flex size-8 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800"
               onClick={onClose}
               aria-label="关闭 PM2 进程"
               title="关闭"
@@ -15077,7 +14719,7 @@ function GitReleasePanelNext({
             </button>
           )}
           <button
-            className="inline-flex size-9 items-center justify-center rounded-lg border border-slate-200 bg-white p-0 text-xs font-semibold text-slate-600 disabled:opacity-40 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-300"
+            className="inline-flex size-9 items-center justify-center rounded-lg bg-white p-0 text-xs font-semibold text-slate-600 enabled:hover:bg-(--theme-surface-hover) disabled:opacity-40 dark:bg-slate-900 dark:text-slate-300"
             onClick={refresh}
             disabled={loading || busy}
             aria-label="刷新发布状态"
@@ -15470,7 +15112,7 @@ export function NativeRobotWindow({ name }: { name: RobotWindowName | SystemWind
   const query = new URLSearchParams(window.location.search)
   const root = query.get('root') ?? ''
   if (name === 'terminal') {
-    return <FullTerminal {...nativeRobotWindowProps} root={root} />
+    return <TerminalPanel native root={root} onClose={closeNativeRobotWindow} />
   }
   if (name === 'pm2-logs') {
     return <PM2LogsPanel {...nativeRobotWindowProps} root={root} />
@@ -15478,7 +15120,7 @@ export function NativeRobotWindow({ name }: { name: RobotWindowName | SystemWind
   if (name === 'foreground-logs') {
     const taskName = query.get('taskName')
     return (
-      <ReadonlyConsoleContent
+      <ReadonlyConsole
         {...nativeRobotWindowProps}
         logsOnly
         root={root}
@@ -15496,7 +15138,7 @@ export function NativeRobotWindow({ name }: { name: RobotWindowName | SystemWind
     )
   }
   if (name === 'git') {
-    return <RobotGitControl {...nativeRobotWindowProps} project={{ path: root, name: query.get('name') || projectName(root) }} />
+    return <RobotGitControl {...nativeRobotWindowProps} project={{ path: root, name: query.get('name') || directoryName(root) }} />
   }
   if (name === 'test') return <TestCenterWindow {...nativeRobotWindowProps} root={root} />
   if (name === 'live') return <LiveChatWindow {...nativeRobotWindowProps} root={root} />
@@ -15606,7 +15248,7 @@ function NativeOpsOverview() {
   const projects = useSelector((state: RootState) => state.workspace.projects)
   return (
     <OpsOverview
-      projects={projects.map(project => ({ ...project, name: projectName(project.path) }))}
+      projects={projects.map(project => ({ ...project, name: directoryName(project.path) }))}
       sidebarLayout
       onOpenProject={id => openNativeWindow('main-project', new URLSearchParams({ id }).toString())}
     />

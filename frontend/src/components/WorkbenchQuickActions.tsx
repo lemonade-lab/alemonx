@@ -1,5 +1,5 @@
 import { Cable, Check, ChevronRight, Code2, Network } from 'lucide-react'
-import { useEffect, useId, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { useDispatch } from 'react-redux'
 import { setDeveloperMode } from '../store/workspaceStore'
 import {
@@ -14,10 +14,74 @@ import { Button } from './Button'
 import { GitHubAuthControl } from './GitHubAuthControl'
 import { ThemeToggle } from './ThemeToggle'
 import { WorkbenchTools } from './WorkbenchTools'
+import type { WorkbenchToolAction } from './WorkbenchToolRail'
 import { networkError, networkModes } from './network/networkSettings'
 
-export function WorkbenchQuickActions({ developerMode }: { developerMode: boolean }) {
-  return <WorkbenchTools keepMounted>{(_, open) => <QuickActions developerMode={developerMode} open={open} />}</WorkbenchTools>
+export function WorkbenchQuickActions({
+  developerMode,
+  minimizedWindows,
+  panelActions = []
+}: {
+  developerMode: boolean
+  minimizedWindows: WorkbenchToolAction[]
+  panelActions?: Array<{
+    title: string
+    label: string
+    icon: ReactNode
+    expanded: boolean
+    toggle: () => void
+  }>
+}) {
+  return (
+    <WorkbenchTools
+      keepMounted
+      restoreFocusOnClose={panelActions.length > 0}
+      menuClassName={panelActions.length > 0 ? 'workbench-settings-menu overflow-y-auto overscroll-contain' : undefined}
+    >
+      {(close, open) => (
+        <>
+          {panelActions.length > 0 && (
+            <>
+              {panelActions.map(action => (
+                <Button
+                  key={action.title}
+                  className="workbench-action-item"
+                  aria-expanded={action.expanded}
+                  onClick={() => {
+                    close()
+                    action.toggle()
+                  }}
+                >
+                  {action.icon}
+                  {action.label}
+                </Button>
+              ))}
+              <div className="workbench-action-divider" aria-hidden="true" />
+            </>
+          )}
+          {minimizedWindows.length > 0 && (
+            <div className="min-[1200px]:hidden" role="group" aria-label="已最小化窗口">
+              {minimizedWindows.map(window => (
+                <Button
+                  key={window.id}
+                  className="workbench-action-item [&>svg]:size-4"
+                  onClick={() => {
+                    window.activate()
+                    close()
+                  }}
+                >
+                  {window.icon}
+                  {window.label}
+                </Button>
+              ))}
+              <div className="workbench-action-divider" aria-hidden="true" />
+            </div>
+          )}
+          <QuickActions developerMode={developerMode} open={open} />
+        </>
+      )}
+    </WorkbenchTools>
+  )
 }
 
 function QuickActions({ developerMode, open }: { developerMode: boolean; open: boolean }) {
@@ -140,7 +204,7 @@ function QuickActions({ developerMode, open }: { developerMode: boolean; open: b
           role="group"
           aria-label="网络模式"
           style={networkPosition}
-          className="workbench-tools-menu workbench-network-submenu"
+          className="workbench-tools-menu workbench-side-submenu"
           onKeyDown={event => {
             if (event.key !== 'Escape') return
             event.preventDefault()

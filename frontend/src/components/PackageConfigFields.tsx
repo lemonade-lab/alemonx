@@ -132,7 +132,7 @@ function FieldControl({
               />
               <button
                 type="button"
-                className="config-field-action inline-flex size-11 shrink-0 items-center justify-center rounded-md text-(--theme-text-secondary)"
+                className="config-field-remove inline-flex size-11 shrink-0 items-center justify-center rounded-md text-(--theme-text-secondary)"
                 onClick={() => {
                   const next = [...items]
                   next.splice(index, 1)

@@ -1,44 +1,40 @@
 import { useStoreState } from '../../store/guideStore'
-import { useEffect, useRef, type CSSProperties, type ReactNode } from 'react'
+import { useEffect, useRef, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import { useDispatch } from 'react-redux'
-import { useNavigate } from 'react-router-dom'
-import { ArrowRight, Code2 } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Check, Code2 } from 'lucide-react'
+import cn from 'classnames'
 import { setProject } from '../../store/guideStore'
 import { DirectoryPicker } from '../../components/Dashboard'
 import { ErrorNotice } from '../../components/ErrorNotice'
-import { GuideHeader } from '../../components/GuideHeader'
-import type { Goal } from './types'
+import { Button } from '../../components/Button'
 import { guideIcons } from './icons'
 
 type Props = {
   group?: string
-  goal?: Goal
+  stepsTarget: HTMLDivElement | null
+  progressTarget: HTMLDivElement | null
+  onBack?: () => void
+  onStepSelect: () => void
   error: string
   onSelect: (id: string | null) => void
-  onClose: () => void
-  onOpenSettings: () => void
   onClearError: () => void
-  windowStyle?: CSSProperties
-  windowControls?: ReactNode
-  renderFlow: (registerBack: (handler: () => void) => void) => ReactNode
+  children: ReactNode
 }
 
 export function GuideHome({
   group,
-  goal,
+  stepsTarget,
+  progressTarget,
+  onBack,
+  onStepSelect,
   error,
   onSelect,
-  onClose,
-  onOpenSettings,
   onClearError,
-  renderFlow,
-  windowStyle,
-  windowControls
+  children
 }: Props) {
-  const backAction = useRef<() => void>(() => {})
   const dispatch = useDispatch()
   const [directoryPickerOpen, setDirectoryPickerOpen] = useStoreState(false)
-  const navigate = useNavigate()
   useEffect(() => {
     const open = () => setDirectoryPickerOpen(true)
     window.addEventListener('alemon:choose-directory', open)
@@ -46,36 +42,115 @@ export function GuideHome({
   }, [setDirectoryPickerOpen])
 
   return (
-    <main className="guide-shell">
-      <section className="guide-window" style={windowStyle}>
-        <GuideHeader
-          onBack={() => (group ? navigate('/guide') : backAction.current())}
-          onClose={onClose}
-          onOpenSettings={onOpenSettings}
-          showBack={Boolean(goal || group)}
-        />
-        {error && <ErrorNotice message={error} onClose={onClearError} />}
-        {group ? (
+    <section className="workbench-guide flex min-h-0 min-w-0 flex-1 flex-col" aria-label="引导">
+      {error && <ErrorNotice message={error} onClose={onClearError} />}
+      {group ? (
+        <>
+          <GuideFlowNavigation
+            target={stepsTarget}
+            title={group === 'deploy' ? '部署引导' : '开发引导'}
+            steps={['选择目的']}
+            currentStep={0}
+            onBack={onBack}
+            onSelect={() => {
+              onStepSelect()
+              onSelect(null)
+            }}
+          />
+          <GuideProgress target={progressTarget} text="选择目的" />
           <PurposeGroup group={group} onSelect={onSelect} />
-        ) : (
-          renderFlow(handler => {
-            backAction.current = handler
-          })
+        </>
+      ) : (
+        children
+      )}
+      <DirectoryPicker
+        open={directoryPickerOpen}
+        multiple={false}
+        onClose={() => setDirectoryPickerOpen(false)}
+        onSelect={paths => {
+          dispatch(
+            setProject({ destinationMode: 'custom', destination: paths[0] })
+          )
+          setDirectoryPickerOpen(false)
+        }}
+      />
+    </section>
+  )
+}
+
+export function GuideProgress({ target, text }: {
+  target: HTMLDivElement | null
+  text: string
+}) {
+  return target && createPortal(
+    <p className="m-0 truncate text-sm font-semibold text-(--theme-text-secondary)" aria-live="polite" title={text}>
+      {text}
+    </p>,
+    target
+  )
+}
+
+export function GuideFlowNavigation({ target, title, steps, currentStep, onBack, onSelect }: {
+  target: HTMLDivElement | null
+  title: string
+  steps: string[]
+  currentStep: number
+  onBack?: () => void
+  onSelect: (step: number) => void
+}) {
+  const active = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    active.current?.scrollIntoView({ block: 'nearest' })
+  }, [currentStep, target])
+
+  if (!target) return null
+
+  return createPortal(
+    <nav className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto p-2.5" aria-label="引导流程">
+      <div className="mb-1 flex min-h-8 min-w-0 items-center justify-between gap-2 px-2">
+        <h2 className="min-w-0 truncate text-xs font-semibold text-(--theme-text-muted)" title={title}>{title}</h2>
+        {onBack && (
+          <Button variant="icon" className="bg-transparent! hover:bg-(--theme-surface-hover)!" onClick={onBack} aria-label="返回" title="返回">
+            <ArrowLeft className="size-4" aria-hidden="true" />
+          </Button>
         )}
-        <DirectoryPicker
-          open={directoryPickerOpen}
-          multiple={false}
-          onClose={() => setDirectoryPickerOpen(false)}
-          onSelect={paths => {
-            dispatch(
-              setProject({ destinationMode: 'custom', destination: paths[0] })
-            )
-            setDirectoryPickerOpen(false)
-          }}
-        />
-        {windowControls}
-      </section>
-    </main>
+      </div>
+      <ol className="m-0 grid list-none gap-1 p-0">
+        {steps.map((label, index) => (
+          <li key={label} className="min-w-0">
+            <button
+              type="button"
+              ref={index === currentStep ? active : undefined}
+              aria-current={index === currentStep ? 'step' : undefined}
+              disabled={index > currentStep}
+              className={cn(
+                'flex min-h-10 w-full items-center gap-2 rounded-md px-2 py-1 text-left text-sm enabled:hover:bg-(--theme-surface-hover) disabled:cursor-default',
+                index === currentStep
+                  ? 'bg-(--theme-accent-soft) font-semibold text-(--theme-accent-text)'
+                  : 'text-(--theme-text-secondary) disabled:text-(--theme-text-muted)'
+              )}
+              onClick={() => onSelect(index)}
+            >
+              <span
+                aria-hidden="true"
+                className={cn(
+                  'grid size-6 shrink-0 place-items-center rounded-full text-xs font-semibold',
+                  index === currentStep
+                    ? 'bg-(--theme-accent) text-(--theme-accent-contrast)'
+                    : index < currentStep
+                      ? 'bg-(--theme-success-soft) text-(--theme-success-text)'
+                      : 'bg-(--theme-surface-active)'
+                )}
+              >
+                {index < currentStep ? <Check className="size-3.5" /> : index + 1}
+              </span>
+              <span>{label}</span>
+            </button>
+          </li>
+        ))}
+      </ol>
+    </nav>,
+    target
   )
 }
 

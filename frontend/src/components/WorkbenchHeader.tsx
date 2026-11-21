@@ -1,6 +1,7 @@
 import { createPortal } from 'react-dom'
 import { Minus, Square, X } from 'lucide-react'
-import { useRef, type ReactNode } from 'react'
+import type { ReactNode } from 'react'
+import { useWorkbenchWindowDrag } from '../hooks/useWorkbenchWindowDrag'
 
 import { bridge, desktopPlatform, windows } from './nativeWindow'
 
@@ -9,6 +10,19 @@ const resizeEdges = ['n', 'ne', 'e', 'se', 's', 'sw', 'w', 'nw'] as const
 function doubleClickTitle() {
   bridge?.postMessage(
     windows ? 'alx:window:toggle-maximise' : 'wails:drag:doubleclick'
+  )
+}
+
+export function WorkbenchDragRegion({ className = 'native-workbench-drag' }: {
+  className?: string
+}) {
+  const dragHandlers = useWorkbenchWindowDrag(desktopPlatform !== 'linux')
+  return (
+    <div
+      className={className}
+      {...dragHandlers}
+      onDoubleClick={desktopPlatform === 'linux' ? undefined : doubleClickTitle}
+    />
   )
 }
 
@@ -21,7 +35,6 @@ export function WorkbenchHeader({
   className?: string
   fallback?: boolean
 }) {
-  const dragReady = useRef(false)
   if (!desktopPlatform) return <header className={className}>{children}</header>
 
   return createPortal(
@@ -31,25 +44,7 @@ export function WorkbenchHeader({
       data-fallback={fallback || undefined}
     >
       {children}
-      <div
-        className="native-workbench-drag"
-        onMouseDown={event => {
-          dragReady.current =
-            desktopPlatform !== 'linux' && event.button === 0 && event.detail === 1
-        }}
-        onMouseUp={() => {
-          dragReady.current = false
-        }}
-        onMouseLeave={() => {
-          dragReady.current = false
-        }}
-        onMouseMove={event => {
-          if (!dragReady.current || event.buttons !== 1) return
-          dragReady.current = false
-          bridge?.postMessage('wails:drag')
-        }}
-        onDoubleClick={desktopPlatform === 'linux' ? undefined : doubleClickTitle}
-      />
+      <WorkbenchDragRegion />
       {desktopPlatform === 'windows' && (
         <div
           className="native-window-controls"

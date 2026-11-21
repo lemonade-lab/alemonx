@@ -14,7 +14,7 @@ const fieldTypes = [
 const inputClass =
   'min-h-8 w-full rounded-md border border-slate-300 bg-white px-2 text-xs font-normal text-slate-800 outline-none transition focus:border-brand-600 focus:ring-2 focus:ring-brand-100'
 const actionClass =
-  'inline-flex size-8 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-500 transition hover:border-brand-300 hover:text-brand-700 disabled:cursor-not-allowed disabled:opacity-40'
+  'inline-flex size-8 items-center justify-center rounded-md bg-white text-slate-500 transition hover:bg-(--theme-surface-hover) hover:text-brand-700 disabled:cursor-not-allowed disabled:opacity-40'
 
 function emptyField(): PackageConfigField {
   return { name: '', type: 'string', required: false, description: '' }
@@ -79,7 +79,7 @@ function FieldCard({
           <button type="button" className={actionClass} onClick={() => onMove(1)} disabled={index === count - 1} aria-label="下移字段">
             <ChevronDown className="size-3.5" />
           </button>
-          <button type="button" className={`${actionClass} hover:border-red-300 hover:text-red-600`} onClick={onRemove} aria-label="删除字段">
+          <button type="button" className={`${actionClass} hover:text-red-600`} onClick={onRemove} aria-label="删除字段">
             <Trash2 className="size-3.5" />
           </button>
         </div>
@@ -129,7 +129,7 @@ function FieldCard({
           <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_2rem] gap-1.5" key={ruleIndex}>
             <input className={inputClass} value={rule.pattern} onChange={event => update({ rules: updateAt(rules, ruleIndex, { ...rule, pattern: event.target.value }) })} placeholder="正则表达式" />
             <input className={inputClass} value={rule.message ?? ''} onChange={event => update({ rules: updateAt(rules, ruleIndex, { ...rule, message: event.target.value }) })} placeholder="校验提示" />
-            <button type="button" className={`${actionClass} hover:border-red-300 hover:text-red-600`} onClick={() => update({ rules: rules.filter((_, itemIndex) => itemIndex !== ruleIndex) })} aria-label="删除校验规则">
+            <button type="button" className={`${actionClass} hover:text-red-600`} onClick={() => update({ rules: rules.filter((_, itemIndex) => itemIndex !== ruleIndex) })} aria-label="删除校验规则">
               <Trash2 className="size-3.5" />
             </button>
           </div>

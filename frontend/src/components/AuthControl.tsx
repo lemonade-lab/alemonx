@@ -443,7 +443,7 @@ export function AuthControl({ embedded = false }: { embedded?: boolean }) {
         <Button
           variant="icon"
           className={
-            status?.enabled ? 'border-brand-100 bg-brand-50 text-brand-600' : ''
+            status?.enabled ? 'bg-brand-50 text-brand-600' : ''
           }
           onClick={() =>
             setOpen(value => {

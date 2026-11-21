@@ -44,7 +44,17 @@ func (ConfigRevisionConflict) Error() string {
 	return "运行配置已被其他操作更新，请刷新后重试"
 }
 
-var runtimeConfigLocks sync.Map // map[string]*sync.Mutex, keyed by project path
+var projectFileLocks sync.Map // map[string]*sync.Mutex, keyed by project path
+
+func lockProjectFiles(project string) func() {
+	if runtime.GOOS == "windows" {
+		project = strings.ToLower(project)
+	}
+	value, _ := projectFileLocks.LoadOrStore(filepath.Clean(project), &sync.Mutex{})
+	lock := value.(*sync.Mutex)
+	lock.Lock()
+	return lock.Unlock
+}
 
 // readRuntimeConfigFile returns a runtime configuration after applying the
 // small, unambiguous migrations that make legacy incremental writes valid
@@ -70,7 +80,7 @@ func readRuntimeConfigFile(path string) ([]byte, error) {
 	return []byte(normalized), nil
 }
 
-func runtimeConfigRevision(content string) string {
+func fileContentRevision(content string) string {
 	sum := sha256.Sum256([]byte(content))
 	return fmt.Sprintf("%x", sum[:])
 }
@@ -83,17 +93,14 @@ func (m Manager) UpdateRuntimeConfig(root, expectedRevision string, update func(
 	if err != nil {
 		return Result{}, err
 	}
-	lockValue, _ := runtimeConfigLocks.LoadOrStore(project, &sync.Mutex{})
-	lock := lockValue.(*sync.Mutex)
-	lock.Lock()
-	defer lock.Unlock()
+	defer lockProjectFiles(project)()
 	path := filepath.Join(project, "alemon.config.yaml")
 	data, err := os.ReadFile(path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return Result{}, fmt.Errorf("无法读取运行配置：%w", err)
 	}
 	current := string(data)
-	if expectedRevision != "" && expectedRevision != runtimeConfigRevision(current) {
+	if expectedRevision != "" && expectedRevision != fileContentRevision(current) {
 		return Result{}, ConfigRevisionConflict{}
 	}
 	next, err := update(current)
@@ -107,7 +114,7 @@ func (m Manager) UpdateRuntimeConfig(root, expectedRevision string, update func(
 	if err := writeFileAtomically(path, []byte(next), 0o600); err != nil {
 		return Result{}, fmt.Errorf("保存 alemon.config.yaml 失败：%w", err)
 	}
-	return Result{Path: path, Output: "已保存。", Revision: runtimeConfigRevision(next)}, nil
+	return Result{Path: path, Output: "已保存。", Revision: fileContentRevision(next)}, nil
 }
 
 // PM2LogPage is a read-only slice of PM2 output. Page 1 is always the newest
@@ -533,16 +540,9 @@ func (Manager) ReadProjectFile(root, name string) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	info, err := os.Stat(path)
+	data, _, err := readRegularProjectFile(path)
 	if err != nil {
-		return Result{}, fmt.Errorf("读取失败：%w", err)
-	}
-	if info.Size() > maxMCPFileSize {
-		return Result{}, errors.New("文件超过 1 MiB，MCP 不会读取")
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return Result{}, fmt.Errorf("读取失败：%w", err)
+		return Result{}, err
 	}
 	return Result{Path: path, Output: string(data)}, nil
 }
@@ -1705,7 +1705,7 @@ func (m Manager) Read(root, name string) (Result, error) {
 		// project legitimately may not have created either one yet; present an
 		// empty document so the editor can create it on save.
 		if errors.Is(err, os.ErrNotExist) && (name == "alemon.config.yaml" || name == ".npmrc" || name == ".env") {
-			return Result{Path: path, Output: "", Revision: runtimeConfigRevision("")}, nil
+			return Result{Path: path, Output: "", Revision: fileContentRevision("")}, nil
 		}
 		if permissionError(err) {
 			return Result{}, permissionAdvice("读取 " + filepath.Base(path))
@@ -1714,7 +1714,7 @@ func (m Manager) Read(root, name string) (Result, error) {
 	}
 	result := Result{Path: path, Output: string(data)}
 	if name == "alemon.config.yaml" {
-		result.Revision = runtimeConfigRevision(result.Output)
+		result.Revision = fileContentRevision(result.Output)
 	}
 	return result, nil
 }
@@ -1749,6 +1749,10 @@ func (m Manager) Write(root, name, content string) (Result, error) {
 // process interruption. The final chmod also repairs permissive modes left by
 // earlier releases.
 func writeFileAtomically(path string, content []byte, mode os.FileMode) error {
+	return writeFileAtomicallyAfterCheck(path, content, mode, nil)
+}
+
+func writeFileAtomicallyAfterCheck(path string, content []byte, mode os.FileMode, check func() error) error {
 	directory := filepath.Dir(path)
 	file, err := os.CreateTemp(directory, ".alx-write-*")
 	if err != nil {
@@ -1770,6 +1774,11 @@ func writeFileAtomically(path string, content []byte, mode os.FileMode) error {
 	}
 	if err := file.Close(); err != nil {
 		return err
+	}
+	if check != nil {
+		if err := check(); err != nil {
+			return err
+		}
 	}
 	if err := os.Rename(temporary, path); err != nil {
 		return err

@@ -683,6 +683,10 @@ export const workspaceApi = createApi({
     'SystemMcp'
   ],
   endpoints: build => ({
+    dshWebStatus: build.query<{ ready: boolean; message?: string }, void>({
+      query: () => 'dsh/status',
+      keepUnusedDataFor: 0
+    }),
     openDSHWeb: build.mutation<{ url: string }, string>({
       query: root => ({
         url: `dsh/runtimes/${btoa(unescape(encodeURIComponent(root)))
@@ -1429,6 +1433,38 @@ export const workspaceApi = createApi({
       query: root => `robot/validate?${new URLSearchParams({ root })}`,
       keepUnusedDataFor: 60
     }),
+    workspaceProjectDirectory: build.query<
+      { entries: { name: string; path: string; directory: boolean }[] },
+      { root: string; directory: string }
+    >({
+      query: args => `workspace/project-files?${new URLSearchParams(args)}`
+    }),
+    workspaceProjectFile: build.query<
+      { content: string; revision: string },
+      { root: string; file: string }
+    >({
+      query: args => `workspace/project-files?${new URLSearchParams(args)}`,
+      keepUnusedDataFor: 0,
+      providesTags: (_result, _error, { root, file }) => [
+        { type: 'RobotFile', id: `${root}:${file}` }
+      ]
+    }),
+    saveWorkspaceProjectFile: build.mutation<
+      { content: string; revision: string },
+      { root: string; file: string; content: string; revision: string }
+    >({
+      query: ({ root, file, ...body }) => ({
+        url: `workspace/project-files?${new URLSearchParams({ root, file })}`,
+        method: 'PUT',
+        body
+      }),
+      invalidatesTags: (result, _error, { root, file }) => result ? [
+        { type: 'RobotFile', id: `${root}:${file}` },
+        { type: 'GitStatus', id: root },
+        ...(file === 'alemon.config.yaml' ? ['PackageConfig' as const] : []),
+        ...(file === 'package.json' ? [{ type: 'PackageManifest' as const, id: root }] : [])
+      ] : []
+    }),
     robotFile: build.query<RobotResult, { root: string; file: string }>({
       query: ({ root, file }) => `robot?${new URLSearchParams({ root, file })}`,
       providesTags: (_result, _error, arg) => [
@@ -1575,6 +1611,7 @@ export const workspaceApi = createApi({
 })
 
 export const {
+  useDshWebStatusQuery,
   useOpenDSHWebMutation,
   useGoalsQuery,
   useWorkspaceQuery,
@@ -1685,6 +1722,9 @@ export const {
   useLazyRobotProjectQuery,
   useLazyRobotFileQuery,
   useRobotFileQuery,
+  useWorkspaceProjectDirectoryQuery,
+  useWorkspaceProjectFileQuery,
+  useSaveWorkspaceProjectFileMutation,
   useGitStatusQuery,
   useGitWorkspaceQuery,
   useGitWorkspaceActionMutation,

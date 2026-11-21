@@ -1,4 +1,5 @@
 export type DSHWorkspaceProps = {
   root: string
-  onOpenWeb: (url: string) => void
+  robotRoots: string[]
+  visible: boolean
 }

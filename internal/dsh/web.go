@@ -20,6 +20,19 @@ import (
 	"alemonx/internal/system"
 )
 
+// CheckWebProgram checks the configured executable or packaged Web sidecar
+// without starting a runtime or reading credentials.
+func CheckWebProgram() error {
+	if bin := os.Getenv("ALX_DSH_BIN"); bin != "" {
+		if _, err := exec.LookPath(bin); err != nil {
+			return errors.New("找不到配置的 DSH 程序，请检查 ALX_DSH_BIN")
+		}
+		return nil
+	}
+	_, err := resources.DSHProgram()
+	return err
+}
+
 func defaultWebCommand(ctx context.Context, home string) (*exec.Cmd, error) {
 	bin := os.Getenv("ALX_DSH_BIN")
 	var prefix []string

@@ -240,6 +240,29 @@ try {
     return key && localStorage.getItem(key).includes('alx-project-latest');
   }, null, { timeout:15000 });
   if (created !== switchedCount) throw new Error('returning to project created an extra session');
+  const host = await context.newPage();
+  await host.goto(new URL('/embedded-dsh-test', process.env.ALX_WEB_PROXY_URL).href);
+  const createdInFrame = host.waitForResponse(response => {
+    const request = response.request();
+    if (!new URL(response.url()).pathname.endsWith('/api/workspace/create') || request.method() !== 'POST') return false;
+    return request.postDataJSON().payload?.args?.request?.path === process.env.ALX_WEB_SECOND_ROOT;
+  }, { timeout: 15000 });
+  await host.evaluate(({ address, roots }) => {
+    const frame = document.createElement('iframe');
+    window.addEventListener('message', ({ source, origin, data }) => {
+      if (source === frame.contentWindow && origin === location.origin && data?.type === 'alx:dsh-workspaces-ready')
+        source.postMessage({ type: 'alx:dsh-robot-workspaces', roots }, location.origin);
+    });
+    frame.src = address;
+    document.body.append(frame);
+  }, { address: process.env.ALX_WEB_PROXY_URL, roots: [process.env.ALX_WEB_OTHER_ROOT, process.env.ALX_WEB_SECOND_ROOT] });
+  const added = await (await createdInFrame).json();
+  if (!added.result?.ok || !added.result?.value?.created)
+    throw new Error('Embedded Web did not add the new robot workspace');
+  const existing = await rpc('workspace/create', {request:{path:process.env.ALX_WEB_OTHER_ROOT}});
+  if (existing.created || existing.workspace.workspaceId !== foreign.workspace.workspaceId)
+    throw new Error('Embedding replaced a manually created workspace');
+  await host.close();
   if (failures.length) throw new Error('Official Web UI reported browser errors');
   console.log('Official Web UI loaded and connected through the production HTTP proxy');
 } finally { await browser.close(); }

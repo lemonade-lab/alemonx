@@ -108,7 +108,13 @@ func (s *server) dshHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if path == "status" && r.Method == http.MethodGet {
-		writeJSON(w, 200, map[string]any{"ready": false, "version": dsh.Version})
+		err := dsh.CheckWebProgram()
+		result := map[string]any{"ready": err == nil, "version": dsh.Version}
+		if err != nil {
+			result["message"] = err.Error()
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		writeJSON(w, 200, result)
 		return
 	}
 	parts := strings.Split(path, "/")
