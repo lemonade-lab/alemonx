@@ -27,19 +27,32 @@ function sharedValue(key: string, value: string) {
 const writes = new Map<string, Promise<void>>()
 let enabled = false
 
-function save(key: string, value: string | null) {
-  if (!enabled || !isPreference(key)) return
-  const body = JSON.stringify({ key, value: value === null ? null : sharedValue(key, value) })
-  const write = () => fetch(path, {
-    method: 'PUT', headers, body,
-    keepalive: new TextEncoder().encode(body).length < 60_000
-  }).then(response => {
-    if (!response.ok) throw new Error('Unable to save desktop preference')
-  }).catch(error => console.error('ALemonX Desktop preferences:', error))
+function queueWrite(key: string, value: string | null, importing = false) {
+  const write = async () => {
+    try {
+      const body = JSON.stringify({
+        key,
+        value: value === null ? null : sharedValue(key, value),
+        import: importing || undefined
+      })
+      const response = await fetch(path, {
+        method: 'PUT', headers, body,
+        signal: importing ? AbortSignal.timeout(3000) : undefined,
+        keepalive: !importing && new TextEncoder().encode(body).length < 60_000
+      })
+      if (!response.ok) throw new Error('Unable to save desktop preference')
+    } catch (error) {
+      console.error('ALemonX Desktop preferences:', error)
+    }
+  }
   const pending = writes.get(key)
   const request = pending ? pending.then(write) : write()
   writes.set(key, request)
   void request.then(() => { if (writes.get(key) === request) writes.delete(key) })
+}
+
+function save(key: string, value: string | null) {
+  if (enabled && isPreference(key)) queueWrite(key, value)
 }
 
 export const preferenceStorage = {
@@ -81,19 +94,11 @@ export async function restoreDesktopPreferences() {
     const legacy = Object.keys(localStorage).filter(key =>
       isPreference(key) && !Object.prototype.hasOwnProperty.call(saved, key)
     )
-    await Promise.all(legacy.map(async key => {
+    // Import in the background. Later writes to the same key wait in order.
+    for (const key of legacy) {
       const value = localStorage.getItem(key)
-      if (value === null) return
-      try {
-        const imported = await fetch(path, {
-          method: 'PUT', headers, signal: AbortSignal.timeout(3000),
-          body: JSON.stringify({ key, value: sharedValue(key, value), import: true })
-        })
-        if (!imported.ok) throw new Error('Unable to import desktop preference')
-      } catch (error) {
-        console.error('ALemonX Desktop preference migration:', error)
-      }
-    }))
+      if (value !== null) queueWrite(key, value, true)
+    }
     const theme = localStorage.getItem('alemonjs-theme')
     if (theme === 'dark' || theme === 'light') {
       document.documentElement.dataset.theme = theme

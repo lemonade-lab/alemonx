@@ -59,12 +59,13 @@ test('desktop login remembers the account and only restores a password with cons
   const password = page.getByLabel('密码', { exact: true })
   const remember = page.getByRole('checkbox', { name: '记住密码' })
   const submit = page.getByRole('button', { name: '登录', exact: true })
+  const settings = page.getByRole('tablist', { name: '设置页面' })
   await expect(remember).not.toBeChecked()
   await account.fill('fixture-user')
   await password.fill('fixture-password')
   await remember.check()
   await submit.click()
-  await expect(submit).toBeHidden()
+  await expect(settings).toBeVisible()
 
   authenticated = false
   await page.reload()
@@ -73,7 +74,7 @@ test('desktop login remembers the account and only restores a password with cons
   await expect(remember).toBeChecked()
   await remember.uncheck()
   await submit.click()
-  await expect(submit).toBeHidden()
+  await expect(settings).toBeVisible()
 
   authenticated = false
   await page.reload()

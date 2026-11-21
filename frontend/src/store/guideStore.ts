@@ -10,7 +10,7 @@ import { persistReducer, persistStore } from 'redux-persist'
 import { useCallback, useEffect, useId, useMemo } from 'react'
 import { useDispatch, useSelector } from 'react-redux'
 import { workspaceApi } from './workspaceApi'
-import { persistedWorkspace } from './workspaceStore'
+import { migrateWorkspaceStorage, persistedWorkspace } from './workspaceStore'
 import { persistedDataPreferences } from './dataStore'
 
 const storage = {
@@ -52,10 +52,6 @@ const uiSlice = createSlice({
     values: {}
   } as UIState,
   reducers: {
-    initializeUIValue(state, action: PayloadAction<UIValue>) {
-      if (!(action.payload.key in state.values))
-        state.values[action.payload.key] = action.payload.value
-    },
     setUIValue(state, action: PayloadAction<UIValue>) {
       if (Object.is(state.values[action.payload.key], action.payload.value))
         return
@@ -119,9 +115,16 @@ export const store = configureStore({
   middleware: getDefault =>
     getDefault({ serializableCheck: false }).concat(workspaceApi.middleware)
 })
-export const persistor = persistStore(store)
+let storeRestored: Promise<void> | undefined
+
+export function restoreStore() {
+  return storeRestored ??= new Promise<void>(resolve => {
+    migrateWorkspaceStorage()
+    persistStore(store, undefined, resolve)
+  })
+}
 export const { setDeveloper, setProject, toggleCapability } = guideSlice.actions
-const { initializeUIValue, setUIValue, clearUIValue } = uiSlice.actions
+const { setUIValue, clearUIValue } = uiSlice.actions
 export type RootState = ReturnType<typeof store.getState>
 
 type StateInitializer<T> = T | (() => T)
@@ -151,26 +154,19 @@ export function useStoreState<T>(
       (state.ui.values[key] as T | undefined) ?? initialValue
   )
 
-  useEffect(() => {
-    dispatch(initializeUIValue({ key, value: initialValue }))
-    return () => {
-      dispatch(clearUIValue(key))
-    }
-  }, [dispatch, initialValue, key])
+  useEffect(() => () => {
+    if (key in store.getState().ui.values) dispatch(clearUIValue(key))
+  }, [dispatch, key])
 
   const setValue = useCallback<StoreStateSetter<T>>(
     next => {
       const current =
         (store.getState().ui.values[key] as T | undefined) ?? initialValue
-      dispatch(
-        setUIValue({
-          key,
-          value:
-            typeof next === 'function'
-              ? (next as (previous: T) => T)(current)
-              : next
-        })
-      )
+      const value =
+        typeof next === 'function'
+          ? (next as (previous: T) => T)(current)
+          : next
+      if (!Object.is(current, value)) dispatch(setUIValue({ key, value }))
     },
     [dispatch, initialValue, key]
   )

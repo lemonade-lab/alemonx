@@ -140,10 +140,10 @@ async function fixture(
     const {default:React}=await import('/node_modules/.vite/deps/react.js');
     const {default:ReactDOM}=await import('/node_modules/.vite/deps/react-dom_client.js');
     const {Provider}=await import('/node_modules/.vite/deps/react-redux.js');
-    const {store,persistor}=await import('/src/store/guideStore.ts');
+    const {store,restoreStore}=await import('/src/store/guideStore.ts');
     const {BackpackPanel}=await import('/src/components/Dashboard.tsx');
     const {useLocalPackagesQuery,useMoveAppMutation}=await import('/src/store/workspaceApi.ts');
-    await new Promise(resolve=>{if(persistor.getState().bootstrapped)return resolve();const stop=persistor.subscribe(()=>{if(persistor.getState().bootstrapped){stop();resolve()}})});
+    await restoreStore();
     const root=new URLSearchParams(location.search).get('root')||'/test/robot';
     function Fixture(){const [moveApp]=useMoveAppMutation();const {currentData,isFetching,error,refetch}=useLocalPackagesQuery(root);return React.createElement(BackpackPanel,{
       root,items:currentData?.items??[],loading:isFetching,failed:!!error,busy:false,onRefresh:refetch,
@@ -368,9 +368,9 @@ test('editor navigation survives reload without persisting environment values', 
     const {default:React}=await import('/node_modules/.vite/deps/react.js');
     const {default:ReactDOM}=await import('/node_modules/.vite/deps/react-dom_client.js');
     const {Provider}=await import('/node_modules/.vite/deps/react-redux.js');
-    const {store,persistor}=await import('/src/store/guideStore.ts');
+    const {store,restoreStore}=await import('/src/store/guideStore.ts');
     const {EnvConfigForm}=await import('/src/components/EnvConfigForm.tsx');
-    await new Promise(resolve=>{if(persistor.getState().bootstrapped)return resolve();const stop=persistor.subscribe(()=>{if(persistor.getState().bootstrapped){stop();resolve()}})});
+    await restoreStore();
     ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(Provider,{store},React.createElement(EnvConfigForm,{content:'TOKEN=fixture-private-value',onChange:()=>{}})));
     </script>`
     })

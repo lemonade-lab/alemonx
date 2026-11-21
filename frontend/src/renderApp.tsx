@@ -2,22 +2,23 @@ import { lazy, StrictMode, Suspense } from 'react'
 import { createRoot } from 'react-dom/client'
 import { Provider } from 'react-redux'
 import { BrowserRouter } from 'react-router-dom'
-import App from './App'
+import { DeferredPanel } from './components/DeferredPanel'
+import type { AuthStatus } from './lib/workbenchAuth'
 import { AuthGate } from './components/AuthControl'
 import { ErrorBoundary } from './components/ErrorBoundary'
-import { store } from './store/guideStore'
+import { restoreStore, store } from './store/guideStore'
 import { connectDesktopTrayNetwork } from './lib/desktopTrayNetwork'
 import { WorkbenchHeader } from './components/WorkbenchHeader'
+import { desktopPlatform } from './components/nativeWindow'
 import {
-  desktopPlatform,
-  getAuxiliaryWindowName
-} from './components/nativeWindow'
+  auxiliaryName,
+  loadAuxiliaryWindow,
+  loadWorkbench,
+  type prepareWorkbenchRoute
+} from './lib/workbenchRoutes'
 
-const NativeAuxiliaryWindow = lazy(() =>
-  import('./components/NativeAuxiliaryWindow').then(module => ({
-    default: module.NativeAuxiliaryWindow
-  }))
-)
+const LazyWorkbench = lazy(loadWorkbench)
+const LazyAuxiliaryWindow = lazy(loadAuxiliaryWindow)
 
 if (desktopPlatform) {
   document.documentElement.dataset.nativeDesktop = desktopPlatform
@@ -31,34 +32,48 @@ if (desktopPlatform) {
   })
 }
 
-const auxiliaryName = desktopPlatform && getAuxiliaryWindowName(window.location.pathname)
-if (desktopPlatform === 'mac') connectDesktopTrayNetwork(!auxiliaryName)
-
-createRoot(document.getElementById('root')!).render(
-  <StrictMode>
-    <ErrorBoundary>
-      <Provider store={store}>
-        {desktopPlatform && <WorkbenchHeader fallback />}
-        <AuthGate>
-          <BrowserRouter>
-            {auxiliaryName ? (
-              <Suspense
-                fallback={
-                  <p className="native-auxiliary-content p-4" role="status">
-                    正在加载…
-                  </p>
-                }
-              >
-                <NativeAuxiliaryWindow
-                  name={auxiliaryName}
-                />
-              </Suspense>
-            ) : (
-              <App />
+export async function renderApp(
+  initialStatus: Promise<AuthStatus>,
+  ready: Awaited<ReturnType<typeof prepareWorkbenchRoute>>
+) {
+  await restoreStore()
+  const Workbench = ready?.workbench ?? LazyWorkbench
+  const AuxiliaryWindow = ready?.auxiliary ?? LazyAuxiliaryWindow
+  if (desktopPlatform === 'mac') connectDesktopTrayNetwork(!auxiliaryName)
+  createRoot(document.getElementById('root')!).render(
+    <StrictMode>
+      <ErrorBoundary>
+        <Provider store={store}>
+          {desktopPlatform && <WorkbenchHeader fallback />}
+          <AuthGate initialStatus={initialStatus}>
+            {status => (
+              <BrowserRouter>
+                {auxiliaryName ? (
+                  <Suspense
+                    fallback={
+                      <p className="native-auxiliary-content p-4" role="status">
+                        正在加载…
+                      </p>
+                    }
+                  >
+                    <AuxiliaryWindow name={auxiliaryName} />
+                  </Suspense>
+                ) : (
+                  <DeferredPanel label="工作台">
+                    <Workbench
+                      initialRobots={
+                        ready?.status === status
+                          ? ready.initialRobots
+                          : undefined
+                      }
+                    />
+                  </DeferredPanel>
+                )}
+              </BrowserRouter>
             )}
-          </BrowserRouter>
-        </AuthGate>
-      </Provider>
-    </ErrorBoundary>
-  </StrictMode>
-)
+          </AuthGate>
+        </Provider>
+      </ErrorBoundary>
+    </StrictMode>
+  )
+}

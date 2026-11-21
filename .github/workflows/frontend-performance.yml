@@ -1,0 +1,31 @@
+name: Frontend performance
+
+on:
+  pull_request:
+    paths: ['frontend/**', '.github/workflows/frontend-performance.yml']
+  push:
+    branches: [main]
+    paths: ['frontend/**', '.github/workflows/frontend-performance.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: yarn
+          cache-dependency-path: frontend/yarn.lock
+      - run: corepack enable
+      - run: yarn install --frozen-lockfile --non-interactive
+      - run: yarn check:performance
+      - run: yarn playwright install --with-deps chrome
+      - run: yarn test:sse --workers=2 e2e/startup-performance.spec.ts e2e/pm2-logs.spec.ts
+      - run: yarn test:sse --workers=2 e2e/window-responsive.spec.ts -g 'robot workbench resizes the left rail|terminal opens at minimum width'

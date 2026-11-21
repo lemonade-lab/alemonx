@@ -2,13 +2,14 @@ import { RobotRuntimeSwitch } from './RobotRuntimeSwitch'
 import { RobotDiagnostics } from './RobotDiagnostics'
 import { BackpackPackageUpdate } from './BackpackPackageUpdate'
 import { WorkbenchQuickActions } from './WorkbenchQuickActions'
-import { TerminalPanel, type TerminalPanelHandle } from './TerminalPanel'
+import type { TerminalPanelHandle } from './TerminalPanel'
 import { WorkbenchTerminalSplitter } from './WorkbenchTerminalSplitter'
 import { WorkbenchAuxiliaryStart } from './WorkbenchAuxiliaryStart'
 import { WorkbenchToolRail, type WorkbenchToolAction } from './WorkbenchToolRail'
 import { RobotDirectoryTree } from './RobotDirectoryTree'
 import { RobotWorkspaceSplitter } from './RobotWorkspaceSplitter'
 import { useAccountRobots } from '../hooks/useAccountRobots'
+import type { RobotList } from '../lib/workspaceRobots'
 import { useNavigationState } from '../hooks/useNavigationState'
 import {
   ConnectionCatalog,
@@ -16,7 +17,7 @@ import {
   OfficialResourceInfo
 } from './OfficialResources'
 import { useStoreState } from '../store/guideStore'
-import { recordBrowserSite } from '../store/browserRecentStore'
+import type { BrowserCommand } from './MiniBrowserWindow'
 import { useAutoSave } from '../hooks/useAutoSave'
 import {
   lazy,
@@ -45,26 +46,10 @@ import {
 } from '../lib/dashboardNavigation'
 import { createRandomID } from '../lib/randomId'
 import { directoryName } from '../lib/directoryName'
-import {
-  collapseForegroundLog,
-  filterForegroundLog,
-  foregroundLogDomains,
-  foregroundLogDisplayText,
-  foregroundLogSummary as summarizeForegroundLog,
-  normalizeForegroundLog,
-  redactForegroundLog,
-  type ForegroundLogAction,
-  type ForegroundLogDomain,
-  type ForegroundLogLevel,
-  type ForegroundLogItem,
-  type ForegroundLogMode
-} from '../lib/foregroundLogInterpreter'
+import { operationErrorMessage } from '../lib/operationErrorMessage'
 import cn from 'classnames'
-import Markdown from 'markdown-to-jsx'
+import { DeferredMarkdown } from './DeferredMarkdown'
 import { load as loadYAML } from 'js-yaml'
-import { Terminal as XTerm } from '@xterm/xterm'
-import { FitAddon } from '@xterm/addon-fit'
-import '@xterm/xterm/css/xterm.css'
 import {
   AlertTriangle,
   Activity,
@@ -82,7 +67,6 @@ import {
   Loader2,
   ClipboardList,
   Code2,
-  Download,
   Database,
   Eye,
   EyeOff,
@@ -142,15 +126,12 @@ import { Tabs } from './Tabs'
 import { NpmrcConfigForm } from './NpmrcConfigForm'
 import { EnvConfigForm } from './EnvConfigForm'
 import { RobotPanel } from './RobotPanel'
-import { EcosystemMarket } from './EcosystemMarket'
-import meLogo from '../assets/images/me.png'
+import { isWorkbenchBrowserPageURL } from '../lib/workbenchBrowserAddress'
 import { EnvironmentFixDialog } from './EnvironmentFixDialog'
 import type { Report } from '../features/guide/types'
-import { OpsCenter } from './OpsCenter'
 import { OpsOverview } from './OpsOverview'
 import { NpmPublishPanel } from './NpmPublishPanel'
 import { PackageManifestPanel } from './PackageManifestPanel'
-import { DSHWorkspace } from './DSHWorkspace'
 import { DSHWhaleIcon } from './DSHWhaleIcon'
 import { ErrorNotice } from './ErrorNotice'
 import { EmptyState } from './EmptyState'
@@ -178,10 +159,8 @@ import { RobotGitControl } from './RobotGitControl'
 import { useIsMobileViewport } from '../hooks/useIsMobileViewport'
 import { useIsPadViewport } from '../hooks/useIsPadViewport'
 import { useViewportPopoverPosition } from '../hooks/useViewportPopoverPosition'
-import { TestCenter } from './TestCenter'
-import { LiveChat } from './LiveChat'
 import { DesktopWindow } from './DesktopWindow'
-import { PM2LogsPanel } from './PM2LogsPanel'
+import { DeferredPanel } from './DeferredPanel'
 import {
   SidebarWindow,
   SidebarWindowActions,
@@ -199,7 +178,6 @@ import {
   useGitStatusQuery,
   useLazyEnvironmentReportQuery,
   useGitWorkspaceQuery,
-  useLazyRobotConsoleQuery,
   useLazyRobotFileQuery,
   useLazyPackageConfigQuery,
   useLazyRobotRuntimePreflightQuery,
@@ -311,6 +289,7 @@ type FloatingWindowID =
   | 'ops'
   | `system:${string}`
 type Props = {
+  initialRobots?: Promise<RobotList>
   report: { checks: Check[]; container?: boolean } | null
   checking: boolean
   error: string
@@ -330,11 +309,36 @@ type Props = {
   onClearError: () => void
   onCheck: () => void
   onFix: (check: Check) => void
-  goals?: unknown
-  goal?: unknown
   onSelect?: (id: string) => void
 }
 
+const MiniBrowserWindow = lazy(() =>
+  import('./MiniBrowserWindow').then(module => ({ default: module.MiniBrowserWindow }))
+)
+const DSHWorkspace = lazy(() =>
+  import('./DSHWorkspace').then(module => ({ default: module.DSHWorkspace }))
+)
+const EcosystemMarket = lazy(() =>
+  import('./EcosystemMarket').then(module => ({ default: module.EcosystemMarket }))
+)
+const LiveChat = lazy(() =>
+  import('./LiveChat').then(module => ({ default: module.LiveChat }))
+)
+const OpsCenter = lazy(() =>
+  import('./OpsCenter').then(module => ({ default: module.OpsCenter }))
+)
+const PM2LogsPanel = lazy(() =>
+  import('./PM2LogsPanel').then(module => ({ default: module.PM2LogsPanel }))
+)
+const ReadonlyConsole = lazy(() =>
+  import('./ReadonlyConsole').then(module => ({ default: module.ReadonlyConsole }))
+)
+const TerminalPanel = lazy(() =>
+  import('./TerminalPanel').then(module => ({ default: module.TerminalPanel }))
+)
+const TestCenter = lazy(() =>
+  import('./TestCenter').then(module => ({ default: module.TestCenter }))
+)
 const DataWorkspace = lazy(() => import('./data/DataWorkspace'))
 const ResourceExplorer = lazy(() => import('./explorer/ResourceExplorer').then(
   module => ({ default: module.ResourceExplorer })
@@ -457,30 +461,6 @@ function isMissingConfigValue(value: unknown) {
   if (Array.isArray(value)) return value.length === 0
   if (typeof value === 'object') return Object.keys(value).length === 0
   return false
-}
-
-// RTK Query rejects with a serialised object rather than an Error. Keep the
-// server's explanation intact so a permission problem is never shown as the
-// unhelpful generic "操作未完成".
-function operationErrorMessage(reason: unknown, fallback: string) {
-  if (reason instanceof Error && reason.message) return reason.message
-  if (typeof reason === 'string' && reason) return reason
-  if (reason && typeof reason === 'object') {
-    const value = reason as {
-      data?: { error?: unknown; message?: unknown } | string
-      error?: unknown
-      message?: unknown
-    }
-    const data = value.data
-    if (typeof data === 'string' && data) return data
-    if (data && typeof data === 'object') {
-      if (typeof data.error === 'string' && data.error) return data.error
-      if (typeof data.message === 'string' && data.message) return data.message
-    }
-    if (typeof value.error === 'string' && value.error) return value.error
-    if (typeof value.message === 'string' && value.message) return value.message
-  }
-  return fallback
 }
 
 type GitHTTPSAuthorization = {
@@ -1125,6 +1105,7 @@ export function DirectoryPicker({
 }
 
 export function Dashboard({
+  initialRobots,
   report,
   checking,
   error,
@@ -1250,6 +1231,11 @@ export function Dashboard({
   const [liveMinimized, setLiveMinimized] = useStoreState(false)
   const [pendingAppPageID, setPendingAppPageID] = useStoreState('')
   const [pm2LogsOpen, setPM2LogsOpen] = useStoreState(false)
+  const [pm2LogsMounted, setPM2LogsMounted] = useStoreState(false)
+  const openPM2Logs = () => {
+    setPM2LogsMounted(true)
+    setPM2LogsOpen(true)
+  }
   const [pm2LogsMinimized, setPM2LogsMinimized] = useStoreState(false)
   const [pm2ProcessesOpen, setPM2ProcessesOpen] = useStoreState(false)
   const [pm2ProcessesMinimized, setPM2ProcessesMinimized] = useStoreState(false)
@@ -1328,6 +1314,7 @@ export function Dashboard({
     () => (Array.isArray(setupPluginsData) ? setupPluginsData : []),
     [setupPluginsData]
   )
+  const activeSetupPlugins = setupPlugins.filter(plugin => plugin.enabled && !plugin.online)
   const environmentChecked = useRef(false)
   const eventsRef = useRef<EventSource | null>(null)
   const opsRefreshTimer = useRef<number | null>(null)
@@ -1364,7 +1351,7 @@ export function Dashboard({
     retry: retryRobotList,
     canImport,
     importLegacy
-  } = useAccountRobots()
+  } = useAccountRobots(initialRobots)
   const rawProjects = useSelector(
     (state: RootState) => state.workspace.projects
   )
@@ -3259,8 +3246,8 @@ export function Dashboard({
             void refetchPM2Status()
           }}
           onOpenPM2Logs={() => {
-          if (openNativeRobotTool('pm2-logs', root)) return
-            setPM2LogsOpen(true)
+            if (openNativeRobotTool('pm2-logs', root)) return
+            openPM2Logs()
             setPM2LogsMinimized(false)
             activateFloatingWindow('pm2Logs')
           }}
@@ -3315,18 +3302,20 @@ export function Dashboard({
   )
 
   const catalogContent = (
-    <EcosystemMarket
-      key={`${root}:${page}:${currentCatalog?.id ?? ''}`}
-      root={root}
-      type={page === 'connections' ? 'connector' : 'js-plugin'}
-      subtype={currentCatalog?.id}
-      category={currentCatalog?.title ?? '全部'}
-      busy={busy}
-      onRun={(action, packageName) =>
-        api('POST', { root, action, package: packageName })
-      }
-      onSaveConfig={savePackageConfig}
-    />
+    <DeferredPanel label="资源市场">
+      <EcosystemMarket
+        key={`${root}:${page}:${currentCatalog?.id ?? ''}`}
+        root={root}
+        type={page === 'connections' ? 'connector' : 'js-plugin'}
+        subtype={currentCatalog?.id}
+        category={currentCatalog?.title ?? '全部'}
+        busy={busy}
+        onRun={(action, packageName) =>
+          api('POST', { root, action, package: packageName })
+        }
+        onSaveConfig={savePackageConfig}
+      />
+    </DeferredPanel>
   )
   const workspaceSetupPlugin = setupPlugins.find(
     item => systemFeature === `setup:${item.id}`
@@ -3549,8 +3538,18 @@ export function Dashboard({
       if (id === 'environment' && !bridge) onCheck()
     }
   }))
+  const pluginTools = activeSetupPlugins.map(plugin => {
+    const id = `setup:${plugin.id}`
+    return {
+      id,
+      label: plugin.navigation.label || plugin.name,
+      icon: setupPluginIcon(plugin.navigation.icon),
+      activate: () => selectSystemFeature(id)
+    }
+  })
   const railWindows = openWindows.filter(window =>
-    !systemTools.some(tool => window.id === `system:${tool.id}`)
+    !systemTools.some(tool => window.id === `system:${tool.id}`) &&
+    !pluginTools.some(tool => window.id === `system:${tool.id}`)
   )
   function showWorkbenchHome() {
     for (const window of openWindows) {
@@ -4021,6 +4020,7 @@ export function Dashboard({
             <WorkbenchToolRail
               windows={railWindows}
               systemTools={systemTools}
+              pluginTools={pluginTools}
               activeSystemTool={systemWindowFeature && !systemWindows[systemWindowFeature]?.minimized ? systemWindowFeature : null}
               activeView={workbenchView}
               onShowHome={showWorkbenchHome}
@@ -4039,14 +4039,8 @@ export function Dashboard({
                 <div ref={setDirectoryTarget} className="flex min-h-0 min-w-0 flex-1" />
               ) : (
                 <ProjectRail
-                  feature={systemWindowFeature}
-                  setupPlugins={setupPlugins}
                   projects={projects}
                   activeID={activeProjectID}
-                  onFeature={feature => {
-                    setMobilePanel(null)
-                    selectSystemFeature(feature)
-                  }}
                   onPinProject={pinProject}
                   onReorderProject={reorderProject}
                   onAdd={() => { setMobilePanel(null); chooseDirectories() }}
@@ -4126,21 +4120,23 @@ export function Dashboard({
                         />
                       )}
                       {terminalRoot !== null && (
-                        <TerminalPanel
-                          key={terminalRoot}
-                          ref={terminalPanel}
-                          root={terminalRoot}
-                          visible={terminalVisible}
-                          toolbarTarget={auxiliaryEnabled && terminalOpen ? terminalToolbarTarget : null}
-                          onActivate={auxiliaryEnabled ? () => setAuxiliaryTab('terminal') : undefined}
-                          onClose={() => {
-                            setTerminalOpen(false)
-                            setTerminalRoot(null)
-                            setAuxiliaryTab(current => current === 'terminal'
-                              ? openedAuxiliaryTools.includes('repository') ? 'repository' : 'new'
-                              : current)
-                          }}
-                        />
+                        <DeferredPanel label="终端">
+                          <TerminalPanel
+                            key={terminalRoot}
+                            ref={terminalPanel}
+                            root={terminalRoot}
+                            visible={terminalVisible}
+                            toolbarTarget={auxiliaryEnabled && terminalOpen ? terminalToolbarTarget : null}
+                            onActivate={auxiliaryEnabled ? () => setAuxiliaryTab('terminal') : undefined}
+                            onClose={() => {
+                              setTerminalOpen(false)
+                              setTerminalRoot(null)
+                              setAuxiliaryTab(current => current === 'terminal'
+                                ? openedAuxiliaryTools.includes('repository') ? 'repository' : 'new'
+                                : current)
+                            }}
+                          />
+                        </DeferredPanel>
                       )}
                       <div
                         ref={setSourceControlTarget}
@@ -4171,7 +4167,14 @@ export function Dashboard({
                       {guide?.renderContent(guideStepsTarget, guideProgressTarget, () => setMobilePanel(null))}
                       {(aiOpen || dshTarget) && (
                         <div className={cn('min-h-0 min-w-0 flex-1', workbenchView !== 'dsh' && 'hidden')}>
-                          <DSHWorkspace key={JSON.stringify([robotScope, dshTarget])} root={dshTarget} robotRoots={dshRobotRoots} visible={workbenchView === 'dsh'} />
+                          <DeferredPanel label="DSH">
+                            <DSHWorkspace
+                              key={JSON.stringify([robotScope, dshTarget])}
+                              root={dshTarget}
+                              robotRoots={dshRobotRoots}
+                              visible={workbenchView === 'dsh'}
+                            />
+                          </DeferredPanel>
                         </div>
                       )}
                       {explorerMounted && (
@@ -4241,63 +4244,64 @@ export function Dashboard({
         />
       )}
       {foregroundLogsOpen && (
-        <ReadonlyConsole
-          open
-          logsOnly
-          minimized={foregroundLogsMinimized}
-          root={root}
-          zIndex={windowLayers.foregroundLogs}
-          onOpenRuntime={() => {
-            markUserNavigation()
-            closeTemporaryContentPage()
-            setSystemFeature(null)
-            setPage('robot')
-            setSection('runtime')
-          }}
-          onOpenConfig={() => {
-            markUserNavigation()
-            closeTemporaryContentPage()
-            setSystemFeature(null)
-            setPage('robot')
-            setSection('config')
-          }}
-          onOpenEnvironment={() => selectSystemFeature('environment')}
-          masterAuthorizationIDs={masterAuthorizationIDs}
-          onToggleMasterAuthorization={(userID, currentlyAuthorized) =>
-            void setMasterAuthorization(userID, currentlyAuthorized)
-          }
-          onOpenService={url => {
-            void (async () => {
-              let src = url
-              let isWorkbenchPage = false
-              try {
-                const service = new URL(url)
-                const configured = await loadAppPort(root, true).unwrap()
-                const servicePort = Number(
-                  service.port || (service.protocol === 'https:' ? 443 : 80)
-                )
-                if (configured.configured && servicePort === configured.port) {
-                  const path = `${service.pathname}${service.search}${service.hash}`
-                  src = `/api/v1/robot/app/${robotAppToken(root)}${path}`
-                  isWorkbenchPage = true
+        <DeferredPanel label="前台日志">
+          <ReadonlyConsole
+            open
+            minimized={foregroundLogsMinimized}
+            root={root}
+            zIndex={windowLayers.foregroundLogs}
+            onOpenRuntime={() => {
+              markUserNavigation()
+              closeTemporaryContentPage()
+              setSystemFeature(null)
+              setPage('robot')
+              setSection('runtime')
+            }}
+            onOpenConfig={() => {
+              markUserNavigation()
+              closeTemporaryContentPage()
+              setSystemFeature(null)
+              setPage('robot')
+              setSection('config')
+            }}
+            onOpenEnvironment={() => selectSystemFeature('environment')}
+            masterAuthorizationIDs={masterAuthorizationIDs}
+            onToggleMasterAuthorization={(userID, currentlyAuthorized) =>
+              void setMasterAuthorization(userID, currentlyAuthorized)
+            }
+            onOpenService={url => {
+              void (async () => {
+                let src = url
+                let isWorkbenchPage = false
+                try {
+                  const service = new URL(url)
+                  const configured = await loadAppPort(root, true).unwrap()
+                  const servicePort = Number(
+                    service.port || (service.protocol === 'https:' ? 443 : 80)
+                  )
+                  if (configured.configured && servicePort === configured.port) {
+                    const path = `${service.pathname}${service.search}${service.hash}`
+                    src = `/api/v1/robot/app/${robotAppToken(root)}${path}`
+                    isWorkbenchPage = true
+                  }
+                } catch {
+                  // 非当前机器人应用端口继续直接嵌入；跨源服务仍可刷新。
                 }
-              } catch {
-                // 非当前机器人应用端口继续直接嵌入；跨源服务仍可刷新。
-              }
-              // A service link from the smart log is an explicit external
-              // preview. Preserve the user's current browser page and open it
-              // in its own tab, just like a browser's "open service" action.
-              if (isWorkbenchPage) openWorkbenchBrowserPage(src)
-              else openMiniBrowser(src, undefined, true)
-            })()
-          }}
-          onActivate={() => activateFloatingWindow('foregroundLogs')}
-          onMinimize={() => setForegroundLogsMinimized(true)}
-          onClose={() => {
-            setForegroundLogsOpen(false)
-            setForegroundLogsMinimized(false)
-          }}
-        />
+                // A service link from the smart log is an explicit external
+                // preview. Preserve the user's current browser page and open it
+                // in its own tab, just like a browser's "open service" action.
+                if (isWorkbenchPage) openWorkbenchBrowserPage(src)
+                else openMiniBrowser(src, undefined, true)
+              })()
+            }}
+            onActivate={() => activateFloatingWindow('foregroundLogs')}
+            onMinimize={() => setForegroundLogsMinimized(true)}
+            onClose={() => {
+              setForegroundLogsOpen(false)
+              setForegroundLogsMinimized(false)
+            }}
+          />
+        </DeferredPanel>
       )}
       {serviceWebview && (
         <ServiceWebviewWindow
@@ -4312,19 +4316,23 @@ export function Dashboard({
           }}
         />
       )}
-      <PM2LogsPanel
-        key={`pm2-logs:${root}`}
-        open={pm2LogsOpen}
-        minimized={pm2LogsMinimized}
-        root={root}
-        zIndex={windowLayers.pm2Logs}
-        onActivate={() => activateFloatingWindow('pm2Logs')}
-        onMinimize={() => setPM2LogsMinimized(true)}
-        onClose={() => {
-          setPM2LogsOpen(false)
-          setPM2LogsMinimized(false)
-        }}
-      />
+      {pm2LogsMounted && (
+        <DeferredPanel label="PM2 日志">
+          <PM2LogsPanel
+            key={`pm2-logs:${root}`}
+            open={pm2LogsOpen}
+            minimized={pm2LogsMinimized}
+            root={root}
+            zIndex={windowLayers.pm2Logs}
+            onActivate={() => activateFloatingWindow('pm2Logs')}
+            onMinimize={() => setPM2LogsMinimized(true)}
+            onClose={() => {
+              setPM2LogsOpen(false)
+              setPM2LogsMinimized(false)
+            }}
+          />
+        </DeferredPanel>
+      )}
       <PM2ProcessesPanel
         open={pm2ProcessesOpen}
         minimized={pm2ProcessesMinimized}
@@ -4332,7 +4340,7 @@ export function Dashboard({
         zIndex={windowLayers.pm2Status}
         onOpenLogs={() => {
           if (openNativeRobotTool('pm2-logs', root)) return
-          setPM2LogsOpen(true)
+          openPM2Logs()
           setPM2LogsMinimized(false)
           activateFloatingWindow('pm2Logs')
         }}
@@ -4370,28 +4378,29 @@ export function Dashboard({
         const offset = (index % 6) * 28
         if (feature === 'browser') {
           return (
-            <MiniBrowserWindow
-              key={`${feature}-${browserHomeVersion}`}
-              minimized={state.minimized}
-              browserCommand={browserRequestedURL}
-              onCommandConsumed={id =>
-                setBrowserRequestedURL(current =>
-                  current?.id === id ? null : current
-                )
-              }
-              zIndex={zIndex}
-              onClose={() => closeSystemWindow(feature)}
-              onMinimize={() =>
-                setSystemWindows(current => ({
-                  ...current,
-                  [feature]: { minimized: true }
-                }))
-              }
-              onActivate={() => {
-                setSystemWindowFeature(feature)
-                activateFloatingWindow(windowID)
-              }}
-            />
+            <DeferredPanel label="浏览器" key={`${feature}-${browserHomeVersion}`}>
+              <MiniBrowserWindow
+                minimized={state.minimized}
+                browserCommand={browserRequestedURL}
+                onCommandConsumed={id =>
+                  setBrowserRequestedURL(current =>
+                    current?.id === id ? null : current
+                  )
+                }
+                zIndex={zIndex}
+                onClose={() => closeSystemWindow(feature)}
+                onMinimize={() =>
+                  setSystemWindows(current => ({
+                    ...current,
+                    [feature]: { minimized: true }
+                  }))
+                }
+                onActivate={() => {
+                  setSystemWindowFeature(feature)
+                  activateFloatingWindow(windowID)
+                }}
+              />
+            </DeferredPanel>
           )
         }
         if (usesSystemFeatureSidebar(feature)) {
@@ -4487,11 +4496,8 @@ export function Dashboard({
 }
 
 function ProjectRail({
-  feature,
-  setupPlugins,
   projects,
   activeID,
-  onFeature,
   onAdd,
   onClone,
   onSelect,
@@ -4500,11 +4506,8 @@ function ProjectRail({
   onPinProject,
   onReorderProject
 }: {
-  feature: SystemFeature | null
-  setupPlugins: SetupPlugin[]
   projects: Project[]
   activeID: string
-  onFeature: (feature: SystemFeature) => void
   onAdd: () => void
   onClone: () => void
   onSelect: (id: string) => void
@@ -4519,9 +4522,6 @@ function ProjectRail({
   const [dragTargetID, setDragTargetID] = useStoreState<string | null>(null)
   const longPressTimer = useRef<number | null>(null)
   const ignoreProjectSelect = useRef(false)
-  const activePlugins = setupPlugins.filter(
-    item => item.enabled && !item.online
-  )
   const isMobile = useIsMobileViewport()
   const clearLongPress = () => {
     if (longPressTimer.current === null) return
@@ -4615,29 +4615,6 @@ function ProjectRail({
       )}
     </div>
   )
-  const pluginNav = (
-    <nav className="grid gap-0.5">
-      {activePlugins.map(item => (
-        <button
-          className={cn(
-            'flex min-h-8 w-full items-center gap-2 rounded-md px-2 text-left text-xs font-medium transition-colors',
-            feature === `setup:${item.id}`
-              ? 'workspace-nav-active'
-              : 'text-slate-600 hover:bg-slate-200/40 dark:text-slate-400 dark:hover:bg-slate-700/40'
-          )}
-          key={item.id}
-          onClick={() => onFeature(`setup:${item.id}`)}
-        >
-          <i className="inline-flex size-4 items-center justify-center not-italic">
-            {setupPluginIcon(item.navigation.icon)}
-          </i>
-          <span className="min-w-0 flex-1 truncate">
-            {item.navigation.label || item.name}
-          </span>
-        </button>
-      ))}
-    </nav>
-  )
   return (
     <aside className="project-rail flex min-h-0 min-w-0 flex-col border-r border-slate-200">
       <section className={cn('flex min-h-0 flex-col', !isMobile && 'flex-1')}>
@@ -4657,22 +4634,6 @@ function ProjectRail({
         </header>
         {robotList}
       </section>
-      {activePlugins.length > 0 && (
-        <section
-          className="border-t border-slate-200 px-2.5 py-2 dark:border-slate-700"
-          aria-label="已加载插件"
-        >
-          <header className="flex px-1.5 pb-1">
-            <span className="text-[0.7rem] font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">
-              插件
-              <span className="ml-1.5 text-slate-300 dark:text-slate-600">
-                {activePlugins.length}
-              </span>
-            </span>
-          </header>
-          {pluginNav}
-        </section>
-      )}
     </aside>
   )
 }
@@ -9389,7 +9350,7 @@ function PackageConfigFieldsItem({
 function MarkdownPage({ markdown }: { markdown: string }) {
   return (
     <article className="markdown-page">
-      <Markdown
+      <DeferredMarkdown
         options={{
           forceBlock: true,
           overrides: {
@@ -9411,7 +9372,7 @@ function MarkdownPage({ markdown }: { markdown: string }) {
         }}
       >
         {markdown}
-      </Markdown>
+      </DeferredMarkdown>
     </article>
   )
 }
@@ -11529,830 +11490,6 @@ function ServiceWebviewWindow({
   )
 }
 
-type BrowserTab = {
-  id: string
-  query: string
-  title?: string
-  pageURL: string
-  frameKey: number
-  history: string[]
-  historyIndex: number
-}
-
-type BrowserAddress = {
-  url: URL
-  displayURL: string
-}
-
-// Keep navigation sources explicit. A workbench document is never interpreted
-// as text from the address bar, and an address-bar URL can never acquire a
-// robot application route by accident.
-type BrowserCommand = {
-  id: string
-  kind: 'open' | 'close'
-  source?: 'address' | 'workbench'
-  url?: string
-  tabID?: string
-  newTab?: boolean
-}
-
-function isWorkbenchBrowserPageURL(value: string) {
-  try {
-    const target = new URL(value, window.location.origin)
-    return (
-      target.origin === window.location.origin &&
-      (target.pathname.startsWith('/api/v1/robot/') ||
-        target.pathname.startsWith('/api/v1/services/'))
-    )
-  } catch {
-    return false
-  }
-}
-
-function createBrowserHomeTab(): BrowserTab {
-  return {
-    id: `browser-home-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    query: '',
-    pageURL: '',
-    frameKey: 0,
-    history: [],
-    historyIndex: -1
-  }
-}
-
-function isBrowserIPAddress(host: string) {
-  const value = host.replace(/^\[|\]$/g, '')
-  return (
-    /^\d{1,3}(?:\.\d{1,3}){3}$/.test(value) ||
-    value.includes(':') ||
-    value === 'localhost'
-  )
-}
-
-// URL.href removes default ports. The browser keeps a separate display URL so
-// address completion remains visible and deterministic to users.
-function completeBrowserAddress(input: string): BrowserAddress | null {
-  const raw = input.trim()
-  if (!raw) return null
-  const portOnly = /^(\d{1,5})([/?#].*)?$/.exec(raw)
-  let scheme = ''
-  let authority = ''
-  let suffix = ''
-  if (portOnly) {
-    scheme = 'http:'
-    authority = '127.0.0.1:' + portOnly[1]
-    suffix = portOnly[2] || ''
-  } else {
-    const prefixed = /^(https?):\/\/?(.*)$/i.exec(raw)
-    if (prefixed) {
-      scheme = prefixed[1].toLowerCase() + ':'
-      authority = prefixed[2]
-      if (/^\d{1,5}$/.test(authority)) authority = '127.0.0.1:' + authority
-    } else {
-      authority = raw
-    }
-    const boundary = authority.search(/[/?#]/)
-    if (boundary >= 0) {
-      suffix = authority.slice(boundary)
-      authority = authority.slice(0, boundary)
-    }
-    if (!authority) return null
-    let provisional: URL
-    try {
-      provisional = new URL('http://' + authority)
-    } catch {
-      return null
-    }
-    const explicitPort =
-      /(?:^\[[^\]]+\]|^[^:]+):(\d{1,5})$/.exec(authority)?.[1] || ''
-    const hasPort = explicitPort !== ''
-    const hostIsIP = isBrowserIPAddress(provisional.hostname)
-    if (!scheme) {
-      if (hasPort && explicitPort === '80') scheme = 'http:'
-      else if (hasPort && explicitPort === '443') scheme = 'https:'
-      else scheme = hostIsIP ? 'http:' : 'https:'
-    }
-    if (!hasPort) authority += ':' + (scheme === 'https:' ? '443' : '80')
-  }
-  try {
-    const url = new URL(scheme + '//' + authority + suffix)
-    // A Hash route is handled entirely by the document; it is never included
-    // in the HTTP request. Directory-hosted SPAs commonly require their entry
-    // document to end with `/`, e.g. `/console/#/config` rather than
-    // `/console#/config`. Canonicalize only extensionless Hash entry paths so
-    // a direct deep link does not become an upstream 404 before the SPA runs.
-    const finalSegment = url.pathname.split('/').at(-1) ?? ''
-    if (
-      url.hash &&
-      finalSegment !== '' &&
-      !finalSegment.includes('.') &&
-      !url.pathname.endsWith('/')
-    ) {
-      url.pathname += '/'
-    }
-    const port = url.port || (scheme === 'https:' ? '443' : '80')
-    const host =
-      url.hostname.includes(':') && !url.hostname.startsWith('[')
-        ? `[${url.hostname}]`
-        : url.hostname
-    return {
-      url,
-      displayURL: `${scheme}//${host}:${port}${url.pathname}${url.search}${url.hash}`
-    }
-  } catch {
-    return null
-  }
-}
-
-function MiniBrowserWindow({
-  minimized,
-  browserCommand,
-  zIndex,
-  onClose,
-  onMinimize,
-  onActivate,
-  onCommandConsumed,
-  native = false
-}: {
-  native?: boolean
-  minimized: boolean
-  browserCommand: BrowserCommand | null
-  zIndex: number
-  onClose: () => void
-  onMinimize: () => void
-  onActivate: () => void
-  onCommandConsumed: (id: string) => void
-}) {
-  const dispatch = useDispatch()
-  const recentSites = useSelector((state: RootState) => state.browserRecent.sites)
-  const [homeQuery, setHomeQuery] = useState('')
-  // Directly opening the browser gets one blank tab. A concrete navigation is
-  // itself the first tab, so service and plugin launches never leave a spare
-  // home tab behind.
-  const startsWithNavigation = Boolean(
-    browserCommand?.kind === 'open' && browserCommand.url
-  )
-  const [tabs, setTabs] = useState<BrowserTab[]>(() =>
-    startsWithNavigation ? [] : [createBrowserHomeTab()]
-  )
-  const [activeTabID, setActiveTabID] = useState(() => tabs[0]?.id ?? '')
-  const [error, setError] = useState('')
-  const lastBrowserCommandID = useRef('')
-  const frameRefs = useRef(new Map<string, HTMLIFrameElement>())
-  const activeTab = tabs.find(tab => tab.id === activeTabID)
-  const query = activeTab?.query ?? homeQuery
-  const pageURL = activeTab?.pageURL ?? ''
-  const history = activeTab?.history ?? []
-  const historyIndex = activeTab?.historyIndex ?? -1
-  const updateActiveTab = (update: (tab: BrowserTab) => BrowserTab) => {
-    setTabs(current =>
-      current.map(tab => (tab.id === activeTabID ? update(tab) : tab))
-    )
-  }
-  const setQuery = (value: string) => {
-    if (activeTab) updateActiveTab(tab => ({ ...tab, query: value }))
-    else setHomeQuery(value)
-  }
-  const addressTextFor = (target: URL) =>
-    target.origin === window.location.origin
-      ? `${target.pathname}${target.search}${target.hash}` || '/'
-      : target.href
-  const frameURLFor = (target: URL) => {
-    if (target.origin === window.location.origin)
-      return `${target.pathname}${target.search}${target.hash}`
-    if (target.protocol !== 'http:') return target.href
-    const token = window
-      .btoa(target.origin)
-      .replace(/\+/g, '-')
-      .replace(/\//g, '_')
-      .replace(/=+$/g, '')
-    return `/api/v1/browser/http/${token}${target.pathname}${target.search}${target.hash}`
-  }
-  const openInSystemBrowser = async (target: BrowserAddress) => {
-    const response = await fetch('/api/v1/browser/external/open', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: target.displayURL })
-    })
-    if (!response.ok) throw new Error('无法交给系统浏览器打开。')
-  }
-  const removeBrowserTab = (id: string) => {
-    setTabs(current => {
-      const remaining = current.filter(tab => tab.id !== id)
-      if (remaining.length === 0) {
-        // The only tab was a provisional HTTP tab that has been classified for
-        // the system browser. Do not leave an empty embedded browser behind.
-        window.setTimeout(onClose, 0)
-        if (native) {
-          const home = createBrowserHomeTab()
-          setActiveTabID(home.id)
-          return [home]
-        }
-        return remaining
-      }
-      if (activeTabID === id) setActiveTabID(remaining.at(-1)?.id ?? '')
-      return remaining
-    })
-  }
-  const openWorkbenchPage = (
-    path: string,
-    openInNewTab: boolean,
-    tabID?: string
-  ) => {
-    let target: URL
-    try {
-      target = new URL(path, window.location.origin)
-    } catch {
-      setError('工作台页面地址无效。')
-      return
-    }
-    if (
-      target.origin !== window.location.origin ||
-      !isWorkbenchBrowserPageURL(target.href)
-    ) {
-      setError('不允许将该地址作为工作台内部页面打开。')
-      return
-    }
-    const pageURL = `${target.pathname}${target.search}${target.hash}`
-    const nextTab: BrowserTab = {
-      id:
-        tabID ??
-        `browser-workbench-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      query: pageURL,
-      pageURL,
-      frameKey: 1,
-      history: [target.href],
-      historyIndex: 0
-    }
-    setError('')
-    if (openInNewTab || !activeTab) {
-      setTabs(current => [...current, nextTab])
-      setActiveTabID(nextTab.id)
-      return
-    }
-    setTabs(current =>
-      current.map(tab =>
-        tab.id === activeTab.id ? { ...nextTab, id: tab.id } : tab
-      )
-    )
-  }
-  const navigate = async (
-    value = query,
-    openInNewTab = false,
-    tabID?: string
-  ) => {
-    const input = value.trim()
-    if (!input) return
-    try {
-      const portOnly = /^(\d{1,5})(?:[/?#].*)?$/.exec(input)
-      const port = portOnly ? Number(portOnly[1]) : 0
-      if (portOnly && (port < 1 || port > 65535)) {
-        setError('端口号必须在 1 到 65535 之间。')
-        return
-      }
-      const currentEntry = activeTab?.history[activeTab.historyIndex]
-      const isPathReference =
-        input.startsWith('/') ||
-        input.startsWith('./') ||
-        input.startsWith('../') ||
-        input.startsWith('?') ||
-        input.startsWith('#') ||
-        /^[^/?#\s]+\/[^/?#\s].*$/.test(input)
-      const looksLikeAddress =
-        input.includes('.') ||
-        input.startsWith('localhost') ||
-        input.includes(':')
-      const searchURL = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(input)}`
-      if (isPathReference && !currentEntry) {
-        setError('请先打开一个网站，再输入相对路径、查询或锚点。')
-        return
-      }
-      const complete = isPathReference
-        ? completeBrowserAddress(new URL(input, currentEntry).href)
-        : completeBrowserAddress(
-            looksLikeAddress || portOnly ? input : searchURL
-          )
-      if (!complete) throw new Error('地址无效')
-      const next = complete.url
-      // A newly-created home tab is active but deliberately has no history
-      // entry yet. Its first navigation must not try to parse `undefined`.
-      const current = currentEntry ? new URL(currentEntry) : null
-      const sameSite = Boolean(
-        current &&
-        current.protocol === next.protocol &&
-        current.hostname === next.hostname &&
-        (current.port || (current.protocol === 'https:' ? '443' : '80')) ===
-          (next.port || (next.protocol === 'https:' ? '443' : '80'))
-      )
-      const shouldOpenNewTab = openInNewTab || !activeTab
-      // HTTPS is completely decided in the renderer: cross-site HTTPS always
-      // belongs to the system browser, so it must not wait for a backend host
-      // classification request or briefly create an embedded tab.
-      if (!sameSite && next.protocol === 'https:') {
-        await openInSystemBrowser(complete)
-        if (tabs.length === 0) window.setTimeout(onClose, 0)
-        return
-      }
-      // HTTP targets get a visible tab before asynchronous classification. In
-      // particular, this keeps a plugin Web UI open request reliable while its
-      // host panel and the browser window are mounting concurrently.
-      const pendingTabID = shouldOpenNewTab
-        ? (tabID ??
-          `browser-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
-        : ''
-      if (shouldOpenNewTab && next.protocol === 'http:') {
-        setTabs(current => [
-          ...current,
-          {
-            id: pendingTabID,
-            query: complete.displayURL,
-            pageURL: '',
-            frameKey: 0,
-            history: [],
-            historyIndex: -1
-          }
-        ])
-        setActiveTabID(pendingTabID)
-      }
-      if (!sameSite) {
-        let scope = 'public'
-        try {
-          const classified = await fetch('/api/v1/browser/classify', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ url: complete.displayURL })
-          })
-          const result = (await classified.json().catch(() => ({}))) as {
-            scope?: string
-          }
-          if (!classified.ok) throw new Error('地址分类失败')
-          scope = result.scope ?? scope
-        } catch (reason) {
-          // HTTP is served through our compatibility proxy. When host
-          // classification itself is unavailable, still create the requested
-          // tab and let the proxy show the real connection result instead of
-          // silently discarding the user's new-tab action.
-          if (next.protocol !== 'http:') throw reason
-          scope = 'private'
-        }
-        if (scope !== 'private') {
-          await openInSystemBrowser(complete)
-          if (pendingTabID) removeBrowserTab(pendingTabID)
-          return
-        }
-      }
-      setError('')
-      const recentSite = recordBrowserSite(next)
-      if (recentSite) dispatch(recentSite)
-      const nextHistory = shouldOpenNewTab
-        ? [next.href]
-        : activeTab.history.slice(0, activeTab.historyIndex + 1)
-      if (nextHistory.at(-1) !== next.href) nextHistory.push(next.href)
-      const nextTab: BrowserTab = {
-        id:
-          pendingTabID ||
-          tabID ||
-          `browser-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        query: sameSite ? addressTextFor(next) : complete.displayURL,
-        pageURL: frameURLFor(next),
-        frameKey: 1,
-        history: nextHistory,
-        historyIndex: nextHistory.length - 1
-      }
-      if (shouldOpenNewTab) {
-        setTabs(current =>
-          pendingTabID
-            ? current.map(tab => (tab.id === pendingTabID ? nextTab : tab))
-            : [...current, nextTab]
-        )
-        setActiveTabID(nextTab.id)
-      } else {
-        setTabs(current =>
-          current.map(tab =>
-            tab.id === activeTab.id ? { ...nextTab, id: tab.id } : tab
-          )
-        )
-      }
-    } catch (reason) {
-      setError(
-        reason instanceof Error && reason.message
-          ? reason.message
-          : '请输入有效的网址或搜索内容。'
-      )
-    }
-  }
-  const navigateHistory = (delta: -1 | 1) => {
-    const nextIndex = historyIndex + delta
-    const nextURL = history[nextIndex]
-    if (!nextURL) return
-    const target = new URL(nextURL)
-    updateActiveTab(tab => ({
-      ...tab,
-      historyIndex: nextIndex,
-      query: addressTextFor(target),
-      pageURL: frameURLFor(target),
-      frameKey: tab.frameKey + 1
-    }))
-    setError('')
-  }
-  const syncTabTitle = (tabID: string) => {
-    const frame = frameRefs.current.get(tabID)
-    if (!frame) return
-    try {
-      const title = frame.contentDocument?.title.trim() ?? ''
-      if (!title) return
-      setTabs(current =>
-        current.map(tab =>
-          tab.id === tabID && tab.title !== title ? { ...tab, title } : tab
-        )
-      )
-    } catch {
-      // A direct document may be cross-origin. Its existing URL label remains
-      // the safe fallback, while proxied and workbench documents are readable.
-    }
-  }
-  const syncFrameNavigation = (tabID: string) => {
-    const frame = frameRefs.current.get(tabID)
-    if (!frame) return
-    syncTabTitle(tabID)
-    try {
-      const frameURL = new URL(frame.contentWindow?.location.href ?? '')
-      const match = frameURL.pathname.match(
-        /^\/api\/v1\/browser\/http\/([^/]+)\/(.*)$/
-      )
-      if (!match) return
-      const targetOrigin = window.atob(
-        match[1].replace(/-/g, '+').replace(/_/g, '/')
-      )
-      const logical = new URL(
-        `/${match[2]}${frameURL.search}${frameURL.hash}`,
-        targetOrigin
-      )
-      setTabs(current =>
-        current.map(tab => {
-          if (
-            tab.id !== tabID ||
-            tab.history[tab.historyIndex] === logical.href
-          )
-            return tab
-          const nextHistory = tab.history.slice(0, tab.historyIndex + 1)
-          nextHistory.push(logical.href)
-          return {
-            ...tab,
-            query: addressTextFor(logical),
-            pageURL: `${frameURL.pathname}${frameURL.search}${frameURL.hash}`,
-            history: nextHistory,
-            historyIndex: nextHistory.length - 1
-          }
-        })
-      )
-    } catch {
-      // HTTPS pages are direct and intentionally remain inaccessible to the
-      // workbench document; their address stays as the user entered it.
-    }
-  }
-  useEffect(() => {
-    if (!browserCommand || browserCommand.id === lastBrowserCommandID.current)
-      return
-    lastBrowserCommandID.current = browserCommand.id
-    onCommandConsumed(browserCommand.id)
-    if (browserCommand.kind === 'close' && browserCommand.tabID) {
-      closeTab(browserCommand.tabID)
-      return
-    }
-    if (browserCommand.kind === 'open' && browserCommand.url) {
-      if (browserCommand.source === 'workbench') {
-        openWorkbenchPage(
-          browserCommand.url,
-          browserCommand.newTab === true,
-          browserCommand.tabID
-        )
-        return
-      }
-      navigate(
-        browserCommand.url,
-        browserCommand.newTab === true,
-        browserCommand.tabID
-      )
-    }
-  }, [browserCommand])
-  useEffect(() => {
-    const receive = (event: MessageEvent) => {
-      if (event.origin !== window.location.origin) return
-      const data = event.data as {
-        source?: string
-        type?: string
-        url?: string
-      } | null
-      if (data?.source !== 'alx-browser' || !data.url) return
-      const sourceTab = tabs.find(
-        tab => frameRefs.current.get(tab.id)?.contentWindow === event.source
-      )
-      if (!sourceTab) return
-      if (data.type === 'form-blocked') {
-        setError(
-          '已阻止跨站 POST 提交：系统浏览器无法安全复用当前页面的表单数据与会话。'
-        )
-        return
-      }
-      if (data.type === 'open') {
-        navigate(data.url, true)
-        return
-      }
-      if (data.type !== 'navigate') return
-      try {
-        const logical = new URL(data.url)
-        setTabs(current =>
-          current.map(tab => {
-            if (
-              tab.id !== sourceTab.id ||
-              tab.history[tab.historyIndex] === logical.href
-            )
-              return tab
-            const nextHistory = tab.history.slice(0, tab.historyIndex + 1)
-            nextHistory.push(logical.href)
-            return {
-              ...tab,
-              query: addressTextFor(logical),
-              pageURL: frameURLFor(logical),
-              history: nextHistory,
-              historyIndex: nextHistory.length - 1
-            }
-          })
-        )
-      } catch {
-        // Ignore malformed messages from an embedded document.
-      }
-    }
-    window.addEventListener('message', receive)
-    return () => window.removeEventListener('message', receive)
-  })
-  useEffect(() => {
-    // SPAs often replace document.title after their initial load. Every browser
-    // tab has its own persistent frame, so update titles independently without
-    // disturbing DOM or JavaScript state.
-    const timer = window.setInterval(() => {
-      tabs.forEach(tab => {
-        if (tab.pageURL) syncTabTitle(tab.id)
-      })
-    }, 800)
-    return () => window.clearInterval(timer)
-  }, [tabs])
-  const closeTab = (id: string) => {
-    const index = tabs.findIndex(tab => tab.id === id)
-    if (index < 0) return
-    const remaining = tabs.filter(tab => tab.id !== id)
-    window.dispatchEvent(
-      new CustomEvent('alx-browser-tab-closed', { detail: { id } })
-    )
-    if (remaining.length === 0) {
-      const home = createBrowserHomeTab()
-      setTabs([home])
-      setActiveTabID(home.id)
-      setHomeQuery('')
-      setError('')
-      return
-    }
-    setTabs(remaining)
-    if (id === activeTabID)
-      setActiveTabID(remaining[Math.max(0, index - 1)]?.id ?? '')
-  }
-  const openHomeTab = () => {
-    const homeTab = createBrowserHomeTab()
-    setTabs(current => [...current, homeTab])
-    setActiveTabID(homeTab.id)
-    setHomeQuery('')
-    setError('')
-  }
-  return (
-    <DesktopWindow
-      native={native}
-      id="mini-browser"
-      open
-      minimized={minimized}
-      title="浏览器"
-      subtitle={pageURL || '搜索与访问网页'}
-      icon={
-        <Globe2 className="size-4 shrink-0 text-brand-600 dark:text-brand-200" />
-      }
-      headerLeft={
-        tabs.length > 0 ? (
-          <div className="flex w-full items-center gap-1 overflow-x-auto py-1">
-            {tabs.map(tab => (
-              <div
-                key={tab.id}
-                className={`flex min-w-28 max-w-52 items-center gap-1 rounded-t-md border border-b-0 px-2 py-1 text-xs ${tab.id === activeTabID ? 'bg-white text-slate-800 dark:bg-slate-700 dark:text-slate-100' : 'border-transparent text-slate-500 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700/70'}`}
-              >
-                <button
-                  className="min-w-0 flex-1 truncate text-left"
-                  type="button"
-                  onClick={() => setActiveTabID(tab.id)}
-                  title={tab.title || tab.query || '新标签页'}
-                >
-                  {tab.title || tab.query || '新标签页'}
-                </button>
-                <button
-                  className="shrink-0 rounded p-0.5 hover:bg-slate-200 dark:hover:bg-slate-600"
-                  type="button"
-                  onClick={() => closeTab(tab.id)}
-                  aria-label="关闭标签页"
-                >
-                  <X className="size-3" />
-                </button>
-              </div>
-            ))}
-            <button
-              className="icon-button size-8 shrink-0 p-0"
-              type="button"
-              onClick={openHomeTab}
-              aria-label="新建标签页"
-              title="新建标签页"
-            >
-              <Plus className="size-4" />
-            </button>
-          </div>
-        ) : undefined
-      }
-      onClose={() => {
-        tabs.forEach(tab =>
-          window.dispatchEvent(
-            new CustomEvent('alx-browser-tab-closed', {
-              detail: { id: tab.id }
-            })
-          )
-        )
-        onClose()
-      }}
-      onMinimize={onMinimize}
-      zIndex={zIndex}
-      onActivate={onActivate}
-      initialPosition={{ left: 144, top: 96 }}
-      width={1020}
-      height={700}
-    >
-      <section className="mini-browser grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)] bg-slate-50 dark:bg-slate-900">
-        <div className="min-w-0" hidden={!pageURL}>
-          <form
-            className="flex shrink-0 items-center gap-2 border-b border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-800"
-            onSubmit={event => {
-              event.preventDefault()
-              void navigate()
-            }}
-          >
-            <button
-              className="icon-button size-8 shrink-0 p-0"
-              type="button"
-              onClick={() => navigateHistory(-1)}
-              disabled={historyIndex <= 0}
-              aria-label="后退"
-              title="后退"
-            >
-              <ArrowLeft className="size-4" />
-            </button>
-            <button
-              className="icon-button size-8 shrink-0 p-0"
-              type="button"
-              onClick={() => navigateHistory(1)}
-              disabled={historyIndex >= history.length - 1}
-              aria-label="前进"
-              title="前进"
-            >
-              <ArrowRight className="size-4" />
-            </button>
-            <button
-              className="icon-button size-8 shrink-0 p-0"
-              type="button"
-              onClick={() =>
-                updateActiveTab(tab => ({
-                  ...tab,
-                  frameKey: tab.frameKey + 1
-                }))
-              }
-              aria-label="刷新"
-              title="刷新"
-            >
-              <RefreshCw className="size-4" />
-            </button>
-            <input
-              className="min-w-0 flex-1 rounded-full border border-slate-300 bg-white px-4 py-1.5 text-sm text-slate-800 outline-none placeholder:text-slate-400 focus:border-brand-600 focus:ring-2 focus:ring-brand-100 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100"
-              value={query}
-              onChange={event => setQuery(event.target.value)}
-              placeholder="输入网址或搜索内容"
-              aria-label="网址或搜索内容"
-              autoComplete="off"
-              spellCheck={false}
-            />
-            <button
-              className="icon-button size-8 shrink-0 p-0"
-              type="submit"
-              aria-label="前往"
-              title="前往"
-            >
-              <Search className="size-4" />
-            </button>
-          </form>
-          {error && (
-            <p className="m-0 border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-700 dark:border-amber-900/70 dark:bg-amber-950/30 dark:text-amber-300">
-              {error}
-            </p>
-          )}
-        </div>
-        <div className="relative row-start-2 min-h-0 overflow-hidden">
-          {tabs
-            .filter(tab => tab.pageURL)
-            .map(tab => (
-              <iframe
-                key={`${tab.id}:${tab.frameKey}`}
-                ref={node => {
-                  if (node) frameRefs.current.set(tab.id, node)
-                  else frameRefs.current.delete(tab.id)
-                }}
-                className={`absolute inset-0 h-full w-full border-0 bg-white ${tab.id === activeTabID ? '' : 'invisible pointer-events-none'}`}
-                name={`alx-browser-tab:${tab.id}`}
-                src={tab.pageURL}
-                title={tab.query || '迷你浏览器页面'}
-                referrerPolicy={
-                  tab.pageURL.startsWith('/api/v1/browser/http/')
-                    ? 'strict-origin-when-cross-origin'
-                    : 'no-referrer'
-                }
-                onLoad={() => syncFrameNavigation(tab.id)}
-              />
-            ))}
-          {!pageURL && (
-            <div className="grid h-full place-items-center overflow-y-auto bg-white p-4 sm:p-8 dark:bg-slate-900">
-              <form
-                className="grid w-full max-w-2xl gap-7"
-                onSubmit={event => {
-                  event.preventDefault()
-                  navigate()
-                }}
-              >
-                <img
-                  className="mx-auto h-auto w-52 max-w-[62%] dark:brightness-125"
-                  src={meLogo}
-                  alt="Alemon"
-                />
-                <div className="flex items-center rounded-full border border-slate-300 bg-white px-4 shadow-sm transition-shadow focus-within:border-brand-500 focus-within:ring-4 focus-within:ring-brand-100 dark:border-slate-600 dark:bg-slate-800 dark:focus-within:ring-brand-900/40">
-                  <Plus className="mr-3 size-5 shrink-0 text-slate-700 dark:text-slate-300" />
-                  <input
-                    className="h-12 min-w-0 flex-1 bg-transparent text-base text-slate-800 outline-none placeholder:text-slate-400 dark:text-slate-100"
-                    value={query}
-                    onChange={event => setQuery(event.target.value)}
-                    placeholder="搜索、输入网址或端口号"
-                    aria-label="搜索或输入网址"
-                    autoComplete="off"
-                    autoFocus
-                    spellCheck={false}
-                  />
-                  <button
-                    className="inline-flex size-8 shrink-0 items-center justify-center rounded-full text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-800 dark:text-slate-400 dark:hover:bg-slate-700 dark:hover:text-slate-100"
-                    type="submit"
-                    aria-label="搜索或前往网址"
-                    title="搜索或前往网址"
-                  >
-                    <Search className="size-4" />
-                  </button>
-                </div>
-                {error && (
-                  <p className="m-0 text-center text-xs text-amber-700 dark:text-amber-300">
-                    {error}
-                  </p>
-                )}
-                {recentSites.length > 0 && (
-                  <section aria-label="近期打开" className="grid min-w-0 gap-2">
-                    <h2 className="m-0 px-2 text-xs font-medium text-slate-500 dark:text-slate-400">
-                      近期打开
-                    </h2>
-                    <ul className="m-0 grid list-none grid-cols-2 gap-2 p-0 sm:grid-cols-3">
-                      {recentSites.map(site => {
-                        const hostname = new URL(site).host
-                        return (
-                          <li key={site} className="min-w-0">
-                            <button
-                              type="button"
-                              className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm text-slate-700 hover:bg-slate-100 focus-visible:outline-2 focus-visible:outline-brand-500 dark:text-slate-200 dark:hover:bg-slate-800"
-                              title={site}
-                              onClick={() => void navigate(site)}
-                            >
-                              <Globe2 aria-hidden="true" className="size-4 shrink-0 text-slate-500 dark:text-slate-400" />
-                              <span className="truncate">{hostname}</span>
-                            </button>
-                          </li>
-                        )
-                      })}
-                    </ul>
-                  </section>
-                )}
-              </form>
-            </div>
-          )}
-        </div>
-      </section>
-    </DesktopWindow>
-  )
-}
-
 export function AppEmbed({
   root,
   onClose,
@@ -12577,7 +11714,9 @@ function TestCenterWindow({
       width={1180}
       height={760}
     >
-      <TestCenter root={root} />
+      <DeferredPanel label="测试台">
+        <TestCenter root={root} />
+      </DeferredPanel>
     </DesktopWindow>
   )
 }
@@ -12619,7 +11758,9 @@ function LiveChatWindow({
       height={760}
       storageKey={qqChatWindowStorageKey(root)}
     >
-      <LiveChat root={root} />
+      <DeferredPanel label="QQ 消息">
+        <LiveChat root={root} />
+      </DeferredPanel>
     </DesktopWindow>
   )
 }
@@ -12929,936 +12070,6 @@ function StatusDot({
   )
 }
 
-function ReadonlyConsole({
-  open,
-  terminalOnly = false,
-  logsOnly = false,
-  taskId,
-  logTitle,
-  minimized,
-  root,
-  onClose,
-  onMinimize,
-  onOpenRuntime,
-  onOpenConfig,
-  onOpenEnvironment,
-  masterAuthorizationIDs = [],
-  onToggleMasterAuthorization,
-  onOpenService,
-  zIndex,
-  onActivate,
-  native = false
-}: {
-  native?: boolean
-  open: boolean
-  terminalOnly?: boolean
-  logsOnly?: boolean
-  taskId?: string
-  logTitle?: string
-  minimized: boolean
-  root: string
-  onClose: () => void
-  onMinimize: () => void
-  onOpenRuntime?: () => void
-  onOpenConfig?: () => void
-  onOpenEnvironment?: () => void
-  masterAuthorizationIDs?: string[]
-  onToggleMasterAuthorization?: (
-    userID: string,
-    currentlyAuthorized: boolean
-  ) => void
-  onOpenService?: (url: string) => void
-  zIndex: number
-  onActivate: () => void
-}) {
-  // 终端输出按字符数封顶，避免机器人持续输出时 DOM 无限增长卡死浏览器。
-  const MAX_TERMINAL_OUTPUT_CHARS = 100_000
-  const appendTerminalOutput = (current: string, chunk: string): string => {
-    const next = `${current}${chunk}`
-    if (next.length <= MAX_TERMINAL_OUTPUT_CHARS) return next
-    return `…早期输出已省略…\n${next.slice(-MAX_TERMINAL_OUTPUT_CHARS)}`
-  }
-
-  type TerminalTab = { id: string; label: string; kind: 'readonly' | 'shell' }
-  const [load, { data, error, isFetching }] = useLazyRobotConsoleQuery()
-  const outputRef = useRef<HTMLDivElement>(null)
-  const shellOutputRef = useRef<HTMLDivElement>(null)
-  const xtermRef = useRef<XTerm | null>(null)
-  const xtermFitRef = useRef<FitAddon | null>(null)
-  const xtermWrittenLength = useRef(0)
-  const followLatest = useRef(true)
-  const [tabs, setTabs] = useStoreState<TerminalTab[]>([])
-  const [activeTab, setActiveTab] = useStoreState('runtime')
-  const [shellOutput, setShellOutput] = useStoreState('')
-  const [shellDirectory, setShellDirectory] = useStoreState('')
-  const [terminalSessionID, setTerminalSessionID] = useStoreState('')
-  const terminalSessionRef = useRef('')
-  // liveOutput accumulates incremental output pushed over SSE; the initial
-  // load seeds it with the current buffer so the terminal is real-time without
-  // polling. The static snapshot still comes from the query.
-  const [liveOutput, setLiveOutput] = useStoreState('')
-  const [foregroundLogMode, setForegroundLogMode] =
-    useStoreState<ForegroundLogMode>('simple')
-  const [foregroundLogQuery, setForegroundLogQuery] = useStoreState('')
-  const [foregroundLogLevels, setForegroundLogLevels] = useStoreState<
-    ForegroundLogLevel[]
-  >([])
-  const [foregroundLogDomainsSelected, setForegroundLogDomainsSelected] =
-    useStoreState<ForegroundLogDomain[]>([])
-  const [foregroundLogFiltersOpen, setForegroundLogFiltersOpen] =
-    useStoreState(false)
-  const [expandedForegroundRepeats, setExpandedForegroundRepeats] =
-    useStoreState<string[]>([])
-  const [foregroundLogContextIndex, setForegroundLogContextIndex] =
-    useStoreState<number | null>(null)
-  const [pendingForegroundLogCount, setPendingForegroundLogCount] =
-    useStoreState(0)
-  const previousForegroundLogRef = useRef('')
-  // A task ID is allocated for every foreground/development launch. Keep it
-  // beside the live buffer so output from a new launch never joins the old
-  // run just because the logger did not print a timestamp.
-  const foregroundSessionRef = useRef('')
-  const runError = error
-    ? operationErrorMessage(error, '无法读取当前目录的运行终端信息。')
-    : ''
-  const running = Boolean(data?.running)
-  const message = runError || liveOutput
-  const rawForegroundLogItems = useMemo(
-    () => normalizeForegroundLog(message),
-    [message]
-  )
-  const foregroundLogItems = useMemo(() => {
-    const modeVisible = rawForegroundLogItems.filter(
-      item =>
-        foregroundLogMode !== 'simple' ||
-        item.level !== 'info' ||
-        item.domain === 'login' ||
-        item.domain === 'service' ||
-        item.action !== null ||
-        item.details.length > 0
-    )
-    const modeItems =
-      foregroundLogMode === 'advanced'
-        ? modeVisible
-        : collapseForegroundLog(modeVisible)
-    return filterForegroundLog(modeItems, {
-      query: foregroundLogQuery,
-      levels: foregroundLogLevels,
-      domains: foregroundLogDomainsSelected
-    })
-  }, [
-    foregroundLogDomainsSelected,
-    foregroundLogLevels,
-    foregroundLogMode,
-    foregroundLogQuery,
-    rawForegroundLogItems
-  ])
-  const foregroundLogSummary = useMemo(
-    () => summarizeForegroundLog(foregroundLogItems),
-    [foregroundLogItems]
-  )
-  const foregroundLogContext = useMemo(() => {
-    if (foregroundLogContextIndex === null) return []
-    const position = rawForegroundLogItems.findIndex(
-      item => item.index === foregroundLogContextIndex
-    )
-    return position < 0
-      ? []
-      : rawForegroundLogItems.slice(
-          Math.max(0, position - 20),
-          Math.min(rawForegroundLogItems.length, position + 21)
-        )
-  }, [foregroundLogContextIndex, rawForegroundLogItems])
-  const foregroundLogExport = useMemo(() => {
-    const filters = [
-      foregroundLogQuery.trim() ? `关键词：${foregroundLogQuery.trim()}` : '',
-      foregroundLogLevels.length
-        ? `级别：${foregroundLogLevels.join('、')}`
-        : '',
-      foregroundLogDomainsSelected.length
-        ? `领域：${foregroundLogDomainsSelected.join('、')}`
-        : ''
-    ].filter(Boolean)
-    return [
-      'AlemonX 智能日志（已脱敏）',
-      `会话：${data?.sessionId || '当前运行'}`,
-      `模式：${data?.mode || '最近运行'}`,
-      data?.startedAt ? `启动时间：${data.startedAt}` : '',
-      filters.length ? `筛选：${filters.join('；')}` : '筛选：全部',
-      '',
-      ...filterForegroundLog(rawForegroundLogItems, {
-        query: foregroundLogQuery,
-        levels: foregroundLogLevels,
-        domains: foregroundLogDomainsSelected
-      }).map(item => item.safeRaw)
-    ]
-      .filter(Boolean)
-      .join('\n')
-  }, [
-    data?.mode,
-    data?.sessionId,
-    data?.startedAt,
-    foregroundLogDomainsSelected,
-    foregroundLogLevels,
-    foregroundLogQuery,
-    rawForegroundLogItems
-  ])
-  const activeTerminal = tabs.find(tab => tab.id === activeTab)
-  const resetTerminals = useCallback(() => {
-    if (logsOnly) {
-      setTabs([{ id: 'runtime', label: '日志', kind: 'readonly' }])
-      setActiveTab('runtime')
-    } else {
-      const id = `shell-${Date.now()}`
-      setTabs([{ id, label: '终端', kind: 'shell' }])
-      setActiveTab(id)
-    }
-    setShellOutput('')
-    setShellDirectory('')
-  }, [logsOnly, setActiveTab, setShellDirectory, setShellOutput, setTabs])
-  useEffect(() => {
-    if (!open || !root) return
-    resetTerminals()
-    void load({ root, taskId }).then(result => {
-      if (result.data) {
-        const changedSession =
-          Boolean(result.data.sessionId) &&
-          result.data.sessionId !== foregroundSessionRef.current
-        foregroundSessionRef.current = result.data.sessionId ?? ''
-        if (changedSession) {
-          setExpandedForegroundRepeats([])
-          setForegroundLogContextIndex(null)
-        }
-        setLiveOutput(appendTerminalOutput('', result.data.output ?? ''))
-      }
-    })
-    // No polling: output streams in via the SSE robot-output event; the manual
-    // refresh button re-reads the snapshot.
-  }, [
-    load,
-    open,
-    resetTerminals,
-    root,
-    taskId,
-    setExpandedForegroundRepeats,
-    setForegroundLogContextIndex,
-    setLiveOutput
-  ])
-  useEffect(() => {
-    if (!native || !open || !root) return
-    const query = new URLSearchParams(taskId ? { taskId } : {})
-    const source = new EventSource(`/api/v1/robot/events?${query}`)
-    let timer: number | undefined
-    let disposed = false
-    const refresh = () => {
-      if (timer !== undefined) return
-      timer = window.setTimeout(() => {
-        void load({ root, taskId }).then(result => {
-          if (!disposed && result.data) setLiveOutput(result.data.output ?? '')
-        }).finally(() => { timer = undefined })
-      }, 350)
-    }
-    source.onopen = refresh
-    source.onmessage = event => {
-      try {
-        const payload = JSON.parse(event.data) as { type?: string }
-        if (payload.type === 'output' || payload.type === 'task') refresh()
-      } catch {
-        // Ignore malformed frames.
-      }
-    }
-    return () => {
-      disposed = true
-      source.close()
-      window.clearTimeout(timer)
-    }
-  }, [load, native, open, root, setLiveOutput, taskId])
-  useEffect(() => {
-    if (!open || native) return
-    const handler = (event: Event) => {
-      const detail = (
-        event as CustomEvent<{
-          taskId?: string
-          text?: string
-          truncated?: boolean
-        }>
-      ).detail
-      if (taskId && detail?.taskId !== taskId) return
-      if (detail?.text) {
-        const changedSession =
-          Boolean(detail.taskId) &&
-          detail.taskId !== foregroundSessionRef.current
-        if (detail.taskId) foregroundSessionRef.current = detail.taskId
-        if (changedSession) {
-          setExpandedForegroundRepeats([])
-          setForegroundLogContextIndex(null)
-        }
-        setLiveOutput(current =>
-          appendTerminalOutput(
-            changedSession ? '' : current,
-            `${detail.truncated ? '…早期输出已省略…\n' : ''}${detail.text}`
-          )
-        )
-      }
-    }
-    window.addEventListener('alx:robot-output', handler)
-    return () => window.removeEventListener('alx:robot-output', handler)
-  }, [
-    native,
-    open,
-    taskId,
-    setExpandedForegroundRepeats,
-    setForegroundLogContextIndex,
-    setLiveOutput
-  ])
-  useEffect(() => {
-    if (!logsOnly || !open) return
-    const previous = previousForegroundLogRef.current
-    if (previous && message.length > previous.length && !followLatest.current)
-      setPendingForegroundLogCount(value => value + 1)
-    previousForegroundLogRef.current = message
-  }, [logsOnly, message, open, setPendingForegroundLogCount])
-  useEffect(() => {
-    if (
-      !open ||
-      !terminalOnly ||
-      activeTerminal?.kind !== 'shell' ||
-      !shellOutputRef.current
-    )
-      return
-    const terminal = new XTerm({
-      cursorBlink: false,
-      cursorStyle: 'bar',
-      cursorWidth: 1,
-      convertEol: true,
-      fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-      fontSize: 13,
-      theme: { background: '#0f172a', foreground: '#e2e8f0' }
-    })
-    const fit = new FitAddon()
-    terminal.loadAddon(fit)
-    terminal.open(shellOutputRef.current)
-    fit.fit()
-    xtermRef.current = terminal
-    xtermFitRef.current = fit
-    xtermWrittenLength.current = 0
-    const disposeInput = terminal.onData(data => sendTerminalInput(data))
-    const disposeResize = terminal.onResize(({ cols, rows }) =>
-      sendTerminalResize(cols, rows)
-    )
-    const resize = () => {
-      try {
-        fit.fit()
-      } catch {
-        // 窗口正被最小化或布局尚未完成时，下一次尺寸变化会重新同步。
-      }
-    }
-    const observer = new ResizeObserver(resize)
-    observer.observe(shellOutputRef.current)
-    window.addEventListener('resize', resize)
-    return () => {
-      window.removeEventListener('resize', resize)
-      observer.disconnect()
-      disposeInput.dispose()
-      disposeResize.dispose()
-      xtermRef.current = null
-      xtermFitRef.current = null
-      terminal.dispose()
-    }
-  }, [activeTerminal?.kind, open, terminalOnly])
-  useEffect(() => {
-    const terminal = xtermRef.current
-    if (!terminal || shellOutput.length <= xtermWrittenLength.current) return
-    terminal.write(shellOutput.slice(xtermWrittenLength.current))
-    xtermWrittenLength.current = shellOutput.length
-  }, [shellOutput])
-  useEffect(() => {
-    if (!open || !terminalOnly || !root) return
-    let disposed = false
-    void fetch('/api/v1/robot/terminal/session', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ root })
-    })
-      .then(response => response.json())
-      .then(result => {
-        if (!disposed && typeof result.sessionId === 'string') {
-          terminalSessionRef.current = result.sessionId
-          setTerminalSessionID(result.sessionId)
-          const terminal = xtermRef.current
-          if (terminal) {
-            sendTerminalResize(terminal.cols, terminal.rows)
-            window.requestAnimationFrame(() => terminal.focus())
-          }
-        }
-      })
-      .catch(() => setShellOutput('无法启动交互式终端。\n'))
-    return () => {
-      disposed = true
-      const sessionId = terminalSessionRef.current
-      if (sessionId)
-        void fetch('/api/v1/robot/terminal/close', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ root, sessionId })
-        })
-      setTerminalSessionID('')
-      terminalSessionRef.current = ''
-    }
-  }, [open, root, setShellOutput, setTerminalSessionID, terminalOnly])
-  useEffect(() => {
-    if (!open || !terminalSessionID) return
-    const handler = (event: Event) => {
-      const detail = (
-        event as CustomEvent<{ sessionId?: string; text?: string }>
-      ).detail
-      if (detail?.sessionId === terminalSessionID && detail.text)
-        setShellOutput(current =>
-          appendTerminalOutput(current, detail.text ?? '')
-        )
-    }
-    window.addEventListener('alx:terminal-output', handler)
-    return () => window.removeEventListener('alx:terminal-output', handler)
-  }, [open, setShellOutput, terminalSessionID])
-  useEffect(() => {
-    if (!open) return
-    followLatest.current = true
-    setPendingForegroundLogCount(0)
-  }, [open, setPendingForegroundLogCount])
-  useEffect(() => {
-    if (!open || !followLatest.current) return
-    const frame = window.requestAnimationFrame(() => {
-      const output = outputRef.current
-      if (output) output.scrollTop = output.scrollHeight
-    })
-    return () => window.cancelAnimationFrame(frame)
-  }, [message, open])
-  useEffect(() => {
-    if (!open || minimized || activeTerminal?.kind !== 'shell') return
-    const frame = window.requestAnimationFrame(() => {
-      xtermFitRef.current?.fit()
-      xtermRef.current?.focus()
-    })
-    return () => window.cancelAnimationFrame(frame)
-  }, [activeTerminal?.kind, minimized, open, shellOutput])
-  const closeTab = (id: string) => {
-    setTabs(current => current.filter(tab => tab.id !== id))
-    if (activeTab === id) setActiveTab('')
-  }
-  const addTab = () => {
-    const id = `shell-${Date.now()}`
-    setTabs(current => [...current, { id, label: '终端', kind: 'shell' }])
-    setActiveTab(id)
-    setShellOutput('')
-  }
-  const sendTerminalInput = (input: string) => {
-    const sessionId = terminalSessionRef.current
-    if (!sessionId || !input) return
-    void fetch('/api/v1/robot/terminal/input', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ root, sessionId, input })
-    })
-  }
-  const sendTerminalResize = (cols: number, rows: number) => {
-    const sessionId = terminalSessionRef.current
-    if (!sessionId || !cols || !rows) return
-    void fetch('/api/v1/robot/terminal/resize', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ root, sessionId, cols, rows })
-    })
-  }
-  const foregroundLogActionLabel = (item: ForegroundLogItem) => {
-    if (!item.action) return ''
-    if (native && item.action === 'manage-master' && !onToggleMasterAuthorization) return ''
-    if (native && (item.action === 'open-runtime' || item.action === 'install-dependencies') && !onOpenRuntime) return ''
-    if (native && item.action === 'open-config' && !onOpenConfig) return ''
-    if (native && item.action === 'open-environment' && !onOpenEnvironment) return ''
-    const labels: Record<NonNullable<ForegroundLogAction>, string> = {
-      'install-dependencies': '自动同步依赖',
-      'open-runtime': '查看运行',
-      'open-config': '查看配置',
-      'open-environment': '环境检查',
-      'open-service': '打开服务',
-      'copy-service-url': '复制地址',
-      'manage-master':
-        item.masterUserID && masterAuthorizationIDs.includes(item.masterUserID)
-          ? '取消主人授权'
-          : '授权为主人'
-    }
-    return labels[item.action]
-  }
-  const runForegroundLogAction = (item: ForegroundLogItem) => {
-    switch (item.action) {
-      case 'install-dependencies':
-        onOpenRuntime?.()
-        return
-      case 'open-runtime':
-        onOpenRuntime?.()
-        return
-      case 'open-config':
-        onOpenConfig?.()
-        return
-      case 'open-environment':
-        onOpenEnvironment?.()
-        return
-      case 'open-service':
-        if (item.serviceURL) onOpenService?.(item.serviceURL)
-        return
-      case 'copy-service-url':
-        if (item.serviceURL)
-          void navigator.clipboard?.writeText(
-            redactForegroundLog(item.serviceURL)
-          )
-        return
-      case 'manage-master':
-        if (!item.masterUserID) return
-        onToggleMasterAuthorization?.(
-          item.masterUserID,
-          masterAuthorizationIDs.includes(item.masterUserID)
-        )
-    }
-  }
-  const toggleLogLevel = (level: ForegroundLogLevel) =>
-    setForegroundLogLevels(current =>
-      current.includes(level)
-        ? current.filter(value => value !== level)
-        : [...current, level]
-    )
-  const toggleLogDomain = (domain: ForegroundLogDomain) =>
-    setForegroundLogDomainsSelected(current =>
-      current.includes(domain)
-        ? current.filter(value => value !== domain)
-        : [...current, domain]
-    )
-  const toggleForegroundLogContext = (index: number) =>
-    setForegroundLogContextIndex(current => (current === index ? null : index))
-  const copyForegroundLog = () =>
-    void navigator.clipboard?.writeText(foregroundLogExport)
-  const downloadForegroundLog = () => {
-    const blob = new Blob([foregroundLogExport], {
-      type: 'text/plain;charset=utf-8'
-    })
-    const url = URL.createObjectURL(blob)
-    const anchor = document.createElement('a')
-    anchor.href = url
-    anchor.download = `alemonx-log-${data?.sessionId || 'current'}.txt`
-    anchor.click()
-    URL.revokeObjectURL(url)
-  }
-  const jumpToLatestForegroundLog = () => {
-    const output = outputRef.current
-    if (output) output.scrollTop = output.scrollHeight
-    followLatest.current = true
-    setPendingForegroundLogCount(0)
-  }
-  const terminalTabs = (
-    <nav className="readonly-console-tabs" aria-label="终端列表">
-      {tabs.map(tab => (
-        <button
-          className={cn(
-            'readonly-console-tab',
-            activeTab === tab.id && 'active'
-          )}
-          key={tab.id}
-          onClick={() => setActiveTab(tab.id)}
-        >
-          <span>{tab.label}</span>
-          <X
-            className="size-3"
-            onClick={event => {
-              event.stopPropagation()
-              closeTab(tab.id)
-            }}
-          />
-        </button>
-      ))}
-      <button
-        className="readonly-console-tab-add"
-        onClick={addTab}
-        aria-label="添加终端"
-        title="添加终端"
-      >
-        <Plus className="size-4" />
-      </button>
-      {tabs.length === 0 && (
-        <span className="readonly-console-empty">
-          没有打开的终端，点击 + 添加
-        </span>
-      )}
-    </nav>
-  )
-  if (!open) return null
-  return (
-    <DesktopWindow
-      native={native}
-      id={logsOnly ? 'foreground-logs' : 'terminal'}
-      open={open}
-      minimized={minimized}
-      title={logsOnly ? (logTitle ?? '日志') : '终端'}
-      subtitle={
-        terminalOnly
-          ? `仅限当前机器人目录 · ${shellDirectory ? `./${shellDirectory}` : '.'}`
-          : activeTerminal?.kind === 'shell'
-            ? `仅限当前机器人目录 · ${shellDirectory ? `./${shellDirectory}` : '.'}`
-            : running
-              ? `${data?.mode ?? '进程'}实时输出 · 智能识别`
-              : '最近运行输出 · 智能整理'
-      }
-      icon={
-        logsOnly ? (
-          <ClipboardList className="size-4 shrink-0 text-brand-600 dark:text-brand-200" />
-        ) : (
-          <Terminal className="size-4 shrink-0 text-brand-600 dark:text-brand-200" />
-        )
-      }
-      headerLeft={logsOnly ? undefined : terminalTabs}
-      onClose={onClose}
-      onMinimize={onMinimize}
-      zIndex={zIndex}
-      onActivate={() => {
-        onActivate()
-        if (activeTerminal?.kind === 'shell' && !minimized)
-          window.requestAnimationFrame(() => xtermRef.current?.focus())
-      }}
-      initialPosition={{ left: 16, top: 16 }}
-      width={560}
-      height={650}
-      actions={
-        <div className="flex items-center gap-1">
-          {logsOnly && (
-            <>
-              <button
-                className={cn(
-                  'smart-log-window-action',
-                  (foregroundLogQuery ||
-                    foregroundLogLevels.length ||
-                    foregroundLogDomainsSelected.length) &&
-                    'active'
-                )}
-                onClick={() => setForegroundLogFiltersOpen(value => !value)}
-                title="筛选日志"
-              >
-                {foregroundLogSummary.errors > 0
-                  ? `异常 ${foregroundLogSummary.errors}`
-                  : foregroundLogSummary.warnings > 0
-                    ? `提醒 ${foregroundLogSummary.warnings}`
-                    : '筛选'}
-              </button>
-              <button
-                className="smart-log-window-action"
-                onClick={() =>
-                  setForegroundLogMode(mode =>
-                    mode === 'simple'
-                      ? 'common'
-                      : mode === 'common'
-                        ? 'advanced'
-                        : 'simple'
-                  )
-                }
-                title="切换日志显示层级"
-              >
-                {
-                  { simple: '简洁', common: '常用', advanced: '详细' }[
-                    foregroundLogMode
-                  ]
-                }
-              </button>
-              <button
-                className="icon-button size-8 p-0"
-                disabled={!rawForegroundLogItems.length}
-                onClick={copyForegroundLog}
-                aria-label="复制脱敏运行日志"
-                title="复制脱敏日志"
-              >
-                <ClipboardList className="size-4" />
-              </button>
-              <button
-                className="icon-button size-8 p-0"
-                disabled={!rawForegroundLogItems.length}
-                onClick={downloadForegroundLog}
-                aria-label="下载脱敏运行日志"
-                title="下载脱敏日志"
-              >
-                <Download className="size-4" />
-              </button>
-            </>
-          )}
-          <button
-            className="icon-button size-8 p-0"
-            disabled={isFetching}
-            onClick={() => void load({ root, taskId, refresh: true })}
-            aria-label={logsOnly ? '刷新运行日志' : '刷新运行终端'}
-            title="刷新"
-          >
-            <RefreshCw className="size-4" />
-          </button>
-        </div>
-      }
-    >
-      <div className="readonly-console-body min-h-0">
-        {activeTerminal?.kind === 'shell' ? (
-          <div className="readonly-console-shell">
-            <div
-              ref={shellOutputRef}
-              aria-label="机器人目录交互式终端"
-              onPointerDown={() =>
-                window.requestAnimationFrame(() => xtermRef.current?.focus())
-              }
-            />
-          </div>
-        ) : logsOnly && activeTerminal ? (
-          <div className="smart-foreground-log">
-            <div
-              ref={outputRef}
-              className="smart-foreground-log-list"
-              onScroll={event => {
-                const output = event.currentTarget
-                followLatest.current =
-                  output.scrollHeight - output.scrollTop - output.clientHeight <
-                  24
-                if (followLatest.current) setPendingForegroundLogCount(0)
-              }}
-            >
-              {pendingForegroundLogCount > 0 && (
-                <button
-                  className="smart-log-pending"
-                  onClick={jumpToLatestForegroundLog}
-                >
-                  有新日志，跳到最新
-                </button>
-              )}
-              {foregroundLogFiltersOpen && (
-                <section
-                  className="smart-log-filter-panel"
-                  aria-label="日志筛选"
-                >
-                  <div className="flex items-center gap-2">
-                    <Search className="size-3.5 shrink-0 text-slate-400" />
-                    <input
-                      value={foregroundLogQuery}
-                      onChange={event =>
-                        setForegroundLogQuery(event.target.value)
-                      }
-                      placeholder="搜索当前会话（已脱敏）"
-                      aria-label="搜索日志"
-                    />
-                    <button
-                      type="button"
-                      className="text-button text-[11px]"
-                      onClick={() => {
-                        setForegroundLogQuery('')
-                        setForegroundLogLevels([])
-                        setForegroundLogDomainsSelected([])
-                      }}
-                    >
-                      清除
-                    </button>
-                  </div>
-                  <div className="smart-log-filter-row">
-                    <small>级别</small>
-                    {(
-                      [
-                        'error',
-                        'warning',
-                        'success',
-                        'info'
-                      ] as ForegroundLogLevel[]
-                    ).map(level => (
-                      <button
-                        type="button"
-                        key={level}
-                        className={cn(
-                          'smart-log-filter-chip',
-                          foregroundLogLevels.includes(level) && 'active'
-                        )}
-                        onClick={() => toggleLogLevel(level)}
-                      >
-                        {
-                          {
-                            error: '异常',
-                            warning: '提醒',
-                            success: '正常',
-                            info: '信息'
-                          }[level]
-                        }
-                      </button>
-                    ))}
-                  </div>
-                  <div className="smart-log-filter-row">
-                    <small>领域</small>
-                    {foregroundLogDomains.map(domain => (
-                      <button
-                        type="button"
-                        key={domain.value}
-                        className={cn(
-                          'smart-log-filter-chip',
-                          foregroundLogDomainsSelected.includes(domain.value) &&
-                            'active'
-                        )}
-                        onClick={() => toggleLogDomain(domain.value)}
-                      >
-                        {domain.label}
-                      </button>
-                    ))}
-                  </div>
-                </section>
-              )}
-              {isFetching && !message ? (
-                <div className="smart-log-empty">正在读取运行输出…</div>
-              ) : foregroundLogItems.length === 0 ? (
-                <div className="smart-log-empty">
-                  {foregroundLogQuery ||
-                  foregroundLogLevels.length ||
-                  foregroundLogDomainsSelected.length
-                    ? '当前筛选条件下没有日志。'
-                    : '当前没有可显示的前台日志。'}
-                </div>
-              ) : (
-                foregroundLogItems.map((item, index) => (
-                  <div key={item.id}>
-                    {foregroundLogMode !== 'advanced' &&
-                      item.timeLabel &&
-                      item.timeLabel !==
-                        foregroundLogItems[index - 1]?.timeLabel && (
-                        <div className="smart-log-time-divider">
-                          <span>{item.timeLabel}</span>
-                        </div>
-                      )}
-                    {foregroundLogMode === 'advanced' ? (
-                      <div className="smart-log-raw-wrap">
-                        <pre className={`smart-log-raw is-${item.level}`}>
-                          {foregroundLogDisplayText(item, foregroundLogMode)}
-                        </pre>
-                        <button
-                          className="smart-log-context-button"
-                          onClick={() => toggleForegroundLogContext(item.index)}
-                        >
-                          上下文
-                        </button>
-                      </div>
-                    ) : (
-                      <article
-                        className={cn('smart-log-line', `is-${item.level}`)}
-                      >
-                        <div className="smart-log-line-meta">
-                          <span className="smart-log-title">
-                            {item.title}
-                            {item.time && <small>{item.time}</small>}
-                            {item.count > 1 && (
-                              <small className="smart-log-repeat">
-                                × {item.count}
-                              </small>
-                            )}
-                          </span>
-                          <span className="smart-log-line-actions">
-                            {foregroundLogActionLabel(item) &&
-                              item.action !== 'install-dependencies' && (
-                                <button
-                                  onClick={() => runForegroundLogAction(item)}
-                                >
-                                  {foregroundLogActionLabel(item)}
-                                </button>
-                              )}
-                            {item.count > 1 && (
-                              <button
-                                onClick={() =>
-                                  setExpandedForegroundRepeats(current =>
-                                    current.includes(item.id)
-                                      ? current.filter(
-                                          value => value !== item.id
-                                        )
-                                      : [...current, item.id]
-                                  )
-                                }
-                              >
-                                {expandedForegroundRepeats.includes(item.id)
-                                  ? '收起重复'
-                                  : '展开重复'}
-                              </button>
-                            )}
-                            <button
-                              onClick={() =>
-                                toggleForegroundLogContext(
-                                  item.occurrenceIndexes[0] ?? item.index
-                                )
-                              }
-                            >
-                              上下文
-                            </button>
-                          </span>
-                        </div>
-                        <code>
-                          {foregroundLogDisplayText(item, foregroundLogMode)}
-                        </code>
-                        {(foregroundLogMode === 'simple' ||
-                          (item.level !== 'error' &&
-                            item.level !== 'warning')) &&
-                          item.details.filter(detail => detail.label !== '信息')
-                            .length > 0 && (
-                            <div className="smart-log-extracts">
-                              {item.details
-                                .filter(detail => detail.label !== '信息')
-                                .map(detail => (
-                                  <span key={`${detail.label}:${detail.value}`}>
-                                    <small>{detail.label}</small>
-                                    {detail.value}
-                                  </span>
-                                ))}
-                            </div>
-                          )}
-                      </article>
-                    )}
-                    {foregroundLogMode !== 'advanced' &&
-                      item.count > 1 &&
-                      expandedForegroundRepeats.includes(item.id) && (
-                        <div className="smart-log-repeat-list">
-                          {item.occurrenceIndexes.map(occurrence => {
-                            const repeated = rawForegroundLogItems.find(
-                              value => value.index === occurrence
-                            )
-                            return repeated ? (
-                              <pre key={repeated.id}>{repeated.safeRaw}</pre>
-                            ) : null
-                          })}
-                        </div>
-                      )}
-                    {foregroundLogContextIndex !== null &&
-                      item.occurrenceIndexes.includes(
-                        foregroundLogContextIndex
-                      ) && (
-                        <section
-                          className="smart-log-context"
-                          aria-label="日志上下文"
-                        >
-                          <header>
-                            <strong>上下文</strong>
-                          </header>
-                          {foregroundLogContext.map(context => (
-                            <pre
-                              key={context.id}
-                              className={cn(
-                                context.index === foregroundLogContextIndex &&
-                                  'active'
-                              )}
-                            >
-                              {context.safeRaw}
-                            </pre>
-                          ))}
-                        </section>
-                      )}
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-        ) : null}
-      </div>
-    </DesktopWindow>
-  )
-}
-
 // Kept as an exported compatibility surface while every caller uses the
 // shared window chrome, geometry and container-query contract.
 export function FloatingWindow({
@@ -13954,7 +12165,9 @@ function OpsWindow({
       height={720}
       sidebarAriaLabel="运维操作"
     >
-      <OpsCenter root={root} sidebarLayout />
+      <DeferredPanel label="运维">
+        <OpsCenter root={root} sidebarLayout />
+      </DeferredPanel>
     </SidebarWindow>
   )
 }
@@ -15043,7 +13256,6 @@ export function NativeRobotWindow({ name }: { name: RobotWindowName | SystemWind
     return (
       <ReadonlyConsole
         {...nativeRobotWindowProps}
-        logsOnly
         root={root}
         taskId={query.get('taskId') ?? undefined}
         logTitle={taskName ? taskName + ' 日志' : '前台日志'}

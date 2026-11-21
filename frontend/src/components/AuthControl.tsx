@@ -1,3 +1,4 @@
+import { authRequest, readAuthStatus, type AuthStatus } from '../lib/workbenchAuth'
 import { useStoreState } from '../store/guideStore'
 import {
   Fragment,
@@ -21,31 +22,6 @@ import {
   setRememberedPassword
 } from './workbenchCredentials'
 
-type AuthStatus = {
-  enabled: boolean
-  authenticated: boolean
-  account?: string
-  githubLogin?: string
-}
-
-async function authRequest(path: string, init?: RequestInit) {
-  const controller = new AbortController()
-  const timer = window.setTimeout(() => controller.abort(), 8000)
-  try {
-    const response = await fetch(`/api/v1/auth/${path}`, {
-      credentials: 'same-origin',
-      headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
-      signal: controller.signal,
-      ...init
-    })
-    const data = (await response.json()) as AuthStatus & { error?: string }
-    if (!response.ok) throw new Error(data.error || '身份认证操作未完成。')
-    return data
-  } finally {
-    window.clearTimeout(timer)
-  }
-}
-
 function notifyAuthChanged() {
   window.dispatchEvent(new Event('alx:auth-changed'))
   if (desktopPlatform) {
@@ -55,11 +31,13 @@ function notifyAuthChanged() {
   }
 }
 
-async function readStatus() {
-  return authRequest('status')
-}
-
-export function AuthGate({ children }: { children: ReactNode }) {
+export function AuthGate({
+  children,
+  initialStatus
+}: {
+  children: (status: AuthStatus) => ReactNode
+  initialStatus: Promise<AuthStatus>
+}) {
   const [status, setStatus] = useStoreState<AuthStatus | null>(null)
   const [loading, setLoading] = useStoreState(true)
   const [loadError, setLoadError] = useStoreState('')
@@ -70,21 +48,29 @@ export function AuthGate({ children }: { children: ReactNode }) {
   const [password, setPassword] = useStoreState('')
   const [error, setError] = useStoreState('')
   const [busy, setBusy] = useStoreState(false)
-  const refresh = useCallback(() => {
+  const requestID = useRef(0)
+  const loadStatus = useCallback((request: Promise<AuthStatus>) => {
+    const id = ++requestID.current
     setLoading(true)
     setLoadError('')
-    void readStatus()
-      .then(setStatus)
+    void request
+      .then(value => {
+        if (id === requestID.current) setStatus(value)
+      })
       .catch(reason => {
+        if (id !== requestID.current) return
         setStatus(null)
         setLoadError(
           reason instanceof Error ? reason.message : '无法读取身份认证状态。'
         )
       })
-      .finally(() => setLoading(false))
+      .finally(() => {
+        if (id === requestID.current) setLoading(false)
+      })
   }, [setLoadError, setLoading, setStatus])
+  const refresh = useCallback(() => loadStatus(readAuthStatus()), [loadStatus])
   useEffect(() => {
-    refresh()
+    loadStatus(initialStatus)
     window.addEventListener('alx:auth-changed', refresh)
     const channel = desktopPlatform
       ? new BroadcastChannel('alx-native-auth')
@@ -96,10 +82,11 @@ export function AuthGate({ children }: { children: ReactNode }) {
       }
     }
     return () => {
+      requestID.current += 1
       channel?.close()
       window.removeEventListener('alx:auth-changed', refresh)
     }
-  }, [refresh, setStatus])
+  }, [initialStatus, loadStatus, refresh, setStatus])
   const loginVisible = status?.enabled === true && !status.authenticated
   useEffect(() => {
     if (!loginVisible) return
@@ -140,6 +127,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
     const values = new FormData(event.currentTarget)
     const username = String(values.get('username') ?? '').trim()
     const secret = String(values.get('password') ?? '')
+    const rememberPassword = values.has('remember-password')
     if (!username || !secret) return
     setBusy(true)
     setError('')
@@ -150,7 +138,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
       })
       const signedInAccount = result.account || username
       try {
-        await setRememberedPassword(signedInAccount, secret, remember)
+        await setRememberedPassword(signedInAccount, secret, rememberPassword)
       } catch {
         window.alert('已登录。系统或浏览器密码管理器未能更新已保存的密码。')
       }
@@ -192,7 +180,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
   if (!status.enabled || status.authenticated)
     return (
       <Fragment key={status.enabled ? `account:${status.account}` : 'local'}>
-        {children}
+        {children(status)}
       </Fragment>
     )
   return (
@@ -245,6 +233,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
             <label className="flex items-center gap-2 text-xs text-(--theme-text-secondary)">
               <input
                 type="checkbox"
+                name="remember-password"
                 checked={remember}
                 disabled={busy || githubPending}
                 onChange={event => setRemember(event.target.checked)}
@@ -290,7 +279,7 @@ export function AuthControl({ embedded = false }: { embedded?: boolean }) {
   const [error, setError] = useStoreState('')
   const [busy, setBusy] = useStoreState(false)
   const refresh = useCallback(() => {
-    void readStatus()
+    void readAuthStatus()
       .then(setStatus)
       .catch(() => setStatus(null))
   }, [setStatus])

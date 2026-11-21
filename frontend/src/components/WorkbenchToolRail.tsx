@@ -1,8 +1,9 @@
-import { useId, useRef, useState, type ReactNode } from 'react'
+import { useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { FolderTree, House, Settings } from 'lucide-react'
 import { Button } from './Button'
 import { DSHWhaleIcon } from './DSHWhaleIcon'
+import { WorkbenchTools } from './WorkbenchTools'
 import { useWorkbenchWindowDrag } from '../hooks/useWorkbenchWindowDrag'
 import { useViewportPopoverPosition } from '../hooks/useViewportPopoverPosition'
 
@@ -17,6 +18,7 @@ export type WorkbenchView = 'home' | 'dsh' | 'explorer' | 'guide'
 
 type WorkbenchToolRailProps = {
   systemTools: WorkbenchToolAction[]
+  pluginTools: WorkbenchToolAction[]
   activeSystemTool: string | null
   windows: WorkbenchToolAction[]
   activeView: WorkbenchView
@@ -103,6 +105,7 @@ function RailButton({
 
 export function WorkbenchToolRail({
   systemTools,
+  pluginTools,
   activeSystemTool,
   windows,
   activeView,
@@ -112,6 +115,41 @@ export function WorkbenchToolRail({
   onOpenSettings
 }: WorkbenchToolRailProps) {
   const dragHandlers = useWorkbenchWindowDrag(true)
+  const toolList = useRef<HTMLDivElement>(null)
+  const pluginGroup = useRef<HTMLDivElement>(null)
+  const systemGroup = useRef<HTMLDivElement>(null)
+  const windowGroup = useRef<HTMLDivElement>(null)
+  const [pluginSlots, setPluginSlots] = useState(1)
+  const hasPlugins = pluginTools.length > 0
+
+  useLayoutEffect(() => {
+    const list = toolList.current
+    const plugins = pluginGroup.current
+    const system = systemGroup.current
+    const windows = windowGroup.current
+    if (!hasPlugins || !list || !plugins || !system || !windows) return
+
+    const update = () => {
+      const button = system.querySelector('button') ?? plugins.querySelector('button')
+      if (!button) return
+      const rowHeight = button.getBoundingClientRect().height
+      if (!rowHeight) return
+      const groupGap = Number.parseFloat(getComputedStyle(list).rowGap)
+      const rowGap = Number.parseFloat(getComputedStyle(plugins).rowGap)
+      const space = list.clientHeight - system.offsetHeight - windows.offsetHeight - 2 * groupGap
+      setPluginSlots(Math.max(1, Math.floor((space + rowGap) / (rowHeight + rowGap))))
+    }
+
+    const observer = new ResizeObserver(update)
+    observer.observe(list)
+    observer.observe(system)
+    observer.observe(windows)
+    update()
+    return () => observer.disconnect()
+  }, [hasPlugins])
+
+  const visiblePluginCount = pluginTools.length > pluginSlots ? pluginSlots - 1 : pluginTools.length
+  const overflowPlugins = pluginTools.slice(visiblePluginCount)
   const pinnedViews = [
     {
       id: 'home',
@@ -136,7 +174,7 @@ export function WorkbenchToolRail({
     <nav
       aria-label="工作台工具"
       {...dragHandlers}
-      className="workbench-tool-rail flex w-12 shrink-0 flex-col items-center gap-2 bg-[oklch(from_var(--theme-surface-raised)_calc(l_-_0.012)_c_h)] py-2"
+      className="workbench-tool-rail flex min-h-0 w-12 shrink-0 flex-col items-center gap-2 bg-[oklch(from_var(--theme-surface-raised)_calc(l_-_0.012)_c_h)] py-2"
     >
       {pinnedViews.map(view => (
         <RailButton
@@ -151,8 +189,8 @@ export function WorkbenchToolRail({
         className="w-5 shrink-0 border-t border-(--theme-border-default)"
         role="separator"
       />
-      <div className="flex min-h-0 w-full flex-1 flex-col items-center gap-2 overflow-y-auto [scrollbar-width:none]">
-        <div className="flex shrink-0 flex-col items-center gap-1" role="group" aria-label="系统功能">
+      <div ref={toolList} className="flex min-h-0 w-full flex-1 flex-col items-center gap-2 overflow-y-auto [scrollbar-width:none]">
+        <div ref={systemGroup} className="flex shrink-0 flex-col items-center gap-1" role="group" aria-label="系统功能">
           {systemTools.map(tool => (
             <RailButton
               key={tool.id}
@@ -163,7 +201,46 @@ export function WorkbenchToolRail({
             />
           ))}
         </div>
-        <div className="flex min-h-4 w-full flex-1 flex-col items-center gap-1" role="group" aria-label="已打开窗口">
+        {hasPlugins && (
+          <div ref={pluginGroup} className="flex shrink-0 flex-col items-center gap-1" role="group" aria-label="已启动插件">
+            {pluginTools.slice(0, visiblePluginCount).map(tool => (
+              <RailButton
+                key={tool.id}
+                label={tool.label}
+                icon={tool.icon}
+                active={activeSystemTool === tool.id}
+                onClick={tool.activate}
+              />
+            ))}
+            {overflowPlugins.length > 0 && (
+              <WorkbenchTools
+                label="更多插件"
+                menuLabel="更多插件列表"
+                placement="right"
+                menuClassName="overflow-y-auto [--workbench-menu-layer:1250]"
+                restoreFocusOnClose
+              >
+                {close => overflowPlugins.map(tool => (
+                  <button
+                    key={tool.id}
+                    type="button"
+                    className="workbench-action-item aria-[current=page]:bg-(--theme-accent-soft)!"
+                    aria-current={activeSystemTool === tool.id ? 'page' : undefined}
+                    title={tool.label}
+                    onClick={() => {
+                      close()
+                      tool.activate()
+                    }}
+                  >
+                    <span className="grid size-4 shrink-0 place-items-center [&>svg]:size-4" aria-hidden="true">{tool.icon}</span>
+                    <span className="min-w-0 truncate">{tool.label}</span>
+                  </button>
+                ))}
+              </WorkbenchTools>
+            )}
+          </div>
+        )}
+        <div ref={windowGroup} className="flex min-h-4 w-full shrink-0 flex-col items-center gap-1" role="group" aria-label="已打开窗口">
           {windows.map(window => (
             <RailButton key={window.id} label={window.label} icon={window.icon} onClick={window.activate} />
           ))}

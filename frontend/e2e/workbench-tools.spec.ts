@@ -103,6 +103,122 @@ test('desktop tool rail opens independent native windows', async ({ page }) => {
   await expect(page.getByText('还没有已下载的插件')).toBeVisible()
 })
 
+test('the fixed tool rail follows the active plugin registry in resource mode', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.addInitScript(() => {
+    Object.assign(window, {
+      webkit: {
+        messageHandlers: {
+          external: {
+            postMessage: (message: string) => {
+              document.documentElement.dataset.lastNativeMessage = message
+            }
+          }
+        }
+      }
+    })
+  })
+  let running = false
+  let additionalPlugins = 0
+  const plugin = {
+    id: 'fixture', name: '源码插件', enabled: true, developmentSource: true,
+    navigation: { label: '测试插件入口', icon: 'plug' }
+  }
+  await page.route('**/api/v1/**', route => {
+    const path = new URL(route.request().url()).pathname
+    if (path === '/api/v1/auth/status')
+      return route.fulfill({ json: { enabled: false, authenticated: false } })
+    if (path === '/api/v1/workspace/robots')
+      return route.fulfill({ json: { scope: 'test', local: true, initialized: true, projects: [], activeProjectID: '' } })
+    if (path === '/api/v1/setup/plugins')
+      return route.fulfill({ json: [
+        { ...plugin, id: 'disabled', name: '停用插件', navigation: {}, enabled: false },
+        { ...plugin, id: 'online', name: '在线目录插件', navigation: {}, online: true },
+        ...(running ? [plugin, ...Array.from({ length: additionalPlugins }, (_, index) => ({
+          ...plugin,
+          id: `extra-${index + 1}`,
+          navigation: { ...plugin.navigation, label: `扩展 ${index + 1}` }
+        }))] : [])
+      ] })
+    return route.fulfill({ status: 503, json: {} })
+  })
+  await page.goto('/dashboard/robot')
+  const tools = page.getByRole('navigation', { name: '工作台工具' })
+  await tools.getByRole('button', { name: '资源管理器' }).click()
+  await expect(page.getByRole('region', { name: '资源管理器' })).toBeVisible()
+  const pluginTools = tools.getByRole('group', { name: '已启动插件' })
+  await expect(pluginTools).toHaveCount(0)
+  const systemTools = tools.getByRole('group', { name: '系统功能' })
+  const systemPositions = () => systemTools.getByRole('button').evaluateAll(buttons =>
+    buttons.map(button => button.getBoundingClientRect().top)
+  )
+  const initialSystemPositions = await systemPositions()
+
+  const notifyPluginChange = () => page.evaluate(() => {
+    const channel = new BroadcastChannel('alx-events')
+    channel.postMessage({ type: 'event', envelope: { topic: 'plugins', type: 'plugins.changed' } })
+    channel.close()
+  })
+  running = true
+  await notifyPluginChange()
+  const entry = pluginTools.getByRole('button', { name: '测试插件入口' })
+  await expect(pluginTools.getByRole('button')).toHaveCount(1)
+  await expect(entry).toBeInViewport()
+  expect(await systemPositions()).toEqual(initialSystemPositions)
+  const systemBounds = (await systemTools.boundingBox())!
+  expect((await entry.boundingBox())!.y).toBeGreaterThanOrEqual(systemBounds.y + systemBounds.height)
+  await entry.click()
+  await expect(page.locator('html')).toHaveAttribute('data-last-native-message', 'alx:open-window:plugin:id=fixture')
+
+  additionalPlugins = 8
+  await notifyPluginChange()
+  const morePlugins = pluginTools.getByRole('button', { name: '更多插件', exact: true })
+  await expect(pluginTools.getByRole('button')).toHaveCount(9)
+  await expect(morePlugins).toHaveCount(0)
+
+  await page.setViewportSize({ width: 900, height: 570 })
+  await expect(morePlugins).toBeInViewport()
+  const compactSystemBounds = (await systemTools.boundingBox())!
+  expect((await morePlugins.boundingBox())!.y).toBeGreaterThanOrEqual(compactSystemBounds.y + compactSystemBounds.height)
+  await expect(systemTools.getByRole('button', { name: '全局环境' })).toBeInViewport({ ratio: 1 })
+  await expect(tools.getByRole('button', { name: '打开设置' })).toBeInViewport({ ratio: 1 })
+  await expect(entry).toBeVisible()
+  const lastPlugin = pluginTools.getByRole('button', { name: '扩展 8', exact: true })
+  await expect(lastPlugin).toBeHidden()
+  await morePlugins.click()
+  const menu = pluginTools.getByRole('region', { name: '更多插件列表' })
+  await expect(menu.getByRole('button', { name: '扩展 8', exact: true })).toBeVisible()
+  await morePlugins.press('Tab')
+  await expect(menu.getByRole('button').first()).toBeFocused()
+  await page.keyboard.press('Escape')
+  await expect(menu).toBeHidden()
+  await expect(morePlugins).toBeFocused()
+  await morePlugins.click()
+  await lastPlugin.click()
+  await expect(menu).toBeHidden()
+  await expect(page.locator('html')).toHaveAttribute('data-last-native-message', 'alx:open-window:plugin:id=extra-8')
+
+  additionalPlugins = 24
+  await notifyPluginChange()
+  await morePlugins.click()
+  const finalEntry = menu.getByRole('button', { name: '扩展 24', exact: true })
+  await expect(finalEntry).toBeAttached()
+  await expect(finalEntry).not.toBeInViewport()
+  await finalEntry.click()
+  await expect(page.locator('html')).toHaveAttribute('data-last-native-message', 'alx:open-window:plugin:id=extra-24')
+
+  additionalPlugins = 8
+  await notifyPluginChange()
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await expect(morePlugins).toHaveCount(0)
+  await expect(lastPlugin).toBeInViewport()
+
+  running = false
+  await notifyPluginChange()
+  await expect(pluginTools).toHaveCount(0)
+  expect(await systemPositions()).toEqual(initialSystemPositions)
+})
+
 test('operation menu stays collapsed at all widths and opens nested tools', async ({
   page
 }) => {

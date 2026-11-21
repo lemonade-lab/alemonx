@@ -356,8 +356,43 @@ function classify(raw: string, index: number): ForegroundLogItem {
   }
 }
 
+function mapForegroundLogBlocks(
+  content: string,
+  resolveBlock: typeof classify
+) {
+  const blocks = buildBlocks(content)
+  const offset = Math.max(0, blocks.length - MAX_ITEMS)
+  return blocks.slice(offset).map((block, index) => resolveBlock(block, offset + index))
+}
+
 export function normalizeForegroundLog(content: string) {
-  return buildBlocks(content).map(classify).slice(-MAX_ITEMS)
+  return mapForegroundLogBlocks(content, classify)
+}
+
+export function createForegroundLogNormalizer() {
+  let previous = new Map<string, ForegroundLogItem>()
+  return (content: string) => {
+    // Keep just the displayed blocks. A continuation appended to the final
+    // line changes its text, so it naturally goes through classification again.
+    const next = new Map<string, ForegroundLogItem>()
+    const items = mapForegroundLogBlocks(content, (raw, index) => {
+      const cached = next.get(raw) ?? previous.get(raw)
+      const item = !cached
+        ? classify(raw, index)
+        : cached.index === index
+          ? cached
+          : {
+              ...cached,
+              id: `${index}:${cached.safeRaw.slice(0, 80)}`,
+              index,
+              occurrenceIndexes: [index]
+            }
+      next.set(raw, item)
+      return item
+    })
+    previous = next
+    return items
+  }
 }
 export function filterForegroundLog(
   items: ForegroundLogItem[],

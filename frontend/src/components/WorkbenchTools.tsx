@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, type ReactNode } from 'react'
 import { MoreHorizontal } from 'lucide-react'
 import { useStoreState } from '../store/guideStore'
-import { useViewportPopoverPosition } from '../hooks/useViewportPopoverPosition'
+import { useViewportPopoverPosition, type PopoverPlacement } from '../hooks/useViewportPopoverPosition'
 
 export function WorkbenchTools({
   children,
@@ -11,6 +11,7 @@ export function WorkbenchTools({
   icon = <MoreHorizontal className="size-4" aria-hidden="true" />,
   menuClassName,
   align,
+  placement = 'bottom',
   restoreFocusOnClose = false
 }: {
   children: ReactNode | ((close: () => void, open: boolean) => ReactNode)
@@ -20,6 +21,7 @@ export function WorkbenchTools({
   icon?: ReactNode
   menuClassName?: string
   align?: 'start' | 'end'
+  placement?: PopoverPlacement
   restoreFocusOnClose?: boolean
 }) {
   const [open, setOpen] = useStoreState(false)
@@ -32,7 +34,8 @@ export function WorkbenchTools({
     anchorRef: trigger,
     open,
     align,
-    keepBelowAnchor: true,
+    placement,
+    keepBelowAnchor: placement === 'bottom',
     popoverRef: menu
   })
   const close = () => {

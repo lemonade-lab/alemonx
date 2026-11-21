@@ -92,7 +92,7 @@ export function RobotDirectoryTree<T extends Robot>({
           <small>{node.count}</small>
         </button>
         <ul id={contentsID} hidden={!open} className="robot-directory-children">
-          {renderContents(node)}
+          {open && renderContents(node)}
         </ul>
       </li>
     )

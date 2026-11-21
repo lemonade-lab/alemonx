@@ -178,14 +178,7 @@ for (const viewport of [
     await expect(list.getByRole('tablist')).toHaveCount(0)
     await expect(robot).toBeVisible()
     await expect(robotPanel.getByRole('button', { name: '添加本地机器人目录' })).toBeVisible()
-    const plugins = robotPanel.getByRole('region', { name: '已加载插件' })
-    if (viewport.width === 390) {
-      const plugin = plugins.getByRole('button', { name: '测试插件' })
-      await expect(plugin).toBeVisible()
-      expect((await plugin.boundingBox())!.y).toBeGreaterThan((await robot.boundingBox())!.y)
-    } else {
-      await expect(plugins).toHaveCount(0)
-    }
+    await expect(robotPanel.getByRole('button', { name: '测试插件' })).toHaveCount(0)
     await expect(robotPanel).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)')
     const more = robotPanel.getByRole('button', { name: 'phone-bot 的更多操作' })
     await expect(more).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)')
@@ -218,6 +211,13 @@ for (const viewport of [
     await robotPanel.getByText('phone-bot', { exact: true }).click()
     await expect(list).toBeHidden()
     await expect(projects).toBeFocused()
+    const plugins = tools.getByRole('group', { name: '已启动插件' })
+    if (viewport.width === 390) {
+      await expect(plugins.getByRole('button', { name: '测试插件' })).toBeInViewport()
+      await expect(plugins.getByRole('button', { name: '更多插件' })).toHaveCount(0)
+    } else {
+      await expect(plugins).toHaveCount(0)
+    }
     const systemTools = tools.getByRole('group', { name: '系统功能' })
     await expect(systemTools.getByRole('button')).toHaveCount(6)
     const environment = systemTools.getByRole('button', { name: '全局环境', exact: true })

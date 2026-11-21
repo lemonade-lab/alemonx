@@ -1,8 +1,10 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { Provider } from 'react-redux'
-import { store } from '../../src/store/guideStore'
+import { restoreStore, store } from '../../src/store/guideStore'
 import { DataWorkspaceFixture } from './data-workspace'
+
+await restoreStore()
 
 const root = createRoot(document.getElementById('root')!)
 root.render(

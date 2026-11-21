@@ -17,7 +17,7 @@ const isPrivateDraft = (key: string) =>
   key.endsWith(':alemon.config.yaml') ||
   key.endsWith(':alemon.config.yml')
 
-// Remove values stored by older releases as soon as this module is loaded.
+// Remove values stored by older releases before reading persisted state.
 // A redux-persist transform protects future writes, but would otherwise leave
 // an old raw value in localStorage until the next state change.
 function removeLegacyPrivateDrafts() {
@@ -36,8 +36,6 @@ function removeLegacyPrivateDrafts() {
     // Persisted workspace data is optional; ignore malformed legacy entries.
   }
 }
-
-removeLegacyPrivateDrafts()
 
 export type WorkspaceProject = {
   id: string
@@ -69,32 +67,35 @@ export function clearLegacyRobots() {
   preferenceStorage.removeItem(legacyRobotListKey)
 }
 
-try {
-  const raw = preferenceStorage.getItem(workspacePersistKey)
-  if (raw) {
-    const saved = JSON.parse(raw) as Record<string, string>
-    if (saved.projects || saved.activeProjectID) {
-      const projects = JSON.parse(saved.projects ?? '[]')
-      if (
-        Array.isArray(projects) &&
-        projects.length &&
-        !preferenceStorage.getItem(legacyRobotListKey)
-      ) {
-        preferenceStorage.setItem(
-          legacyRobotListKey,
-          JSON.stringify({
-            projects,
-            activeProjectID: JSON.parse(saved.activeProjectID ?? '""')
-          })
-        )
+export function migrateWorkspaceStorage() {
+  removeLegacyPrivateDrafts()
+  try {
+    const raw = preferenceStorage.getItem(workspacePersistKey)
+    if (raw) {
+      const saved = JSON.parse(raw) as Record<string, string>
+      if (saved.projects || saved.activeProjectID) {
+        const projects = JSON.parse(saved.projects ?? '[]')
+        if (
+          Array.isArray(projects) &&
+          projects.length &&
+          !preferenceStorage.getItem(legacyRobotListKey)
+        ) {
+          preferenceStorage.setItem(
+            legacyRobotListKey,
+            JSON.stringify({
+              projects,
+              activeProjectID: JSON.parse(saved.activeProjectID ?? '""')
+            })
+          )
+        }
+        delete saved.projects
+        delete saved.activeProjectID
+        preferenceStorage.setItem(workspacePersistKey, JSON.stringify(saved))
       }
-      delete saved.projects
-      delete saved.activeProjectID
-      preferenceStorage.setItem(workspacePersistKey, JSON.stringify(saved))
     }
+  } catch {
+    // An unreadable legacy browser list must not block account data.
   }
-} catch {
-  // An unreadable legacy browser list must not block account data.
 }
 
 type WorkspaceState = {

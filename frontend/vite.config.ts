@@ -2,9 +2,42 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react-swc'
 import tailwindcss from '@tailwindcss/vite'
 import { fileURLToPath, URL } from 'node:url'
+import { brotliCompressSync, constants, gzipSync } from 'node:zlib'
 
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [
+    react(),
+    tailwindcss(),
+    {
+      name: 'alemonx-compressed-assets',
+      apply: 'build',
+      generateBundle: {
+        order: 'post',
+        handler(_, bundle) {
+          for (const [fileName, entry] of Object.entries(bundle)) {
+            if (!fileName.startsWith('assets/') || !/\.(js|css)$/.test(fileName)) continue
+            const source = entry.type === 'chunk' ? entry.code : entry.source
+            if (source.length < 1024) continue
+            const gzip = gzipSync(source)
+            const brotli = brotliCompressSync(source, {
+              params: { [constants.BROTLI_PARAM_QUALITY]: 6 }
+            })
+            this.emitFile({
+              type: 'asset',
+              fileName: `${fileName}.gz`,
+              source: gzip
+            })
+            if (brotli.length < gzip.length)
+              this.emitFile({
+                type: 'asset',
+                fileName: `${fileName}.br`,
+                source: brotli
+              })
+          }
+        }
+      }
+    }
+  ],
   resolve: {
     alias: [
       {
@@ -28,33 +61,12 @@ export default defineConfig({
     emptyOutDir: true,
     rolldownOptions: {
       output: {
-        manualChunks(id) {
-          if (
-            id.includes('node_modules/react/') ||
-            id.includes('node_modules/react-dom/') ||
-            id.includes('node_modules/react-router-dom/')
-          )
-            return 'react'
-          if (
-            id.includes('node_modules/@reduxjs/') ||
-            id.includes('node_modules/react-redux/') ||
-            id.includes('node_modules/redux-persist/')
-          )
-            return 'state'
-          if (id.includes('node_modules/markdown-to-jsx/')) return 'markdown'
-          if (
-            id.includes('node_modules/antd/') ||
-            id.includes('node_modules/@ant-design/')
-          )
-            return 'antd'
-          if (id.includes('node_modules/slate')) return 'slate'
-          if (id.includes('node_modules/dayjs/')) return 'dayjs'
-          if (
-            id.includes('node_modules/flatted/') ||
-            id.includes('node_modules/crypto-js/') ||
-            id.includes('node_modules/lodash-es/')
-          )
-            return 'testone-vendor'
+        codeSplitting: {
+          groups: [{
+            name: 'icons',
+            test: /\/node_modules\/lucide-react\//,
+            includeDependenciesRecursively: false
+          }]
         }
       }
     }

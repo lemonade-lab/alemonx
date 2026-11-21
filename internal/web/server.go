@@ -15,6 +15,7 @@ import (
 	"io"
 	"io/fs"
 	"log"
+	"mime"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -9381,6 +9382,52 @@ func (s *server) projectsHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, created)
 }
 
+// Vite appends a content hash to assets emitted by the workbench build.
+var workbenchAssetPattern = regexp.MustCompile(`^/assets/[^/]+-[A-Za-z0-9_-]{8}\.(js|css|png|svg|webp|woff2)$`)
+
+func workbenchEncodings(header string) [2]string {
+	quality := map[string]float64{"gzip": -1, "br": -1, "*": 0}
+	for entry := range strings.SplitSeq(header, ",") {
+		name, params, _ := strings.Cut(entry, ";")
+		name = strings.ToLower(strings.TrimSpace(name))
+		if _, supported := quality[name]; !supported {
+			continue
+		}
+		weight := 1.0
+		for param := range strings.SplitSeq(params, ";") {
+			key, value, _ := strings.Cut(strings.TrimSpace(param), "=")
+			if strings.EqualFold(strings.TrimSpace(key), "q") {
+				q, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+				weight = 0
+				if err == nil && q >= 0 && q <= 1 {
+					weight = q
+				}
+				break
+			}
+		}
+		quality[name] = weight
+	}
+	br, gzip := quality["br"], quality["gzip"]
+	if br < 0 {
+		br = quality["*"]
+	}
+	if gzip < 0 {
+		gzip = quality["*"]
+	}
+	switch {
+	case br > 0 && gzip > br:
+		return [2]string{"gzip", "br"}
+	case br > 0 && gzip > 0:
+		return [2]string{"br", "gzip"}
+	case br > 0:
+		return [2]string{"br"}
+	case gzip > 0:
+		return [2]string{"gzip"}
+	default:
+		return [2]string{}
+	}
+}
+
 func (s *server) spa() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/") {
@@ -9388,11 +9435,40 @@ func (s *server) spa() http.Handler {
 			return
 		}
 		if r.URL.Path != "/" {
-			if _, err := fs.Stat(s.assets, r.URL.Path[1:]); err == nil {
+			if entry, err := fs.Stat(s.assets, r.URL.Path[1:]); err == nil {
+				if !entry.IsDir() && workbenchAssetPattern.MatchString(r.URL.Path) {
+					w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+					ext := filepath.Ext(r.URL.Path)
+					if ext == ".js" || ext == ".css" {
+						w.Header().Add("Vary", "Accept-Encoding")
+						for _, encoding := range workbenchEncodings(strings.Join(r.Header.Values("Accept-Encoding"), ",")) {
+							if encoding == "" {
+								break
+							}
+							suffix := ".br"
+							if encoding == "gzip" {
+								suffix = ".gz"
+							}
+							if compressed, err := fs.ReadFile(s.assets, r.URL.Path[1:]+suffix); err == nil {
+								w.Header().Set("Content-Type", mime.TypeByExtension(ext))
+								w.Header().Set("Content-Encoding", encoding)
+								http.ServeContent(w, r, entry.Name(), entry.ModTime(), bytes.NewReader(compressed))
+								return
+							}
+						}
+					}
+				} else if r.URL.Path == "/index.html" {
+					w.Header().Set("Cache-Control", "no-cache")
+				}
 				s.static.ServeHTTP(w, r)
 				return
 			}
+			if strings.HasPrefix(r.URL.Path, "/assets/") {
+				http.NotFound(w, r)
+				return
+			}
 		}
+		w.Header().Set("Cache-Control", "no-cache")
 		r.URL.Path = "/"
 		s.static.ServeHTTP(w, r)
 	})

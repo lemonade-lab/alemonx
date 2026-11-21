@@ -1,3 +1,4 @@
+import '@testone/testone.scss'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Provider } from 'react-redux'
 import { App as AntApp, ConfigProvider, theme as antdTheme } from 'antd'

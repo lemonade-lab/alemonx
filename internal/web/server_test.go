@@ -3,6 +3,7 @@ package web
 import (
 	"archive/zip"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -179,6 +180,101 @@ func TestGitHubDownloadGuideUsesSystemMirrorPresets(t *testing.T) {
 
 func newTestServer() http.Handler {
 	return NewServer("test", fstest.MapFS{"dist/index.html": &fstest.MapFile{Data: []byte("<!doctype html>")}})
+}
+
+func TestWorkbenchStaticAssets(t *testing.T) {
+	const asset = "/assets/workbench-AB_cd-12.js"
+	const code = "console.log('workbench')"
+	var compressed bytes.Buffer
+	zipper := gzip.NewWriter(&compressed)
+	if _, err := io.WriteString(zipper, code); err != nil {
+		t.Fatal(err)
+	}
+	if err := zipper.Close(); err != nil {
+		t.Fatal(err)
+	}
+	brotli, err := base64.StdEncoding.DecodeString("GxcA+EVP1uL/8hqYEYwqRJZigRcv7zfhqMuBAA==")
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := fstest.MapFS{
+		"index.html":                           {Data: []byte("<!doctype html>")},
+		strings.TrimPrefix(asset, "/"):         {Data: []byte(code)},
+		strings.TrimPrefix(asset, "/") + ".gz": {Data: compressed.Bytes()},
+		strings.TrimPrefix(asset, "/") + ".br": {Data: brotli},
+		"assets/base-DJFyAa02.css":             {Data: []byte("body{}")},
+	}
+	handler := (&server{assets: files, static: http.FileServer(http.FS(files))}).spa()
+
+	for _, test := range []struct{ accept, want string }{
+		{"gzip", "gzip"}, {"br, gzip", "br"}, {"br;q=0.4, gzip;q=0.5", "gzip"},
+		{"*;q=1", "br"}, {"", ""}, {"br", "br"}, {"*;q=1, br;q=0", "gzip"},
+		{"gzip;q=0, br;q=0", ""},
+	} {
+		t.Run(test.accept, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, asset, nil)
+			request.Header.Set("Accept-Encoding", test.accept)
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != http.StatusOK || response.Header().Get("Vary") != "Accept-Encoding" ||
+				response.Header().Get("Cache-Control") != "public, max-age=31536000, immutable" ||
+				!strings.Contains(response.Header().Get("Content-Type"), "javascript") {
+				t.Fatalf("status %d, headers %v", response.Code, response.Header())
+			}
+			if actual := response.Header().Get("Content-Encoding"); actual != test.want {
+				t.Fatalf("unexpected encoding %q, want %q", actual, test.want)
+			}
+			if test.want == "br" {
+				if !bytes.Equal(response.Body.Bytes(), brotli) {
+					t.Fatal("wrong Brotli asset body")
+				}
+				return
+			}
+			body := io.Reader(response.Body)
+			if test.want == "gzip" {
+				decoded, err := gzip.NewReader(body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer decoded.Close()
+				body = decoded
+			}
+			if actual, err := io.ReadAll(body); err != nil || string(actual) != code {
+				t.Fatalf("asset body %q, err %v", actual, err)
+			}
+		})
+	}
+
+	for _, path := range []string{"/", "/dashboard/robot", "/desktop-window/settings"} {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+		if response.Code != http.StatusOK || response.Header().Get("Cache-Control") != "no-cache" {
+			t.Fatalf("SPA document %s: status %d, headers %v", path, response.Code, response.Header())
+		}
+	}
+	request := httptest.NewRequest(http.MethodGet, "/assets/base-DJFyAa02.css", nil)
+	request.Header.Set("Accept-Encoding", "gzip")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || response.Header().Get("Content-Encoding") != "" || response.Body.String() != "body{}" {
+		t.Fatalf("missing gzip variant: status %d, headers %v, body %s", response.Code, response.Header(), response.Body)
+	}
+
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/assets/missing-AB_cd-12.js", nil))
+	if response.Code != http.StatusNotFound || response.Header().Get("Cache-Control") != "" {
+		t.Fatalf("missing asset: status %d, headers %v", response.Code, response.Header())
+	}
+
+	delete(files, strings.TrimPrefix(asset, "/")+".br")
+	request = httptest.NewRequest(http.MethodGet, asset, nil)
+	request.Header.Set("Accept-Encoding", "br, gzip")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || response.Header().Get("Content-Encoding") != "gzip" ||
+		!bytes.Equal(response.Body.Bytes(), compressed.Bytes()) {
+		t.Fatalf("missing Brotli variant: status %d, headers %v", response.Code, response.Header())
+	}
 }
 
 func TestWorkspaceEndpointExposesUnifiedLayout(t *testing.T) {

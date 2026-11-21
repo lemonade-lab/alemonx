@@ -18,6 +18,7 @@ test('narrow workbench, Git, and operations windows respond to their own width',
 }) => {
   await page.setViewportSize({ width: 1280, height: 900 })
   await page.goto('/')
+  await page.addStyleTag({ url: '/src/features/testone/testone.scss?direct' })
 
   await page.evaluate(() => {
     const fixture = document.createElement('div')
@@ -258,7 +259,8 @@ test('robot workbench resizes the left rail and keeps the right card fixed', asy
       const { default: React } = await import('/node_modules/.vite/deps/react.js');
       const { default: ReactDOM } = await import('/node_modules/.vite/deps/react-dom_client.js');
       const { Provider } = await import('/node_modules/.vite/deps/react-redux.js');
-      const { store } = await import('/src/store/guideStore.ts');
+      const { restoreStore, store } = await import('/src/store/guideStore.ts');
+      await restoreStore();
       const { RobotWorkspaceSplitter } = await import('/src/components/RobotWorkspaceSplitter.tsx');
       const { RobotPanel } = await import('/src/components/RobotPanel.tsx');
       ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(Provider, {store},
@@ -278,11 +280,11 @@ test('robot workbench resizes the left rail and keeps the right card fixed', asy
       .getByText(label, { exact: true })
       .evaluate(node => node.getBoundingClientRect().width)
   const left = page.getByRole('separator', { name: '调整机器人列表宽度' })
-  const divider = left.locator('.ant-splitter-bar-dragger')
+  const divider = left.locator('.workspace-split-handle')
   await expect(divider).toBeVisible()
   expect(await divider.evaluate(node => getComputedStyle(node, '::before').content)).toBe('none')
   expect(await divider.evaluate(node => getComputedStyle(node, '::after').content)).toBe('none')
-  const right = page.locator('.robot-workspace-main + .ant-splitter-bar')
+  const right = page.locator('.robot-workspace-main + [role="separator"]')
   await expect(right).toHaveCount(0)
   const column = (await page.locator('.robot-workspace-content').boundingBox())!
   const content = (await page.locator('.robot-workspace-content > .console-page').boundingBox())!
@@ -328,14 +330,16 @@ test('robot workbench resizes the left rail and keeps the right card fixed', asy
   const beforeWorkspace = await width('工作区')
   const drag = async (separator: typeof left, offset: number) => {
     const handle = await separator
-      .locator('.ant-splitter-bar-dragger')
+      .locator('.workspace-split-handle')
       .boundingBox()
     if (!handle) throw new Error('分隔条未渲染')
     const x = handle.x + handle.width / 2
     const y = handle.y + handle.height / 2
+    const committedWidth = await width('机器人列表')
     await page.mouse.move(x, y)
     await page.mouse.down()
     await page.mouse.move(x + offset, y, { steps: 5 })
+    expect(await width('机器人列表')).toBe(committedWidth)
     await page.mouse.up()
   }
   await drag(left, 65)
@@ -360,7 +364,7 @@ test('robot workbench resizes the left rail and keeps the right card fixed', asy
   expect(phoneContent.y).toBe(0)
   expect(phoneContent.height).toBe(600)
   await page.setViewportSize({ width: 1280, height: 820 })
-  await expect(left.locator('.ant-splitter-bar-dragger')).toBeVisible()
+  await expect(left.locator('.workspace-split-handle')).toBeVisible()
   await expect.poll(() => width('机器人列表')).toBe(resizedList)
 })
 
@@ -407,6 +411,8 @@ test('browser workbench fills the viewport and integrates the tool rail', async 
   await page.mouse.move(1300, 25)
   await expect(tooltip).toHaveCount(0)
   await home.focus()
+  await page.keyboard.press('Tab')
+  await expect(tools.getByRole('button', { name: '资源管理器', exact: true })).toBeFocused()
   await page.keyboard.press('Tab')
   const dsh = tools.getByRole('button', { name: 'DSH', exact: true })
   await expect(dsh).toBeFocused()
@@ -769,7 +775,7 @@ test('terminal opens at minimum width and remembers later adjustments', async ({
   await expect(page.getByRole('dialog', { name: '终端', exact: true })).toHaveCount(0)
 
   const separator = page.getByRole('separator', { name: '调整终端宽度' })
-  const divider = separator.locator('.ant-splitter-bar-dragger')
+  const divider = separator.locator('.workspace-split-handle')
   await expect(divider).toBeVisible()
   expect(await divider.evaluate(node => getComputedStyle(node, '::before').content)).toBe('none')
   expect(await divider.evaluate(node => getComputedStyle(node, '::after').content)).toBe('none')

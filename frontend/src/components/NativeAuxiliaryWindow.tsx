@@ -6,8 +6,11 @@ import { setDataTab } from '../store/dataStore'
 import { AppSettingsPanel } from './AppSettingsPanel'
 import { SidebarWindow } from './SidebarWindow'
 import { dataNavigation } from './data/dataNavigation'
-import { NativeRobotWindow } from './Dashboard'
 import type { AuxiliaryWindowName } from './nativeWindow'
+
+const NativeRobotWindow = lazy(() =>
+  import('./Dashboard').then(module => ({ default: module.NativeRobotWindow }))
+)
 
 const DataWorkspace = lazy(() => import('./data/DataWorkspace'))
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import cn from 'classnames'
 import {
   AlertTriangle,
@@ -21,6 +21,24 @@ function operationErrorMessage(reason: unknown, fallback: string) {
 
 const PM2_LIVE_MAX_LINES = 2000
 
+type PM2AuditLine = { source: string; text: string }
+type PM2LiveLine = PM2AuditLine & { id: number }
+
+const PM2LogLine = memo(function PM2LogLine({ line }: { line: PM2AuditLine }) {
+  const error = line.source === 'err'
+  return (
+    <div className={cn('pm2-audit-line', error && 'pm2-audit-line-err')}>
+      <span
+        className="pm2-audit-line-source"
+        title={error ? '标准错误 stderr' : '标准输出 stdout'}
+      >
+        {error ? 'ERR' : 'OUT'}
+      </span>
+      <span>{line.text}</span>
+    </div>
+  )
+})
+
 export function PM2LogsPanel({
   open,
   root,
@@ -40,7 +58,6 @@ export function PM2LogsPanel({
   zIndex: number
   onActivate: () => void
 }) {
-  type PM2AuditLine = { source: string; text: string }
   type PM2LogDiagnostic = {
     code: string
     severity: 'error' | 'warning' | 'info'
@@ -84,7 +101,8 @@ export function PM2LogsPanel({
   const [live, setLive] = useState(true)
   const [liveConnected, setLiveConnected] = useState(false)
   const [streamFailed, setStreamFailed] = useState(false)
-  const [liveLines, setLiveLines] = useState<PM2AuditLine[]>([])
+  const [liveLines, setLiveLines] = useState<PM2LiveLine[]>([])
+  const nextLineID = useRef(0)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [deleteBusy, setDeleteBusy] = useState(false)
   const [diagnosticsExpanded, setDiagnosticsExpanded] = useState(false)
@@ -197,14 +215,16 @@ export function PM2LogsPanel({
     params.set('snapshot', '1')
     params.set('page', '1')
     const stream = new EventSource(`/api/v1/robot/pm2-logs/stream?${params}`)
-    let pending: PM2AuditLine[] = []
+    let pending: PM2LiveLine[] = []
+    let timer: number | undefined
     const flush = () => {
+      timer = undefined
       if (!active || pending.length === 0) return
       const batch = pending
       pending = []
       setLiveLines(current => [...current, ...batch].slice(-PM2_LIVE_MAX_LINES))
     }
-    const timer = window.setInterval(flush, 100)
+    const normalizedQuery = committedQuery.trim().toLowerCase()
     stream.onopen = () => {
       if (active) setLiveConnected(false)
     }
@@ -242,25 +262,25 @@ export function PM2LogsPanel({
         }
         if (typeof payload.text !== 'string') return
         if (source !== 'all' && payload.source !== source) return
-        if (
-          committedQuery.trim() &&
-          !payload.text
-            .toLowerCase()
-            .includes(committedQuery.trim().toLowerCase())
-        )
+        if (normalizedQuery && !payload.text.toLowerCase().includes(normalizedQuery))
           return
-        pending.push({ source: payload.source ?? 'out', text: payload.text })
+        pending.push({
+          id: nextLineID.current++,
+          source: payload.source ?? 'out',
+          text: payload.text
+        })
         if (pending.length > PM2_LIVE_MAX_LINES)
           pending = pending.slice(-PM2_LIVE_MAX_LINES)
+        timer ??= window.setTimeout(flush, 100)
       } catch {
         /* Ignore malformed frames. */
       }
     }
     return () => {
       // Preserve all received lines when the user pauses, including this batch.
+      window.clearTimeout(timer)
       flush()
       active = false
-      window.clearInterval(timer)
       stream.close()
     }
   }, [
@@ -295,20 +315,33 @@ export function PM2LogsPanel({
     setFollowing(true)
   }, [committedQuery, date, page, root, source])
 
-  const visibleLines = useMemo<PM2AuditLine[]>(() => {
+  const history = useMemo(() => {
     const q = committedQuery.trim().toLowerCase()
-    return [...(data?.lines ?? []), ...liveLines]
-      .filter(
-        line =>
-          (source === 'all' || line.source === source) &&
-          (!q || line.text.toLowerCase().includes(q))
+    return (data?.lines ?? [])
+      .map((line, index) => ({ line, index }))
+      .filter(({ line }) =>
+        (source === 'all' || line.source === source) &&
+        (!q || line.text.toLowerCase().includes(q))
       )
-      .slice(-PM2_LIVE_MAX_LINES)
-  }, [committedQuery, data, liveLines, source])
+  }, [committedQuery, data?.lines, source])
+  const visibleLines = useMemo(() => {
+    const q = committedQuery.trim().toLowerCase()
+    const updates = source === 'all' && !q ? liveLines : liveLines.filter(
+      line =>
+        (source === 'all' || line.source === source) &&
+        (!q || line.text.toLowerCase().includes(q))
+    )
+    const count = Math.min(PM2_LIVE_MAX_LINES, history.length + updates.length)
+    return {
+      history: history.slice(history.length + updates.length - count),
+      updates,
+      count
+    }
+  }, [committedQuery, history, liveLines, source])
   const diagnostics = data?.diagnostics ?? []
 
   useEffect(() => {
-    if (!open) return
+    if (!open || minimized) return
     const el = outputRef.current
     if (!el || !followLatest.current) return
     const frame = window.requestAnimationFrame(() => {
@@ -316,7 +349,7 @@ export function PM2LogsPanel({
         outputRef.current.scrollTop = outputRef.current.scrollHeight
     })
     return () => window.cancelAnimationFrame(frame)
-  }, [open, visibleLines])
+  }, [open, minimized, visibleLines])
 
   const dayIndex = days.findIndex(day => day.date === date)
   const olderDay =
@@ -682,34 +715,21 @@ export function PM2LogsPanel({
         >
           {loading && !data ? (
             <div className="pm2-audit-hint">正在读取 PM2 日志…</div>
-          ) : visibleLines.length === 0 ? (
+          ) : visibleLines.count === 0 ? (
             <div className="pm2-audit-hint">
               {committedQuery || date || source !== 'all'
                 ? '没有匹配的日志，请调整筛选条件。'
                 : '暂无日志，进程产生输出后会显示在这里。'}
             </div>
           ) : (
-            visibleLines.map((line, index) => (
-              <div
-                key={`${line.source}-${index}`}
-                className={cn(
-                  'pm2-audit-line',
-                  line.source === 'err' && 'pm2-audit-line-err'
-                )}
-              >
-                <span
-                  className="pm2-audit-line-source"
-                  title={
-                    line.source === 'err'
-                      ? '标准错误 stderr'
-                      : '标准输出 stdout'
-                  }
-                >
-                  {line.source === 'err' ? 'ERR' : 'OUT'}
-                </span>
-                <span>{line.text}</span>
-              </div>
-            ))
+            <>
+              {visibleLines.history.map(({ line, index }) => (
+                <PM2LogLine key={index} line={line} />
+              ))}
+              {visibleLines.updates.map(line => (
+                <PM2LogLine key={line.id} line={line} />
+              ))}
+            </>
           )}
         </div>
         <footer className="pm2-audit-footer">
@@ -727,7 +747,7 @@ export function PM2LogsPanel({
                   : `第 ${data?.page ?? page} 页`}
           </span>
           <span>
-            显示 {visibleLines.length} 行
+            显示 {visibleLines.count} 行
             {!live && !frozen && data ? ` · 共 ${data.total} 条匹配` : ''}
             {data?.truncated ? ' · 超出读取上限，仅显示最近记录' : ''}
           </span>

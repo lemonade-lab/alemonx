@@ -1,5 +1,5 @@
-import { Splitter } from 'antd'
-import { useEffect, useRef, type KeyboardEvent, type ReactNode } from 'react'
+import type { ReactNode } from 'react'
+import { WorkspaceSplitPane } from './WorkspaceSplitPane'
 import { useNavigationState } from '../hooks/useNavigationState'
 import { useIsMobileViewport } from '../hooks/useIsMobileViewport'
 import { Modal } from './Modal'
@@ -7,10 +7,6 @@ import { Button } from './Button'
 import { X } from 'lucide-react'
 
 const listLimits = { min: 17, max: 35, initial: 20 }
-
-function clampListWidth(value: number) {
-  return Math.max(listLimits.min, Math.min(listLimits.max, Math.round(value)))
-}
 
 export function RobotWorkspaceSplitter({
   list,
@@ -32,45 +28,12 @@ export function RobotWorkspaceSplitter({
   onCloseMobilePanel?: () => void
 }) {
   const isCompact = useIsMobileViewport()
-  const root = useRef<HTMLDivElement>(null)
   const [listPreference, setListPreference] = useNavigationState(
     'workbench.splitter',
     ['list'],
     listLimits.initial
   )
   const showList = !isCompact && !listHidden
-  const listWidth = showList ? clampListWidth(listPreference) : 0
-
-  useEffect(() => {
-    const bar = root.current?.querySelector<HTMLElement>(
-      '.robot-workspace-list + [role="separator"]'
-    )
-    if (!bar) return
-    bar.tabIndex = showList ? 0 : -1
-    bar.setAttribute('aria-orientation', 'vertical')
-    bar.setAttribute('aria-label', '调整机器人列表宽度')
-  }, [showList])
-
-  const saveWidths = (sizes: number[]) => {
-    const total = sizes.reduce((sum, size) => sum + size, 0)
-    if (showList && total > 0)
-      setListPreference(clampListWidth((sizes[0] * 100) / total))
-  }
-
-  const resizeWithKeyboard = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (
-      !showList ||
-      !(event.target instanceof HTMLElement) ||
-      !event.target.matches('.robot-workspace-list + [role="separator"]')
-    )
-      return
-    const delta =
-      event.key === 'ArrowLeft' ? -2 : event.key === 'ArrowRight' ? 2 : 0
-    if (!delta) return
-    setListPreference(clampListWidth(listWidth + delta))
-    event.preventDefault()
-  }
-
   const body = (
     <div className="robot-workspace-content">
       <section className="console-page">{children}</section>
@@ -82,30 +45,21 @@ export function RobotWorkspaceSplitter({
   const content = renderContent ? renderContent(body) : body
 
   return (
-    <div ref={root} className="robot-workspace" onKeyDown={resizeWithKeyboard}>
-      <Splitter
+    <div className="robot-workspace">
+      <WorkspaceSplitPane
         className="robot-workspace-splitter"
-        lazy
-        onResizeEnd={saveWidths}
-        style={{ minHeight: 0 }}
-      >
-        <Splitter.Panel
-          className={`robot-workspace-list${showList ? '' : ' robot-workspace-hidden'}`}
-          size={`${listWidth}%`}
-          min={showList ? `${listLimits.min}%` : 0}
-          max={`${listLimits.max}%`}
-          resizable={showList}
-        >
-          {!isCompact && list}
-        </Splitter.Panel>
-        <Splitter.Panel
-          className="robot-workspace-main"
-          size={`${100 - listWidth}%`}
-          min="30%"
-        >
-          {content}
-        </Splitter.Panel>
-      </Splitter>
+        leadingClassName={`robot-workspace-list${showList ? '' : ' robot-workspace-hidden'}`}
+        trailingClassName="robot-workspace-main"
+        leading={isCompact ? null : list}
+        trailing={content}
+        sizedPane="leading"
+        width={listPreference}
+        min={listLimits.min}
+        max={listLimits.max}
+        resizable={showList}
+        separatorLabel="调整机器人列表宽度"
+        onWidthChange={setListPreference}
+      />
       {isCompact && (
         <Modal
           open={

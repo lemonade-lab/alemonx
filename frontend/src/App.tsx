@@ -1,8 +1,10 @@
+import type { RobotList } from './lib/workspaceRobots'
 import { openNativeWindow } from './components/nativeWindow'
 import { OfficialExtensionChoices } from './components/OfficialResources'
 import { useResourceOptionsQuery } from './store/workspaceApi'
 import { useStoreState } from './store/guideStore'
 import {
+  lazy,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -19,7 +21,7 @@ import {
   type RootState
 } from './store/guideStore'
 import { Dashboard } from './components/Dashboard'
-import { AppSettingsPanel } from './components/AppSettingsPanel'
+import { DeferredPanel } from './components/DeferredPanel'
 import type { SettingsSection } from './components/settingsSections'
 import { navigationKey, setNavigationValue } from './store/navigationStore'
 import { EnvironmentFixDialog } from './components/EnvironmentFixDialog'
@@ -46,6 +48,12 @@ import type {
   Report
 } from './features/guide/types'
 
+const AppSettingsPanel = lazy(() =>
+  import('./components/AppSettingsPanel').then(module => ({
+    default: module.AppSettingsPanel
+  }))
+)
+
 const capabilityLabels: Record<string, string> = {
   bubble: '气泡服务',
   database: '数据存储',
@@ -54,14 +62,13 @@ const capabilityLabels: Record<string, string> = {
   qqbot: 'QQ Bot'
 }
 
-export default function App() {
+export default function App({ initialRobots }: { initialRobots?: Promise<RobotList> }) {
   const navigate = useNavigate()
   const location = useLocation()
   const [error, setError] = useStoreState('')
   const [creating, setCreating] = useStoreState(false)
   const [creation, setCreation] = useStoreState<Creation | null>(null)
   const [repairCheck, setRepairCheck] = useStoreState<Check | null>(null)
-  const { data: goalData, isLoading: loading } = useGoalsQuery()
   const [
     loadEnvironmentReport,
     {
@@ -71,7 +78,6 @@ export default function App() {
       originalArgs: checkedEnvironment
     }
   ] = useLazyEnvironmentReportQuery()
-  const goals = (goalData as Goal[] | null | undefined) ?? []
   const settingsTitle = '设置'
   const routeGoal = location.pathname.match(
     /^\/guide\/([^/]+)\/step\/\d+$/
@@ -79,6 +85,8 @@ export default function App() {
   const guideGroup = location.pathname.match(/^\/guide\/group\/([^/]+)$/)?.[1]
   const selectedID = routeGoal ?? null
   const guideOpen = !location.pathname.startsWith('/dashboard')
+  const { data: goalData, isLoading: loading } = useGoalsQuery(undefined, { skip: !guideOpen })
+  const goals = (goalData as Goal[] | null | undefined) ?? []
   const guideHasBack = Boolean(guideGroup || (routeGoal && !location.pathname.endsWith('/step/0')))
   const guideBack = useRef<() => void>(() => {})
   const dashboardReturn = useRef('/dashboard/robot')
@@ -88,6 +96,7 @@ export default function App() {
       ? ((environmentData as Report | undefined) ?? null)
       : null
   const activeGoal = goals.find(goal => goal.id === activeID)
+  const [settingsMounted, setSettingsMounted] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsMinimized, setSettingsMinimized] = useState(false)
   const [settingsLayer, setSettingsLayer] = useState(108)
@@ -105,6 +114,7 @@ export default function App() {
     }
     const layer = ++nextWindowLayer.current
     setSettingsLayer(layer)
+    setSettingsMounted(true)
     setSettingsOpen(true)
     setSettingsMinimized(false)
     window.dispatchEvent(
@@ -184,8 +194,7 @@ export default function App() {
     <div className="app-shell">
       <div className="workbench-stage">
         <Dashboard
-          goals={goals}
-          goal={activeGoal}
+          initialRobots={initialRobots}
           report={report}
           checking={checking}
           error={error}
@@ -252,25 +261,29 @@ export default function App() {
           onFix={setRepairCheck}
         />
       </div>
-      <AppSettingsPanel
-        id="app-settings"
-        open={settingsOpen}
-        minimized={settingsMinimized}
-        title={settingsTitle}
-        icon={
-          <Settings className="size-4 text-brand-600 dark:text-brand-200" />
-        }
-        onClose={() => {
-          setSettingsOpen(false)
-          setSettingsMinimized(false)
-        }}
-        onMinimize={() => setSettingsMinimized(true)}
-        zIndex={settingsLayer}
-        onActivate={openSettings}
-        initialPosition={{ left: 180, top: 120 }}
-        width={820}
-        height={640}
-      />
+      {settingsMounted && (
+        <DeferredPanel label="设置">
+          <AppSettingsPanel
+            id="app-settings"
+            open={settingsOpen}
+            minimized={settingsMinimized}
+            title={settingsTitle}
+            icon={
+              <Settings className="size-4 text-brand-600 dark:text-brand-200" />
+            }
+            onClose={() => {
+              setSettingsOpen(false)
+              setSettingsMinimized(false)
+            }}
+            onMinimize={() => setSettingsMinimized(true)}
+            zIndex={settingsLayer}
+            onActivate={openSettings}
+            initialPosition={{ left: 180, top: 120 }}
+            width={820}
+            height={640}
+          />
+        </DeferredPanel>
+      )}
       {repairCheck && (
         <EnvironmentFixDialog
           check={repairCheck}

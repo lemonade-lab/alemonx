@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useDispatch } from 'react-redux'
+import { requestRobots, type RobotList } from '../lib/workspaceRobots'
 import {
   replaceAccountRobots,
   readLegacyRobots,
@@ -7,13 +8,6 @@ import {
   type WorkspaceProject
 } from '../store/workspaceStore'
 
-type RobotList = {
-  scope: string
-  local: boolean
-  initialized: boolean
-  projects: WorkspaceProject[]
-  activeProjectID: string
-}
 type RobotChange = {
   action: 'add' | 'remove' | 'select' | 'pin' | 'reorder' | 'import'
   projects?: WorkspaceProject[]
@@ -21,16 +15,10 @@ type RobotChange = {
   targetId?: string
 }
 
-async function requestRobots(options?: RequestInit): Promise<RobotList> {
-  const response = await fetch('/api/v1/workspace/robots', options)
-  if (!response.ok) {
-    const body = await response.json().catch(() => null)
-    throw new Error(body?.error || '无法同步账户机器人列表。')
-  }
-  return response.json()
-}
-
-export function useAccountRobots() {
+export function useAccountRobots(initialRobots?: Promise<RobotList>) {
+  // Strict Mode can replay setup. Each setup can observe the same one-time
+  // startup request, and retries always issue a fresh request.
+  const startupRequest = useRef(initialRobots)
   const dispatch = useDispatch()
   const current = useRef<RobotList | null>(null)
   const lifetime = useRef<AbortController | null>(null)
@@ -108,7 +96,8 @@ export function useAccountRobots() {
     setCanImport(false)
     void (async () => {
       try {
-        const list = await requestRobots({ signal: controller.signal })
+        const prefetched = reload === 0 ? startupRequest.current : undefined
+        const list = await (prefetched ?? requestRobots({ signal: controller.signal }))
         if (controller.signal.aborted) return
         apply(list)
         if (

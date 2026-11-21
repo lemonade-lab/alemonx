@@ -1,6 +1,6 @@
 import { resourceTarget, findResource, factFor } from '../lib/officialResources'
 import { useState } from 'react'
-import Markdown from 'markdown-to-jsx'
+import { DeferredMarkdown } from './DeferredMarkdown'
 import {
   useResourceOptionsQuery,
   useMarketResourceQuery,
@@ -95,7 +95,7 @@ export function ResourceDocument({ id }: { id: string }) {
         </p>
       ) : (
         <article className="markdown-page">
-          <Markdown
+          <DeferredMarkdown
             options={{
               disableParsingRawHTML: true,
               overrides: {
@@ -104,7 +104,7 @@ export function ResourceDocument({ id }: { id: string }) {
             }}
           >
             {data?.data.markdown || '平台暂未提供正文。'}
-          </Markdown>
+          </DeferredMarkdown>
         </article>
       )}
     </div>

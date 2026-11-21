@@ -21,7 +21,12 @@
     </script>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <main class="grid min-h-screen content-center justify-items-center gap-3 p-5 text-sm">
+        <p id="startup-status" role="status">正在启动工作台…</p>
+        <button id="startup-retry" type="button" class="secondary-button" hidden>刷新</button>
+      </main>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
