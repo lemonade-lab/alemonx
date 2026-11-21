@@ -22,6 +22,10 @@ on:
         description: 应用镜像版本标签，留空使用 Git 提交 SHA，同时更新 latest
         required: false
         type: string
+      publish_yunzai:
+        description: 同时构建并发布 Yunzai 预置版镜像（镜像仓库名加 -yunzai）
+        type: boolean
+        default: false
       registry_username:
         description: 腾讯云镜像仓库登录账号
         required: true
@@ -76,6 +80,7 @@ jobs:
           password: ${{ inputs.docker_password }}
 
       - name: 构建并发布多架构镜像
+        id: application
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -90,3 +95,19 @@ jobs:
             VERSION=${{ inputs.version || github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: 构建并发布 Yunzai 预置版镜像
+        if: inputs.publish_yunzai
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile.yunzai
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ inputs.tencent_registry }}/${{ inputs.namespace }}/${{ inputs.image_name }}-yunzai:latest
+            ${{ inputs.tencent_registry }}/${{ inputs.namespace }}/${{ inputs.image_name }}-yunzai:${{ inputs.version || github.sha }}
+          build-args: |
+            ALX_YUNZAI_BASE=${{ inputs.tencent_registry }}/${{ inputs.namespace }}/${{ inputs.image_name }}@${{ steps.application.outputs.digest }}
+          cache-from: type=gha,scope=yunzai
+          cache-to: type=gha,scope=yunzai,mode=max

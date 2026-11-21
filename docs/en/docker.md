@@ -108,6 +108,8 @@ It also preinstalls the Linux runtime required by QQ/NapCat: Xvfb, XKB, GTK/NSS/
 
 `alemonx-yunzai` layers QQ, Finder (its current upstream release only ships a Linux amd64 asset), LoadYunzai, TRSS-Yunzai, Miao, Genshin, and Guoba over the base ALemonX image. QQ and Finder use ALX's formal Release installation and verification flow; the Yunzai-related repositories retain their `.git` directories for in-workspace updates. On first start it copies the seed into the persistent `workspace/` directory without overwriting an existing bot, plugin configuration, or QQ login state.
 
+Select `publish_yunzai` when running the **Docker alemonx push** workflow to publish the pre-seeded image alongside the application image. The Yunzai build uses the application image pushed by that run. It publishes the same version and `latest` tags to `<image_name>-yunzai` in the same namespace. The Tencent Cloud account needs push access to both image repositories.
+
 Build and run it locally:
 
 ```sh
@@ -124,7 +126,7 @@ ALX_YUNZAI_VERSION=v1.2.3 make docker-yunzai-buildx-push
 
 ## Publishing and build boundary
 
-The application image can be released manually through the GitHub Actions **发布腾讯云 Docker 镜像** workflow. On the repository's **Actions** page, choose the workflow and select **Run workflow**, then enter the Tencent Cloud TCR/CCR registry domain, namespace, image repository, login username, and password or access token. The form defaults to the current Tencent Cloud registry and also accepts a custom Tencent Cloud registry domain. The workflow masks the password in logs; however, GitHub Actions manual forms have no password field type, so it may be retained in workflow-run metadata. Use it only in trusted repositories. Each build automatically reads the nearest Git tag reachable from the selected commit and pushes that version plus `latest` for `linux/amd64` and `linux/arm64`.
+The application image can be released manually through the GitHub Actions **Docker alemonx push** workflow. On the repository's **Actions** page, choose the workflow and select **Run workflow**, then enter the Tencent Cloud TCR/CCR registry domain, namespace, image repository, login username, and password or access token. The form defaults to the current Tencent Cloud registry and also accepts a custom Tencent Cloud registry domain. The workflow masks the password in logs; however, GitHub Actions manual forms have no password field type, so it may be retained in workflow-run metadata. Use it only in trusted repositories. The workflow builds for `linux/amd64` and `linux/arm64` and publishes `latest` plus the supplied `version` tag. If `version` is empty, it uses the selected commit's SHA.
 
 The base image can be released manually through the **发布腾讯云 alemonbase 镜像** workflow. Provide a version tag (for example, `20260901`) and the workflow publishes both that version and `latest`; the application-image workflow should use that published version or `latest` as its runtime base image.
 

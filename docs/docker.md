@@ -118,6 +118,8 @@ docker compose -f docker-compose.yml -f docker-compose.snowluma.yml up -d
 
 `alemonx-yunzai` 在基础 ALemonX 镜像上预置 QQ、Finder（当前上游仅提供 Linux amd64 安装包）、LoadYunzai、TRSS-Yunzai、Miao、Genshin 与锅巴。QQ/Finder 必须通过 ALX 的正式 Release 安装流程下载和校验；Yunzai 相关仓库则保留 `.git`，可在工作区内自行更新。首次启动会把这些文件复制到持久化的 `workspace/`，而不会覆盖已有机器人、插件配置或 QQ 登录状态。
 
+在 GitHub Actions 的 **Docker alemonx push** 工作流中，运行时勾选 `publish_yunzai` 即可一并发布预置版。预置版基于本次推送的应用镜像构建，发布到同一命名空间下的 `<image_name>-yunzai` 仓库，并使用相同的版本标签和 `latest`。腾讯云账号需要拥有这两个镜像仓库的推送权限。
+
 本地构建：
 
 ```sh
@@ -136,7 +138,7 @@ ALX_YUNZAI_VERSION=v1.2.3 make docker-yunzai-buildx-push
 
 ## 发布与构建边界
 
-应用镜像可通过 GitHub Actions 的 **发布腾讯云 Docker 镜像** 工作流手动发布。进入仓库的 **Actions** 页面，选择该工作流并点击 **Run workflow**，然后填写腾讯云 TCR/CCR 仓库域名、命名空间、镜像仓库、登录账号及密码或访问令牌。运行时基础镜像默认使用 `alemonbase:latest`。表单默认使用当前的腾讯云镜像地址，也允许填写自定义的腾讯云仓库域名。工作流会在日志中遮罩密码；但 GitHub Actions 的手动表单不提供密码字段类型，密码可能保留在工作流运行元数据中，请只在受信任的仓库中使用。每次构建会自动读取当前提交可追溯到的最新 Git 标签，并同时推送该版本和 `latest`，同时构建 `linux/amd64` 与 `linux/arm64` 两个架构。
+应用镜像可通过 GitHub Actions 的 **Docker alemonx push** 工作流手动发布。进入仓库的 **Actions** 页面，选择该工作流并点击 **Run workflow**，然后填写腾讯云 TCR/CCR 仓库域名、命名空间、镜像仓库、登录账号及密码或访问令牌。运行时基础镜像默认使用 `alemonbase:latest`。表单默认使用当前的腾讯云镜像地址，也允许填写自定义的腾讯云仓库域名。工作流会在日志中遮罩密码；但 GitHub Actions 的手动表单不提供密码字段类型，密码可能保留在工作流运行元数据中，请只在受信任的仓库中使用。工作流构建 `linux/amd64` 与 `linux/arm64` 两个架构，并推送 `latest` 和指定的 `version` 标签。留空 `version` 时使用当前提交的 SHA。
 
 基础镜像可通过 **发布腾讯云 alemonbase 镜像** 工作流手动发布。填写版本标签（例如 `20260901`）后，工作流会同时发布该版本和 `latest` 标签；应用镜像工作流的运行时基础镜像应使用已发布的版本标签或 `latest`。
 
