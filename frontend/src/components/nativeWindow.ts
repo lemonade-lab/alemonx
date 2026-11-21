@@ -27,7 +27,7 @@ export function markNativeRuntimeReady() {
 
 const auxiliaryWindowNames = [
   'settings', 'data', 'terminal', 'foreground-logs', 'pm2-logs', 'robot-app',
-  'git', 'pm2-processes', 'test', 'live', 'ops', 'ops-overview', 'tasks',
+  'pm2-processes', 'test', 'live', 'ops', 'ops-overview', 'tasks',
   'environment', 'browser', 'plugins', 'plugin'
 ] as const
 

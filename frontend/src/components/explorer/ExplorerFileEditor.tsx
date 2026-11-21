@@ -1,4 +1,4 @@
-import { RefreshCw, Save } from 'lucide-react'
+import { Code2, Eye, RefreshCw, Save } from 'lucide-react'
 import { useDispatch } from 'react-redux'
 import { store, useStoreState } from '../../store/guideStore'
 import {
@@ -8,6 +8,8 @@ import {
 } from '../../store/workspaceApi'
 import { Button } from '../Button'
 import { ConfirmDialog } from '../ConfirmDialog'
+import { ExplorerMarkdownPreview } from './ExplorerMarkdownPreview'
+import { ExplorerSourceInput } from './ExplorerSourceInput'
 
 export type ExplorerFileDraft = {
   content: string
@@ -56,6 +58,11 @@ export function ExplorerFileEditor({
   const [confirmReload, setConfirmReload] = useStoreState(false)
   const [notice, setNotice] = useStoreState('')
   const [reloadError, setReloadError] = useStoreState('')
+  const [previewing, setPreviewing] = useStoreState(false)
+  const isMarkdown = /\.(md|markdown)$/i.test(file)
+  const showPreview = isMarkdown && previewing
+  const content = draft?.content ?? editorText(currentData?.content ?? '')
+  const canRead = Boolean(draft || (currentData && !error))
 
   function edit(content: string) {
     const original = draft?.original ?? currentData?.content
@@ -111,7 +118,15 @@ export function ExplorerFileEditor({
   }
 
   return (
-    <>
+    <div
+      className="flex min-h-0 min-w-0 flex-1 flex-col"
+      onKeyDown={event => {
+        if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 's')
+          return
+        event.preventDefault()
+        if (!isFetching) void saveFile()
+      }}
+    >
       <header className="flex min-h-10 shrink-0 items-center gap-2 border-b border-(--theme-border-subtle) px-3">
         <span className="min-w-0 flex-1 truncate text-sm" title={file}>
           {projectName} / {file}
@@ -123,6 +138,23 @@ export function ExplorerFileEditor({
           >
             {draft?.saving ? '正在保存…' : draft ? '未保存' : notice}
           </span>
+        )}
+        {isMarkdown && (
+          <Button
+            variant="icon"
+            className="aria-pressed:bg-(--theme-surface-active)!"
+            aria-label="预览 Markdown"
+            aria-pressed={showPreview}
+            title={showPreview ? '返回 Markdown 源码' : '预览 Markdown'}
+            disabled={!canRead}
+            onClick={() => setPreviewing(value => !value)}
+          >
+            {showPreview ? (
+              <Code2 className="size-4" aria-hidden="true" />
+            ) : (
+              <Eye className="size-4" aria-hidden="true" />
+            )}
+          </Button>
         )}
         <Button
           variant="icon"
@@ -150,27 +182,19 @@ export function ExplorerFileEditor({
           {reloadError || draft?.error}
         </p>
       )}
-      {draft || (currentData && !error) ? (
-        <textarea
-          aria-label={`编辑 ${file}`}
-          className="explorer-file-editor min-h-0 flex-1 resize-none overflow-auto bg-(--theme-surface-panel) p-4 font-mono text-sm leading-6 text-(--theme-text-primary)"
-          spellCheck={false}
-          wrap="off"
-          readOnly={
-            (!currentData?.revision && !draft) || draft?.saving || isFetching
-          }
-          value={draft?.content ?? editorText(currentData?.content ?? '')}
-          onChange={event => edit(event.currentTarget.value)}
-          onKeyDown={event => {
-            if (
-              !(event.metaKey || event.ctrlKey) ||
-              event.key.toLowerCase() !== 's'
-            )
-              return
-            event.preventDefault()
-            if (!isFetching) void saveFile()
-          }}
-        />
+      {canRead ? (
+        <>
+          <ExplorerSourceInput
+            hidden={showPreview}
+            file={file}
+            readOnly={
+              (!currentData?.revision && !draft) || draft?.saving || isFetching
+            }
+            content={content}
+            onChange={edit}
+          />
+          {showPreview && <ExplorerMarkdownPreview content={content} />}
+        </>
       ) : (
         <p
           className="p-4 text-sm text-(--theme-text-muted)"
@@ -187,6 +211,6 @@ export function ExplorerFileEditor({
         onCancel={() => setConfirmReload(false)}
         onConfirm={() => void reload()}
       />
-    </>
+    </div>
   )
 }

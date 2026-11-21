@@ -1,4 +1,5 @@
 import { createApi, fetchBaseQuery } from '@reduxjs/toolkit/query/react'
+import { desktopPlatform } from '../components/nativeWindow'
 
 type RobotResult = { output: string; path?: string; revision?: string }
 // ConsolePayload splits the terminal's live process output from its static
@@ -246,6 +247,8 @@ export type PM2Process = {
   runtimeVersion?: string
 }
 export type SystemNetworkMode = 'auto' | 'direct' | 'proxy'
+export const desktopNetworkSaved = 'alx:desktop-network-saved'
+const desktopNetworkTimeout = desktopPlatform === 'mac' ? 5000 : undefined
 export type SystemNetworkGroup = { id: string; candidates: string[] }
 export type SystemNetworkDefinition = {
   id: string
@@ -666,6 +669,7 @@ export const workspaceApi = createApi({
   keepUnusedDataFor: 60 * 60,
   tagTypes: [
     'RobotFile',
+    'WorkspaceProjectDirectory',
     'Catalog',
     'GitStatus',
     'NpmStatus',
@@ -941,7 +945,7 @@ export const workspaceApi = createApi({
       invalidatesTags: ['EnvironmentReport']
     }),
     systemNetwork: build.query<SystemNetworkSettings, void>({
-      query: () => 'system/network',
+      query: () => ({ url: 'system/network', timeout: desktopNetworkTimeout }),
       providesTags: ['SystemNetwork']
     }),
     dependencySources: build.query<DependencySourceStatus, void>({
@@ -1010,8 +1014,18 @@ export const workspaceApi = createApi({
       query: settings => ({
         url: 'system/network',
         method: 'PUT',
-        body: networkConfigBody(settings)
+        body: networkConfigBody(settings),
+        timeout: desktopNetworkTimeout
       }),
+      async onQueryStarted(_settings, { queryFulfilled }) {
+        if (desktopPlatform !== 'mac') return
+        const result = await queryFulfilled.catch(() => undefined)
+        if (!result) return
+        window.dispatchEvent(new Event(desktopNetworkSaved))
+        const channel = new BroadcastChannel(desktopNetworkSaved)
+        channel.postMessage('saved')
+        channel.close()
+      },
       invalidatesTags: ['SystemNetwork']
     }),
     systemNetworkStatus: build.query<SystemNetworkStatus, string | void>({
@@ -1437,7 +1451,25 @@ export const workspaceApi = createApi({
       { entries: { name: string; path: string; directory: boolean }[] },
       { root: string; directory: string }
     >({
-      query: args => `workspace/project-files?${new URLSearchParams(args)}`
+      query: args => `workspace/project-files?${new URLSearchParams(args)}`,
+      providesTags: (_result, _error, { root, directory }) => [
+        { type: 'WorkspaceProjectDirectory', id: JSON.stringify([root, directory]) }
+      ]
+    }),
+    createWorkspaceProjectEntry: build.mutation<
+      { name: string; path: string; directory: boolean },
+      { root: string; name: string; directory: boolean }
+    >({
+      query: ({ root, ...body }) => ({
+        url: `workspace/project-files?${new URLSearchParams({ root })}`,
+        method: 'POST',
+        body
+      }),
+      invalidatesTags: (result, _error, { root }) => result ? [
+        { type: 'WorkspaceProjectDirectory', id: JSON.stringify([root, '']) },
+        { type: 'GitStatus', id: root },
+        { type: 'RobotFile', id: `${root}:${result.path}` }
+      ] : []
     }),
     workspaceProjectFile: build.query<
       { content: string; revision: string },
@@ -1723,6 +1755,7 @@ export const {
   useLazyRobotFileQuery,
   useRobotFileQuery,
   useWorkspaceProjectDirectoryQuery,
+  useCreateWorkspaceProjectEntryMutation,
   useWorkspaceProjectFileQuery,
   useSaveWorkspaceProjectFileMutation,
   useGitStatusQuery,

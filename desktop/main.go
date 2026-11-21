@@ -32,9 +32,9 @@ func main() {
 	flag.Parse()
 
 	var window *application.WebviewWindow
-	var trayWindow *application.WebviewWindow
 	var workbenchURL string
 	var auxiliary auxiliaryWindows
+	var trayNetwork *trayNetworkMenu
 	var restartCommand atomic.Pointer[exec.Cmd]
 	var openWorkbench, restartWorkbench, quitWorkbench func()
 	app := application.New(application.Options{
@@ -61,16 +61,9 @@ func main() {
 			if !isWorkbenchMessage(origin, workbenchURL) {
 				return
 			}
-			if trayWindow != nil && source == trayWindow {
-				switch message {
-				case "alx:tray:open":
-					openWorkbench()
-				case "alx:tray:restart":
-					restartWorkbench()
-				case "alx:tray:quit":
-					quitWorkbench()
-				case "alx:tray:developer-mode":
-					window.ExecJS("window.dispatchEvent(new Event('alx:desktop-developer-mode-toggle'))")
+			if payload, found := strings.CutPrefix(message, trayNetworkMessagePrefix); found {
+				if trayNetwork != nil && source == window {
+					trayNetwork.receive(payload)
 				}
 				return
 			}
@@ -152,9 +145,6 @@ func main() {
 		})
 	}
 	openWorkbench = func() {
-		if trayWindow != nil {
-			trayWindow.Hide()
-		}
 		revealWindow(window)
 	}
 	restartWorkbench = func() {
@@ -173,7 +163,16 @@ func main() {
 	}
 	quitWorkbench = app.Quit
 	menu := app.NewMenu()
+	if runtime.GOOS == "darwin" {
+		menu.AddSectionHeader("工作台")
+	}
 	menu.Add("打开").OnClick(func(*application.Context) { openWorkbench() })
+	if runtime.GOOS == "darwin" {
+		trayNetwork = newTrayNetworkMenu(app, menu, window, func() {
+			auxiliary.openFromMessage("alx:open-window:settings:network")
+		})
+		menu.AddSeparator()
+	}
 	menu.Add("重启").OnClick(func(*application.Context) { restartWorkbench() })
 	menu.Add("退出").OnClick(func(*application.Context) { quitWorkbench() })
 	tray := app.SystemTray.New()
@@ -181,6 +180,16 @@ func main() {
 	tray.SetTooltip("ALemonX Desktop")
 	tray.SetMenu(menu)
 	if runtime.GOOS == "darwin" {
+		app.Event.RegisterApplicationEventHook(events.Mac.ApplicationShouldHandleReopen, func(event *application.ApplicationEvent) {
+			// Wails otherwise shows every hidden window when the Dock reopens the app.
+			event.Cancel()
+			application.InvokeAsync(func() {
+				if !window.IsVisible() || window.IsMinimised() {
+					openWorkbench()
+				}
+			})
+		})
+
 		applicationMenu := app.NewMenu()
 		appMenu := applicationMenu.AddSubmenu("ALemonX")
 		appMenu.Add("打开工作台").OnClick(func(*application.Context) { openWorkbench() })
@@ -220,26 +229,6 @@ func main() {
 			}
 		})
 		app.Menu.SetApplicationMenu(applicationMenu)
-
-		trayWindow = app.Window.NewWithOptions(application.WebviewWindowOptions{
-			Name: "tray-panel", Title: "ALemonX",
-			Width: 316, Height: 186,
-			URL:    backend.url + "/desktop-window/tray-panel",
-			Hidden: true, Frameless: true, DisableResize: true, AlwaysOnTop: true,
-			Mac:             application.MacWindow{Backdrop: application.MacBackdropTransparent, CornerRadius: 16},
-			HideOnFocusLost: true, HideOnEscape: true,
-			DefaultContextMenuDisabled: true,
-		})
-		tray.AttachWindow(trayWindow)
-		materialInstalled := false
-		tray.OnClick(func() {
-			application.InvokeSync(func() {
-				if !materialInstalled {
-					materialInstalled = prepareTrayMaterial(trayWindow)
-				}
-				tray.ToggleWindow()
-			})
-		})
 	}
 
 	app.OnShutdown(backend.stop)

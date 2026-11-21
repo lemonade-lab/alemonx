@@ -2,8 +2,9 @@ import { RobotRuntimeSwitch } from './RobotRuntimeSwitch'
 import { RobotDiagnostics } from './RobotDiagnostics'
 import { BackpackPackageUpdate } from './BackpackPackageUpdate'
 import { WorkbenchQuickActions } from './WorkbenchQuickActions'
-import { TerminalPanel } from './TerminalPanel'
+import { TerminalPanel, type TerminalPanelHandle } from './TerminalPanel'
 import { WorkbenchTerminalSplitter } from './WorkbenchTerminalSplitter'
+import { WorkbenchAuxiliaryStart } from './WorkbenchAuxiliaryStart'
 import { WorkbenchToolRail, type WorkbenchToolAction } from './WorkbenchToolRail'
 import { RobotDirectoryTree } from './RobotDirectoryTree'
 import { RobotWorkspaceSplitter } from './RobotWorkspaceSplitter'
@@ -109,6 +110,7 @@ import {
   PanelLeftOpen,
   PanelRightClose,
   PanelRightOpen,
+  PanelsTopLeft,
   Pencil,
   Pin,
   Play,
@@ -171,7 +173,6 @@ import {
   type HostWebview
 } from './PluginHostUi'
 import { GLOBAL_MODAL_Z_INDEX, Modal } from './Modal'
-import { useCanManageAccounts } from '../hooks/useCanManageAccounts'
 import { AccountManagementPage } from './AccountManagement'
 import { RobotGitControl } from './RobotGitControl'
 import { useIsMobileViewport } from '../hooks/useIsMobileViewport'
@@ -269,7 +270,6 @@ import {
   type SetupPluginDevelopment
 } from '../store/workspaceApi'
 import {
-  setDeveloperMode,
   setDraft,
   setRobotConfig
 } from '../store/workspaceStore'
@@ -292,11 +292,17 @@ type Section = DashboardSection
 type Project = { id: string; path: string; name: string; pinned?: boolean }
 type SystemFeature = string
 type SystemWindowState = { minimized: boolean }
+type AuxiliaryTool = 'repository' | 'directory' | 'git'
+
+const auxiliaryToolTabs = [
+  { id: 'repository', label: '仓库', icon: GitBranch },
+  { id: 'directory', label: '目录', icon: Folder },
+  { id: 'git', label: 'Git 管理', icon: GitBranch }
+] as const
 
 type FloatingWindowID =
   | 'foregroundLogs'
   | 'serviceWebview'
-  | 'git'
   | 'app'
   | 'test'
   | 'live'
@@ -338,19 +344,19 @@ const coreFeatureCatalog: Array<{
   id: SystemFeature
   label: string
   icon: ReactNode
-  status?: string
 }> = [
   { id: 'plugins', label: '插件', icon: <Plug /> },
   { id: 'browser', label: '浏览', icon: <Globe2 /> },
   { id: 'data', label: '数据', icon: <Database /> },
-  { id: 'ops-overview', label: '运维', icon: <ShieldCheck /> }
+  { id: 'ops-overview', label: '运维', icon: <ShieldCheck /> },
+  { id: 'tasks', label: '任务', icon: <ClipboardList /> },
+  { id: 'environment', label: '环境检查', icon: <CheckCircle2 /> }
 ]
 
 function systemFeatureLabel(feature: SystemFeature, plugins: SetupPlugin[]) {
   return (
     plugins.find(item => feature === `setup:${item.id}`)?.name ??
     coreFeatureCatalog.find(item => item.id === feature)?.label ??
-    { tasks: '任务', environment: '环境检查' }[feature] ??
     '系统功能'
   )
 }
@@ -1185,6 +1191,7 @@ export function Dashboard({
   } | null>(null)
   const [terminalOpen, setTerminalOpen] = useStoreState(false)
   const [terminalRoot, setTerminalRoot] = useStoreState<string | null>(null)
+  const terminalPanel = useRef<TerminalPanelHandle>(null)
   const [foregroundLogsOpen, setForegroundLogsOpen] = useStoreState(false)
   const [foregroundLogsMinimized, setForegroundLogsMinimized] =
     useStoreState(false)
@@ -1225,7 +1232,6 @@ export function Dashboard({
     setGitCloneMode('package')
     setGitCloneOpen(true)
   }
-  const [gitProject, setGitProject] = useStoreState<Project | null>(null)
   const [appPortDialog, setAppPortDialog] = useStoreState(false)
   const [appPortValue, setAppPortValue] = useStoreState('')
   const [appPortBusy, setAppPortBusy] = useStoreState(false)
@@ -1243,7 +1249,6 @@ export function Dashboard({
   const [liveContentOpen, setLiveContentOpen] = useStoreState(false)
   const [liveMinimized, setLiveMinimized] = useStoreState(false)
   const [pendingAppPageID, setPendingAppPageID] = useStoreState('')
-  const [gitMinimized, setGitMinimized] = useStoreState(false)
   const [pm2LogsOpen, setPM2LogsOpen] = useStoreState(false)
   const [pm2LogsMinimized, setPM2LogsMinimized] = useStoreState(false)
   const [pm2ProcessesOpen, setPM2ProcessesOpen] = useStoreState(false)
@@ -1254,7 +1259,6 @@ export function Dashboard({
     {
       foregroundLogs: 109,
       serviceWebview: 110,
-      git: 102,
       app: 103,
       test: 104,
       live: 105,
@@ -1275,15 +1279,19 @@ export function Dashboard({
   const [explorerMounted, setExplorerMounted] = useStoreState(false)
   const workbenchView = guideActive ? 'guide' : aiOpen ? 'dsh' : explorerOpen ? 'explorer' : 'home'
   const explorerActive = workbenchView === 'explorer'
-  const [sourceControlOpen, setSourceControlOpen] = useStoreState(false)
+  const auxiliaryEnabled = explorerActive || workbenchView === 'home'
+  const [auxiliaryTab, setAuxiliaryTab] = useStoreState<'new' | 'terminal' | AuxiliaryTool | null>(null)
+  const [openedAuxiliaryTools, setOpenedAuxiliaryTools] = useStoreState<AuxiliaryTool[]>([])
   const [fileTabsTarget, setFileTabsTarget] = useState<HTMLDivElement | null>(null)
   const [directoryTarget, setDirectoryTarget] = useState<HTMLDivElement | null>(null)
+  const [auxiliaryDirectoryTarget, setAuxiliaryDirectoryTarget] = useState<HTMLDivElement | null>(null)
   const [guideStepsTarget, setGuideStepsTarget] = useState<HTMLDivElement | null>(null)
   const [guideProgressTarget, setGuideProgressTarget] = useState<HTMLDivElement | null>(null)
   const [sourceControlTarget, setSourceControlTarget] = useState<HTMLDivElement | null>(null)
   const [terminalToolbarTarget, setTerminalToolbarTarget] = useState<HTMLDivElement | null>(null)
-  const sourceControlVisible = explorerActive && sourceControlOpen
-  const terminalVisible = terminalOpen && !sourceControlVisible
+  const auxiliaryVisible = auxiliaryEnabled && auxiliaryTab !== null
+  const sourceControlVisible = auxiliaryVisible && auxiliaryTab === 'repository'
+  const terminalVisible = terminalOpen && (!auxiliaryEnabled || auxiliaryTab === 'terminal')
   const activateFloatingWindow = useCallback(
     (id: FloatingWindowID) => {
       const layer = ++nextWindowLayer.current
@@ -1379,11 +1387,6 @@ export function Dashboard({
   const developerMode = useSelector(
     (state: RootState) => state.workspace.developerMode
   )
-  useEffect(() => {
-    const toggle = () => dispatch(setDeveloperMode(!developerMode))
-    window.addEventListener('alx:desktop-developer-mode-toggle', toggle)
-    return () => window.removeEventListener('alx:desktop-developer-mode-toggle', toggle)
-  }, [developerMode, dispatch])
   const activeProject = projects.find(item => item.id === activeProjectID)
   const root = activeProject?.path ?? ''
   const dshRobotRoots = useMemo(() => projects.map(project => project.path), [projects])
@@ -1398,16 +1401,26 @@ export function Dashboard({
       setTerminalRoot(root)
       setTerminalOpen(true)
     }
-    setSourceControlOpen(false)
+    if (auxiliaryEnabled) setAuxiliaryTab('terminal')
   }
 
   function toggleTerminal() {
     if (terminalVisible) {
       setTerminalOpen(false)
-      setSourceControlOpen(explorerActive)
       return
     }
     openTerminal()
+  }
+
+  function openAuxiliaryTerminal() {
+    openTerminal()
+    if (terminalOpen || terminalRoot === root) void terminalPanel.current?.addSession()
+  }
+
+  function openAuxiliaryTool(tool: AuxiliaryTool) {
+    setOpenedAuxiliaryTools(current => current.includes(tool) ? current : [...current, tool])
+    setExplorerMounted(true)
+    setAuxiliaryTab(tool)
   }
   const [setSystemCurrentRobot] = useSetSystemCurrentRobotMutation()
   useEffect(() => {
@@ -3013,7 +3026,7 @@ export function Dashboard({
     if (guideActive) leaveGuideForTool(false)
     else if (aiOpen) markUserNavigation()
     setAIOpen(false)
-    if (!explorerActive) setSourceControlOpen(!isTablet && !terminalOpen)
+    if (!explorerActive) setAuxiliaryTab(null)
     setExplorerMounted(true)
     setExplorerOpen(true)
   }
@@ -3351,7 +3364,10 @@ export function Dashboard({
         plugins={setupPlugins}
         pluginsLoading={isPluginsLoading || isPluginsFetching}
         sidebarLayout={sidebarLayout}
-        onOpen={id => selectSystemFeature(`setup:${id}`)}
+        onOpen={id => {
+          closeSystemWindow('plugins')
+          selectSystemFeature(`setup:${id}`)
+        }}
         onRefresh={() => void refetchSetupPlugins()}
       />
     ) : feature === 'accounts' ? (
@@ -3503,7 +3519,6 @@ export function Dashboard({
   }
   addOpenWindow('foregroundLogs', foregroundLogsOpen, foregroundLogsMinimized, '前台日志', <ClipboardList />, setForegroundLogsMinimized)
   addOpenWindow('serviceWebview', Boolean(serviceWebview), serviceWebviewMinimized, serviceWebview?.title ?? '服务页面', <Monitor />, setServiceWebviewMinimized)
-  addOpenWindow('git', Boolean(gitProject), gitMinimized, 'Git 窗口', <GitBranch />, setGitMinimized)
   addOpenWindow('test', testContentOpen, testMinimized, '测试窗口', <FlaskConical />, setTestMinimized)
   addOpenWindow('live', liveContentOpen, liveMinimized, '在线聊天', <MessageSquare />, setLiveMinimized)
   addOpenWindow('pm2Logs', pm2LogsOpen, pm2LogsMinimized, 'PM2 日志', <Terminal />, setPM2LogsMinimized)
@@ -3522,6 +3537,21 @@ export function Dashboard({
       }))
     )
   }
+  const systemTools = coreFeatureCatalog.map(({ id, label, icon }) => ({
+    id,
+    label: id === 'environment' ? '全局环境' : label,
+    icon: id === 'environment' && checking ? <Loader2 className="animate-spin" />
+      : id === 'environment' && environmentWarning ? <AlertTriangle /> : icon,
+    activate: () => {
+      const existing = openWindows.find(window => window.id === `system:${id}`)
+      if (existing) existing.activate()
+      else selectSystemFeature(id)
+      if (id === 'environment' && !bridge) onCheck()
+    }
+  }))
+  const railWindows = openWindows.filter(window =>
+    !systemTools.some(tool => window.id === `system:${tool.id}`)
+  )
   function showWorkbenchHome() {
     for (const window of openWindows) {
       if (!window.minimized) window.minimize()
@@ -3531,6 +3561,7 @@ export function Dashboard({
     else if (aiOpen) markUserNavigation()
     setAIOpen(false)
     setExplorerOpen(false)
+    setAuxiliaryTab(null)
     setTerminalOpen(false)
     onMinimizeSettings()
   }
@@ -3538,7 +3569,7 @@ export function Dashboard({
   const workbarCollapsed = guideActive ? guideStepsCollapsed : sidebarCollapsed
   const setWorkbarCollapsed = guideActive ? setGuideStepsCollapsed : setSidebarCollapsed
   const workbarToggleLabel = isCompact
-    ? guideActive ? '打开引导流程' : explorerActive ? '打开文件目录' : '打开机器人与系统导航'
+    ? guideActive ? '打开引导流程' : explorerActive ? '打开文件目录' : '打开机器人导航'
     : guideActive
       ? workbarCollapsed ? '展开引导流程' : '折叠引导流程'
       : workbarCollapsed ? '展开侧边栏' : '折叠侧边栏'
@@ -3551,14 +3582,7 @@ export function Dashboard({
       icon: <Terminal className="size-4" aria-hidden="true" />,
       expanded: terminalVisible,
       toggle: toggleTerminal
-    },
-    ...(explorerActive ? [{
-      title: '仓库',
-      label: sourceControlVisible ? '收起仓库' : '打开仓库',
-      icon: <GitBranch className="size-4" aria-hidden="true" />,
-      expanded: sourceControlVisible,
-      toggle: () => setSourceControlOpen(value => !value)
-    }] : [])
+    }
   ]
 
   function renderRobotControls(closeMenu?: () => void) {
@@ -3602,10 +3626,8 @@ export function Dashboard({
         }}
         onGit={() => {
           closeMenu?.()
-          if (openNativeGit(robotNavigationProject)) return
-          setGitProject(robotNavigationProject)
-          setGitMinimized(false)
-          activateFloatingWindow('git')
+          openExplorer()
+          openAuxiliaryTool('git')
         }}
       />
     )
@@ -3647,9 +3669,9 @@ export function Dashboard({
         <WorkbenchQuickActions
           developerMode={developerMode}
           minimizedWindows={openWindows.filter(window => window.minimized)}
-          panelActions={isCompact ? panelActions : undefined}
+          panelActions={isCompact && !auxiliaryEnabled ? panelActions : undefined}
         />
-        {!isCompact && panelActions.map(action => (
+        {!isCompact && !auxiliaryEnabled && panelActions.map(action => (
           <Button
             key={action.title}
             variant="icon"
@@ -3661,6 +3683,18 @@ export function Dashboard({
             {action.icon}
           </Button>
         ))}
+        {auxiliaryEnabled && (
+          <Button
+            variant="icon"
+            className="aria-expanded:bg-(--theme-surface-active)!"
+            aria-label="辅助标签页"
+            aria-expanded={auxiliaryVisible}
+            title={auxiliaryVisible ? '收起辅助标签页' : '打开辅助标签页'}
+            onClick={() => setAuxiliaryTab(auxiliaryVisible ? null : 'new')}
+          >
+            <PanelsTopLeft className="size-4" aria-hidden="true" />
+          </Button>
+        )}
         {workbenchView === 'home' && robotNavigationProject && (
           robotMenuInHeader ? (
             <WorkbenchTools
@@ -3985,7 +4019,9 @@ export function Dashboard({
           />
           <div className="flex min-h-0 flex-1">
             <WorkbenchToolRail
-              windows={openWindows}
+              windows={railWindows}
+              systemTools={systemTools}
+              activeSystemTool={systemWindowFeature && !systemWindows[systemWindowFeature]?.minimized ? systemWindowFeature : null}
               activeView={workbenchView}
               onShowHome={showWorkbenchHome}
               onOpenDSH={openAI}
@@ -4007,12 +4043,9 @@ export function Dashboard({
                   setupPlugins={setupPlugins}
                   projects={projects}
                   activeID={activeProjectID}
-                  checking={checking}
-                  environmentWarning={environmentWarning}
                   onFeature={feature => {
                     setMobilePanel(null)
                     selectSystemFeature(feature)
-                    if (feature === 'environment' && !bridge) onCheck()
                   }}
                   onPinProject={pinProject}
                   onReorderProject={reorderProject}
@@ -4036,41 +4069,76 @@ export function Dashboard({
               controls={!robotMenuInHeader && !robotNavigationHidden ? renderRobotControls() : null}
               renderContent={body => (
                 <WorkbenchTerminalSplitter
-                  terminalOpen={terminalVisible || sourceControlVisible}
+                  terminalOpen={terminalVisible || auxiliaryVisible}
                   terminal={(
-                    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-                      {explorerActive && (
-                        <header className="flex min-h-11 min-w-0 shrink-0 items-center gap-1 bg-(--theme-surface-panel) px-1">
+                    <div className="@container/auxiliary flex min-h-0 min-w-0 flex-1 flex-col">
+                      {auxiliaryEnabled && (
+                        <header className="flex min-h-11 min-w-0 shrink-0 items-center gap-1 border-b border-(--theme-border-subtle) bg-(--theme-surface-panel) px-2">
                           <button
+                            type="button"
                             className={cn(
                               'flex min-h-8 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs hover:bg-(--theme-surface-hover)',
-                              sourceControlVisible && 'bg-(--theme-surface-active)'
+                              auxiliaryTab === 'new' && 'bg-(--theme-surface-active)'
                             )}
-                            aria-pressed={sourceControlVisible}
-                            onClick={() => setSourceControlOpen(true)}
+                            aria-label="新标签页"
+                            aria-pressed={auxiliaryTab === 'new'}
+                            title="新标签页"
+                            onClick={() => setAuxiliaryTab('new')}
                           >
-                            <GitBranch className="size-4" aria-hidden="true" />
-                            仓库
+                            <Plus className="size-4" aria-hidden="true" />
+                            {auxiliaryTab === 'new' && '新标签页'}
                           </button>
+                          {auxiliaryToolTabs.filter(tool =>
+                            openedAuxiliaryTools.includes(tool.id) &&
+                            (tool.id === 'repository' || (explorerActive ? tool.id === 'git' : tool.id === 'directory'))
+                          ).map(({ id, label, icon: Icon }) => (
+                            <button
+                              key={id}
+                              type="button"
+                              className={cn(
+                                'flex min-h-8 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs hover:bg-(--theme-surface-hover)',
+                                auxiliaryTab === id && 'bg-(--theme-surface-active)'
+                              )}
+                              aria-label={label}
+                              aria-pressed={auxiliaryTab === id}
+                              title={label}
+                              onClick={() => setAuxiliaryTab(id)}
+                            >
+                              <Icon className="size-4" aria-hidden="true" />
+                              <span className="sr-only @min-[320px]/auxiliary:not-sr-only">{label}</span>
+                            </button>
+                          ))}
                           <div ref={setTerminalToolbarTarget} className="flex min-w-0 flex-1 items-center gap-1" />
-                          {!terminalOpen && (
-                            <Button variant="icon" aria-label="添加终端" title="添加终端" onClick={openTerminal}>
-                              <Plus className="size-4" aria-hidden="true" />
-                            </Button>
-                          )}
+                          <Button variant="icon" aria-label="关闭辅助面板" title="关闭辅助面板" onClick={() => setAuxiliaryTab(null)}>
+                            <X className="size-4" aria-hidden="true" />
+                          </Button>
                         </header>
+                      )}
+                      {auxiliaryVisible && auxiliaryTab === 'new' && (
+                        <WorkbenchAuxiliaryStart
+                          onOpenTerminal={openAuxiliaryTerminal}
+                          onOpenRepository={() => openAuxiliaryTool('repository')}
+                          hasProject={Boolean(activeProject)}
+                          extra={{
+                            kind: explorerActive ? 'git' : 'directory',
+                            open: () => openAuxiliaryTool(explorerActive ? 'git' : 'directory')
+                          }}
+                        />
                       )}
                       {terminalRoot !== null && (
                         <TerminalPanel
                           key={terminalRoot}
+                          ref={terminalPanel}
                           root={terminalRoot}
                           visible={terminalVisible}
-                          toolbarTarget={explorerActive && terminalOpen ? terminalToolbarTarget : null}
-                          onActivate={() => setSourceControlOpen(false)}
+                          toolbarTarget={auxiliaryEnabled && terminalOpen ? terminalToolbarTarget : null}
+                          onActivate={auxiliaryEnabled ? () => setAuxiliaryTab('terminal') : undefined}
                           onClose={() => {
                             setTerminalOpen(false)
                             setTerminalRoot(null)
-                            setSourceControlOpen(explorerActive)
+                            setAuxiliaryTab(current => current === 'terminal'
+                              ? openedAuxiliaryTools.includes('repository') ? 'repository' : 'new'
+                              : current)
                           }}
                         />
                       )}
@@ -4079,6 +4147,18 @@ export function Dashboard({
                         className="flex min-h-0 min-w-0 flex-1"
                         hidden={!sourceControlVisible}
                       />
+                      {!explorerActive && openedAuxiliaryTools.includes('directory') && (
+                        <div
+                          ref={setAuxiliaryDirectoryTarget}
+                          className="flex min-h-0 min-w-0 flex-1"
+                          hidden={auxiliaryTab !== 'directory'}
+                        />
+                      )}
+                      {explorerActive && activeProject && openedAuxiliaryTools.includes('git') && (
+                        <div className="flex min-h-0 min-w-0 flex-1" hidden={auxiliaryTab !== 'git'}>
+                          <RobotGitControl key={activeProject.path} project={activeProject} />
+                        </div>
+                      )}
                     </div>
                   )}
                 >
@@ -4101,16 +4181,15 @@ export function Dashboard({
                               key={robotScope}
                               projects={projects}
                               currentRoot={root}
-                              directoryTarget={directoryTarget}
-                              directoryInDrawer={isCompact}
+                              directoryTarget={explorerActive ? directoryTarget : auxiliaryDirectoryTarget}
+                              directoryInDrawer={explorerActive && isCompact}
+                              currentProjectDirectoryOnly={!explorerActive}
                               sourceControlTarget={sourceControlTarget}
                               fileTabsTarget={fileTabsTarget}
                               onOpenFile={() => {
                                 setMobilePanel(null)
-                                if (isTablet) {
-                                  setSourceControlOpen(false)
-                                  setTerminalOpen(false)
-                                }
+                                if (!explorerActive) openExplorer()
+                                else if (isTablet) setAuxiliaryTab(null)
                               }}
                             />
                           </Suspense>
@@ -4230,20 +4309,6 @@ export function Dashboard({
           onClose={() => {
             setServiceWebview(null)
             setServiceWebviewMinimized(false)
-          }}
-        />
-      )}
-      {gitProject && (
-        <RobotGitControl
-          key={`git:${gitProject.path}`}
-          project={gitProject}
-          minimized={gitMinimized}
-          zIndex={windowLayers.git}
-          onActivate={() => activateFloatingWindow('git')}
-          onMinimize={() => setGitMinimized(true)}
-          onClose={() => {
-            setGitProject(null)
-            setGitMinimized(false)
           }}
         />
       )}
@@ -4426,8 +4491,6 @@ function ProjectRail({
   setupPlugins,
   projects,
   activeID,
-  checking,
-  environmentWarning,
   onFeature,
   onAdd,
   onClone,
@@ -4441,8 +4504,6 @@ function ProjectRail({
   setupPlugins: SetupPlugin[]
   projects: Project[]
   activeID: string
-  checking: boolean
-  environmentWarning: boolean
   onFeature: (feature: SystemFeature) => void
   onAdd: () => void
   onClone: () => void
@@ -4461,14 +4522,7 @@ function ProjectRail({
   const activePlugins = setupPlugins.filter(
     item => item.enabled && !item.online
   )
-  const canManageAccounts = useCanManageAccounts()
   const isMobile = useIsMobileViewport()
-  const mobileTabsID = useId()
-  const [mobileTab, setMobileTab] = useState<'robot' | 'plugins' | 'system'>(
-    'robot'
-  )
-  const activeMobileTab =
-    mobileTab === 'plugins' && !activePlugins.length ? 'robot' : mobileTab
   const clearLongPress = () => {
     if (longPressTimer.current === null) return
     window.clearTimeout(longPressTimer.current)
@@ -4584,166 +4638,40 @@ function ProjectRail({
       ))}
     </nav>
   )
-  const systemNav = (
-    <nav className="grid gap-0.5">
-      {coreFeatureCatalog
-        .filter(item => item.id !== 'accounts' || canManageAccounts)
-        .map(item => (
-          <button
-            className={cn(
-              'flex min-h-8 w-full items-center gap-2 rounded-md px-2 text-left text-xs font-medium transition-colors',
-              feature === item.id
-                ? 'workspace-nav-active'
-                : 'text-slate-600 hover:bg-slate-200/40 dark:text-slate-400 dark:hover:bg-slate-700/40'
-            )}
-            key={item.id}
-            onClick={() => onFeature(item.id)}
-          >
-            <i className="inline-flex size-4 items-center justify-center not-italic">
-              {item.icon}
-            </i>
-            <span className="min-w-0 flex-1 truncate">{item.label}</span>
-            {item.status && (
-              <small className="text-[10px] text-slate-400">
-                {item.status}
-              </small>
-            )}
-          </button>
-        ))}
-      <button
-        className={cn(
-          'flex min-h-8 w-full items-center gap-2 rounded-md px-2 text-left text-xs font-medium transition-colors',
-          feature === 'tasks'
-            ? 'workspace-nav-active'
-            : 'text-slate-600 hover:bg-slate-200/40 dark:text-slate-400 dark:hover:bg-slate-700/40'
-        )}
-        onClick={() => onFeature('tasks')}
-        aria-label="任务"
-        title="当前目录任务"
-      >
-        <i className="inline-flex size-4 shrink-0 items-center justify-center not-italic">
-          <ClipboardList className="size-4" />
-        </i>
-        <span className="min-w-0 flex-1 truncate">任务</span>
-      </button>
-      <button
-        className={cn(
-          'flex min-h-8 w-full items-center gap-2 rounded-md px-2 text-left text-xs font-medium transition-colors',
-          feature === 'environment'
-            ? 'workspace-nav-active'
-            : 'text-slate-600 hover:bg-slate-200/40 dark:text-slate-400 dark:hover:bg-slate-700/40'
-        )}
-        onClick={() => onFeature('environment')}
-        aria-label="全局环境"
-        title="查看并检查全局环境"
-      >
-        <i className="inline-flex size-4 shrink-0 items-center justify-center not-italic">
-          {checking ? (
-            <Loader2 className="size-4 animate-spin" />
-          ) : environmentWarning ? (
-            <AlertTriangle className="size-4" />
-          ) : (
-            <CheckCircle2 className="size-4" />
-          )}
-        </i>
-        <span className="min-w-0 flex-1 truncate">环境</span>
-      </button>
-    </nav>
-  )
-  const mobileTabs = [
-    {
-      id: 'robot' as const,
-      label: '机器人',
-      icon: <Bot className="size-3.5 shrink-0" aria-hidden="true" />,
-      meta: String(projects.length),
-      content: (
-        <>
-          <div className="flex justify-end px-2">{robotActions}</div>
-          {robotList}
-        </>
-      )
-    },
-    {
-      id: 'plugins' as const,
-      label: '插件',
-      icon: <Plug className="size-3.5 shrink-0" aria-hidden="true" />,
-      meta: activePlugins.length,
-      content: pluginNav
-    },
-    {
-      id: 'system' as const,
-      label: '系统',
-      icon: <Settings className="size-3.5 shrink-0" aria-hidden="true" />,
-      content: systemNav
-    }
-  ].filter(tab => tab.id !== 'plugins' || activePlugins.length > 0)
   return (
     <aside className="project-rail flex min-h-0 min-w-0 flex-col border-r border-slate-200">
-      {isMobile ? (
-        <>
-          <div className="sticky top-0 z-10 bg-(--theme-surface-panel) px-3 py-2">
-            <Tabs
-              items={mobileTabs}
-              value={activeMobileTab}
-              onChange={setMobileTab}
-              idPrefix={mobileTabsID}
-              ariaLabel="机器人与系统分类"
-              variant="inset"
-            />
-          </div>
-          {mobileTabs.map(tab => (
-            <div
-              key={tab.id}
-              id={`${mobileTabsID}-panel-${tab.id}`}
-              role="tabpanel"
-              aria-labelledby={`${mobileTabsID}-tab-${tab.id}`}
-              hidden={tab.id !== activeMobileTab}
-              className="px-2 pb-2"
-            >
-              {tab.id === activeMobileTab && tab.content}
-            </div>
-          ))}
-        </>
-      ) : (
-        <>
-          <section
-            className="order-3 border-t border-slate-200 px-2.5 py-2 dark:border-slate-700"
-            aria-label="系统功能目录"
-          >
-            <header className="px-1.5 pb-1 text-[0.7rem] font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">
-              系统
-            </header>
-            {systemNav}
-          </section>
-          {activePlugins.length > 0 && (
-            <section
-              className="order-2 border-t border-slate-200 px-2.5 py-2 dark:border-slate-700"
-              aria-label="已加载插件"
-            >
-              <header className="flex  px-1.5 pb-1">
-                <span className="text-[0.7rem] font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">
-                  插件
-                  <span className="ml-1.5 text-slate-300 dark:text-slate-600">
-                    {activePlugins.length}
-                  </span>
-                </span>
-              </header>
-              {pluginNav}
-            </section>
-          )}
-          <section className="order-1 flex min-h-0 flex-1 flex-col">
-            <header className="flex min-h-9 items-center justify-between px-2.5 py-1.5">
-              <span className="text-[0.7rem] font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">
-                机器人
-                <span className="ml-1.5 text-slate-300 dark:text-slate-600">
-                  {projects.length}
-                </span>
+      <section className={cn('flex min-h-0 flex-col', !isMobile && 'flex-1')}>
+        <header className={cn(
+          'flex min-h-9 items-center px-2.5 py-1.5',
+          isMobile ? 'justify-end' : 'justify-between'
+        )}>
+          {!isMobile && (
+            <span className="text-[0.7rem] font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">
+              机器人
+              <span className="ml-1.5 text-slate-300 dark:text-slate-600">
+                {projects.length}
               </span>
-              {robotActions}
-            </header>
-            {robotList}
-          </section>
-        </>
+            </span>
+          )}
+          {robotActions}
+        </header>
+        {robotList}
+      </section>
+      {activePlugins.length > 0 && (
+        <section
+          className="border-t border-slate-200 px-2.5 py-2 dark:border-slate-700"
+          aria-label="已加载插件"
+        >
+          <header className="flex px-1.5 pb-1">
+            <span className="text-[0.7rem] font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">
+              插件
+              <span className="ml-1.5 text-slate-300 dark:text-slate-600">
+                {activePlugins.length}
+              </span>
+            </span>
+          </header>
+          {pluginNav}
+        </section>
       )}
     </aside>
   )
@@ -12905,7 +12833,7 @@ function ControlCard({
           aria-label={`管理 ${project?.name ?? '当前机器人'} 的 Git`}
         >
           <GitBranch className="size-3.5" aria-hidden="true" />
-          仓库
+          Git 管理
         </button>
         {quickActionButtons}
       </>
@@ -15044,11 +14972,11 @@ function GitReleasePanelNext({
   )
 }
 
-type RobotWindowName = 'terminal' | 'foreground-logs' | 'pm2-logs' | 'robot-app' | 'git' | 'pm2-processes' | 'test' | 'live' | 'ops'
+type RobotWindowName = 'terminal' | 'foreground-logs' | 'pm2-logs' | 'robot-app' | 'pm2-processes' | 'test' | 'live' | 'ops'
 type SystemWindowName = Exclude<AuxiliaryWindowName, RobotWindowName | 'settings' | 'data'>
 
 function openNativeRobotTool(
-  name: Exclude<RobotWindowName, 'robot-app' | 'git'> | 'environment' | 'tasks',
+  name: Exclude<RobotWindowName, 'robot-app'> | 'environment' | 'tasks',
   root: string,
   taskId?: string,
   taskName?: string
@@ -15057,13 +14985,6 @@ function openNativeRobotTool(
   if (taskId) query.set('taskId', taskId)
   if (taskName) query.set('taskName', taskName)
   return openNativeWindow(name, query.toString())
-}
-
-function openNativeGit(project?: Project) {
-  return project && openNativeWindow('git', new URLSearchParams({
-    root: project.path,
-    name: project.name
-  }).toString())
 }
 
 function openNativePlugin(id: string) {
@@ -15136,9 +15057,6 @@ export function NativeRobotWindow({ name }: { name: RobotWindowName | SystemWind
         }}
       />
     )
-  }
-  if (name === 'git') {
-    return <RobotGitControl {...nativeRobotWindowProps} project={{ path: root, name: query.get('name') || directoryName(root) }} />
   }
   if (name === 'test') return <TestCenterWindow {...nativeRobotWindowProps} root={root} />
   if (name === 'live') return <LiveChatWindow {...nativeRobotWindowProps} root={root} />

@@ -5,12 +5,46 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 )
+
+var ErrProjectEntryExists = errors.New("项目中已有同名文件或目录。")
 
 type ProjectDirectoryEntry struct {
 	Name      string `json:"name"`
 	Path      string `json:"path"`
 	Directory bool   `json:"directory"`
+}
+
+// CreateWorkspaceProjectEntry creates an empty file or directory in the project root.
+func (Manager) CreateWorkspaceProjectEntry(root, name string, directory bool) (ProjectDirectoryEntry, error) {
+	name = strings.TrimSpace(name)
+	if !filepath.IsLocal(name) || name == "." || strings.HasSuffix(name, ".") || strings.ContainsAny(name, "/\\:<>\"|?*\x00\r\n\t") {
+		return ProjectDirectoryEntry{}, errors.New("请输入有效的文件或目录名称。")
+	}
+	path, err := managedProjectFile(root, name)
+	if err != nil {
+		return ProjectDirectoryEntry{}, err
+	}
+	if directory {
+		err = os.Mkdir(path, 0755)
+	} else {
+		var file *os.File
+		file, err = os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
+		if err == nil {
+			err = file.Close()
+		}
+	}
+	if errors.Is(err, os.ErrExist) {
+		return ProjectDirectoryEntry{}, ErrProjectEntryExists
+	}
+	if permissionError(err) {
+		return ProjectDirectoryEntry{}, permissionAdvice("创建 " + name)
+	}
+	if err != nil {
+		return ProjectDirectoryEntry{}, err
+	}
+	return ProjectDirectoryEntry{Name: name, Path: name, Directory: directory}, nil
 }
 
 // ListProjectDirectory lists one level of a managed project using the same

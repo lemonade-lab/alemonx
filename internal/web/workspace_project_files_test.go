@@ -130,6 +130,27 @@ func TestWorkspaceProjectFilesAreScopedToAccount(t *testing.T) {
 	get(owner, "../auth.json", http.StatusBadRequest)
 	get(owner, ".env", http.StatusBadRequest)
 	get(owner, "binary.dat", http.StatusUnsupportedMediaType)
+	create := func(token, name string, directory bool, code int) {
+		t.Helper()
+		body, err := json.Marshal(map[string]any{"name": name, "directory": directory})
+		if err != nil {
+			t.Fatal(err)
+		}
+		call(http.MethodPost, token, "", body, code)
+	}
+	create(other, "new.ts", false, http.StatusForbidden)
+	create(owner, "../outside.ts", false, http.StatusBadRequest)
+	create(owner, ".env", false, http.StatusBadRequest)
+	create(owner, "index.ts", false, http.StatusConflict)
+	create(owner, "index.ts", true, http.StatusConflict)
+	create(owner, "new.ts", false, http.StatusCreated)
+	create(owner, "new-dir", true, http.StatusCreated)
+	if content, err := os.ReadFile(filepath.Join(project, "new.ts")); err != nil || len(content) != 0 {
+		t.Fatalf("new file contents = %q, error = %v", content, err)
+	}
+	if info, err := os.Stat(filepath.Join(project, "new-dir")); err != nil || !info.IsDir() {
+		t.Fatalf("new directory info = %v, error = %v", info, err)
+	}
 
 	if err := os.Symlink(filepath.Join(root, "auth.json"), filepath.Join(project, "linked.ts")); err == nil {
 		get(owner, "linked.ts", http.StatusBadRequest)

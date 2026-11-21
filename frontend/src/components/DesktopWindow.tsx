@@ -9,11 +9,21 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode
 } from 'react'
-import { Minus, X } from 'lucide-react'
+import { Maximize2, Minimize2, Minus, X } from 'lucide-react'
 import { Modal } from './Modal'
 import { isWindowHeaderInteractiveTarget } from './desktopWindowInteraction'
 import { useIsPadViewport, useIsPhoneViewport } from '../hooks/useIsPadViewport'
 import { clampWindowRectToViewport } from '../lib/windowRect'
+import { bridge } from './nativeWindow'
+
+const browserNavigator = typeof navigator === 'undefined' ? undefined : navigator as Navigator & {
+  userAgentData?: { platform?: string }
+}
+const isMacBrowser = !bridge && Boolean(
+  browserNavigator &&
+  /^mac/i.test(browserNavigator.userAgentData?.platform || browserNavigator.platform || '') &&
+  browserNavigator.maxTouchPoints <= 1
+)
 
 export type ResizeCorner = 'nw' | 'ne' | 'sw' | 'se'
 
@@ -326,6 +336,7 @@ export function DesktopWindow({
       </main>
     </>
   )
+  const showMacControls = isMacBrowser && !isPhoneView
   return (
     <Modal
       open
@@ -336,7 +347,7 @@ export function DesktopWindow({
     >
       <section
         ref={windowRef}
-        className="floating-window grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900"
+        className="floating-window grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-2xl border"
         style={{ ...windowRect, display: minimized ? 'none' : undefined }}
         data-window-container="desktop"
         role="dialog"
@@ -355,7 +366,7 @@ export function DesktopWindow({
         }}
       >
         <header
-          className={`floating-window-header flex min-h-12 items-center justify-between gap-3 border-b border-slate-200 px-4 dark:border-slate-700${headerLeft ? ' floating-window-header-custom' : ''}`}
+          className={`floating-window-header flex min-h-12 items-center justify-between gap-3 px-4${headerLeft ? ' floating-window-header-custom' : ''}`}
           onPointerDown={event => {
             if (isPadView) return
             if (isWindowHeaderInteractiveTarget(event.target)) return
@@ -369,26 +380,62 @@ export function DesktopWindow({
           }}
         >
           <div className="flex min-w-0 items-center gap-2">
+            {showMacControls && (
+              <div className="mac-window-controls" role="group" aria-label="窗口控制">
+                <button
+                  type="button"
+                  className="mac-window-control mac-window-control-close"
+                  onClick={onClose}
+                  aria-label={`关闭${title}`}
+                  title="关闭"
+                >
+                  <X aria-hidden="true" />
+                </button>
+                <button
+                  type="button"
+                  className="mac-window-control mac-window-control-minimize"
+                  onClick={onMinimize}
+                  aria-label={`最小化${title}`}
+                  title="最小化"
+                >
+                  <Minus aria-hidden="true" />
+                </button>
+                <button
+                  type="button"
+                  className="mac-window-control mac-window-control-maximize"
+                  onClick={toggleMaximize}
+                  disabled={isPadView}
+                  aria-label={`${maximized ? '还原' : '最大化'}${title}`}
+                  title={maximized ? '还原' : '最大化'}
+                >
+                  {maximized ? <Minimize2 aria-hidden="true" /> : <Maximize2 aria-hidden="true" />}
+                </button>
+              </div>
+            )}
             {headerLeft ?? (
               <>
                 {icon}
                 <span className="grid min-w-0 gap-0.5">
-                  <strong className="truncate text-sm font-semibold text-slate-900 dark:text-slate-100">{title}</strong>
-                  {subtitle && <small className="truncate text-xs text-slate-400">{subtitle}</small>}
+                  <strong className="truncate text-sm font-semibold">{title}</strong>
+                  {subtitle && <small className="truncate text-xs text-(--theme-text-muted)">{subtitle}</small>}
                 </span>
               </>
             )}
           </div>
           <div className="flex items-center gap-1">
             {actions}
-            {!isPhoneView && (
-              <button className="icon-button size-8 p-0" onClick={onMinimize} aria-label={`最小化${title}`} title="最小化">
-                <Minus className="size-4" />
-              </button>
+            {!showMacControls && (
+              <>
+                {!isPhoneView && (
+                  <button className="icon-button size-8 p-0" onClick={onMinimize} aria-label={`最小化${title}`} title="最小化">
+                    <Minus className="size-4" />
+                  </button>
+                )}
+                <button className="icon-button size-8 p-0" onClick={onClose} aria-label={`关闭${title}`} title="关闭">
+                  <X className="size-4" />
+                </button>
+              </>
             )}
-            <button className="icon-button size-8 p-0" onClick={onClose} aria-label={`关闭${title}`} title="关闭">
-              <X className="size-4" />
-            </button>
           </div>
         </header>
         {children}

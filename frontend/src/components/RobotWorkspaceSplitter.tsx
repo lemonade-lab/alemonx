@@ -18,7 +18,7 @@ export function RobotWorkspaceSplitter({
   controls,
   renderContent,
   listHidden = false,
-  listTitle = '机器人与系统',
+  listTitle = '机器人',
   mobilePanel = null,
   onCloseMobilePanel
 }: {

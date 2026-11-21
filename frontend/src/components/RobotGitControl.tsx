@@ -11,7 +11,6 @@ import {
   X
 } from 'lucide-react'
 import { ConfirmDialog } from './ConfirmDialog'
-import { DesktopWindow } from './DesktopWindow'
 import { Tabs } from './Tabs'
 import { gitErrorMessage } from './gitFeedback'
 import { GitSettingsDialog } from './GitSettingsDialog'
@@ -95,24 +94,8 @@ const actionCopy: Record<
   }
 }
 
-export function RobotGitControl({
-  project,
-  onClose,
-  onMinimize,
-  minimized,
-  zIndex,
-  onActivate,
-  native = false
-}: {
-  native?: boolean
-  project: Project | null
-  onClose: () => void
-  onMinimize: () => void
-  minimized: boolean
-  zIndex: number
-  onActivate: () => void
-}) {
-  const root = project?.path ?? ''
+export function RobotGitControl({ project }: { project: Project }) {
+  const root = project.path
   const [tab, setTab] = useNavigationState<Tab>('git.tab', [root], 'commit', tabItems.map(item => item.id))
   const [historyOffset, setHistoryOffset] = useStoreState(0)
   const [inspectedRemote, setInspectedRemote] = useStoreState('')
@@ -181,8 +164,6 @@ export function RobotGitControl({
     const border = textarea.offsetHeight - textarea.clientHeight
     textarea.style.height = `${textarea.scrollHeight + border}px`
   }, [commitMessage])
-  if (!project) return null
-
   const execute = async (request: NonNullable<Pending>) => {
     const object =
       request.action === 'fetch'
@@ -705,24 +686,14 @@ export function RobotGitControl({
             ? branchPanel
             : remotePanel
   return (
-    <DesktopWindow
-      native={native}
-      id="git"
-      open
-      minimized={minimized}
-      title={`${project.name} · Git`}
-      subtitle={`${data?.branch ? `分支 ${data.branch}` : data?.repository ? '分离 HEAD' : '未初始化'} · ${data?.gitRoot || project.path}`}
-      icon={
-        <GitBranch className="size-4 shrink-0 text-brand-600 dark:text-brand-200" />
-      }
-      zIndex={zIndex}
-      onActivate={onActivate}
-      onClose={onClose}
-      onMinimize={onMinimize}
-      initialPosition={{ left: 96, top: 80 }}
-      width={920}
-      height={700}
-      actions={
+    <section aria-label="Git 管理" className="flex min-h-0 min-w-0 flex-1 flex-col bg-(--theme-surface-panel)">
+      <header className="flex shrink-0 items-center justify-between gap-2 border-b border-(--theme-border-subtle) px-3 py-2">
+        <div className="grid min-w-0 gap-0.5">
+          <h2 className="truncate text-sm font-semibold">{project.name} · Git</h2>
+          <small className="truncate text-xs text-(--theme-text-muted)" title={data?.gitRoot || project.path}>
+            {data?.branch ? `分支 ${data.branch}` : data?.repository ? '分离 HEAD' : '未初始化'} · {data?.gitRoot || project.path}
+          </small>
+        </div>
         <button
           className="icon-button size-8 p-0"
           disabled={isFetching || isLoading}
@@ -735,8 +706,7 @@ export function RobotGitControl({
         >
           <RefreshCw className="size-4" />
         </button>
-      }
-    >
+      </header>
       {isInitialLoading ? (
         <p className="grid min-h-40 place-items-center text-sm text-slate-500">
           正在读取 Git 状态…
@@ -751,7 +721,7 @@ export function RobotGitControl({
           </button>
         </div>
       ) : !data?.repository ? (
-        <section className="grid min-h-56 content-center gap-4 p-6 text-center">
+        <section className="grid min-h-0 flex-1 content-start gap-4 overflow-auto p-4 text-center">
           <strong className="text-sm font-semibold text-slate-800">
             此机器人目录尚未初始化 Git
           </strong>
@@ -813,7 +783,7 @@ export function RobotGitControl({
           )}
         </section>
       ) : (
-        <div className="flex min-h-0 min-w-0 flex-col gap-3 overflow-hidden p-4">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-hidden p-3">
           <div className="flex min-w-0 shrink-0 items-center gap-2">
             <Tabs
               className="min-h-10 min-w-0 flex-1 overflow-x-auto overflow-y-hidden [&_button]:shrink-0 [&_button]:whitespace-nowrap [&_svg]:shrink-0"
@@ -939,6 +909,6 @@ export function RobotGitControl({
             </label>
           )}
       </ConfirmDialog>
-    </DesktopWindow>
+    </section>
   )
 }

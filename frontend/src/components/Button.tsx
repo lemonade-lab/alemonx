@@ -1,5 +1,5 @@
 import cn from 'classnames'
-import type { ButtonHTMLAttributes, ReactNode } from 'react'
+import type { ButtonHTMLAttributes, ReactNode, Ref } from 'react'
 
 export type ButtonVariant =
   'primary' | 'secondary' | 'ghost' | 'danger' | 'icon'
@@ -20,6 +20,7 @@ const sizeClasses: Record<ButtonSize, string> = {
 }
 
 type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
+  ref?: Ref<HTMLButtonElement>
   variant?: ButtonVariant
   size?: ButtonSize
   loading?: boolean

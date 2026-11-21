@@ -11,7 +11,7 @@ import (
 
 func (s *server) workspaceProjectFilesHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
-	if r.Method != http.MethodGet && r.Method != http.MethodPut {
+	if r.Method != http.MethodGet && r.Method != http.MethodPut && r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "该操作暂不支持。")
 		return
 	}
@@ -32,15 +32,36 @@ func (s *server) workspaceProjectFilesHandler(w http.ResponseWriter, r *http.Req
 	requested := r.URL.Query().Get("root")
 	for _, project := range projects.Projects {
 		if workspace.SameRobotPath(project.Path, requested) {
-			if r.Method == http.MethodPut {
+			switch r.Method {
+			case http.MethodPut:
 				s.saveWorkspaceProjectFile(w, r, project.Path)
-			} else {
+			case http.MethodPost:
+				s.createWorkspaceProjectEntry(w, r, project.Path)
+			default:
 				s.readWorkspaceProjectFiles(w, r, project.Path)
 			}
 			return
 		}
 	}
 	writeError(w, http.StatusForbidden, "请从当前账户的机器人列表选择目录。")
+}
+
+func (s *server) createWorkspaceProjectEntry(w http.ResponseWriter, r *http.Request, root string) {
+	var input struct {
+		Name      string `json:"name"`
+		Directory *bool  `json:"directory"`
+	}
+	body := http.MaxBytesReader(w, r.Body, 4096)
+	if err := json.NewDecoder(body).Decode(&input); err != nil || input.Directory == nil {
+		writeError(w, http.StatusBadRequest, "项目文件创建请求无效。")
+		return
+	}
+	entry, err := s.robots.CreateWorkspaceProjectEntry(root, input.Name, *input.Directory)
+	if err != nil {
+		writeWorkspaceProjectFileError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, entry)
 }
 
 func (s *server) readWorkspaceProjectFiles(w http.ResponseWriter, r *http.Request, root string) {
@@ -84,7 +105,7 @@ func (s *server) saveWorkspaceProjectFile(w http.ResponseWriter, r *http.Request
 func writeWorkspaceProjectFileError(w http.ResponseWriter, err error) {
 	status := http.StatusBadRequest
 	switch {
-	case errors.Is(err, robot.ErrProjectFileRevision):
+	case errors.Is(err, robot.ErrProjectFileRevision), errors.Is(err, robot.ErrProjectEntryExists):
 		status = http.StatusConflict
 	case errors.Is(err, robot.ErrProjectFileNotText):
 		status = http.StatusUnsupportedMediaType

@@ -1,5 +1,108 @@
 import { expect, test } from '@playwright/test'
 
+test('plugin center opens as a movable window with sidebar navigation', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.route('**/api/v1/**', route => {
+    const path = new URL(route.request().url()).pathname
+    if (path === '/api/v1/auth/status')
+      return route.fulfill({ json: { enabled: false, authenticated: false } })
+    if (path === '/api/v1/setup/plugins' || path === '/api/v1/setup/plugins/market')
+      return route.fulfill({ json: [] })
+    return route.fulfill({ status: 503, json: {} })
+  })
+  await page.goto('/dashboard/robot')
+  const tools = page.getByRole('navigation', { name: '工作台工具' })
+  const trigger = tools.getByRole('button', { name: '插件', exact: true })
+  await trigger.click()
+  const plugins = page.getByRole('dialog', { name: '插件', exact: true })
+  const sidebar = plugins.getByRole('complementary', { name: '系统功能' })
+  const mine = sidebar.getByRole('button', { name: '我的', exact: true })
+  const market = sidebar.getByRole('button', { name: '市场', exact: true })
+  const close = plugins.getByRole('button', { name: '关闭插件', exact: true })
+  const minimize = plugins.getByRole('button', { name: '最小化插件', exact: true })
+  const empty = plugins.getByText('还没有已下载的插件')
+  await expect(mine).toHaveAttribute('aria-current', 'page')
+  await expect(empty).toBeVisible()
+  expect((await mine.boundingBox())!.x).toBeLessThan((await empty.boundingBox())!.x)
+
+  const header = plugins.locator('header').first()
+  for (const [theme, raised] of [['light', 'rgb(242, 241, 238)'], ['dark', 'rgb(35, 33, 31)']]) {
+    await page.evaluate(theme => { document.documentElement.dataset.theme = theme }, theme)
+    await expect(header).toHaveCSS('background-color', raised)
+  }
+  await page.evaluate(() => { document.documentElement.dataset.theme = 'light' })
+
+  const before = (await plugins.boundingBox())!
+  await page.mouse.move(before.x + before.width / 2, before.y + 20)
+  await page.mouse.down()
+  await page.mouse.move(before.x + before.width / 2 + 30, before.y, { steps: 4 })
+  await page.mouse.up()
+  await expect.poll(async () => (await plugins.boundingBox())!.x).toBe(before.x + 30)
+
+  const marketRequest = page.waitForRequest('**/api/v1/setup/plugins/market')
+  await market.click()
+  await marketRequest
+  await expect(market).toHaveAttribute('aria-current', 'page')
+
+  await minimize.click()
+  await expect(plugins).toBeHidden()
+  await trigger.click()
+  await expect(plugins).toBeVisible()
+  await expect(market).toHaveAttribute('aria-current', 'page')
+
+  await page.setViewportSize({ width: 390, height: 610 })
+  await expect(close).toBeInViewport({ ratio: 1 })
+  await expect(market).toBeInViewport({ ratio: 1 })
+  await close.click()
+  await expect(plugins).toHaveCount(0)
+})
+
+test('desktop tool rail opens independent native windows', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'platform', { value: 'MacIntel' })
+    Object.assign(window, {
+      webkit: {
+        messageHandlers: {
+          external: {
+            postMessage: (message: string) => {
+              document.documentElement.dataset.lastNativeMessage = message
+            }
+          }
+        }
+      }
+    })
+  })
+  await page.route('**/api/v1/**', route => {
+    const path = new URL(route.request().url()).pathname
+    if (path === '/api/v1/auth/status')
+      return route.fulfill({ json: { enabled: false, authenticated: false } })
+    if (path === '/api/v1/setup/plugins')
+      return route.fulfill({ json: [] })
+    return route.fulfill({ status: 503, json: {} })
+  })
+  await page.goto('/dashboard/robot')
+  const tools = page.getByRole('navigation', { name: '工作台工具' })
+  for (const [label, destination] of [
+    ['插件', 'plugins:'],
+    ['浏览', 'browser:'],
+    ['数据', 'data:'],
+    ['运维', 'ops-overview:'],
+    ['任务', 'tasks:root='],
+    ['全局环境', 'environment:root='],
+    ['打开设置', 'settings:']
+  ]) {
+    await tools.getByRole('button', { name: label, exact: true }).click()
+    await expect(page.locator('html')).toHaveAttribute('data-last-native-message', `alx:open-window:${destination}`)
+    await expect(page.locator('[data-window-container="desktop"]')).toHaveCount(0)
+  }
+
+  await page.goto('/desktop-window/plugins')
+  await expect(page.locator('.native-workbench-header:visible')).toHaveText('插件')
+  await expect(page.getByRole('button', { name: '我的', exact: true })).toHaveAttribute('aria-current', 'page')
+  await expect(page.getByText('还没有已下载的插件')).toBeVisible()
+})
+
 test('operation menu stays collapsed at all widths and opens nested tools', async ({
   page
 }) => {
@@ -359,6 +462,8 @@ test('saved robots reopen from the account and stale URLs cannot register robots
       return route.fulfill({ contentType: 'text/event-stream', body: ': fixture\n\n' })
     if (path === '/api/v1/terminal/sessions/navigation-terminal')
       return route.fulfill({ json: {} })
+    if (path === '/api/v1/workspace/project-files')
+      return route.fulfill({ json: { entries: [{ name: 'package.json', path: 'package.json', directory: false }] } })
     if (path === '/api/v1/catalog')
       return route.fulfill({ json: ['全部', '数据管理', '框架桥接'].map(title => ({ id: title, title, items: [] })) })
     return route.fulfill({ status: 503, json: { error: '测试中未启用此服务' } })
@@ -372,7 +477,7 @@ test('saved robots reopen from the account and stale URLs cannot register robots
   await expect(menu).toBeVisible()
   await expect(menu.locator('footer').getByRole('button')).toHaveCount(4)
   await expect(menu.getByRole('button', { name: '查看运行终端' })).toHaveCount(0)
-  await expect(page.getByRole('button', { name: '打开终端', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: '辅助标签页', exact: true })).toBeVisible()
   await page.getByRole('button', { name: '隐藏机器人导航' }).click()
   await expect(menu).toHaveCount(0)
   await page.getByRole('button', { name: '显示机器人导航' }).click()
@@ -380,7 +485,20 @@ test('saved robots reopen from the account and stale URLs cannot register robots
 
   await page.setViewportSize({ width: 1180, height: 720 })
   const header = page.locator('.workbench-content-header')
-  await header.getByRole('button', { name: '打开终端', exact: true }).click()
+  const auxiliary = page.locator('.workbench-split-terminal')
+  const auxiliaryToggle = header.getByRole('button', { name: '辅助标签页' })
+  const launcher = auxiliary.getByRole('region', { name: '新标签页' })
+  await auxiliaryToggle.click()
+  await expect(launcher.getByRole('button')).toHaveText(['终端', '仓库', '目录'])
+  await launcher.getByRole('button', { name: '目录', exact: true }).click()
+  const directory = auxiliary.getByRole('complementary', { name: '机器人项目文件' })
+  await expect(directory.getByRole('button', { name: 'package.json' })).toBeVisible()
+  await expect(directory.getByText('alpha', { exact: true })).toHaveCount(0)
+  await auxiliary.getByRole('button', { name: '新标签页' }).click()
+  await launcher.getByRole('button', { name: '仓库', exact: true }).click()
+  await expect(auxiliary.getByRole('complementary', { name: '仓库', exact: true })).toBeVisible()
+  await auxiliary.getByRole('button', { name: '新标签页' }).click()
+  await launcher.getByRole('button', { name: '终端', exact: true }).click()
   const terminal = page.getByRole('complementary', { name: '终端面板' })
   await expect(terminal).toBeVisible()
   await expect(menu).toHaveCount(0)
@@ -390,7 +508,7 @@ test('saved robots reopen from the account and stale URLs cannot register robots
   await expect(dropdown).toBeVisible()
   await expect(dropdown.getByRole('heading')).toHaveCount(0)
   await expect(dropdown.locator('.workbench-action-item')).toHaveText([
-    '运行', '配置', '背包', '插件', '连接', '仓库', '应用', '测试', '聊天', '运维'
+    '运行', '配置', '背包', '插件', '连接', 'Git 管理', '应用', '测试', '聊天', '运维'
   ])
   const plugins = dropdown.getByRole('button', { name: '插件', exact: true })
   await plugins.click()
@@ -422,8 +540,9 @@ test('saved robots reopen from the account and stale URLs cannot register robots
   await dropdown.getByRole('button', { name: '运行', exact: true }).click()
   await expect(dropdown).toBeHidden()
   await expect(functions).toBeFocused()
-  await terminal.getByRole('button', { name: '关闭终端 saved-robot', exact: true }).click()
+  await auxiliary.getByRole('button', { name: '关闭终端 saved-robot', exact: true }).click()
   await expect(terminal).toBeHidden()
+  await auxiliaryToggle.click()
   await expect(menu).toBeVisible()
 
   const list = page.getByRole('navigation', { name: '机器人列表' })
@@ -452,28 +571,13 @@ test('saved robots reopen from the account and stale URLs cannot register robots
   expect(writes).toEqual([])
 
   const git = page.getByRole('button', { name: '管理 saved-robot 的 Git' })
-  const gitWindow = page.getByRole('dialog', { name: 'saved-robot · Git' })
-  await git.evaluate(button => {
-    for (let index = 0; index < 10; index++) (button as HTMLButtonElement).click()
-  })
-  await expect(gitWindow).toHaveCount(1)
-  const minimizeGit = gitWindow.getByRole('button', { name: '最小化saved-robot · Git' })
-  await minimizeGit.click()
-  await expect(gitWindow).toBeHidden()
-  const tools = page.getByRole('navigation', { name: '工作台工具' })
-  await tools.getByRole('button', { name: '恢复Git 窗口' }).click()
-  await expect(gitWindow).toBeVisible()
-
-  await minimizeGit.click()
-  await page.setViewportSize({ width: 1000, height: 720 })
-  await expect(tools.getByRole('button', { name: '恢复Git 窗口' })).toBeVisible()
-  await page.getByRole('button', { name: '操作', exact: true }).click()
-  await page.getByRole('region', { name: '操作菜单' })
-    .getByRole('button', { name: '恢复Git 窗口' }).click()
-  await expect(gitWindow).toBeVisible()
-  await expect(gitWindow).toHaveCount(1)
-  await gitWindow.getByRole('button', { name: '关闭saved-robot · Git' }).click()
-  await expect(gitWindow).toHaveCount(0)
+  await git.click()
+  const gitManagement = auxiliary.getByRole('region', { name: 'Git 管理' })
+  await expect(page.getByRole('region', { name: '资源管理器' })).toBeVisible()
+  await expect(gitManagement.getByRole('heading', { name: 'saved-robot · Git' })).toBeVisible()
+  await expect(page.getByRole('dialog', { name: 'saved-robot · Git' })).toHaveCount(0)
+  await auxiliary.getByRole('button', { name: '关闭辅助面板' }).click()
+  await expect(gitManagement).toBeHidden()
 })
 
 test('robot runtime switches only after a fresh compatible preview is confirmed', async ({ page }) => {

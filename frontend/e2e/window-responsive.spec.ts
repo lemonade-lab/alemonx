@@ -395,14 +395,32 @@ test('browser workbench fills the viewport and integrates the tool rail', async 
   expect(separator.width).toBeLessThan(homePosition.width)
   expect(settingsPosition.y).toBeGreaterThan(850)
 
-  await page.getByRole('region', { name: '系统功能目录' })
-    .getByRole('button', { name: '浏览', exact: true }).click()
+  const systemTools = tools.getByRole('group', { name: '系统功能' })
+  await expect(systemTools.getByRole('button')).toHaveCount(6)
+  await expect(page.getByRole('region', { name: '系统功能目录' })).toHaveCount(0)
+  const browserTool = systemTools.getByRole('button', { name: '浏览', exact: true })
+  const tooltip = page.getByRole('tooltip')
+  await browserTool.hover()
+  await expect(tooltip).toHaveText('浏览')
+  const browserToolBounds = (await browserTool.boundingBox())!
+  expect((await tooltip.boundingBox())!.x).toBeGreaterThan(browserToolBounds.x + browserToolBounds.width)
+  await page.mouse.move(1300, 25)
+  await expect(tooltip).toHaveCount(0)
+  await home.focus()
+  await page.keyboard.press('Tab')
+  const dsh = tools.getByRole('button', { name: 'DSH', exact: true })
+  await expect(dsh).toBeFocused()
+  await expect(tooltip).toHaveText('DSH')
+  await page.keyboard.press('Escape')
+  await expect(tooltip).toHaveCount(0)
+  await browserTool.click()
   const browser = page.getByRole('dialog', { name: '浏览器', exact: true })
   await expect(browser).toBeVisible()
-  await expect(windows.getByRole('button', { name: '切换到浏览器' })).toBeVisible()
+  await expect(browserTool).toHaveAttribute('aria-current', 'page')
+  await expect(windows.getByRole('button')).toHaveCount(0)
   await home.click()
   await expect(browser).toBeHidden()
-  await windows.getByRole('button', { name: '恢复浏览器' }).click()
+  await browserTool.click()
   await expect(browser).toBeVisible()
   await browser.getByRole('button', { name: '关闭浏览器' }).click()
   await expect(browser).toHaveCount(0)
@@ -438,7 +456,64 @@ test('browser workbench fills the viewport and integrates the tool rail', async 
   }
 })
 
+test('macOS browser floating windows have working traffic-light controls', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.addInitScript(() => {
+    Object.defineProperties(navigator, {
+      userAgentData: { value: undefined },
+      platform: { value: 'MacIntel' },
+      maxTouchPoints: { value: 0 }
+    })
+  })
+  await page.route('**/api/v1/auth/status', route =>
+    route.fulfill({ json: { enabled: false, authenticated: false } })
+  )
+  await page.goto('/dashboard/robot')
+
+  const openSettings = page.getByRole('button', { name: '打开设置', exact: true })
+  await openSettings.click()
+  const settings = page.getByRole('dialog', { name: '设置', exact: true })
+  const header = settings.locator('header').first()
+  for (const { theme, panel, raised, border } of [
+    { theme: 'light', panel: 'rgb(255, 255, 255)', raised: 'rgb(242, 241, 238)', border: 'rgb(228, 226, 220)' },
+    { theme: 'dark', panel: 'rgb(29, 28, 26)', raised: 'rgb(35, 33, 31)', border: 'rgb(52, 49, 45)' }
+  ]) {
+    await page.evaluate(theme => { document.documentElement.dataset.theme = theme }, theme)
+    await expect(settings).toHaveCSS('background-color', panel)
+    await expect(settings).toHaveCSS('border-top-color', border)
+    await expect(header).toHaveCSS('background-color', raised)
+    await expect(header).toHaveCSS('border-bottom-width', '0px')
+  }
+  const controls = settings.getByRole('group', { name: '窗口控制' })
+  const maximize = controls.getByRole('button', { name: '最大化设置' })
+  const minimize = controls.getByRole('button', { name: '最小化设置' })
+  const close = controls.getByRole('button', { name: '关闭设置' })
+  await expect(controls.getByRole('button')).toHaveCount(3)
+  expect(await controls.getByRole('button').evaluateAll(buttons =>
+    buttons.map(button => getComputedStyle(button, '::before').backgroundColor)
+  )).toEqual(['rgb(255, 95, 87)', 'rgb(254, 188, 46)', 'rgb(40, 200, 64)'])
+
+  const initialBounds = await settings.boundingBox()
+  await maximize.press('Enter')
+  await expect(settings).toHaveCSS('width', '1408px')
+  await controls.getByRole('button', { name: '还原设置' }).click()
+  await expect.poll(() => settings.boundingBox()).toEqual(initialBounds)
+
+  await minimize.click()
+  await expect(settings).toBeHidden()
+  await openSettings.click()
+  await expect(settings).toBeVisible()
+  await close.click()
+  await expect(settings).toHaveCount(0)
+})
+
 test('browser workbench leaves window shortcuts to the browser', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperties(navigator, {
+      userAgentData: { value: { platform: 'Windows' } },
+      platform: { value: 'Win32' }
+    })
+  })
   await page.route('**/api/v1/auth/status', route =>
     route.fulfill({ json: { enabled: false, authenticated: false } })
   )
@@ -448,6 +523,8 @@ test('browser workbench leaves window shortcuts to the browser', async ({ page }
   await page.getByRole('button', { name: '打开设置', exact: true }).click()
   const settings = page.getByRole('dialog', { name: '设置', exact: true })
   await expect(settings).toBeVisible()
+  await expect(settings.getByRole('group', { name: '窗口控制' })).toHaveCount(0)
+  await expect(settings.getByRole('button', { name: '关闭设置' })).toBeVisible()
 
   const handled = await page.evaluate(() =>
     ['metaKey', 'ctrlKey'].flatMap(modifier =>
@@ -507,7 +584,7 @@ for (const platform of ['mac', 'windows', 'linux'] as const) {
       expect(bounds.x).toBe(railBounds.width)
       expect(bounds.x + bounds.width).toBe(640)
       expect((await content.boundingBox())?.y).toBe(0)
-      const workbarToggle = header.getByRole('button', { name: '打开机器人与系统导航' })
+      const workbarToggle = header.getByRole('button', { name: '打开机器人导航' })
       expect((await workbarToggle.boundingBox())!.x).toBeGreaterThanOrEqual(86)
       expect((await rail.getByRole('button', { name: '主页', exact: true }).boundingBox())!.y)
         .toBeGreaterThanOrEqual(bounds.height)
@@ -532,7 +609,7 @@ for (const platform of ['mac', 'windows', 'linux'] as const) {
     const messages = await page.evaluate(() =>
       Reflect.get(window, 'captionMessages')
     )
-    expect(messages.filter((message: string) => message !== 'wails:runtime:ready')).toEqual(
+    expect(messages.filter((message: string) => /^(alx:window:|wails:drag)/.test(message))).toEqual(
       platform === 'windows'
         ? [
             'alx:window:toggle-maximise',
@@ -542,19 +619,20 @@ for (const platform of ['mac', 'windows', 'linux'] as const) {
         : platform === 'mac' ? ['wails:drag:doubleclick'] : []
     )
     const rail = page.getByRole('navigation', { name: '工作台工具' })
-    const blank = (await rail.getByRole('group', { name: '已打开窗口' }).boundingBox())!
-    const blankY = blank.y + blank.height / 2
+    const railBounds = (await rail.boundingBox())!
+    const home = (await rail.getByRole('button', { name: '主页', exact: true }).boundingBox())!
+    const blankX = railBounds.x + railBounds.width - 2
+    const blankY = home.y + home.height / 2
     const dragMessages = () => page.evaluate(() =>
       Reflect.get(window, 'captionMessages').filter((message: string) => message === 'wails:drag')
     )
-    await page.mouse.move(blank.x + blank.width - 2, blankY)
+    await page.mouse.move(blankX, blankY)
     await page.mouse.down()
     expect(await dragMessages()).toHaveLength(0)
-    await page.mouse.move(blank.x + blank.width + 6, blankY)
+    await page.mouse.move(blankX + 8, blankY)
     await page.mouse.up()
     await expect.poll(dragMessages).toEqual(['wails:drag'])
 
-    const home = (await rail.getByRole('button', { name: '主页', exact: true }).boundingBox())!
     await page.mouse.move(home.x + home.width / 2, home.y + home.height / 2)
     await page.mouse.down()
     await page.mouse.move(home.x + home.width / 2 + 5, home.y + home.height / 2)
@@ -606,20 +684,25 @@ test('terminal opens at minimum width and remembers later adjustments', async ({
   expect(headerBounds.x).toBeCloseTo(leftBounds.x + leftBounds.width, 1)
   expect(headerBounds.y).toBe(leftBounds.y)
   await expect(header.getByRole('button', { name: '打开设置' })).toHaveCount(0)
-  await header.getByRole('button', { name: '打开终端' }).click()
+  const auxiliary = page.locator('.workbench-split-terminal')
+  const auxiliaryToggle = header.getByRole('button', { name: '辅助标签页' })
+  const launcher = auxiliary.getByRole('region', { name: '新标签页' })
+  async function openNewTerminal() {
+    if (!(await auxiliary.isVisible())) await auxiliaryToggle.click()
+    if (!(await launcher.isVisible()))
+      await auxiliary.getByRole('button', { name: '新标签页' }).click()
+    await launcher.getByRole('button', { name: '终端', exact: true }).click()
+  }
+  await openNewTerminal()
   const panel = page.getByRole('complementary', { name: '终端面板' })
-  const directoryTabs = panel.getByRole('button', { name: 'fixture', exact: true })
+  const directoryTabs = auxiliary.getByRole('button', { name: 'fixture', exact: true })
   const tab = directoryTabs.first()
   await expect(tab).toBeVisible()
   await expect(tab).toHaveAttribute('title', '/fixture')
-  const addTerminal = panel.getByRole('button', { name: '添加终端' })
-  await expect(addTerminal).toHaveCSS('border-width', '0px')
-  await addTerminal.hover()
-  await expect(addTerminal).toHaveCSS('border-width', '0px')
+  await expect(auxiliary.getByRole('button', { name: '添加终端' })).toHaveCount(0)
   await expect(panel).toHaveCSS('border-left-width', '0px')
   await expect(panel.getByRole('button', { name: '收起终端面板' })).toHaveCount(0)
-  const terminalHeader = panel.locator('header')
-  await expect(terminalHeader).toHaveCSS('border-bottom-width', '0px')
+  const terminalHeader = auxiliary.locator('header').first()
   const terminalMore = terminalHeader.getByRole('button', { name: '终端更多操作' })
   const terminalActions = terminalHeader.getByRole('region', { name: '终端操作菜单' })
   await expect(terminalMore).toHaveCSS('border-width', '0px')
@@ -646,7 +729,21 @@ test('terminal opens at minimum width and remembers later adjustments', async ({
   await expect(outputRows).toHaveCSS('color', 'rgb(23, 23, 23)')
   const themeMenu = header.getByRole('region', { name: '操作菜单' })
   const themeMenuTrigger = header.getByRole('button', { name: '操作', exact: true })
+  const contentPane = page.locator('.workbench-split-main')
+  async function expectMenuAboveTerminal() {
+    await expect(contentPane).toHaveCSS('overflow', 'visible')
+    const menuBounds = (await themeMenu.boundingBox())!
+    const terminalBounds = (await panel.boundingBox())!
+    const x = Math.max(menuBounds.x, terminalBounds.x) + 12
+    const y = Math.max(menuBounds.y, terminalBounds.y) + 18
+    expect(x).toBeLessThan(Math.min(menuBounds.x + menuBounds.width, terminalBounds.x + terminalBounds.width))
+    expect(y).toBeLessThan(Math.min(menuBounds.y + menuBounds.height, terminalBounds.y + terminalBounds.height))
+    await expect.poll(() => themeMenu.evaluate((menu, point) =>
+      menu.contains(document.elementFromPoint(point.x, point.y)), { x, y }
+    )).toBe(true)
+  }
   await themeMenuTrigger.click()
+  await expectMenuAboveTerminal()
   await themeMenu.getByRole('button', { name: '切换到暗色' }).click()
   await expect(terminalOutput).toHaveCSS('background-color', 'rgb(11, 11, 11)')
   await expect(outputRows).toHaveCSS('color', 'rgb(245, 245, 245)')
@@ -660,7 +757,7 @@ test('terminal opens at minimum width and remembers later adjustments', async ({
   expect(outputBounds.x).toBe(titleBounds.x)
   expect(outputBounds.width).toBe(titleBounds.width)
   expect(outputBounds.y).toBe(titleBounds.y + titleBounds.height)
-  const bounds = (await panel.boundingBox())!
+  const bounds = (await auxiliary.boundingBox())!
   expect(bounds.x + bounds.width).toBeCloseTo(1600, 1)
   const resizedHeaderBounds = (await header.boundingBox())!
   expect(await projectRail.boundingBox()).toEqual(leftBounds)
@@ -692,17 +789,18 @@ test('terminal opens at minimum width and remembers later adjustments', async ({
   await expect.poll(() => page.evaluate(() => JSON.stringify(localStorage)))
     .toContain('workbench.splitter')
 
-  await header.getByRole('button', { name: '收起终端面板' }).click()
+  await auxiliaryToggle.click()
   await expect(panel).toBeHidden()
   await expect(separator).toBeHidden()
-  await header.getByRole('button', { name: '打开终端' }).click()
+  await auxiliaryToggle.click()
+  await tab.click()
   await expect(tab).toBeVisible()
   expect(created).toBe(1)
   expect(deleted).toBe(0)
   await expect.poll(width).toBe(resizedWidth)
 
   await page.reload()
-  await header.getByRole('button', { name: '打开终端' }).click()
+  await openNewTerminal()
   await expect(tab).toBeVisible()
   await expect.poll(width).toBe(resizedWidth)
   expect(created).toBe(1)
@@ -710,11 +808,16 @@ test('terminal opens at minimum width and remembers later adjustments', async ({
   await page.setViewportSize({ width: 390, height: 760 })
   await expect(panel).toBeVisible()
   await expect(separator).toBeHidden()
+  await themeMenuTrigger.click()
+  await expectMenuAboveTerminal()
+  await themeMenuTrigger.press('Escape')
+  await expect(themeMenu).toBeHidden()
+  await expect(contentPane).toHaveCSS('overflow', 'auto')
   const rail = page.getByRole('navigation', { name: '工作台工具' })
   await expect(rail).toBeVisible()
   const railBounds = (await rail.boundingBox())!
   await expect.poll(width).toBe(390 - railBounds.width)
-  expect((await panel.boundingBox())!.y).toBe(
+  expect((await auxiliary.boundingBox())!.y).toBe(
     (await header.boundingBox())!.y + (await header.boundingBox())!.height
   )
   const settings = rail.getByRole('button', { name: '打开设置', exact: true })
@@ -722,10 +825,10 @@ test('terminal opens at minimum width and remembers later adjustments', async ({
   const settingsDialog = page.getByRole('dialog', { name: '设置', exact: true })
   await expect(settingsDialog).toBeVisible()
   await settingsDialog.getByRole('button', { name: '关闭设置', exact: true }).click()
-  await addTerminal.click()
+  await openNewTerminal()
   await expect(directoryTabs).toHaveCount(2)
   await expect(directoryTabs.last()).toHaveAttribute('aria-pressed', 'true')
-  const closeTabs = panel.getByRole('button', { name: '关闭终端 fixture', exact: true })
+  const closeTabs = auxiliary.getByRole('button', { name: '关闭终端 fixture', exact: true })
   await closeTabs.first().click()
   await expect(directoryTabs).toHaveCount(1)
   await expect.poll(() => deleted).toBe(1)
@@ -733,23 +836,19 @@ test('terminal opens at minimum width and remembers later adjustments', async ({
   await closeTabs.click()
   await expect(panel).toHaveCount(0)
   await expect.poll(() => deleted).toBe(2)
-  const more = header.getByRole('button', { name: '操作', exact: true })
-  const actions = header.getByRole('region', { name: '操作菜单' })
   await expect(header.getByRole('button', { name: '打开终端' })).toBeHidden()
-  await more.click()
-  await actions.getByRole('button', { name: '打开终端' }).click()
-  await expect(actions).toBeHidden()
+  await openNewTerminal()
   await expect(tab).toBeVisible()
   expect(created).toBe(3)
   for (const count of [2, 3, 4]) {
-    await addTerminal.click()
+    await openNewTerminal()
     await expect(directoryTabs).toHaveCount(count)
     await expect(directoryTabs.last()).toHaveAttribute('aria-pressed', 'true')
   }
-  const tabList = panel.getByRole('navigation', { name: '终端列表' })
+  const tabList = auxiliary.getByRole('navigation', { name: '终端列表' })
   await expect(tabList).toHaveCSS('scrollbar-width', 'none')
   await expect.poll(() => tabList.evaluate(node => node.scrollLeft)).toBeGreaterThan(0)
-  await expect(addTerminal).toBeInViewport()
+  await expect(auxiliary.getByRole('button', { name: '新标签页' })).toBeInViewport()
   await expect(terminalMore).toBeInViewport()
   await terminalMore.click()
   await expect(terminalActions.getByRole('button', { name: '复制输出' })).toBeInViewport()
@@ -759,8 +858,7 @@ test('terminal opens at minimum width and remembers later adjustments', async ({
   await tab.click()
   await expect(tab).toBeInViewport({ ratio: 1 })
   await expect(tab).toHaveAttribute('aria-pressed', 'true')
-  await more.click()
-  await actions.getByRole('button', { name: '收起终端面板' }).click()
+  await auxiliaryToggle.click()
   await expect(panel).toBeHidden()
   await settings.click()
   await expect(settingsDialog).toBeVisible()
@@ -795,13 +893,14 @@ test('native workbench docks its terminal and opens settings in a standalone pag
   )
   await page.goto('/dashboard/robot')
   const tools = page.getByRole('button', { name: '操作', exact: true })
-  const terminal = page.getByRole('button', { name: '打开终端', exact: true })
+  const terminal = page.getByRole('button', { name: '辅助标签页', exact: true })
   await expect(terminal).toBeVisible()
   expect((await terminal.boundingBox())!.x).toBeGreaterThan(
     (await tools.boundingBox())!.x
   )
   await terminal.click()
-  await expect(page.getByRole('complementary', { name: '终端面板' })
+  await page.getByRole('region', { name: '新标签页' }).getByRole('button', { name: '终端', exact: true }).click()
+  await expect(page.locator('.workbench-split-terminal')
     .getByRole('button', { name: 'fixture', exact: true })).toBeVisible()
   await expect(page.locator('html')).not.toHaveAttribute('data-last-native-message', /^alx:open-window:terminal:/)
   await page.getByRole('button', { name: '打开设置', exact: true }).click()
@@ -814,7 +913,71 @@ test('native workbench docks its terminal and opens settings in a standalone pag
     page.getByRole('tab', { name: '网络', exact: true })
   ).toHaveAttribute('aria-selected', 'true')
   await expect(page.locator('.native-auxiliary-content')).toBeVisible()
+  await page.evaluate(() => { document.documentElement.dataset.theme = 'dark' })
+  await expect(page.locator('header.native-workbench-header:visible')).toHaveCSS('background-color', 'rgb(29, 28, 26)')
   await expect(page.locator('.workbench-stage')).toHaveCount(0)
+})
+
+test('macOS tray network mode follows saved settings and keeps the confirmed mode on failure', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'platform', { value: 'MacIntel' })
+    Object.assign(window, {
+      webkit: { messageHandlers: { external: {
+        postMessage: (message: string) => {
+          const prefix = 'alx:tray-network:'
+          if (message.startsWith(prefix))
+            document.documentElement.dataset.trayNetwork = message.slice(prefix.length)
+        }
+      } } }
+    })
+  })
+  await page.route('**/api/v1/auth/status', route =>
+    route.fulfill({ json: { enabled: true, authenticated: true } })
+  )
+  const settings = {
+    version: 2, revision: 3, mode: 'auto',
+    automatic: { groups: [{ id: 'github-api', candidates: [] }] },
+    proxy: { url: '' }
+  }
+  const writes: unknown[] = []
+  await page.route('**/api/v1/system/network', route => {
+    if (route.request().method() === 'PUT') {
+      const body = route.request().postDataJSON()
+      writes.push(body)
+      if (body.mode === 'auto')
+        return route.fulfill({ status: 409, json: { error: '网络配置已更新，请重新打开编辑' } })
+      settings.mode = body.mode
+      settings.revision++
+    }
+    return route.fulfill({ json: settings })
+  })
+  await page.goto('/dashboard/robot')
+  const state = page.locator('html')
+  const select = (mode: string) => page.evaluate(value => {
+    window.dispatchEvent(new CustomEvent('alx:tray-network-select', { detail: value }))
+  }, mode)
+  await expect(state).toHaveAttribute('data-tray-network', JSON.stringify({
+    mode: 'auto', proxyConfigured: false, error: ''
+  }))
+  await select('direct')
+  await expect(state).toHaveAttribute('data-tray-network', JSON.stringify({
+    mode: 'direct', proxyConfigured: false, error: ''
+  }))
+  expect(writes).toEqual([{ ...settings, revision: 3 }])
+  await select('auto')
+  await expect(state).toHaveAttribute('data-tray-network', JSON.stringify({
+    mode: 'direct', proxyConfigured: false, error: '网络配置已更新，请重新打开编辑'
+  }))
+  settings.mode = 'proxy'
+  settings.proxy.url = 'http://127.0.0.1:8080'
+  await page.evaluate(() => {
+    const channel = new BroadcastChannel('alx:desktop-network-saved')
+    channel.postMessage('saved')
+    channel.close()
+  })
+  await expect(state).toHaveAttribute('data-tray-network', JSON.stringify({
+    mode: 'proxy', proxyConfigured: true, error: ''
+  }))
 })
 
 test('native terminal restores its session and robot application embeds the existing route', async ({
@@ -911,68 +1074,6 @@ test('Git clone keeps its themed footer visible on a narrow window', async ({
   await expect(dialog.getByRole('group', { name: '克隆设置' })).toBeVisible()
   await expect(dialog.getByRole('group', { name: '存放位置' })).toBeVisible()
   expect(await dialog.evaluate(element => element.scrollWidth)).toBeLessThanOrEqual(390)
-})
-
-test('macOS tray panel shows service status and sends desktop actions', async ({ page }) => {
-  await page.setViewportSize({ width: 316, height: 186 })
-  await page.addInitScript(() => {
-    Object.defineProperty(navigator, 'platform', { value: 'MacIntel' })
-    Object.assign(window, {
-      webkit: { messageHandlers: { external: {
-        postMessage: (message: string) => {
-          document.documentElement.dataset.lastNativeMessage = message
-        }
-      } } }
-    })
-  })
-  await page.route('**/healthz', route =>
-    route.fulfill({ json: { status: 'ok', version: 'v1.0.0' } })
-  )
-  let mode = 'auto'
-  await page.route('**/api/v1/system/network', route => {
-    if (route.request().method() === 'PUT') mode = route.request().postDataJSON().mode
-    return route.fulfill({ json: {
-      version: 2, revision: 1, mode, automatic: { groups: [] }, proxy: { url: '' }
-    } })
-  })
-  await page.goto('/desktop-window/tray-panel')
-  const panel = page.getByRole('main', { name: 'ALemonX 菜单' })
-  await expect(panel.getByRole('status')).toHaveText('工作台在线')
-  await expect(panel.getByText('v1.0.0')).toBeVisible()
-  const bounds = { x: 0, y: 0, width: 316, height: 186 }
-  expect(await panel.boundingBox()).toEqual(bounds)
-  await page.evaluate(() => {
-    window.dispatchEvent(new Event('blur'))
-    window.dispatchEvent(new Event('focus'))
-  })
-  expect(await panel.boundingBox()).toEqual(bounds)
-  await expect(panel).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)')
-  await page.emulateMedia({ colorScheme: 'dark' })
-  await expect(panel).toHaveCSS('color', 'rgb(241, 241, 244)')
-  await page.emulateMedia({ colorScheme: 'light' })
-  await expect(panel).toHaveCSS('color', 'rgb(32, 32, 36)')
-  await expect(page.locator('body')).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)')
-  await expect(panel.getByRole('button', { name: '打开终端' })).toHaveCount(0)
-  expect(await panel.evaluate(node => getComputedStyle(node, '::before').content)).toBe('none')
-  const modes = panel.getByRole('group', { name: '网络模式' })
-  await expect(modes.getByRole('button', { name: '自动' })).toHaveAttribute('aria-pressed', 'true')
-  await modes.getByRole('button', { name: '直连' }).click()
-  await expect(modes.getByRole('button', { name: '直连' })).toHaveAttribute('aria-pressed', 'true')
-  await modes.getByRole('button', { name: '代理' }).click()
-  await expect(panel.getByRole('alert')).toContainText('配置代理地址')
-  await panel.getByRole('button', { name: /^切换到/ }).click()
-  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
-  await expect(panel).toHaveCSS('color', 'rgb(32, 32, 36)')
-  await panel.getByRole('button', { name: '更多' }).click()
-  for (const [label, action] of [['切换开发模式', 'developer-mode'], ['打开', 'open'], ['重启应用', 'restart'], ['退出', 'quit']]) {
-    const button = panel.getByRole('button', { name: label, exact: true })
-    await expect(button).toBeInViewport()
-    await button.click()
-    await expect(page.locator('html')).toHaveAttribute(
-      'data-last-native-message',
-      `alx:tray:${action}`
-    )
-  }
 })
 
 test('native environment window installs and updates managed Bun', async ({ page }) => {

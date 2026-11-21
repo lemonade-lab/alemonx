@@ -752,7 +752,7 @@ test('workbench lower-left data entry opens a standalone window without a robot'
   )
   await page.goto('/data-entry-regression')
   await page
-    .getByLabel('系统功能目录')
+    .getByRole('group', { name: '系统功能' })
     .getByRole('button', { name: '数据', exact: true })
     .click()
   await expect(page.getByRole('region', { name: '数据管理' })).toBeVisible()

@@ -1,11 +1,22 @@
 import { useEffect, useLayoutEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
-import { FileText, Folder, FolderOpen, X } from 'lucide-react'
+import {
+  FilePlus,
+  FileText,
+  Folder,
+  FolderOpen,
+  FolderPlus,
+  X
+} from 'lucide-react'
 import cn from 'classnames'
 import { useStoreState } from '../../store/guideStore'
-import { useWorkspaceProjectDirectoryQuery } from '../../store/workspaceApi'
+import {
+  useCreateWorkspaceProjectEntryMutation,
+  useWorkspaceProjectDirectoryQuery
+} from '../../store/workspaceApi'
 import { Button } from '../Button'
 import { ConfirmDialog } from '../ConfirmDialog'
+import { Modal } from '../Modal'
 import {
   ExplorerFileEditor,
   type ExplorerFileDraft
@@ -123,6 +134,7 @@ export function ResourceExplorer({
   currentRoot,
   directoryTarget,
   directoryInDrawer,
+  currentProjectDirectoryOnly = false,
   sourceControlTarget,
   fileTabsTarget,
   onOpenFile
@@ -131,6 +143,7 @@ export function ResourceExplorer({
   currentRoot: string
   directoryTarget: HTMLDivElement | null
   directoryInDrawer: boolean
+  currentProjectDirectoryOnly?: boolean
   sourceControlTarget: HTMLDivElement | null
   fileTabsTarget: HTMLDivElement | null
   onOpenFile: () => void
@@ -141,6 +154,18 @@ export function ResourceExplorer({
     {}
   )
   const [pendingClose, setPendingClose] = useStoreState<OpenFile | null>(null)
+  const [createTarget, setCreateTarget] = useStoreState<{
+    project: Project
+    directory: boolean
+  } | null>(null)
+  const [entryName, setEntryName] = useStoreState('')
+  const [createError, setCreateError] = useStoreState('')
+  const [createEntry, { isLoading: creating }] =
+    useCreateWorkspaceProjectEntryMutation()
+  const currentProject = projects.find(project => project.path === currentRoot)
+  const directoryProjects = currentProjectDirectoryOnly && currentProject
+    ? [currentProject]
+    : projects
   const availableFiles = openFiles.filter(file =>
     projects.some(project => project.path === file.root)
   )
@@ -206,6 +231,33 @@ export function ResourceExplorer({
     onOpenFile()
   }
 
+  function startCreate(directory: boolean) {
+    if (!currentProject) return
+    setEntryName('')
+    setCreateError('')
+    setCreateTarget({ project: currentProject, directory })
+  }
+
+  async function submitCreate() {
+    const name = entryName.trim()
+    if (!createTarget || !name || creating) return
+    const { project, directory } = createTarget
+    try {
+      const entry = await createEntry({
+        root: project.path,
+        name,
+        directory
+      }).unwrap()
+      setCreateTarget(null)
+      if (!entry.directory) open({ root: project.path, path: entry.path })
+    } catch (failure) {
+      const response = failure as { data?: { error?: string } } | undefined
+      setCreateError(response?.data?.error || '创建失败，请重试。')
+    }
+  }
+
+  const createTitle = createTarget?.directory ? '新建目录' : '新建文件'
+
   return (
     <section
       className="flex h-full min-h-0 min-w-0 flex-col"
@@ -217,16 +269,36 @@ export function ResourceExplorer({
             className="flex min-h-0 min-w-0 flex-1 flex-col bg-(--theme-surface-raised)"
             aria-label="机器人项目文件"
           >
-            <h2 className="shrink-0 px-4 pt-4 pb-2 text-sm font-semibold">
-              目录
-            </h2>
+            <header className="flex shrink-0 items-center justify-between gap-2 px-4 pt-3 pb-1">
+              <h2 className="text-sm font-semibold">目录</h2>
+              <div className="flex items-center gap-1">
+                <Button
+                  variant="icon"
+                  aria-label="新建文件"
+                  title="新建文件"
+                  disabled={!currentProject}
+                  onClick={() => startCreate(false)}
+                >
+                  <FilePlus className="size-4" aria-hidden="true" />
+                </Button>
+                <Button
+                  variant="icon"
+                  aria-label="新建目录"
+                  title="新建目录"
+                  disabled={!currentProject}
+                  onClick={() => startCreate(true)}
+                >
+                  <FolderPlus className="size-4" aria-hidden="true" />
+                </Button>
+              </div>
+            </header>
             <div
               className={cn(
                 'px-2 pb-2',
                 !directoryInDrawer && 'min-h-0 flex-1 overflow-auto overscroll-contain'
               )}
             >
-              {projects.map(project => (
+              {directoryProjects.map(project => (
                 <ProjectFolder
                   key={project.id}
                   root={project.path}
@@ -242,6 +314,56 @@ export function ResourceExplorer({
           </aside>,
           directoryTarget
         )}
+      {createTarget && (
+        <Modal
+          open
+          ariaLabel={createTitle}
+          className="p-4"
+          onClose={() => {
+            if (!creating) setCreateTarget(null)
+          }}
+        >
+          <form
+            className="modal-surface grid w-full max-w-md gap-4"
+            onSubmit={event => {
+              event.preventDefault()
+              void submitCreate()
+            }}
+          >
+            <header className="grid gap-1">
+              <h2 className="text-sm font-semibold">{createTitle}</h2>
+              <p className="break-all text-xs text-(--theme-text-secondary)">
+                创建位置：{createTarget.project.path}
+              </p>
+            </header>
+            <label className="grid gap-1 text-sm">
+              {createTarget.directory ? '目录名称' : '文件名称'}
+              <input
+                className="settings-input min-w-0"
+                value={entryName}
+                disabled={creating}
+                onChange={event => {
+                  setEntryName(event.target.value)
+                  setCreateError('')
+                }}
+              />
+            </label>
+            {createError && (
+              <p role="alert" className="text-sm text-(--theme-danger-text)">
+                {createError}
+              </p>
+            )}
+            <footer className="flex justify-end gap-2">
+              <Button type="button" disabled={creating} onClick={() => setCreateTarget(null)}>
+                取消
+              </Button>
+              <Button type="submit" variant="primary" loading={creating} disabled={!entryName.trim()}>
+                创建
+              </Button>
+            </footer>
+          </form>
+        </Modal>
+      )}
       {sourceControlTarget &&
         createPortal(
           <aside

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useImperativeHandle, useRef, useState, type Ref } from 'react'
 import { createPortal } from 'react-dom'
 import {
   ClipboardList,
@@ -23,6 +23,10 @@ type LocalTerminal = {
   truncated?: boolean
 }
 
+export type TerminalPanelHandle = {
+  addSession: () => Promise<void>
+}
+
 const headersFor = (item: LocalTerminal) => ({
   'Content-Type': 'application/json',
   'X-ALX-Terminal-Key': item.key
@@ -42,7 +46,8 @@ export function TerminalPanel({
   native = false,
   visible = true,
   toolbarTarget,
-  onActivate
+  onActivate,
+  ref
 }: {
   root: string
   onClose: () => void
@@ -50,6 +55,7 @@ export function TerminalPanel({
   visible?: boolean
   toolbarTarget?: HTMLDivElement | null
   onActivate?: () => void
+  ref?: Ref<TerminalPanelHandle>
 }) {
   const storageKey = `alx-terminal-sessions:${root}`
   const hostRef = useRef<HTMLDivElement>(null)
@@ -59,6 +65,7 @@ export function TerminalPanel({
   const creatingRef = useRef(false)
   const closedRef = useRef(false)
   const restoredStorage = useRef('')
+  const restoringSessions = useRef<Promise<void> | null>(null)
   const [sessions, setSessions] = useState<LocalTerminal[]>([])
   const [activeID, setActiveID] = useState('')
   const active = sessions.find(item => item.id === activeID) ?? sessions[0]
@@ -108,6 +115,13 @@ export function TerminalPanel({
     }
   }, [root])
 
+  useImperativeHandle(ref, () => ({
+    async addSession() {
+      await restoringSessions.current
+      await createTerminal()
+    }
+  }), [createTerminal])
+
   // Restore only descriptors, never credentials in long-lived storage. The
   // daemon keeps the PTY alive across a browser refresh and validates every
   // descriptor before it becomes visible again.
@@ -125,7 +139,7 @@ export function TerminalPanel({
     } catch {
       sessionStorage.removeItem(storageKey)
     }
-    void Promise.all(
+    restoringSessions.current = Promise.all(
       descriptors.map(async ({ id, key }): Promise<LocalTerminal | null> => {
         const response = await fetch(
           `/api/v1/terminal/sessions/${id}`,
@@ -336,10 +350,7 @@ export function TerminalPanel({
         onActivate?.()
       }}
       onClose={closeTerminal}
-      onAdd={() => {
-        onActivate?.()
-        void createTerminal()
-      }}
+      onAdd={toolbarTarget ? undefined : () => void createTerminal()}
     />
   )
   const actions = (

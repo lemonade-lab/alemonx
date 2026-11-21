@@ -8,7 +8,6 @@ import (
 	"path"
 	"runtime"
 	"strings"
-	"sync"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
@@ -18,7 +17,6 @@ type auxiliaryWindows struct {
 	app        *application.App
 	baseURL    string
 	mainWindow *application.WebviewWindow
-	pendingGit sync.Map
 }
 
 func (a *auxiliaryWindows) openFromMessage(message string) {
@@ -88,7 +86,7 @@ func (a *auxiliaryWindows) openFromMessage(message string) {
 			revealWindow(a.mainWindow)
 		})
 		return
-	case "terminal", "foreground-logs", "pm2-logs", "robot-app", "git", "pm2-processes", "test", "live", "ops", "ops-overview", "tasks", "environment", "plugins", "plugin":
+	case "terminal", "foreground-logs", "pm2-logs", "robot-app", "pm2-processes", "test", "live", "ops", "ops-overview", "tasks", "environment", "plugins", "plugin":
 		params, err := url.ParseQuery(section)
 		if err != nil {
 			return
@@ -100,14 +98,6 @@ func (a *auxiliaryWindows) openFromMessage(message string) {
 			title, width = "前台日志", 900
 		case "pm2-logs":
 			title, width = "PM2 运行日志", 1000
-		case "git":
-			root := params.Get("root")
-			if root == "" {
-				return
-			}
-			title, width = "Git", 1100
-			// Display metadata must not change the window identity.
-			windowKey = fmt.Sprintf("git-%x", sha256.Sum256([]byte(root)))
 		case "pm2-processes":
 			title, width = "PM2 进程", 1050
 		case "test":
@@ -140,14 +130,12 @@ func (a *auxiliaryWindows) openFromMessage(message string) {
 				return
 			}
 		}
-		if name != "git" {
-			windowTaskID := params.Get("taskId")
-			if name == "tasks" {
-				windowTaskID = ""
-			}
-			identity := params.Get("root") + "\x00" + windowTaskID + "\x00" + params.Get("path") + "\x00" + params.Get("id")
-			windowKey = fmt.Sprintf("%s-%x", name, sha256.Sum256([]byte(identity)))
+		windowTaskID := params.Get("taskId")
+		if name == "tasks" {
+			windowTaskID = ""
 		}
+		identity := params.Get("root") + "\x00" + windowTaskID + "\x00" + params.Get("path") + "\x00" + params.Get("id")
+		windowKey = fmt.Sprintf("%s-%x", name, sha256.Sum256([]byte(identity)))
 		suffix = "?" + params.Encode()
 	default:
 		return
@@ -156,17 +144,7 @@ func (a *auxiliaryWindows) openFromMessage(message string) {
 	if name == "settings" && section != "" {
 		target += "#section=" + url.QueryEscape(section)
 	}
-	if name == "git" {
-		// Wails delivers raw messages concurrently. Keep one pending open per
-		// repository, from queueing through completion on the UI thread.
-		if _, pending := a.pendingGit.LoadOrStore(windowKey, struct{}{}); pending {
-			return
-		}
-	}
 	application.InvokeAsync(func() {
-		if name == "git" {
-			defer a.pendingGit.Delete(windowKey)
-		}
 		if existing, found := a.app.Window.GetByName(windowKey); found {
 			if (name == "settings" && section != "") || name == "tasks" {
 				existing.SetURL(target)

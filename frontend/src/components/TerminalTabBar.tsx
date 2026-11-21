@@ -11,7 +11,7 @@ export function TerminalTabBar({ tabs, activeID, onSelect, onClose, onAdd }: {
   activeID?: string
   onSelect: (id: string) => void
   onClose: (id: string) => void
-  onAdd: () => void
+  onAdd?: () => void
 }) {
   const available = useRef<HTMLDivElement>(null)
   const viewport = useRef<HTMLElement>(null)
@@ -90,9 +90,11 @@ export function TerminalTabBar({ tabs, activeID, onSelect, onClose, onAdd }: {
           </div>
         </nav>
       </div>
-      <Button variant="icon" onClick={onAdd} aria-label="添加终端" title="添加终端">
-        <Plus className="size-4" aria-hidden="true" />
-      </Button>
+      {onAdd && (
+        <Button variant="icon" onClick={onAdd} aria-label="添加终端" title="添加终端">
+          <Plus className="size-4" aria-hidden="true" />
+        </Button>
+      )}
     </div>
   )
 }

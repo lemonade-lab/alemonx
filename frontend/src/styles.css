@@ -39,7 +39,7 @@
 }
 
 @utility icon-button {
-  @apply inline-flex size-8 items-center justify-center rounded-control border border-(--theme-border-strong) bg-(--theme-surface-panel) text-(--theme-text-secondary) transition hover:border-(--theme-border-strong) hover:bg-(--theme-surface-hover) hover:text-(--theme-text-strong) disabled:cursor-not-allowed disabled:opacity-50;
+  @apply inline-flex size-8 items-center justify-center rounded-control border-0 bg-transparent text-(--theme-text-secondary) transition hover:bg-(--theme-surface-hover) hover:text-(--theme-text-strong) disabled:cursor-not-allowed disabled:opacity-50;
 }
 
 @utility danger-button {
@@ -1341,6 +1341,65 @@ button {
   cursor: grab;
   min-width: 0;
   user-select: none;
+}
+
+.mac-window-controls {
+  display: flex;
+  flex: none;
+  align-items: center;
+}
+
+.floating-window-header-custom .mac-window-controls {
+  margin-inline-start: 8px;
+}
+
+.mac-window-control {
+  display: grid;
+  position: relative;
+  width: 20px;
+  height: 24px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: rgb(0 0 0 / 65%);
+}
+
+.mac-window-control::before {
+  content: '';
+  position: absolute;
+  inset: 6px 4px;
+  border-radius: 50%;
+  background: var(--mac-window-control-color);
+}
+
+.mac-window-control-close {
+  --mac-window-control-color: #ff5f57;
+}
+
+.mac-window-control-minimize {
+  --mac-window-control-color: #febc2e;
+}
+
+.mac-window-control-maximize {
+  --mac-window-control-color: #28c840;
+}
+
+.mac-window-control:disabled::before {
+  background: var(--theme-surface-hover);
+}
+
+.mac-window-control svg {
+  position: relative;
+  width: 8px;
+  height: 8px;
+  opacity: 0;
+}
+
+.mac-window-controls:hover .mac-window-control:enabled svg,
+.mac-window-controls:focus-within .mac-window-control:enabled svg {
+  opacity: 1;
 }
 
 /* Header controls may live in a narrow floating window. Keep both native
@@ -3901,7 +3960,7 @@ select.git-clone-input {
    icons always occupy the same optical 16px box. */
 .icon-button {
   align-items: center;
-  background: var(--theme-surface-panel);
+  background: transparent;
   border: 0;
   border-radius: 6px;
   color: var(--theme-text-secondary);
@@ -7390,7 +7449,7 @@ button > svg,
   box-shadow: none !important;
 }
 .floating-window-header
-  button:not(.readonly-console-tab):not(.readonly-console-tab-add):hover {
+  button:not(.readonly-console-tab):not(.readonly-console-tab-add):not(.mac-window-control):hover {
   background: var(--theme-surface-hover) !important;
 }
 
@@ -9375,17 +9434,37 @@ body:has(.native-workbench-header:not([data-fallback]), .workbench-content-drag)
   margin: 0;
 }
 
-/* Dialog chrome follows the directory picker's raised title and action bars. */
+/* Dialogs and tool windows share the same theme palette. */
+.modal-surface,
+.floating-window {
+  background: var(--theme-surface-panel);
+  color: var(--theme-text-primary);
+}
+
+.modal-surface,
+.floating-window {
+  border-color: var(--theme-border-default);
+  box-shadow: var(--theme-shadow-pop);
+}
+
+.modal-surface > :is(header, footer),
+.floating-window-header {
+  background: var(--theme-surface-raised);
+}
+
+.modal-surface > header,
+.floating-window-header {
+  color: var(--theme-text-strong);
+}
+
 .modal-surface {
   --modal-inset: 16px;
   min-width: 0;
   max-height: min(calc(100dvh - 24px), 100%);
   margin-inline: 12px;
-  border: 1px solid var(--theme-border-default);
+  border-width: 1px;
+  border-style: solid;
   border-radius: 12px;
-  background: var(--theme-surface-panel);
-  color: var(--theme-text-primary);
-  box-shadow: var(--theme-shadow-pop);
   overscroll-behavior: contain;
 }
 
@@ -9400,13 +9479,11 @@ body:has(.native-workbench-header:not([data-fallback]), .workbench-content-drag)
 .modal-surface > :is(header, footer) {
   min-width: 0;
   padding: 12px var(--modal-inset);
-  background: var(--theme-surface-raised);
   border-color: var(--theme-border-default);
 }
 
 .modal-surface > header {
   border-bottom: 1px solid var(--theme-border-default);
-  color: var(--theme-text-strong);
 }
 
 .modal-surface > footer {
@@ -9440,172 +9517,6 @@ body:has(.native-workbench-header:not([data-fallback]), .workbench-content-drag)
 
 .modal-surface :where(input, select, textarea)[aria-invalid='true'] {
   border-color: var(--theme-danger);
-}
-
-html[data-tray-panel],
-[data-tray-panel] :is(body, #root) {
-  background: transparent;
-  width: 100%;
-  height: 100%;
-  overflow: hidden;
-}
-
-.tray-panel {
-  --tray-menu-surface: #f3f3f5;
-  --tray-text: #202024;
-  --tray-danger: #a3242b;
-  --tray-success: #248044;
-  --tray-line: rgb(0 0 0 / 9%);
-  --tray-hover: rgb(0 0 0 / 6%);
-  --tray-track: rgb(0 0 0 / 5%);
-  --tray-selection: #fff;
-  --tray-muted: #62626a;
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  width: 100%;
-  height: 100%;
-  border-radius: 16px;
-  background: transparent;
-  color: var(--tray-text);
-  color-scheme: light dark;
-  font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
-}
-
-@media (prefers-color-scheme: dark) {
-  .tray-panel {
-    --tray-menu-surface: #29292d;
-    --tray-text: #f1f1f4;
-    --tray-danger: #ff9a9a;
-    --tray-success: #6bd88a;
-    --tray-line: rgb(255 255 255 / 17%);
-    --tray-hover: rgb(255 255 255 / 12%);
-    --tray-track: rgb(255 255 255 / 9%);
-    --tray-selection: #535358;
-    --tray-muted: #c3c3cb;
-  }
-}
-
-.tray-header {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  padding: 12px;
-}
-
-.tray-app-icon {
-  display: grid;
-  place-items: center;
-  flex: 0 0 32px;
-  height: 32px;
-  border-radius: 9px;
-  background: var(--tray-track);
-  color: var(--tray-muted);
-}
-
-.tray-shortcuts {
-  display: flex;
-  flex-shrink: 0;
-  gap: 2px;
-}
-
-.tray-panel button {
-  min-height: 26px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  box-shadow: none;
-  color: inherit;
-  font-size: 12px;
-  font-weight: 500;
-}
-
-.tray-panel button:hover:not(:disabled) {
-  background: var(--tray-hover);
-}
-
-.tray-shortcuts button {
-  display: grid;
-  width: 27px;
-  height: 27px;
-  padding: 0;
-  place-items: center;
-  color: var(--tray-muted);
-}
-
-.tray-network {
-  display: grid;
-  flex: 1;
-  align-content: start;
-  gap: 7px;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 8px 12px;
-  border-top: 1px solid var(--tray-line);
-}
-
-.tray-segments {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 2px;
-  padding: 2px;
-  border-radius: 8px;
-  background: var(--tray-track);
-}
-
-.tray-segments button[aria-pressed='true'],
-.tray-segments button[aria-pressed='true']:hover:not(:disabled) {
-  background: var(--tray-selection);
-  box-shadow: 0 1px 3px rgb(0 0 0 / 12%);
-}
-
-.tray-network-error {
-  max-height: 28px;
-  margin: 0;
-  overflow: auto;
-  color: var(--tray-danger);
-  font-size: 11px;
-  line-height: 14px;
-}
-
-.tray-more {
-  position: absolute;
-  z-index: 1;
-  top: 45px;
-  right: 10px;
-  min-width: 132px;
-  padding: 4px;
-  border: 1px solid var(--tray-line);
-  border-radius: 8px;
-  background: var(--tray-menu-surface);
-  box-shadow: 0 4px 14px rgb(0 0 0 / 14%);
-}
-
-.tray-footer {
-  display: grid;
-  grid-template-columns: 1fr 1.2fr 1fr;
-  gap: 3px;
-  flex-shrink: 0;
-  padding: 5px 8px;
-  border-top: 1px solid var(--tray-line);
-}
-
-.tray-footer button {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  white-space: nowrap;
-}
-
-.tray-footer svg {
-  width: 13px;
-  height: 13px;
-  color: var(--tray-muted);
-}
-
-.tray-footer button[data-action='quit']:hover:not(:disabled) {
-  color: var(--tray-danger);
 }
 
 .workbench-guide .wizard {
@@ -9676,9 +9587,93 @@ html[data-tray-panel],
   padding: 0;
 }
 
+/* Header popovers can extend into the adjacent pane. The splitter's scroll
+ * container can clip that part of the menu when the panes are composited. */
+.workbench-terminal-splitter > .workbench-split-main:has(.workbench-content-header .workbench-menu-trigger[aria-expanded='true']) {
+  overflow: visible;
+}
+
+.explorer-source-paint,
+.explorer-file-editor {
+  @apply font-mono text-sm leading-6;
+  color: var(--theme-text-primary);
+  font-variant-ligatures: none;
+  tab-size: 4;
+}
+.explorer-file-editor-highlighted {
+  background: transparent;
+  caret-color: var(--theme-text-primary);
+  color: transparent;
+}
+.explorer-file-editor-highlighted::selection {
+  background: var(--theme-accent-soft-border);
+  color: var(--theme-text-primary);
+}
+.explorer-source-paint :is(.hljs-comment, .hljs-quote) {
+  color: var(--theme-text-muted);
+}
+.explorer-source-paint :is(.hljs-string, .hljs-regexp, .hljs-addition) {
+  color: var(--theme-success-text);
+}
+.explorer-source-paint :is(.hljs-keyword, .hljs-literal, .hljs-number, .hljs-meta) {
+  color: var(--theme-accent-text);
+}
+.explorer-source-paint :is(.hljs-attr, .hljs-attribute, .hljs-selector-tag, .hljs-title, .hljs-name, .hljs-built_in) {
+  color: var(--theme-info-text);
+}
+@media (forced-colors: active) {
+  .explorer-source-paint {
+    display: none;
+  }
+  .explorer-file-editor-highlighted {
+    color: CanvasText;
+    caret-color: auto;
+  }
+}
 .explorer-file-editor:focus-visible {
   outline: 2px solid var(--theme-accent);
   outline-offset: -2px;
+}
+.explorer-markdown-preview {
+  overflow-wrap: anywhere;
+}
+.explorer-markdown-preview:focus-visible {
+  outline: 2px solid var(--theme-accent);
+  outline-offset: -2px;
+}
+.explorer-markdown-preview :is(h1, h2, h3, h4, h5, h6) {
+  font-weight: 600;
+}
+.explorer-markdown-preview ul {
+  list-style: disc;
+}
+.explorer-markdown-preview ol {
+  list-style: decimal;
+  margin: 10px 0;
+  padding-inline-start: 20px;
+}
+.explorer-markdown-preview blockquote {
+  border-inline-start: 3px solid var(--theme-border-strong);
+  color: var(--theme-text-secondary);
+  padding-inline-start: 14px;
+}
+.explorer-markdown-preview a[href] {
+  color: var(--theme-accent-text);
+  text-decoration: underline;
+}
+.explorer-markdown-preview pre {
+  background: var(--theme-surface-raised);
+  color: var(--theme-text-primary);
+  overflow: auto;
+}
+.explorer-markdown-preview :not(pre) > code {
+  background: var(--theme-surface-raised);
+  border-radius: 4px;
+  padding: 2px 4px;
+}
+.explorer-markdown-preview :is(th, td) {
+  border: 1px solid var(--theme-border-default);
+  padding: 5px 8px;
 }
 .workbench-content-body {
   container: workbench-window / inline-size;
