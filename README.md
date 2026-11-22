@@ -8,21 +8,6 @@
 
 ![ALemonX 工作台：多机器人项目管理、运行配置与 Agent 协作](docs/images/alemonx-workbench.png)
 
-## 目录布局
-
-```text
-dist/                     前端构建产物（构建时嵌入 alx 二进制，不参与运行期布局）
-resources/                运行期资源（构建时嵌入 alx 二进制）
-├── templates/            项目模板源（bot/、dev/）
-└── packages/             内置工具包（Yarn 嵌入；PM2 等按需用 Yarn 安装）
-workspace/                统一工作区（默认 <运行目录>/workspace）
-├── templates/            项目模板（首次启动从内嵌模板物化，可编辑）
-├── packages/             工具目录（Yarn 物化副本；PM2 首次使用安装到这里，位置固定）
-├── bots/                 新建机器人的默认落点
-├── plugins/              已安装系统插件（唯一安装目标，优先读取）
-└── store/                系统插件持久数据（每个插件使用 store/<插件 ID>/）
-```
-
 ## 一行安装
 
 macOS、Linux 或 FreeBSD 在终端执行：
@@ -58,20 +43,6 @@ $env:ALX_PREFER_MIRROR='1'; irm https://ghfast.top/https://raw.githubusercontent
 ### 手动安装
 
 如需手动下载，可从 [GitHub Releases](https://github.com/lemonade-lab/alemonx/releases) 选择对应系统的压缩包：
-
-| 系统                            | 下载文件                        |
-| ------------------------------- | ------------------------------- |
-| Windows x64                     | `alx-windows-amd64.zip`         |
-| Windows ARM64                   | `alx-windows-arm64.zip`         |
-| Windows 32 位                   | `alx-windows-386.zip`           |
-| macOS Apple Silicon             | `alx-darwin-arm64.zip`          |
-| macOS Intel                     | `alx-darwin-amd64.zip`          |
-| Linux x64                       | `alx-linux-amd64.zip`           |
-| Linux ARM64                     | `alx-linux-arm64.zip`           |
-| Linux ARMv7                     | `alx-linux-armv7.zip`           |
-| Linux 32 位 x86                 | `alx-linux-386.zip`             |
-| Linux ppc64le / s390x / riscv64 | 对应的 `alx-linux-<架构>.zip`   |
-| FreeBSD x64 / ARM64             | 对应的 `alx-freebsd-<架构>.zip` |
 
 国内下载较慢时，可在 GitHub 地址前加镜像前缀，例如 `https://ghfast.top/https://github.com/lemonade-lab/alemonx/releases/latest`。
 
