@@ -1,7 +1,7 @@
+import { RefreshButton } from '../RefreshButton'
 import { useSelector } from 'react-redux'
 import type { RootState } from '../../store/guideStore'
 import { useDataCatalogQuery } from '../../store/dataApi'
-import { Button } from '../Button'
 import { RedisBrowser } from './RedisBrowser'
 import { RedisServicePanel } from './RedisServicePanel'
 
@@ -18,7 +18,7 @@ export function RedisWorkspace() {
         ) : catalog.isError ? (
           <div role="alert">
             无法读取连接，可能缺少管理权限。
-            <Button onClick={() => void catalog.refetch()}>重试</Button>
+            <RefreshButton label="重试" onClick={() => void catalog.refetch()} />
           </div>
         ) : (
           <RedisBrowser

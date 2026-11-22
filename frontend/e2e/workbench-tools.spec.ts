@@ -1,4 +1,45 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type Locator } from '@playwright/test'
+
+async function expectMenuRowsAligned(menu: Locator, count: number) {
+  const buttons = menu.locator('.workbench-action-item')
+  await expect(buttons).toHaveCount(count)
+  const rows = await buttons.evaluateAll(buttons => buttons.map(button => {
+    const row = button.getBoundingClientRect()
+    const leading = button.firstElementChild
+    const icon = (leading?.matches('svg') ? leading : leading?.querySelector('svg'))?.getBoundingClientRect()
+    if (!icon || !leading) return null
+
+    let text = leading.nextSibling
+    while (text?.nodeType === Node.TEXT_NODE && !text.textContent?.trim()) {
+      text = text.nextSibling
+    }
+    if (!text) return null
+    const range = document.createRange()
+    range.selectNodeContents(text)
+    const label = range.getBoundingClientRect()
+
+    return {
+      top: row.top,
+      bottom: row.bottom,
+      iconLeft: icon.left,
+      iconWidth: icon.width,
+      iconHeight: icon.height,
+      iconCenterOffset: (icon.top + icon.bottom - row.top - row.bottom) / 2,
+      textGap: label.left - icon.right
+    }
+  }))
+  const first = rows[0]!
+  for (const [index, row] of rows.entries()) {
+    expect(row).not.toBeNull()
+    expect(row!.iconWidth).toBe(16)
+    expect(row!.iconHeight).toBe(16)
+    expect(row!.iconLeft).toBeCloseTo(first.iconLeft, 1)
+    expect(Math.abs(row!.iconCenterOffset)).toBeLessThan(1)
+    expect(row!.textGap).toBeGreaterThanOrEqual(8)
+    if (index > 0) expect(row!.top - rows[index - 1]!.bottom).toBeGreaterThanOrEqual(2)
+  }
+}
+
 
 test('plugin center opens as a movable window with sidebar navigation', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 })
@@ -26,7 +67,7 @@ test('plugin center opens as a movable window with sidebar navigation', async ({
   expect((await mine.boundingBox())!.x).toBeLessThan((await empty.boundingBox())!.x)
 
   const header = plugins.locator('header').first()
-  for (const [theme, raised] of [['light', 'rgb(242, 241, 238)'], ['dark', 'rgb(35, 33, 31)']]) {
+  for (const [theme, raised] of [['light', 'rgb(239, 235, 227)'], ['dark', 'rgb(43, 39, 32)']]) {
     await page.evaluate(theme => { document.documentElement.dataset.theme = theme }, theme)
     await expect(header).toHaveCSS('background-color', raised)
   }
@@ -366,10 +407,25 @@ test('settings navigation opens SSH and manages HTTP MCP with developer mode off
   await trigger.click()
   const initialTheme = await page.locator('html').getAttribute('data-theme')
   const theme = quickActions.getByRole('button', { name: /切换到(亮色|暗色)/ })
+  const developer = quickActions.getByRole('button', { name: '开发模式' })
+  const idleRows = [
+    theme,
+    developer,
+    quickActions.getByRole('button', { name: '启动 MCP HTTP' }),
+    quickActions.getByRole('button', { name: '登录 GitHub' }),
+    quickActions.getByRole('button', { name: /^网络/ })
+  ]
+  for (const row of idleRows) {
+    await expect(row).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)')
+  }
+  await expectMenuRowsAligned(quickActions, idleRows.length)
   await theme.click()
   await expect(page.locator('html')).toHaveAttribute('data-theme', initialTheme === 'dark' ? 'light' : 'dark')
+  await page.mouse.move(0, 0)
+  for (const row of idleRows) {
+    await expect(row).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)')
+  }
   await theme.click()
-  const developer = quickActions.getByRole('button', { name: '开发模式' })
   await developer.click()
   await expect(developer).toHaveAttribute('aria-pressed', 'true')
   await developer.click()
@@ -605,14 +661,11 @@ test('saved robots reopen from the account and stale URLs cannot register robots
   const auxiliaryToggle = header.getByRole('button', { name: '辅助标签页' })
   const launcher = auxiliary.getByRole('region', { name: '新标签页' })
   await auxiliaryToggle.click()
-  await expect(launcher.getByRole('button')).toHaveText(['终端', '仓库', '目录'])
+  await expect(launcher.getByRole('button')).toHaveText(['终端', 'Git 管理', '目录'])
   await launcher.getByRole('button', { name: '目录', exact: true }).click()
   const directory = auxiliary.getByRole('complementary', { name: '机器人项目文件' })
   await expect(directory.getByRole('button', { name: 'package.json' })).toBeVisible()
   await expect(directory.getByText('alpha', { exact: true })).toHaveCount(0)
-  await auxiliary.getByRole('button', { name: '新标签页' }).click()
-  await launcher.getByRole('button', { name: '仓库', exact: true }).click()
-  await expect(auxiliary.getByRole('complementary', { name: '仓库', exact: true })).toBeVisible()
   await auxiliary.getByRole('button', { name: '新标签页' }).click()
   await launcher.getByRole('button', { name: '终端', exact: true }).click()
   const terminal = page.getByRole('complementary', { name: '终端面板' })
@@ -626,6 +679,7 @@ test('saved robots reopen from the account and stale URLs cannot register robots
   await expect(dropdown.locator('.workbench-action-item')).toHaveText([
     '运行', '配置', '背包', '插件', '连接', 'Git 管理', '应用', '测试', '聊天', '运维'
   ])
+  await expectMenuRowsAligned(dropdown, 10)
   const plugins = dropdown.getByRole('button', { name: '插件', exact: true })
   await plugins.click()
   await expect(dropdown).toBeHidden()
@@ -722,8 +776,10 @@ test('robot runtime switches only after a fresh compatible preview is confirmed'
         return route.fulfill({ json: { valid: true } })
       case '/api/v1/robot/runtime':
         return route.fulfill({
-          json: { name: 'runtime-fixture', version: '1.0.0', runtime, packageManager: runtime === 'node' ? 'npm' : 'bun', platforms: [] }
+          json: { name: 'runtime-fixture', version: '1.0.0', runtime, packageManager: runtime === 'node' ? 'npm' : 'bun', platforms: [], hasAppScript: true }
         })
+      case '/api/v1/robot/pm2-registration':
+        return route.fulfill({ json: { registered: true, name: 'runtime-fixture' } })
       case '/api/v1/robot/pm2-processes':
         return route.fulfill({
           json: {
@@ -761,6 +817,32 @@ test('robot runtime switches only after a fresh compatible preview is confirmed'
   await expect(page.getByText('Bun v1.4.4', { exact: true })).toBeVisible()
   await expect(page.getByText('Node.js v22.23.5', { exact: true })).toBeVisible()
   await expect(page.getByText('Bun v9.9.9', { exact: true })).toHaveCount(0)
+  for (const theme of ['light', 'dark']) {
+    const palette = await page.evaluate(theme => {
+      const root = document.documentElement
+      root.dataset.theme = theme
+      const probe = document.createElement('span')
+      probe.style.backgroundColor = 'var(--theme-accent-soft)'
+      probe.style.color = 'var(--theme-accent-soft-text)'
+      document.body.append(probe)
+      const style = getComputedStyle(probe)
+      const { backgroundColor: background, color } = style
+      probe.style.backgroundColor = 'var(--theme-brand-100)'
+      const hoverBackground = style.backgroundColor
+      probe.remove()
+      return { background, color, hoverBackground }
+    }, theme)
+    for (const name of ['启动前台', '更新注册']) {
+      const button = page.getByRole('button', { name, exact: true })
+      await expect(button).toBeEnabled()
+      await expect(button).toHaveCSS('background-color', palette.background)
+      await expect(button).toHaveCSS('color', palette.color)
+      await button.hover()
+      await expect(button).toHaveCSS('background-color', palette.hoverBackground)
+      await expect(button).toHaveCSS('color', palette.color)
+      await page.mouse.move(0, 0)
+    }
+  }
   const switchRuntime = page.getByRole('button', {
     name: '切换运行时',
     exact: true

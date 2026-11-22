@@ -1,3 +1,4 @@
+import { RefreshButton } from './RefreshButton'
 import {
   useCallback,
   useEffect,
@@ -4021,12 +4022,11 @@ function QQ9ChatShell(props: QQ9ShellProps) {
                   ) : (
                     <div>
                       {props.profile.message || '群资料尚未读取。'}
-                      <button
-                        className="ml-1 rounded border border-(--theme-border-default) bg-(--theme-surface-raised) px-1 py-0.5 text-[10px] text-(--theme-accent-text)"
+                      <RefreshButton
+                        label="读取群资料"
+                        className="ml-1 align-middle"
                         onClick={props.refreshProfile}
-                      >
-                        读取
-                      </button>
+                      />
                     </div>
                   )}
                 </div>

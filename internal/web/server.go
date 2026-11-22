@@ -5800,8 +5800,11 @@ func (s *server) submitRobotTask(w http.ResponseWriter, requestContext context.C
 		reject(http.StatusConflict, portBusy)
 		return
 	}
-	payload, _ := json.Marshal(input)
 	created.CanCancel, created.CanRetry = true, account == "" && input.Token == ""
+	var payload []byte
+	if created.CanRetry {
+		payload, _ = json.Marshal(input)
+	}
 	s.mu.Lock()
 	if s.taskControls == nil {
 		s.taskControls = map[string]*operationControl{}

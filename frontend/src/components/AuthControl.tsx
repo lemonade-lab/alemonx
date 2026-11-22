@@ -1,3 +1,4 @@
+import { RefreshButton } from './RefreshButton'
 import { authRequest, readAuthStatus, type AuthStatus } from '../lib/workbenchAuth'
 import { useStoreState } from '../store/guideStore'
 import {
@@ -161,13 +162,12 @@ export function AuthGate({
               {loadError}。请确认 alx 后台仍在运行，然后重试。
             </p>
           </div>
-          <button
-            className="primary-button"
+          <RefreshButton
+            label="重试"
             onClick={refresh}
-            disabled={loading}
-          >
-            {loading ? '重试中…' : '重试'}
-          </button>
+            busy={loading}
+            className="justify-self-center"
+          />
         </section>
       </main>
     )

@@ -21,6 +21,8 @@ import type { Descendant } from 'slate';
 import type { DataEnums } from '@testone/typing';
 import { useAppSelector, safeSend } from '@testone/store';
 import { userHashKey, Platform } from '@testone/core/alemon';
+import { Modal } from '../../../../components/Modal';
+import { useIsPhoneViewport } from '../../../../hooks/useIsPadViewport';
 
 /* ─── 特殊事件定义 ─── */
 type SpecialEventDef = {
@@ -193,6 +195,7 @@ const InputBox = ({
   const [eventText, setEventText] = useState('');
   const [eventSent, setEventSent] = useState<string | null>(null);
   const [open, setOpen] = useState(isImageCompressionOpen());
+  const isPhone = useIsPhoneViewport();
 
   const currentUser = useAppSelector(s => s.users.current);
   const currentChannel = useAppSelector(s => s.channels.current);
@@ -267,6 +270,65 @@ const InputBox = ({
     }
     setOpen(open);
   };
+  const closeEvents = () => setShowEvents(false);
+  const eventPanel = showEvents && (
+    <div
+      className={
+        'flex flex-col overflow-hidden rounded-lg bg-[var(--editor-background)] shadow-lg ' +
+        (isPhone
+          ? 'testone-modal-surface mx-4 max-h-[calc(100dvh-2rem)] w-full max-w-lg'
+          : 'absolute inset-x-0 bottom-full z-20 mb-1 border border-[var(--panel-border)]')
+      }
+    >
+      <div className="flex shrink-0 items-center justify-between gap-2 px-3 py-1.5 border-b border-[var(--panel-border)] bg-[var(--activityBar-background)]">
+        <span className="text-xs font-semibold text-[var(--editor-foreground)]">
+          ⚡ 特殊事件 — {pageType === 'public' ? '群聊' : '私聊'}
+        </span>
+        <button type="button" className="icon-button size-8 p-0" aria-label="关闭特殊事件" onClick={closeEvents}>
+          <CloseOutlined className="text-xs" />
+        </button>
+      </div>
+      <div className="shrink-0 px-3 py-1.5 border-b border-[var(--panel-border)]">
+        <input
+          className="w-full px-2 py-1 rounded text-xs bg-[var(--input-background)] text-[var(--input-foreground)] border border-[var(--input-border)] outline-none focus:border-[var(--button-background)]"
+          aria-label="事件附加文本"
+          placeholder="填入文案、交互 ID 或表情"
+          value={eventText}
+          onChange={e => setEventText(e.target.value)}
+        />
+      </div>
+      <div className={`testone-special-events scrollbar grid min-h-0 max-h-48 gap-1.5 overflow-y-auto p-2 ${isPhone ? 'grid-cols-2!' : ''}`}>
+        {filteredEvents.map(ev => (
+          <button
+            key={ev.name}
+            className={
+              'flex flex-col items-start px-2 py-1.5 rounded text-left text-xs ' +
+              'border border-[var(--panel-border)] ' +
+              'hover:bg-[var(--activityBar-background)] hover:border-[var(--button-background)] ' +
+              'transition-colors cursor-pointer ' +
+              (!connected ? 'opacity-40 cursor-not-allowed' : '')
+            }
+            onClick={() => sendSpecialEvent(ev)}
+            disabled={!connected}
+            title={ev.name}
+          >
+            <span className="font-medium text-[var(--editor-foreground)]">
+              <SendOutlined className="mr-1 text-[10px]" />
+              {ev.label}
+            </span>
+            <span className="text-[10px] text-[var(--descriptionForeground)] leading-tight">
+              {ev.desc}
+            </span>
+          </button>
+        ))}
+      </div>
+      {eventSent && (
+        <div className="px-3 py-1 text-xs text-(--theme-success-text) border-t border-[var(--panel-border)]">
+          ✓ 已发送「{eventSent}」
+        </div>
+      )}
+    </div>
+  );
   return (
     <div className="relative">
       <CommandList
@@ -301,7 +363,7 @@ const InputBox = ({
                 <OrderedListOutlined /> 删除所选({selectedCount})
               </div>
               <div
-                className="flex justify-end cursor-pointer gap-1 text-xs text-gray-500"
+                className="flex justify-end cursor-pointer gap-1 text-xs text-(--theme-text-muted)"
                 onClick={() => onCancelSelect?.()}
               >
                 取消选择
@@ -329,58 +391,11 @@ const InputBox = ({
           </div>
         </div>
       </PopoverBox>
-      {/* 特殊事件面板 */}
-      {showEvents && (
-        <div className="absolute bottom-full left-0 right-0 z-20 mb-1 bg-[var(--editor-background)] border border-[var(--panel-border)] rounded-lg shadow-lg overflow-hidden">
-          <div className="flex items-center justify-between px-3 py-1.5 border-b border-[var(--panel-border)] bg-[var(--activityBar-background)]">
-            <span className="text-xs font-semibold text-[var(--editor-foreground)]">
-              ⚡ 特殊事件 — {pageType === 'public' ? '群聊' : '私聊'}
-            </span>
-            <CloseOutlined
-              className="cursor-pointer text-[var(--descriptionForeground)] hover:text-[var(--foreground)] text-xs"
-              onClick={() => setShowEvents(false)}
-            />
-          </div>
-          <div className="px-3 py-1.5 border-b border-[var(--panel-border)]">
-            <input
-              className="w-full px-2 py-1 rounded text-xs bg-[var(--input-background)] text-[var(--input-foreground)] border border-[var(--input-border)] outline-none focus:border-[var(--button-background)]"
-              placeholder="附加文本（戳一戳文案、交互ID、表情等）"
-              value={eventText}
-              onChange={e => setEventText(e.target.value)}
-            />
-          </div>
-          <div className="testone-special-events grid gap-1.5 p-2 max-h-48 overflow-y-auto scrollbar">
-            {filteredEvents.map(ev => (
-              <button
-                key={ev.name}
-                className={
-                  'flex flex-col items-start px-2 py-1.5 rounded text-left text-xs ' +
-                  'border border-[var(--panel-border)] ' +
-                  'hover:bg-[var(--activityBar-background)] hover:border-[var(--button-background)] ' +
-                  'transition-colors cursor-pointer ' +
-                  (!connected ? 'opacity-40 cursor-not-allowed' : '')
-                }
-                onClick={() => sendSpecialEvent(ev)}
-                disabled={!connected}
-                title={ev.name}
-              >
-                <span className="font-medium text-[var(--editor-foreground)]">
-                  <SendOutlined className="mr-1 text-[10px]" />
-                  {ev.label}
-                </span>
-                <span className="text-[10px] text-[var(--descriptionForeground)] leading-tight">
-                  {ev.desc}
-                </span>
-              </button>
-            ))}
-          </div>
-          {eventSent && (
-            <div className="px-3 py-1 text-xs text-green-400 border-t border-[var(--panel-border)]">
-              ✓ 已发送「{eventSent}」
-            </div>
-          )}
-        </div>
-      )}
+      {isPhone ? (
+        <Modal open={showEvents} onClose={closeEvents} ariaLabel="特殊事件">
+          {eventPanel}
+        </Modal>
+      ) : eventPanel}
       <SlateTextarea
         value={value}
         onContentChange={onInput}

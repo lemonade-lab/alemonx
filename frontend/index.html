@@ -24,7 +24,12 @@
     <div id="root">
       <main class="grid min-h-screen content-center justify-items-center gap-3 p-5 text-sm">
         <p id="startup-status" role="status">正在启动工作台…</p>
-        <button id="startup-retry" type="button" class="secondary-button" hidden>刷新</button>
+        <button id="startup-retry" type="button" class="icon-button" aria-label="刷新" title="刷新" hidden>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M20 7v5h-5M4 17v-5h5"/>
+            <path d="M4.5 9a8 8 0 0 1 13-3L20 9m-16 6 2.5 3a8 8 0 0 0 13-3"/>
+          </svg>
+        </button>
       </main>
     </div>
     <script type="module" src="/src/main.tsx"></script>

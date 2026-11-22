@@ -8,6 +8,7 @@ import {
 } from '../store/workspaceApi'
 import { AlemonjsConfigEditor } from './AlemonjsConfigEditor'
 import { RobotPanel } from './RobotPanel'
+import { SourceTextarea } from './SourceTextarea'
 
 type Manifest = {
   name: string
@@ -401,12 +402,14 @@ export function PackageManifestPanel({
                   <span className="ml-1 font-normal text-slate-400">用于粘贴或微调完整声明</span>
                 </summary>
                 <div className="grid gap-1.5 pt-3">
-                  <textarea
-                    className={`${fieldClass} min-h-52 resize-y py-2 font-mono text-xs leading-5 ${configError ? 'border-red-400 focus:border-red-500 focus:ring-red-100' : ''}`}
-                    value={configText}
-                    onChange={event => setConfigText(event.target.value)}
+                  <SourceTextarea
+                    file="package.json"
+                    aria-label="编辑 AlemonJS 配置声明 JSON"
+                    aria-invalid={Boolean(configError)}
+                    className={`w-full ${fieldClass} min-h-52 resize-y py-2 font-mono text-xs leading-5 ${configError ? 'border-red-400 focus:border-red-500 focus:ring-red-100' : ''}`}
+                    content={configText}
+                    onChange={setConfigText}
                     onBlur={commitAlemonjsConfig}
-                    spellCheck={false}
                     placeholder={'[\n  {\n    "name": "token",\n    "type": "string",\n    "required": true,\n    "description": "访问令牌"\n  }\n]'}
                   />
                   {configError && <span className="text-xs font-normal text-red-600">{configError}</span>}

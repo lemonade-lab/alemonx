@@ -97,7 +97,6 @@ export function ReadonlyConsole({
   const runError = error
     ? operationErrorMessage(error, '无法读取当前目录的运行终端信息。')
     : ''
-  const running = Boolean(data?.running)
   const message = runError || liveOutput
   const normalizeLog = useMemo(createForegroundLogNormalizer, [])
   const rawForegroundLogItems = useMemo(() => normalizeLog(message), [message, normalizeLog])
@@ -407,11 +406,7 @@ export function ReadonlyConsole({
       open={open}
       minimized={minimized}
       title={logTitle ?? '日志'}
-      subtitle={
-        running
-          ? `${data?.mode ?? '进程'}实时输出 · 智能识别`
-          : '最近运行输出 · 智能整理'
-      }
+      subtitle={''}
       icon={
         <ClipboardList className="size-4 shrink-0 text-brand-600 dark:text-brand-200" />
       }

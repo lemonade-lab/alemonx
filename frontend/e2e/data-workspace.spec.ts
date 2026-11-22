@@ -26,14 +26,21 @@ test('fixed SQLite auto-opens separately from Connect and shares the standard si
   const tabs = page.getByRole('tablist', { name: '数据导航' })
   await expect(tabs.getByRole('tab')).toHaveCount(3)
   await tabs.getByRole('tab', { name: 'SQLite', exact: true }).click()
-  await expect(
-    page.getByRole('button', { name: '刷新表', exact: true })
-  ).toBeEnabled()
+  const refreshTables = page.getByRole('button', { name: '刷新表', exact: true })
+  await expect(refreshTables).toBeEnabled()
+  await expect(refreshTables).toHaveText('')
+  await expect(refreshTables).toHaveAttribute('title', '刷新表')
+  await expect(refreshTables.locator('svg')).toBeVisible()
   await expect(
     page.getByText('/workspace/data/default.sqlite', { exact: true })
   ).toBeVisible()
   await expect(page.getByLabel('SQLite 文件（服务器绝对路径）')).toHaveCount(0)
   expect(paths).toEqual(['/workspace/data/default.sqlite'])
+  await refreshTables.click()
+  await expect.poll(() => paths).toEqual([
+    '/workspace/data/default.sqlite',
+    '/workspace/data/default.sqlite'
+  ])
   await tabs.getByRole('tab', { name: 'SQLite', exact: true }).press('End')
   await expect(tabs.getByRole('tab', { name: 'Connect' })).toBeFocused()
   await page.getByRole('button', { name: '新建连接', exact: true }).click()
@@ -209,13 +216,16 @@ test('Redis service management remains available when catalog fails and can save
   )
   await page.reload()
   await expect(page.getByRole('alert')).toContainText('无法读取连接')
+  await page.setViewportSize({ width: 320, height: 568 })
   await page.getByRole('tab', { name: '本地服务', exact: true }).click()
   await expect(page.getByText('Redis 已准备好', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: '高级设置', exact: true }).click()
   await expect(
     page.getByRole('button', { name: '停止', exact: true })
   ).toBeVisible()
-  await page.getByLabel('端口', { exact: true }).fill('6380')
+  const port = page.getByLabel('端口', { exact: true })
+  expect((await port.boundingBox())!.width).toBeGreaterThanOrEqual(100)
+  await port.fill('6380')
   await page.getByRole('button', { name: '保存配置', exact: true }).click()
   await page.getByRole('button', { name: '确认继续', exact: true }).click()
   await expect(page.getByText('配置已保存。', { exact: true })).toBeVisible()

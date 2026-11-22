@@ -277,7 +277,7 @@ func tools() []map[string]any {
 		tool("alemonjs_package_inventory", "读取本地安装状态", "读取项目依赖与背包的真实安装、启用状态，可与官方资源按包名或仓库匹配。", objectSchema(map[string]any{"root": stringSchema("机器人项目的绝对路径。")}, "root"), true, false),
 		tool("alemonjs_list_local_packages", "列出本地包", "列出机器人项目 packages 目录中已发现的本地 AlemonJS 包。", objectSchema(map[string]any{"root": stringSchema("机器人项目的绝对路径。")}, "root"), true, false),
 		tool("alemonjs_get_package_runtime_config", "读取运行配置", "读取已安装 AlemonJS 包声明的运行配置字段与当前值。", objectSchema(map[string]any{"root": stringSchema("机器人项目的绝对路径。"), "package": stringSchema("已安装的包名。")}, "root", "package"), true, false),
-		tool("alemonjs_save_package_runtime_config", "保存运行配置", "按包声明的字段校验后保存 AlemonJS 运行配置。必须在用户明确确认后调用。", objectSchema(map[string]any{"root": stringSchema("机器人项目的绝对路径。"), "package": stringSchema("已安装的包名。"), "values": map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}, "description": "字段名到字符串值的映射。"}, "confirm": boolSchema("用户已经确认保存运行配置时为 true。")}, "root", "package", "values", "confirm"), false, true),
+		tool("alemonjs_save_package_runtime_config", "保存运行配置", "按包声明的字段校验后保存 AlemonJS 运行配置。必须在用户明确确认后调用。", objectSchema(map[string]any{"root": stringSchema("机器人项目的绝对路径。"), "package": stringSchema("已安装的包名。"), "values": map[string]any{"type": "object", "additionalProperties": true, "description": "按配置声明传入原生 JSON 值，包括字符串、数字、布尔值、数组、对象或 null。"}, "confirm": boolSchema("用户已经确认保存运行配置时为 true。")}, "root", "package", "values", "confirm"), false, true),
 		tool("alemonjs_get_package_manifest", "读取发布信息", "读取 package.json 中由 Setup 管理的发布信息。", objectSchema(map[string]any{"root": stringSchema("机器人项目的绝对路径。")}, "root"), true, false),
 		tool("alemonjs_save_package_manifest", "保存发布信息", "校验并保存 package.json 的名称、版本、仓库和发布访问级别。必须在用户明确确认后调用。", objectSchema(map[string]any{"root": stringSchema("机器人项目的绝对路径。"), "manifest": manifestSchema(), "confirm": boolSchema("用户已经确认保存发布信息时为 true。")}, "root", "manifest", "confirm"), false, true),
 		tool("alemonjs_get_npm_publish_status", "检查 NPM 发布", "读取 NPM 发布前检查结果，不会发布。", objectSchema(map[string]any{"root": stringSchema("机器人项目的绝对路径。")}, "root"), true, false),
@@ -290,7 +290,7 @@ func tools() []map[string]any {
 		tool("alemonjs_list_project_tasks", "列出项目操作", "列出项目操作任务。工作台 MCP 返回持久化任务历史。", objectSchema(map[string]any{"root": stringSchema("可选。仅返回该机器人项目的操作任务。")}), true, false),
 		tool("alemonjs_list_setup_plugins", "列出 Setup 插件", "列出当前电脑可用的 Setup 插件及其 Web 界面入口（是否已安装、可运行）。不执行插件代码。", objectSchema(map[string]any{}), true, false),
 		tool("alemonjs_create_project", "创建项目", "使用内置模板创建 AlemonJS 项目，并安装依赖。会写入磁盘、联网下载依赖，必须在用户明确确认后调用。", objectSchema(map[string]any{"config": map[string]any{"type": "object", "description": "与 ALemonX 创建向导相同的项目配置。"}, "confirm": boolSchema("用户已经确认创建项目时为 true。")}, "config", "confirm"), false, true),
-	}, robotTools()...)
+	}, append(robotTools(), backpackTools()...)...)
 }
 
 func tool(name, title, description string, schema map[string]any, readOnly, destructive bool) map[string]any {
@@ -370,6 +370,11 @@ func (s *Server) execute(ctx context.Context, name string, arguments json.RawMes
 		"alemonjs_manage_robot_plugin", "alemonjs_set_robot_plugin_enabled", "alemonjs_control_robot_runtime", "alemonjs_get_robot_logs",
 		"alemonjs_get_robot_diagnostics", "alemonjs_list_robot_operations":
 		return s.robotTool(ctx, name, arguments)
+	case "alemonjs_get_backpack_plugin_details", "alemonjs_list_backpack_plugin_versions",
+		"alemonjs_update_backpack_plugins", "alemonjs_manage_backpack_plugin_version", "alemonjs_import_backpack_plugin",
+		"alemonjs_clone_backpack_plugin", "alemonjs_set_backpack_plugins_enabled", "alemonjs_get_backpack_plugin_order",
+		"alemonjs_move_backpack_plugin", "alemonjs_get_backpack_workspace", "alemonjs_set_backpack_workspace":
+		return s.backpackTool(name, arguments)
 	case "alemonjs_project_status":
 		var input struct {
 			Root string `json:"root"`
@@ -1023,7 +1028,12 @@ func (s *Server) submitProjectAction(input ProjectAction) (string, error) {
 	if s.policy.SubmitProjectAction != nil {
 		return s.policy.SubmitProjectAction(input)
 	}
+	release, err := robot.BeginOperation(context.Background(), input.Root)
+	if err != nil {
+		return "", err
+	}
 	return encodeResult(s.startTask(input.Root, input.Action, func() (string, error) {
+		defer release()
 		result, err := s.robots.Run(input.Root, input.Action, input.Message, input.Package, input.Version, input.Tag, "", true)
 		return result.Output, err
 	}))

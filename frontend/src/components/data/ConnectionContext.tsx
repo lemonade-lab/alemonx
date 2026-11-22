@@ -15,7 +15,7 @@ export function ConnectionContext({
       className="flex min-w-0 flex-wrap items-center gap-2 rounded-md border border-(--theme-border-default) bg-(--theme-surface-panel) p-3 text-xs"
     >
       <strong>{engine}</strong>
-      <span className="min-w-0 flex-1 break-all">{target}</span>
+      <span className="min-w-0 flex-[1_1_7rem] wrap-anywhere">{target}</span>
       <span>{state}</span>
       <span>{access}</span>
     </div>

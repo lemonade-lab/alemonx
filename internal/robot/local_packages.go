@@ -237,7 +237,19 @@ func ensurePackagesWorkspace(root string) error {
 // packages/*. Unlike the generic package manifest editor it changes only this
 // one workspace pattern, so independently configured workspaces are retained.
 func setBackpackWorkspace(root string, enabled bool) (Result, error) {
-	manifest := filepath.Join(root, "package.json")
+	project, err := projectPath(root)
+	if err != nil {
+		return Result{}, err
+	}
+	defer lockProjectFiles(project)()
+	manifest := filepath.Join(project, "package.json")
+	info, err := os.Lstat(manifest)
+	if err != nil {
+		return Result{}, fmt.Errorf("无法读取 package.json：%w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return Result{}, errors.New("package.json 必须是普通文件")
+	}
 	data, err := os.ReadFile(manifest)
 	if err != nil {
 		return Result{}, fmt.Errorf("无法读取 package.json：%w", err)
@@ -261,7 +273,7 @@ func setBackpackWorkspace(root string, enabled bool) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	if err := os.WriteFile(manifest, append(updated, '\n'), 0644); err != nil {
+	if err := writeFileAtomically(manifest, append(updated, '\n'), info.Mode().Perm()); err != nil {
 		if permissionError(err) {
 			return Result{}, permissionAdvice("保存背包工作区配置")
 		}
@@ -507,6 +519,10 @@ func replaceLocalPackage(root, packageName, version string) (Result, error) {
 }
 
 func switchLocalPackageVersion(root, packageName, version string, force bool) (Result, error) {
+	return switchLocalPackageVersionWithBackup(root, packageName, version, force, "")
+}
+
+func switchLocalPackageVersionWithBackup(root, packageName, version string, force bool, savedHead string) (Result, error) {
 	items, err := (Manager{}).LocalPackages(root)
 	if err != nil {
 		return Result{}, err
@@ -530,7 +546,7 @@ func switchLocalPackageVersion(root, packageName, version string, force bool) (R
 			if statusErr != nil {
 				return Result{}, statusErr
 			}
-			if !force && (status.Dirty || status.Ahead > 0) {
+			if !force && (status.Dirty || (status.Ahead > 0 && status.Head != savedHead)) {
 				return Result{}, releaseSyncConfirmationError(status)
 			}
 			target := "origin/" + status.Branch
@@ -562,15 +578,14 @@ func switchLocalPackageVersion(root, packageName, version string, force bool) (R
 			}
 			output, checkoutErr := gitRun(item.Path, "checkout", "-B", status.Branch, target)
 			logs = append(logs, output)
-			if checkoutErr == nil {
-				output, checkoutErr = gitRun(item.Path, "reset", "--hard", target)
-				logs = append(logs, output)
-			}
 			output = strings.TrimSpace(strings.Join(logs, "\n"))
 			if checkoutErr != nil {
 				return Result{Path: item.Path, Output: output}, checkoutErr
 			}
 			return Result{Path: item.Path, Output: "已同步 " + status.Branch + " 发布分支。\n" + output}, nil
+		}
+		if force {
+			return Result{}, errors.New("强制切换仅适用于 Git 背包插件")
 		}
 		return replaceLocalPackage(root, packageName, version)
 	}
@@ -613,7 +628,7 @@ func releaseGitStatus(path string) (releaseStatus, error) {
 // untracked files are not a user plugin edit and must not block normal sync.
 // Tracked node_modules changes are intentionally retained as real changes.
 func backpackGitStatus(path string) (string, error) {
-	output, err := gitRun(path, "status", "--porcelain=v1")
+	output, err := gitRun(path, "--no-optional-locks", "status", "--porcelain=v1")
 	if err != nil {
 		return "", err
 	}

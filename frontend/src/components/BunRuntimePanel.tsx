@@ -1,4 +1,4 @@
-import { RefreshCw } from 'lucide-react'
+import { RefreshButton } from './RefreshButton'
 import { useStoreState } from '../store/guideStore'
 import { useBunRuntimeStatusQuery } from '../store/workspaceApi'
 import { EnvironmentFixDialog } from './EnvironmentFixDialog'
@@ -24,17 +24,11 @@ export function BunRuntimePanel({ onChanged }: { onChanged: () => void }) {
         <h2 className="m-0 text-sm font-semibold text-(--theme-text-strong)">
           Bun 版本管理
         </h2>
-        <button
-          type="button"
-          className="secondary-button inline-flex items-center gap-1.5"
-          disabled={isFetching}
+        <RefreshButton
+          label="重新检测 Bun"
           onClick={() => void refetch()}
-        >
-          <RefreshCw
-            className={`size-3.5 ${isFetching ? 'animate-spin' : ''}`}
-          />
-          重新检测 Bun
-        </button>
+          busy={isFetching}
+        />
       </header>
 
       {isError && (

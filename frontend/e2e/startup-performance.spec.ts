@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test'
 import {
   createForegroundLogNormalizer,
+  foregroundLogDisplayText,
   normalizeForegroundLog
 } from '../src/lib/foregroundLogInterpreter'
 
@@ -152,6 +153,28 @@ test('foreground log bursts retain order and switch cleanly to the new task', as
   await expect(logs.getByText(/snapshot|previous task|third line/)).toHaveCount(
     0
   )
+  await page.evaluate(() => {
+    for (const text of [
+      '[2026-11-22 05:10:24][ERROR] {\n',
+      '  err: TypeError: invalid runtime\n\n',
+      '    at configureRuntime (runtime.js:10:2)\n',
+      '}\n[INFO] continuing\n'
+    ]) {
+      window.dispatchEvent(
+        new CustomEvent('alx:robot-output', {
+          detail: { taskId: 'next', text }
+        })
+      )
+    }
+  })
+  const errorCard = logs.getByRole('article').filter({
+    hasText: 'TypeError: invalid runtime'
+  })
+  await expect(errorCard).toBeVisible()
+  expect(await errorCard.locator('code').textContent()).toBe(
+    '{\n  err: TypeError: invalid runtime\n\n    at configureRuntime (runtime.js:10:2)\n}'
+  )
+  await expect(logs.locator('article.is-error')).toHaveCount(1)
 })
 
 test('startup restores missing baseline APIs in older WebViews', async ({
@@ -251,6 +274,40 @@ test('foreground normalization reuses blocks and reparses continuations and trun
       '\n'
     )
   expect(normalize(repeated)).toEqual(normalizeForegroundLog(repeated))
+})
+
+test('foreground log modes preserve structured errors and stop at the next prefixed entry', () => {
+  const errorBody = [
+    '{',
+    "  message: 'connected to https://example.invalid',",
+    '  cause: Error: request failed,',
+    '    at request (client.js:5:2)',
+    '  token=fixture-token',
+    '}'
+  ].join('\n')
+  const errorHeader = '\x1b[31m[stderr] [2026-11-22 05:10:24][ERROR]\x1b[0m '
+  const items = normalizeForegroundLog(
+    errorHeader + errorBody + '\n[2026-11-22 05:10:25][INFO] next entry'
+  )
+  expect(items).toHaveLength(2)
+  expect(items[0]).toMatchObject({ level: 'error', time: '05:10:24' })
+  const redactedBody = errorBody.replace('fixture-token', '[已隐藏]')
+  expect(foregroundLogDisplayText(items[0], 'simple')).toBe(redactedBody)
+  expect(foregroundLogDisplayText(items[0], 'common')).toBe(redactedBody)
+  expect(foregroundLogDisplayText(items[0], 'advanced')).toBe(
+    '[stderr] [2026-11-22 05:10:24][ERROR] ' + redactedBody
+  )
+  expect(items[1].text).toBe('next entry')
+
+  const plainErrors = normalizeForegroundLog(
+    'RangeError: could not load https://example.invalid\r\n' +
+      '    at load (runtime.js:2:1)\r\n' +
+      'Error: worker failed\r\n    at start (worker.js:9:1)'
+  )
+  expect(plainErrors.map(item => item.level)).toEqual(['error', 'error'])
+  expect(foregroundLogDisplayText(plainErrors[0], 'simple')).toBe(
+    'RangeError: could not load https://example.invalid\n    at load (runtime.js:2:1)'
+  )
 })
 
 test('closing a large robot directory removes its rows and keeps pinned entries available', async ({

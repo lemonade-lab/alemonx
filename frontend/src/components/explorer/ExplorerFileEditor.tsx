@@ -9,7 +9,7 @@ import {
 import { Button } from '../Button'
 import { ConfirmDialog } from '../ConfirmDialog'
 import { ExplorerMarkdownPreview } from './ExplorerMarkdownPreview'
-import { ExplorerSourceInput } from './ExplorerSourceInput'
+import { SourceTextarea } from '../SourceTextarea'
 
 export type ExplorerFileDraft = {
   content: string
@@ -184,7 +184,11 @@ export function ExplorerFileEditor({
       )}
       {canRead ? (
         <>
-          <ExplorerSourceInput
+          <SourceTextarea
+            aria-label={`编辑 ${file}`}
+            className="explorer-file-editor relative min-h-0 flex-1 resize-none overflow-auto bg-transparent p-4"
+            containerClassName="flex-1 bg-(--theme-surface-panel)"
+            wrap="off"
             hidden={showPreview}
             file={file}
             readOnly={
@@ -208,6 +212,7 @@ export function ExplorerFileEditor({
         title="重新加载磁盘版本"
         message="重新加载会放弃这个文件的未保存修改。"
         confirmLabel="重新加载"
+        confirmIcon={<RefreshCw className="size-4" aria-hidden="true" />}
         onCancel={() => setConfirmReload(false)}
         onConfirm={() => void reload()}
       />

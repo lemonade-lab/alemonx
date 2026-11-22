@@ -59,6 +59,23 @@ Use `alemonjs_list_robots` to find a robot, then `alemonjs_list_robot_backpack` 
 
 Workbench HTTP keys are scoped to the account that creates them and its robot list. The service log records the account, tool and result in `mcp.tool.called`. Keys survive workbench logout and service restarts. Users can revoke or regenerate their own key at any time. Revocation or regeneration immediately invalidates the old key. Only a key digest is stored, and the plaintext is shown when a key is created or regenerated. Keys issued before this change must be recreated. Workbench HTTP shares runtime state with the UI and supports development, foreground, and PM2. CLI connections support development and PM2. When account authentication is enabled, only a super administrator can start or stop Workbench HTTP or launch CLI MCP with `ALX_AUTH_TOKEN`.
 
+### Backpack maintenance
+
+| Operation | MCP tool |
+| --- | --- |
+| Inspect status, README, local changes, a diff, or stashes | `alemonjs_get_backpack_plugin_details` |
+| List versions and check the local Git state | `alemonjs_list_backpack_plugin_versions` |
+| Safely update one or more plugins | `alemonjs_update_backpack_plugins` |
+| Refresh versions or history, configure Git, switch versions, stash before switching, restore or drop stashes | `alemonjs_manage_backpack_plugin_version` |
+| Import a local folder or ZIP/TGZ/TAR.GZ archive | `alemonjs_import_backpack_plugin` |
+| Clone a Git repository with a branch, directory name, mirror, and depth | `alemonjs_clone_backpack_plugin` |
+| Set plugin states in bulk, list and change load order | `alemonjs_set_backpack_plugins_enabled`, `alemonjs_get_backpack_plugin_order`, `alemonjs_move_backpack_plugin` |
+| Read and set the `packages/*` workspace switch | `alemonjs_get_backpack_workspace`, `alemonjs_set_backpack_workspace` |
+
+Git version queries use previously fetched refs. Use `refresh-versions` after confirmation to fetch the latest refs, or `refresh-history` to expand a shallow checkout. Safe update skips dirty or ahead Git worktrees and non-Git plugins whose local edits cannot be verified. After confirmation, `switch` can select a specific npm version. For Git, `force-switch` discards edits or ahead commits, while `stash-switch` preserves edits in a stash and ahead commits in a backup branch.
+
+Import paths are relative to the robot directory on the server, for example `imports/my-plugin.zip`. Clients can also send an archive of up to 700 KiB as `archiveBase64`. Imports refuse to overwrite existing plugins. Writes require `confirm: true`. Version maintenance, safe updates, imports, clones, and workspace changes return task IDs for `alemonjs_get_project_task`. Send native JSON values when saving plugin configuration.
+
 ## Capability model
 
 | Layer | MCP capability | Purpose |

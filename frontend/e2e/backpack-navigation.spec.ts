@@ -21,6 +21,7 @@ async function fixture(
     delayList?: boolean
     sortable?: boolean
     fields?: PackageConfigField[]
+    longDocument?: boolean
   } = {}
 ) {
   const operations: Array<{ name: string; version: string; force?: boolean }> =
@@ -109,8 +110,12 @@ async function fixture(
           values: {}
         }
       })
-    if (url.pathname.endsWith('/package-readme'))
-      return route.fulfill({ json: { output: '# 示例插件文档' } })
+    if (url.pathname.endsWith('/package-readme')) {
+      const sections = options.longDocument
+        ? Array.from({ length: 60 }, (_, index) => `## 文档第 ${index + 1} 节\n\n测试段落。`).join('\n\n')
+        : ''
+      return route.fulfill({ json: { output: `# 示例插件文档\n\n${sections}` } })
+    }
     return route.fulfill({ json: { items: [] } })
   })
   await page.exposeFunction(
@@ -132,7 +137,9 @@ async function fixture(
     route.fulfill({
       contentType: 'text/html',
       body: `
-    <div id="root"></div><script type="module">
+    ${options.longDocument
+      ? '<div class="robot-workspace-content" style="height:100dvh"><div id="root" class="console-page"></div></div>'
+      : '<div id="root"></div>'}<script type="module">
     import '/src/styles.css';
     import RefreshRuntime from '/@react-refresh';
     RefreshRuntime.injectIntoGlobalHook(window); window.$RefreshReg$=()=>{}; window.$RefreshSig$=()=>type=>type;
@@ -214,13 +221,32 @@ test('plugin configuration groups fit a narrow panel and save nested edits', asy
   const addressField = login.getByRole('textbox', { name: /登录页地址/ })
   await expect(addressField).toBeHidden()
   await login.locator('summary').click()
-  await expect(login).toHaveCSS('background-color', 'rgb(29, 28, 26)')
+  await expect(login).toHaveCSS('background-color', 'rgb(33, 30, 25)')
   await expect(addressField).toHaveValue('')
   const loginBox = (await login.boundingBox())!
   const helpBox = (await help.boundingBox())!
   expect(helpBox.y).toBeGreaterThanOrEqual(loginBox.y + loginBox.height)
   expect(helpBox.width).toBe(loginBox.width)
   await page.setViewportSize({ width: 360, height: 800 })
+  const tabs = page.getByRole('tablist', { name: '插件详情' })
+  const tabGeometry = await tabs.getByRole('tab').evaluateAll(buttons =>
+    buttons.map(button => {
+      const icon = button.querySelector('svg')!.getBoundingClientRect()
+      const label = button.querySelector('span')!.getBoundingClientRect()
+      return {
+        gap: label.left - icon.right,
+        top: button.getBoundingClientRect().top,
+        labelHeight: label.height,
+        lineHeight: Number.parseFloat(getComputedStyle(button).lineHeight)
+      }
+    })
+  )
+  expect(tabGeometry).toHaveLength(6)
+  for (const tab of tabGeometry) {
+    expect(tab.gap).toBeGreaterThanOrEqual(4)
+    expect(tab.top).toBe(tabGeometry[0].top)
+    expect(tab.labelHeight).toBeLessThanOrEqual(tab.lineHeight + 1)
+  }
   await expect(login.getByText(`默认：${address}`)).toBeVisible()
   expect(await panel.evaluate(el => el.scrollWidth)).toBe(
     await panel.evaluate(el => el.clientWidth)
@@ -338,6 +364,26 @@ test('selected plugin and tab survive delayed loading on reload and remain scope
   await expect(
     page.getByRole('tab', { name: '文档', exact: true })
   ).toHaveAttribute('aria-selected', 'true')
+})
+
+test('a long plugin document scrolls inside its body while the tabs stay in place', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 620 })
+  await fixture(page, { longDocument: true })
+  await page.getByRole('button', { name: /fixture-plugin.*v1.2.3/ }).click()
+  const tabs = page.getByRole('tablist', { name: '插件详情' })
+  await tabs.getByRole('tab', { name: '文档', exact: true }).click()
+  const lastHeading = page.getByRole('heading', { name: '文档第 60 节', exact: true })
+  const initialY = (await tabs.boundingBox())!.y
+
+  await lastHeading.scrollIntoViewIfNeeded()
+  await expect(lastHeading).toBeInViewport()
+  await expect(tabs).toBeInViewport()
+  expect((await tabs.boundingBox())!.y).toBe(initialY)
+  expect(await page.locator('[data-workbench-body]').evaluate(body => body.scrollTop)).toBeGreaterThan(0)
+
+  await tabs.getByRole('tab', { name: '概览', exact: true }).click()
+  await tabs.getByRole('tab', { name: '文档', exact: true }).click()
+  await expect(page.getByRole('heading', { name: '示例插件文档' })).toBeInViewport()
 })
 
 test('navigation migration rejects unknown areas and non-navigation values', () => {

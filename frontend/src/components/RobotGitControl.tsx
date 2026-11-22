@@ -1,15 +1,24 @@
+import { createPortal } from 'react-dom'
+import { RefreshButton } from './RefreshButton'
 import { useNavigationState } from '../hooks/useNavigationState'
 import { useStoreState } from '../store/guideStore'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import {
+  Archive,
+  ArrowUpDown,
+  ChevronDown,
+  FilePenLine,
   GitBranch,
   GitCommitHorizontal,
   History,
-  Network,
   RefreshCw,
   Tags,
+  UserRound,
   X
 } from 'lucide-react'
+import { Button } from './Button'
+import { WorkbenchTools } from './WorkbenchTools'
+import { Modal } from './Modal'
 import { ConfirmDialog } from './ConfirmDialog'
 import { Tabs } from './Tabs'
 import { gitErrorMessage } from './gitFeedback'
@@ -17,9 +26,10 @@ import { GitSettingsDialog } from './GitSettingsDialog'
 import { GitBranchPanel } from './GitBranchPanel'
 import { describeGitCommand } from './gitCommandDescription'
 import { GitRemotePanel } from './GitRemotePanel'
-import { GitHistoryPanel } from './GitHistoryPanel'
-import { ChangeTree, DiffView } from './GitChanges'
-import { buildChangeTree, changeStatusLabel } from './gitChangeTree'
+import { GitCommitDetail, GitHistoryPanel } from './GitHistoryPanel'
+import { DiffView } from './GitChanges'
+import { GitChangeList, type GitDiffMode } from './GitChangeList'
+import { GitDiffPane } from './GitDiffPane'
 import type { GitAction, GitActionInput } from '../store/workspaceApi'
 import {
   useGitDiffQuery,
@@ -29,21 +39,26 @@ import {
 } from '../store/workspaceApi'
 
 type Project = { name: string; path: string }
-type Tab = 'commit' | 'history' | 'tag' | 'branch' | 'remote'
+type Tab = 'commit' | 'history' | 'tag'
+type Overlay = 'branch-manage' | 'remote' | 'stash'
 type Action = GitAction
 type Pending = Omit<GitActionInput, 'root'> | null
 
-const tabItems: Array<{
-  id: Tab
-  label: string
-  icon: typeof GitCommitHorizontal
-}> = [
-  { id: 'commit', label: '提交', icon: GitCommitHorizontal },
-  { id: 'history', label: '记录', icon: History },
-  { id: 'tag', label: '标签', icon: Tags },
-  { id: 'branch', label: '分支', icon: GitBranch },
-  { id: 'remote', label: '远程', icon: Network }
-]
+const tabItems = [
+  { id: 'commit', label: '变更', icon: <GitCommitHorizontal className="size-3.5" /> },
+  { id: 'history', label: '历史', icon: <History className="size-3.5" /> }
+] as const
+
+const historyItems = [
+  { id: 'history', label: '提交记录' },
+  { id: 'tag', label: '版本标签', icon: <Tags className="size-3.5" /> }
+] as const
+
+const overlayTitles: Record<Overlay, string> = {
+  'branch-manage': '管理分支',
+  remote: '远程同步',
+  stash: '临时保存'
+}
 
 const actionCopy: Record<
   Action,
@@ -94,51 +109,147 @@ const actionCopy: Record<
   }
 }
 
-export function RobotGitControl({ project }: { project: Project }) {
+function GitBranchOptions({ root, busy, onSelect, onManage }: {
+  root: string
+  busy: boolean
+  onSelect: (branch: string, currentBranch: string | undefined) => void
+  onManage: () => void
+}) {
+  const { currentData, isFetching, error, refetch } = useGitWorkspaceQuery({
+    root, view: 'branch', remote: '', offset: 0
+  })
+  return (
+    <>
+      <div className="flex min-h-0 flex-col gap-0.5 overflow-y-auto overscroll-contain">
+        {error ? (
+          <div className="px-2 py-1 text-xs" role="alert">
+            {gitErrorMessage(error, '无法读取 Git 分支。')}
+            <RefreshButton label="重新读取" onClick={() => void refetch()} />
+          </div>
+        ) : !currentData ? (
+          <p role="status" className="px-2 py-1 text-xs">正在读取分支…</p>
+        ) : currentData.branches.length === 0 ? (
+          <p className="px-2 py-1 text-xs text-(--theme-text-muted)">暂无本地分支</p>
+        ) : currentData.branches.map(item => (
+          <Button
+            variant="ghost"
+            key={item.name}
+            className="workbench-action-item h-auto! min-w-0 shrink-0 leading-snug! aria-current:bg-(--theme-accent-soft)! aria-current:text-(--theme-accent-text)! aria-current:opacity-100!"
+            disabled={busy || isFetching || item.current}
+            aria-current={item.current ? 'true' : undefined}
+            onClick={() => onSelect(item.name, currentData.branch)}
+          >
+            <GitBranch className="size-4 shrink-0" aria-hidden="true" />
+            <span className="min-w-0 flex-1 whitespace-normal [overflow-wrap:anywhere]">{item.name}</span>
+            {item.current && <span className="shrink-0 text-xs">当前分支</span>}
+          </Button>
+        ))}
+      </div>
+      <Button variant="ghost" className="workbench-action-item shrink-0 bg-(--theme-surface-raised)! hover:bg-(--theme-surface-hover)!" onClick={onManage}>
+        <GitBranch className="size-4 shrink-0" aria-hidden="true" />管理分支
+      </Button>
+    </>
+  )
+}
+
+export function RobotGitControl({ project, projects, onSelectProject, onOpenFile, diffTarget, diffTabsTarget }: {
+  project: Project
+  projects?: Array<Project & { id: string }>
+  onSelectProject?: (id: string) => void
+  onOpenFile?: (path: string) => void
+  diffTarget?: HTMLElement | null
+  diffTabsTarget?: HTMLElement | null
+}) {
   const root = project.path
-  const [tab, setTab] = useNavigationState<Tab>('git.tab', [root], 'commit', tabItems.map(item => item.id))
+  const tabsID = useId()
+  const [tab, setTab] = useNavigationState<Tab>('git.tab', [root], 'commit', ['commit', 'history', 'tag'])
+  const [overlay, setOverlay] = useStoreState<Overlay | null>(null)
+  const [selecting, setSelecting] = useStoreState(false)
+  const [outputFailed, setOutputFailed] = useStoreState(false)
+  const branchOverlay = overlay === 'branch-manage'
+  const view: Tab | 'branch' | 'remote' = branchOverlay
+    ? 'branch'
+    : overlay === 'remote' ? 'remote' : overlay === 'stash' ? 'commit' : tab
   const [historyOffset, setHistoryOffset] = useStoreState(0)
   const [inspectedRemote, setInspectedRemote] = useStoreState('')
   const [identityOpen, setIdentityOpen] = useStoreState(false)
   const [identityError, setIdentityError] = useStoreState('')
   const [selectedPaths, setSelectedPaths] = useStoreState<string[]>([])
-  const [diffMode, setDiffMode] = useStoreState<'staged' | 'unstaged'>(
+  const [diffMode, setDiffMode] = useStoreState<GitDiffMode>(
     'unstaged'
   )
   const gitQueryArgs = useMemo(
     () => ({
       root,
-      view: tab,
-      remote: tab === 'remote' ? inspectedRemote : '',
-      offset: historyOffset
+      view,
+      remote: view === 'remote' ? inspectedRemote : '',
+      offset: view === 'history' ? historyOffset : 0
     }),
-    [root, tab, inspectedRemote, historyOffset]
+    [root, view, inspectedRemote, historyOffset]
   )
   const {
     data,
+    currentData,
     isLoading: isInitialLoading,
     isFetching,
     error,
     refetch
   } = useGitWorkspaceQuery(gitQueryArgs, { skip: !root })
+  const changesQuery = useGitWorkspaceQuery(
+    { root, view: 'commit', remote: '', offset: 0 },
+    { skip: !root || view === 'commit' }
+  )
+  const workingData = view === 'commit' ? currentData : changesQuery.currentData
+  const context = workingData ?? data
   useEffect(() => {
     if (
-      tab === 'remote' &&
+      view === 'remote' &&
       inspectedRemote &&
-      data &&
-      !data.remotes.some(item => item.name === inspectedRemote)
+      currentData &&
+      !currentData.remotes.some(item => item.name === inspectedRemote)
     )
       setInspectedRemote('')
-  }, [tab, inspectedRemote, data, setInspectedRemote])
+  }, [view, inspectedRemote, currentData, setInspectedRemote])
   const [diffPath, setDiffPath] = useState<string | null>(null)
+  const [diffOpen, setDiffOpen] = useStoreState(false)
+  const [selectedCommit, setSelectedCommit] = useStoreState<string | null>(null)
+  const diffTrigger = useRef<HTMLElement | null>(null)
+  const changesBody = useRef<HTMLDivElement>(null)
+  const scrollPosition = useRef(0)
+  const inlineDiff = !diffTarget && (tab === 'commit' ? diffOpen && Boolean(diffPath) : tab === 'history' && Boolean(selectedCommit))
+
+  function rememberDetailEntrance() {
+    diffTrigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    scrollPosition.current = changesBody.current?.scrollTop ?? 0
+  }
+
+  function openDiff(path: string, mode: GitDiffMode) {
+    rememberDetailEntrance()
+    setDiffPath(path)
+    setDiffMode(mode)
+    setDiffOpen(true)
+  }
+
+  function closeDiff() {
+    setDiffOpen(false)
+    setSelectedCommit(null)
+    window.requestAnimationFrame(() => {
+      if (changesBody.current) changesBody.current.scrollTop = scrollPosition.current
+      diffTrigger.current?.focus({ preventScroll: true })
+    })
+  }
   const diffQuery = useGitDiffQuery(
     { root, path: diffPath ?? '', view: diffMode },
-    { skip: !root || !diffPath }
+    { skip: !root || !diffPath || !diffOpen || tab !== 'commit' }
   )
-  useEffect(() => {
-    setDiffPath(null)
+  const selectTab = (next: Tab) => {
+    setTab(next)
+    setDiffOpen(false)
+    setSelectedCommit(null)
     setSelectedPaths([])
-  }, [root, tab, setSelectedPaths])
+    setSelecting(false)
+    if (changesBody.current) changesBody.current.scrollTop = 0
+  }
   const [run, { isLoading }] = useGitWorkspaceActionMutation()
   const [initializeGit, { isLoading: isInitializing }] =
     useInitializeGitMutation()
@@ -156,7 +267,6 @@ export function RobotGitControl({ project }: { project: Project }) {
     'chore: initialize project'
   )
   const commitTextareaRef = useRef<HTMLTextAreaElement>(null)
-  // 提交说明框默认与按钮同高（单行），内容换行时才自动增高。
   useEffect(() => {
     const textarea = commitTextareaRef.current
     if (!textarea) return
@@ -178,6 +288,7 @@ export function RobotGitControl({ project }: { project: Project }) {
     setLastCommand(
       `${actionCopy[request.action].title}${object ? ` · ${object}` : ''}${destination}`
     )
+    setOutputFailed(false)
     setOutput('正在执行…')
     try {
       const result = await run({ root, ...request }).unwrap()
@@ -185,6 +296,7 @@ export function RobotGitControl({ project }: { project: Project }) {
       if (request.action === 'commit') {
         setCommitMessage('')
         setDiffPath(null)
+        setDiffOpen(false)
       }
       if (request.action === 'branch-create') setBranchName('')
       if (request.action === 'tag-create') {
@@ -211,6 +323,7 @@ export function RobotGitControl({ project }: { project: Project }) {
       return null
     } catch (reason) {
       const message = gitErrorMessage(reason, 'Git 操作未完成。')
+      setOutputFailed(true)
       setOutput(message)
       await refetch()
       return message
@@ -243,255 +356,184 @@ export function RobotGitControl({ project }: { project: Project }) {
         repository: repository.trim(),
         message: initialMessage.trim()
       }).unwrap()
+      setOutputFailed(false)
       setOutput(result.output || 'Git 仓库已初始化。')
       await refetch()
     } catch (reason) {
+      setOutputFailed(true)
       setOutput(gitErrorMessage(reason, 'Git 初始化未完成。'))
     }
   }
-  const changes = data?.changes ?? []
+  const changes = workingData?.changes ?? []
   const stagedChanges = changes.filter(change => change.staged)
   const checkedChanges = changes.filter(change =>
     selectedPaths.includes(change.path)
   )
-  const changeTree = buildChangeTree(changes)
   const remote = data?.remoteName || data?.remotes[0]?.name || ''
-  const atRepositoryRoot = data?.atRepositoryRoot ?? false
+  const atRepositoryRoot = context?.atRepositoryRoot ?? false
+  const conflictChanges = changes.filter(change => change.conflict)
+  const unstagedChanges = changes.filter(change => change.unstaged && !change.conflict)
+  const eligibleToStage = checkedChanges.filter(change => change.unstaged)
+  const eligibleToUnstage = checkedChanges.filter(change => change.staged)
+  const gitBusy = isLoading || isFetching
+  const needsIdentity = Boolean(workingData && (!workingData.authorName || !workingData.authorEmail))
+  const toggleStage = (action: 'stage' | 'unstage', path: string) => {
+    if (gitBusy) return
+    void execute({ action, paths: [path], expectedBranch: workingData?.branch })
+  }
+  function checkFile(path: string, checked: boolean) {
+    setSelectedPaths(previous => checked ? [...previous, path] : previous.filter(item => item !== path))
+  }
+  function openIdentity() {
+    setAuthorName(context?.authorName ?? '')
+    setAuthorEmail(context?.authorEmail ?? '')
+    setIdentityError('')
+    setOverlay(null)
+    setIdentityOpen(true)
+  }
 
   const confirm = pending ? actionCopy[pending.action] : null
 
   const commitPanel = (
-    <section className="git-tab-panel git-commit-panel grid content-start gap-3 rounded-lg border border-slate-200 bg-white p-4">
-      <div className="git-tab-heading git-commit-heading flex gap-3 border-b border-slate-200 pb-3">
+    <section className="grid content-start gap-4">
+      <div className="grid gap-2">
         <textarea
           ref={commitTextareaRef}
-          className="max-h-40 flex-1 min-h-9 min-w-0 resize-none overflow-y-auto rounded-md border border-slate-300 bg-white px-2.5 py-2 text-xs text-slate-800 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
+          className="max-h-40 min-h-12 w-full min-w-0 resize-none rounded-md border-0 bg-(--theme-surface-input) px-3 py-2 text-sm"
           aria-label="提交说明"
           value={commitMessage}
           onChange={event => setCommitMessage(event.target.value)}
           placeholder="例如：修复登录配置"
-          rows={1}
+          rows={2}
         />
-        <button
-          className="primary-button shrink-0 max-w-60"
-          disabled={
-            isLoading ||
-            isFetching ||
-            !stagedChanges.length ||
-            changes.some(change => change.conflict) ||
-            !commitMessage.trim()
-          }
-          onClick={() =>
-            request(
-              'commit',
-              undefined,
-              commitMessage,
-              stagedChanges.map(change => change.path)
-            )
-          }
-          title={
-            !stagedChanges.length
-              ? '请先暂存要提交的文件'
-              : !commitMessage.trim()
-                ? '请先填写提交说明'
-                : '仅提交已暂存内容'
-          }
+        <Button
+          variant="primary"
+          className="w-full gap-1.5"
+          disabled={gitBusy || needsIdentity || !stagedChanges.length || conflictChanges.length > 0 || !commitMessage.trim()}
+          onClick={() => request('commit', undefined, commitMessage, stagedChanges.map(change => change.path))}
         >
-          提交已暂存 ({stagedChanges.length})
-        </button>
-      </div>
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className="text-xs text-slate-600">
-          当前分支：{data?.branch || '分离 HEAD'}
-        </span>
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            className="secondary-button whitespace-nowrap"
-            disabled={isLoading || isFetching || !remote || !data?.branch}
-            onClick={() =>
-              request('push', undefined, undefined, undefined, remote)
-            }
-            title={`推送当前分支已提交的内容到 ${remote}`}
-          >
-            推送当前分支
-          </button>
-        </div>
-      </div>
-      <div className="flex flex-wrap items-center gap-2 text-xs">
-        <label className="flex items-center gap-1.5 text-slate-600">
-          <input
-            type="checkbox"
-            aria-label="选择全部变更"
-            checked={
-              changes.length > 0 && checkedChanges.length === changes.length
-            }
-            disabled={isLoading || isFetching || !changes.length}
-            onChange={event =>
-              setSelectedPaths(
-                event.target.checked ? changes.map(change => change.path) : []
-              )
-            }
-          />
-          已选 {checkedChanges.length} / {changes.length}
-        </label>
-        <button
-          className="secondary-button"
-          disabled={isLoading || isFetching || !checkedChanges.length}
-          onClick={() =>
-            request(
-              'stage',
-              undefined,
-              undefined,
-              checkedChanges.map(change => change.path)
-            )
-          }
-        >
-          暂存所选
-        </button>
-        <button
-          className="secondary-button"
-          disabled={
-            isLoading ||
-            isFetching ||
-            !checkedChanges.some(change => change.staged)
-          }
-          onClick={() =>
-            request(
-              'unstage',
-              undefined,
-              undefined,
-              checkedChanges
-                .filter(change => change.staged)
-                .map(change => change.path)
-            )
-          }
-        >
-          取消暂存
-        </button>
-        <button
-          className="text-button text-red-700"
-          disabled={
-            isLoading ||
-            isFetching ||
-            !checkedChanges.length ||
-            checkedChanges.some(
-              change =>
-                !change.unstaged || change.status === '??' || change.conflict
-            )
-          }
-          onClick={() =>
-            request(
-              'restore',
-              undefined,
-              undefined,
-              checkedChanges.map(change => change.path)
-            )
-          }
-        >
-          撤销未暂存改动
-        </button>
-      </div>
-      {changes.some(change => change.conflict) && (
-        <p
-          role="alert"
-          className="rounded bg-amber-50 p-2 text-xs text-amber-800"
-        >
-          存在冲突。请在文件编辑器处理冲突后暂存文件，或在“分支”页中止合并。
-        </p>
-      )}
-      <div className="git-commit-workspace">
-        <div className="git-commit-tree">
-          {changes.length ? (
-            <ChangeTree
-              nodes={changeTree}
-              selectedPath={diffPath}
-              onSelect={path => {
-                setDiffPath(path)
-                setDiffMode(
-                  changes.find(change => change.path === path)?.staged
-                    ? 'staged'
-                    : 'unstaged'
-                )
-              }}
-              checkedPaths={selectedPaths}
-              onCheck={(path, checked) =>
-                setSelectedPaths(previous =>
-                  checked
-                    ? [...previous, path]
-                    : previous.filter(item => item !== path)
-                )
-              }
-            />
-          ) : (
-            <p className="grid min-h-24 place-items-center text-xs text-slate-500">
-              工作区很干净，没有需要提交的改动。
-            </p>
-          )}
-        </div>
-        {diffPath && (
-          <div className="git-diff-panel">
-            <div className="git-diff-head">
-              <div className="flex min-w-0 flex-1 items-center gap-2">
-                <code className="min-w-0 flex-1 truncate font-mono text-xs text-slate-700">
-                  {diffPath}
-                </code>
-                {diffQuery.data?.status && (
-                  <code className="shrink-0 rounded bg-brand-50 px-1 text-[10px] font-medium text-brand-700">
-                    {changeStatusLabel(diffQuery.data.status)}
-                  </code>
-                )}
-              </div>
-              <button
-                type="button"
-                onClick={() => setDiffPath(null)}
-                className="grid size-6 shrink-0 place-items-center rounded text-slate-400 hover:bg-slate-100 hover:text-slate-700"
-                aria-label="关闭变更对比"
-                title="关闭对比"
-              >
-                <X className="size-3.5" />
-              </button>
-            </div>
-            <div className="flex gap-2 border-b border-slate-200 p-2">
-              <button
-                className="text-button"
-                aria-pressed={diffMode === 'unstaged'}
-                onClick={() => setDiffMode('unstaged')}
-              >
-                未暂存对比
-              </button>
-              <button
-                className="text-button"
-                aria-pressed={diffMode === 'staged'}
-                onClick={() => setDiffMode('staged')}
-              >
-                已暂存对比
-              </button>
-            </div>
-            {diffQuery.isFetching ? (
-              <p className="git-diff-hint">正在读取变更对比…</p>
-            ) : diffQuery.isError || !diffQuery.data ? (
-              <p className="git-diff-hint">无法读取变更对比。</p>
-            ) : diffQuery.data.missing || diffQuery.data.binary ? (
-              <p className="git-diff-hint">{diffQuery.data.diff}</p>
-            ) : diffQuery.data.diff ? (
-              <>
-                <DiffView
-                  diff={diffQuery.data.diff}
-                  untracked={diffQuery.data.untracked}
-                />
-                {diffQuery.data.truncated && (
-                  <p className="git-diff-hint">diff 过长，已截断显示。</p>
-                )}
-              </>
-            ) : (
-              <p className="git-diff-hint">
-                当前对比没有差异，可切换暂存视图或刷新状态。
-              </p>
-            )}
+          {stagedChanges.length ? `提交 ${stagedChanges.length} 个文件` : '提交'}
+        </Button>
+        {needsIdentity && (
+          <div className="flex items-center justify-between gap-2 text-xs text-(--theme-text-muted)">
+            尚未设置提交身份
+            <Button variant="ghost" size="sm" onClick={openIdentity}>设置身份</Button>
           </div>
         )}
       </div>
-      <section className="grid gap-2 border-t border-slate-200 pt-3">
+      {conflictChanges.length > 0 && (
+        <div className="grid gap-2 rounded-md bg-(--theme-warning-soft) p-2 text-xs text-(--theme-warning-text)">
+          <span role="alert">有 {conflictChanges.length} 个文件存在冲突。请先编辑并暂存冲突文件。</span>
+          {context?.mergeInProgress && (
+            <Button variant="ghost" disabled={gitBusy} onClick={() => request('merge-abort', context.branch)}>中止合并</Button>
+          )}
+        </div>
+      )}
+      {changes.length ? (
+        <>
+          {selecting && (
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+                <label className="flex items-center gap-1.5">
+                  <input
+                    type="checkbox"
+                    aria-label="选择全部变更"
+                    checked={checkedChanges.length === changes.length}
+                    onChange={event => setSelectedPaths(event.target.checked ? changes.map(change => change.path) : [])}
+                  />
+                  已选 {checkedChanges.length}
+                </label>
+                <Button variant="ghost" size="sm" disabled={gitBusy || !eligibleToStage.length} onClick={() => request('stage', undefined, undefined, eligibleToStage.map(change => change.path))}>暂存所选</Button>
+                <Button variant="ghost" size="sm" disabled={gitBusy || !eligibleToUnstage.length} onClick={() => request('unstage', undefined, undefined, eligibleToUnstage.map(change => change.path))}>取消暂存</Button>
+                <Button variant="danger" size="sm" disabled={gitBusy || !checkedChanges.length || checkedChanges.some(change => !change.unstaged || change.status === '??' || change.conflict)} onClick={() => request('restore', undefined, undefined, checkedChanges.map(change => change.path))}>
+                  撤销未暂存改动
+                </Button>
+            </div>
+          )}
+          {conflictChanges.length > 0 && (
+            <GitChangeList label="冲突" changes={conflictChanges} mode="unstaged" selection={{ path: diffPath, mode: diffMode }} checkedPaths={selectedPaths} busy={gitBusy} onSelect={openDiff} onCheck={selecting ? checkFile : undefined} onToggle={path => request('stage', undefined, undefined, [path])} />
+          )}
+          <GitChangeList
+            label="已暂存"
+            changes={stagedChanges.filter(change => !change.conflict)}
+            mode="staged"
+            selection={{ path: diffPath, mode: diffMode }}
+            checkedPaths={selectedPaths}
+            busy={gitBusy}
+            onSelect={openDiff}
+            onCheck={selecting ? checkFile : undefined}
+            onToggle={path => toggleStage('unstage', path)}
+            actions={
+              <Button
+                variant="ghost"
+                size="sm"
+                className="bg-transparent! hover:bg-(--theme-surface-hover)!"
+                aria-pressed={selecting}
+                onClick={() => {
+                  setSelecting(!selecting)
+                  setSelectedPaths([])
+                }}
+              >
+                {selecting ? '退出选择' : '批量操作'}
+              </Button>
+            }
+          />
+          <GitChangeList label="未暂存" changes={unstagedChanges} mode="unstaged" selection={{ path: diffPath, mode: diffMode }} checkedPaths={selectedPaths} busy={gitBusy} onSelect={openDiff} onCheck={selecting ? checkFile : undefined} onToggle={path => toggleStage('stage', path)} />
+        </>
+      ) : (
+        <p className="m-0 px-1 py-2 text-xs text-(--theme-text-muted)">工作区没有需要提交的改动。</p>
+      )}
+    </section>
+  )
+
+  const diffPanel = diffPath && diffOpen && tab === 'commit' && (
+    <GitDiffPane
+      title="文件差异"
+      path={diffPath}
+      inline={inlineDiff}
+      onClose={closeDiff}
+      actions={
+        <div className="flex flex-wrap gap-1">
+          <Button variant="ghost" size="sm" className="px-1.5! aria-pressed:bg-(--theme-accent-soft)! aria-pressed:text-(--theme-accent-text)!" aria-pressed={diffMode === 'unstaged'} onClick={() => setDiffMode('unstaged')}>未暂存差异</Button>
+          <Button variant="ghost" size="sm" className="px-1.5! aria-pressed:bg-(--theme-accent-soft)! aria-pressed:text-(--theme-accent-text)!" aria-pressed={diffMode === 'staged'} onClick={() => setDiffMode('staged')}>已暂存差异</Button>
+          {onOpenFile && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="ml-auto gap-1.5 px-1.5!"
+              disabled={diffQuery.isFetching || !diffQuery.currentData || diffQuery.currentData.missing || diffQuery.currentData.binary}
+              onClick={() => {
+                setDiffOpen(false)
+                onOpenFile(diffPath)
+              }}
+            >
+              <FilePenLine className="size-3.5" aria-hidden="true" /> 打开文件
+            </Button>
+          )}
+        </div>
+      }
+    >
+      {diffQuery.isFetching ? (
+        <p className="git-diff-hint">正在读取变更对比…</p>
+      ) : diffQuery.isError || !diffQuery.currentData ? (
+        <div className="git-diff-hint">
+          <p role="alert">无法读取变更对比。</p>
+          <RefreshButton label="重新读取" onClick={() => void diffQuery.refetch()} />
+        </div>
+      ) : diffQuery.currentData.missing || diffQuery.currentData.binary ? (
+        <p className="git-diff-hint">{diffQuery.currentData.diff}</p>
+      ) : diffQuery.currentData.diff ? (
+        <>
+          <DiffView diff={diffQuery.currentData.diff} untracked={diffQuery.currentData.untracked} />
+          {diffQuery.currentData.truncated && <p className="git-diff-hint">差异过长，已截断显示。</p>}
+        </>
+      ) : (
+        <p className="git-diff-hint">当前没有差异。</p>
+      )}
+    </GitDiffPane>
+  )
+
+  const stashPanel = (
+      <section className="grid gap-2">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <strong className="text-xs text-slate-700">临时保存</strong>
           <button
@@ -518,7 +560,7 @@ export function RobotGitControl({ project }: { project: Project }) {
           保存包含新增文件和暂存内容。恢复后保留记录，确认无误后可删除。
           {!atRepositoryRoot && '请在仓库根目录使用临时保存。'}
         </p>
-        {data?.stashes?.map(stash => (
+        {workingData?.stashes?.map(stash => (
           <div
             key={stash.sha}
             className="flex flex-wrap items-center gap-2 text-xs"
@@ -551,23 +593,29 @@ export function RobotGitControl({ project }: { project: Project }) {
           </div>
         ))}
       </section>
-    </section>
   )
 
   const historyPanel = (
     <GitHistoryPanel
-      root={root}
       commits={data?.commits ?? []}
       offset={historyOffset}
       hasMore={data?.historyHasMore ?? false}
       busy={isFetching || isLoading}
-      onPage={setHistoryOffset}
+      onPage={offset => {
+        closeDiff()
+        setHistoryOffset(offset)
+      }}
+      sha={selectedCommit}
+      onSelect={sha => {
+        rememberDetailEntrance()
+        setSelectedCommit(sha)
+      }}
     />
   )
 
   const tagPanel = (
-    <section className="grid gap-3 rounded-lg border border-slate-200 bg-white p-4">
-      <div className="flex items-end justify-between gap-3 border-b border-slate-200 pb-3">
+    <section className="git-tag-panel grid min-w-0 gap-3">
+      <div className="flex items-end justify-between gap-3 pb-1">
         <div className="grid gap-1">
           <strong className="text-sm font-semibold text-slate-800">
             版本标签
@@ -576,27 +624,27 @@ export function RobotGitControl({ project }: { project: Project }) {
             创建带说明的本地标签；确认后可单独推送。
           </span>
         </div>
-        <small className="text-xs text-slate-400">
+        <small className="shrink-0 text-xs text-(--theme-text-muted)">
           {data?.tags.length ?? 0} 个
         </small>
       </div>
       <div className="git-tag-form grid gap-2">
         <input
-          className="h-9 rounded-md border border-slate-300 px-2.5 text-xs outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
+          className="h-9 w-full min-w-0 rounded-md border-0 bg-(--theme-surface-input) px-2.5 text-xs"
           aria-label="标签名"
           value={tagName}
           onChange={event => setTagName(event.target.value)}
           placeholder="标签名，例如 v1.2.3"
         />
         <input
-          className="h-9 rounded-md border border-slate-300 px-2.5 text-xs outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
+          className="h-9 w-full min-w-0 rounded-md border-0 bg-(--theme-surface-input) px-2.5 text-xs"
           aria-label="标签说明"
           value={tagMessage}
           onChange={event => setTagMessage(event.target.value)}
           placeholder="标签说明，例如 release: v1.2.3"
         />
         <button
-          className="secondary-button"
+          className="secondary-button whitespace-nowrap"
           disabled={
             isLoading || isFetching || !tagName.trim() || !tagMessage.trim()
           }
@@ -609,14 +657,14 @@ export function RobotGitControl({ project }: { project: Project }) {
         <ul className="grid gap-1">
           {data.tags.map(item => (
             <li
-              className="flex flex-wrap items-center gap-3 border-b border-slate-100 px-2 py-2 last:border-0"
+              className="flex min-w-0 flex-wrap items-center gap-2 rounded-md bg-(--theme-surface-input) px-2 py-2"
               key={item.name}
             >
-              <code className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-700">
+              <code className="max-w-full rounded bg-(--theme-surface-raised) px-1.5 py-0.5 text-xs [overflow-wrap:anywhere]">
                 {item.name}
               </code>
-              <span className="grid min-w-0 flex-1 gap-1">
-                <strong className="text-xs font-semibold text-slate-700">
+              <span className="grid min-w-0 flex-[1_1_6rem] gap-1">
+                <strong className="text-xs font-semibold [overflow-wrap:anywhere]">
                   {item.subject || '无说明'}
                 </strong>
                 <small className="text-[11px] text-slate-400">
@@ -675,50 +723,154 @@ export function RobotGitControl({ project }: { project: Project }) {
     />
   )
 
-  const panel =
-    tab === 'commit'
-      ? commitPanel
-      : tab === 'history'
-        ? historyPanel
-        : tab === 'tag'
-          ? tagPanel
-          : tab === 'branch'
-            ? branchPanel
-            : remotePanel
+  const panel = tab === 'commit' ? commitPanel : tab === 'tag' ? tagPanel : historyPanel
+  const primaryTab = tab === 'commit' ? 'commit' : 'history'
+  const detail = tab === 'history' && selectedCommit
+    ? <GitCommitDetail root={root} sha={selectedCommit} inline={inlineDiff} onClose={closeDiff} />
+    : diffPanel
+  const detailLabel = tab === 'history' && selectedCommit
+    ? `提交 ${selectedCommit.slice(0, 8)}`
+    : diffPath?.split('/').at(-1) || '文件差异'
+  const hasRemote = Boolean(context?.remotes.length)
+  const syncLabel = !hasRemote ? '未配置' : context?.upstream ? `↑${context.ahead} ↓${context.behind}` : '未关联'
+  const refresh = () => {
+    void refetch()
+    if (view !== 'commit' && changesQuery.currentData) void changesQuery.refetch()
+    if (diffPath && diffOpen && tab === 'commit') void diffQuery.refetch()
+  }
+  const operationStatus = output && (
+    <div className="shrink-0 bg-(--theme-surface-input) px-3 py-1.5 text-xs">
+      {outputFailed && <p role="alert" className="m-0 break-words text-(--theme-danger)">{output}</p>}
+      {!outputFailed && (
+        <details>
+          <summary className="cursor-pointer truncate" title={lastCommand}>
+            {isLoading ? '正在执行' : '操作结果'}{lastCommand ? ` · ${lastCommand}` : ''}
+          </summary>
+          <pre className="mt-2 max-h-28 overflow-auto whitespace-pre-wrap">{output}</pre>
+        </details>
+      )}
+    </div>
+  )
   return (
-    <section aria-label="Git 管理" className="flex min-h-0 min-w-0 flex-1 flex-col bg-(--theme-surface-panel)">
-      <header className="flex shrink-0 items-center justify-between gap-2 border-b border-(--theme-border-subtle) px-3 py-2">
-        <div className="grid min-w-0 gap-0.5">
-          <h2 className="truncate text-sm font-semibold">{project.name} · Git</h2>
-          <small className="truncate text-xs text-(--theme-text-muted)" title={data?.gitRoot || project.path}>
-            {data?.branch ? `分支 ${data.branch}` : data?.repository ? '分离 HEAD' : '未初始化'} · {data?.gitRoot || project.path}
-          </small>
+    <section aria-label="Git 管理" className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-(--theme-surface-raised)">
+      <header inert={inlineDiff} className="grid shrink-0 grid-cols-1 gap-2 px-3 pt-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="min-w-0 flex-[1_1_5rem] text-sm font-semibold">
+            <h2 className={projects && projects.length > 1 && onSelectProject ? 'sr-only' : 'truncate'} aria-label={`${project.name} · Git`} title={context?.gitRoot || project.path}>
+              {project.name}
+            </h2>
+            {projects && projects.length > 1 && onSelectProject && (
+              <WorkbenchTools
+                label={`选择 Git 仓库，当前 ${project.name}`}
+                menuLabel="选择 Git 仓库"
+                menuClassName="overflow-y-auto border-0!"
+                triggerView={{
+                  className: 'flex min-h-8 max-w-full items-center gap-1 rounded-md px-1 text-left hover:bg-(--theme-surface-hover)',
+                  title: context?.gitRoot || project.path,
+                  content: <><span className="min-w-0 truncate">{project.name}</span><ChevronDown className="size-3.5 shrink-0" aria-hidden="true" /></>
+                }}
+                restoreFocusOnClose
+              >
+                {close => projects.map(item => (
+                  <Button
+                    variant="ghost"
+                    key={item.id}
+                    className="workbench-action-item"
+                    aria-current={item.path === root ? 'true' : undefined}
+                    onClick={() => {
+                      close()
+                      if (item.path !== root) onSelectProject(item.id)
+                    }}
+                  >
+                    <GitBranch className="size-4 shrink-0" aria-hidden="true" />
+                    <span className="grid min-w-0 flex-1 gap-0.5">
+                      <strong className="truncate">{item.name}</strong>
+                      <small className="truncate text-(--theme-text-muted)" title={item.path}>{item.path}</small>
+                    </span>
+                    {item.path === root && <span className="shrink-0 text-xs">当前</span>}
+                  </Button>
+                ))}
+              </WorkbenchTools>
+            )}
+          </div>
+          {context?.repository ? (
+            <div className="flex min-w-0 max-w-full items-center gap-1">
+              <WorkbenchTools
+                label="切换 Git 分支"
+                menuLabel="选择 Git 分支"
+                menuClassName="flex! w-64! flex-col overflow-hidden border-0!"
+                triggerView={{
+                  className: 'secondary-button min-h-8 w-full max-w-34 gap-1.5 px-2!',
+                  title: context.branch || '分离 HEAD',
+                  content: <>
+                    <GitBranch className="size-3.5 shrink-0" aria-hidden="true" />
+                    <span className="truncate">{context.branch || '分离 HEAD'}</span>
+                    <ChevronDown className="size-3 shrink-0" aria-hidden="true" />
+                  </>
+                }}
+                restoreFocusOnClose
+              >
+                {close => (
+                  <GitBranchOptions
+                    root={root}
+                    busy={gitBusy}
+                    onSelect={(value, expectedBranch) => {
+                      close()
+                      void execute({ action: 'branch-switch', value, expectedBranch })
+                    }}
+                    onManage={() => {
+                      close()
+                      setOverlay('branch-manage')
+                    }}
+                  />
+                )}
+              </WorkbenchTools>
+              <Button variant="secondary" size="sm" className="shrink-0 gap-1.5 px-2! whitespace-nowrap" aria-label={`同步状态 ${syncLabel}`} onClick={() => setOverlay('remote')}>
+                <ArrowUpDown className="size-3.5" aria-hidden="true" />{syncLabel}
+              </Button>
+              <WorkbenchTools
+                label="仓库更多操作"
+                menuLabel="仓库操作菜单"
+                align="end"
+                menuClassName="overflow-y-auto border-0!"
+                restoreFocusOnClose
+              >
+                {close => (
+                  <>
+                    <Button variant="ghost" className="workbench-action-item" disabled={gitBusy} onClick={() => { close(); refresh() }}>
+                      <RefreshCw aria-hidden="true" />刷新 Git 状态
+                    </Button>
+                    <Button variant="ghost" className="workbench-action-item" onClick={() => { close(); openIdentity() }}>
+                      <UserRound aria-hidden="true" />提交身份
+                    </Button>
+                    <Button variant="ghost" className="workbench-action-item" onClick={() => { close(); setOverlay('stash') }}>
+                      <Archive aria-hidden="true" />临时保存
+                    </Button>
+                  </>
+                )}
+              </WorkbenchTools>
+            </div>
+          ) : (
+            <RefreshButton label="刷新 Git 状态" disabled={gitBusy} onClick={refresh} />
+          )}
         </div>
-        <button
-          className="icon-button size-8 p-0"
-          disabled={isFetching || isLoading}
-          onClick={() => {
-            void refetch()
-            if (diffPath) void diffQuery.refetch()
-          }}
-          aria-label="刷新 Git 状态"
-          title="刷新 Git 状态"
-        >
-          <RefreshCw className="size-4" />
-        </button>
+        {context?.repository && (
+          <Tabs ariaLabel="Git 功能" idPrefix={tabsID} items={tabItems} onChange={selectTab} value={primaryTab} variant="pill" />
+        )}
+        {context?.repository && tab !== 'commit' && (
+          <Tabs ariaLabel="历史内容" items={historyItems} onChange={selectTab} value={tab} variant="pill" />
+        )}
       </header>
       {isInitialLoading ? (
         <p className="grid min-h-40 place-items-center text-sm text-slate-500">
           正在读取 Git 状态…
         </p>
-      ) : error ? (
+      ) : error && !context?.repository ? (
         <div className="grid min-h-40 place-items-center gap-2 p-4 text-sm text-slate-500">
           <p role="alert">
             {gitErrorMessage(error, '无法读取 Git 状态，请确认目录可访问。')}
           </p>
-          <button className="secondary-button" onClick={() => void refetch()}>
-            重新读取
-          </button>
+          <RefreshButton label="重新读取" onClick={() => void refetch()} />
         </div>
       ) : !data?.repository ? (
         <section className="grid min-h-0 flex-1 content-start gap-4 overflow-auto p-4 text-center">
@@ -783,64 +935,79 @@ export function RobotGitControl({ project }: { project: Project }) {
           )}
         </section>
       ) : (
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-hidden p-3">
-          <div className="flex min-w-0 shrink-0 items-center gap-2">
-            <Tabs
-              className="min-h-10 min-w-0 flex-1 overflow-x-auto overflow-y-hidden [&_button]:shrink-0 [&_button]:whitespace-nowrap [&_svg]:shrink-0"
-              ariaLabel="Git 功能"
-              items={tabItems.map(item => {
-                const Icon = item.icon
-                return {
-                  id: item.id,
-                  icon: <Icon className="size-3.5" />,
-                  label: item.label
-                }
-              })}
-              onChange={setTab}
-              value={tab}
-              variant="pill"
-            />
-            <button
-              className="secondary-button shrink-0 whitespace-nowrap"
-              disabled={isLoading || isFetching}
-              onClick={() => {
-                setAuthorName(data.authorName ?? '')
-                setAuthorEmail(data.authorEmail ?? '')
-                setIdentityError('')
-                setIdentityOpen(true)
-              }}
-            >
-              提交身份
-            </button>
-          </div>
+        <>
           <div
-            key={tab}
+            ref={changesBody}
+            inert={inlineDiff}
+            id={`${tabsID}-panel-${primaryTab}`}
             role="tabpanel"
-            aria-label={tabItems.find(item => item.id === tab)?.label}
-            className="min-h-0 min-w-0 flex-1 overflow-auto"
+            aria-labelledby={`${tabsID}-tab-${primaryTab}`}
+            className="relative min-h-0 min-w-0 flex-1 overflow-auto overscroll-contain px-3 py-3"
           >
-            <div className="grid min-w-0 content-start gap-3">
-              {!atRepositoryRoot && (
-                <p className="break-words rounded bg-amber-50 p-2 text-xs text-amber-800">
-                  当前项目位于父仓库内。文件暂存和撤销限制在本项目；分支切换、合并、同步和推送作用于整个仓库。仓库：
-                  {data.gitRoot}
-                </p>
-              )}
-              {panel}
-              {output && (
-                <section aria-label="执行结果" className="grid min-w-0 gap-1">
-                  <strong className="text-xs text-slate-600">
-                    上次操作：{lastCommand || 'Git 初始化'}
-                  </strong>
-                  <pre className="overflow-auto rounded-lg bg-slate-950 p-3 text-xs leading-5 text-slate-200">
-                    {output}
-                  </pre>
-                </section>
-              )}
-            </div>
+            {!atRepositoryRoot && context?.gitRoot && (
+              <p className="mb-3 rounded bg-(--theme-warning-soft) p-2 text-xs break-words text-(--theme-warning-text)">
+                当前项目位于父仓库内。文件暂存和撤销限制在本项目；分支和同步操作作用于整个仓库。
+              </p>
+            )}
+            {!currentData && isFetching && !overlay ? (
+              <p role="status" className="text-xs text-(--theme-text-muted)">正在读取 Git 状态…</p>
+            ) : error && !overlay ? (
+              <div className="grid gap-2 text-xs text-(--theme-text-muted)">
+                <p role="alert">{gitErrorMessage(error, '无法读取 Git 状态。')}</p>
+                <RefreshButton label="重新读取" onClick={refresh} />
+              </div>
+            ) : panel}
           </div>
-        </div>
+          {!overlay && operationStatus}
+          {detail && (diffTarget ? createPortal(detail, diffTarget) : detail)}
+          {detail && diffTarget && diffTabsTarget && createPortal(
+            <div className="flex max-w-40 shrink-0 items-center gap-1 rounded-md bg-(--theme-surface-active) pl-2" aria-current="page">
+              <span className="min-w-0 truncate text-xs text-(--theme-accent-text)" title={detailLabel}>{detailLabel}</span>
+              <Button variant="icon" className="shrink-0" aria-label="关闭差异标签" onClick={closeDiff}>
+                <X className="size-3.5" aria-hidden="true" />
+              </Button>
+            </div>,
+            diffTabsTarget
+          )}
+        </>
       )}
+      <Modal open={overlay !== null} ariaLabel={overlay ? overlayTitles[overlay] : undefined} onClose={() => setOverlay(null)} className="p-3">
+        <section className="modal-surface modal-surface-flush flex max-h-[75dvh] w-full max-w-xl min-w-0 flex-col overflow-hidden">
+          <header className="flex shrink-0 items-center justify-between gap-2">
+            <strong>{overlay && overlayTitles[overlay]}</strong>
+            <Button variant="icon" aria-label="关闭仓库操作" onClick={() => setOverlay(null)}><X className="size-4" aria-hidden="true" /></Button>
+          </header>
+          <div className="grid min-h-0 min-w-0 gap-3 overflow-auto p-3">
+            {overlay === 'branch-manage' && currentData && branchPanel}
+            {overlay === 'remote' && currentData && (
+              <>
+                <div className="grid gap-1 rounded-lg bg-(--theme-surface-input) p-3">
+                  <strong className="truncate text-sm" title={currentData.upstream || currentData.branch}>
+                    {currentData.upstream || currentData.branch || '分离 HEAD'}
+                  </strong>
+                  <span className="text-xs text-(--theme-text-muted)">
+                    {currentData.upstream ? `待推送 ${currentData.ahead} 个 · 待拉取 ${currentData.behind} 个` : '当前分支尚未关联上游'}
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button disabled={gitBusy || !remote} onClick={() => request('fetch', undefined, undefined, undefined, remote)}>获取</Button>
+                  <Button disabled={gitBusy || !remote || !currentData.branch || currentData.mergeInProgress} onClick={() => request('pull', currentData.branch, undefined, undefined, remote)}>拉取</Button>
+                  <Button disabled={gitBusy || !remote || !currentData.branch} onClick={() => request('push', undefined, undefined, undefined, remote)}>推送</Button>
+                </div>
+                <details className="text-sm" open={!currentData.remotes.length}>
+                  <summary className="cursor-pointer rounded-md px-1 py-2">管理远程</summary>
+                  {remotePanel}
+                </details>
+              </>
+            )}
+            {(branchOverlay || overlay === 'remote') && !currentData && (
+              error ? <p role="alert">{gitErrorMessage(error, '无法读取 Git 状态。')}</p> : <p role="status">正在读取 Git 状态…</p>
+            )}
+            {overlay === 'stash' && stashPanel}
+          </div>
+          {operationStatus}
+        </section>
+      </Modal>
       <GitSettingsDialog
         editor={identityOpen ? 'identity' : null}
         busy={isLoading || isFetching}

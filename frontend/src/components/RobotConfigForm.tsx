@@ -723,6 +723,7 @@ export function RobotConfigForm({
   )
   return (
     <RobotPanel
+      scrollBody
       className="robot-config-form"
       icon={<Settings className="size-4" />}
       title="机器人配置"

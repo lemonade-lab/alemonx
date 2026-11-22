@@ -60,7 +60,7 @@ export function WorkbenchQuickActions({
             </>
           )}
           {minimizedWindows.length > 0 && (
-            <div className="min-[1200px]:hidden" role="group" aria-label="已最小化窗口">
+            <div className="grid gap-0.5 min-[1200px]:hidden" role="group" aria-label="已最小化窗口">
               {minimizedWindows.map(window => (
                 <Button
                   key={window.id}

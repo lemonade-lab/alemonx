@@ -5,7 +5,6 @@ import {
   Download,
   ExternalLink,
   FileArchive,
-  Home,
   RefreshCw,
   Upload,
   X
@@ -310,7 +309,7 @@ export function SetupUpdateButton({ embedded = false }: { embedded?: boolean }) 
   }
 
   return (
-    <div className={embedded ? 'settings-update-panel grid gap-4' : 'relative'}>
+    <div className={embedded ? 'settings-update-panel grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-4' : 'relative'}>
       {!embedded && (
         <button
         className={`inline-flex size-8 items-center justify-center rounded-md transition disabled:cursor-wait disabled:opacity-70 ${
@@ -329,11 +328,7 @@ export function SetupUpdateButton({ embedded = false }: { embedded?: boolean }) 
               : '检查更新'
         }
       >
-        {isFetching || updateAvailable ? (
-          <RefreshCw className="size-4" />
-        ) : (
-          <Home className="size-4" />
-        )}
+        <RefreshCw className="size-4" aria-hidden="true" />
         </button>
       )}
       {embedded && open && (
@@ -348,8 +343,8 @@ export function SetupUpdateButton({ embedded = false }: { embedded?: boolean }) 
         <section
           className={
             embedded
-              ? 'settings-card grid gap-4'
-              : 'topbar-popover absolute left-0 top-[calc(100%+8px)] z-50 grid w-80 gap-2.5 rounded-xl border border-slate-200 bg-white p-3 shadow-[0_18px_42px_rgb(28_26_23/0.13)]'
+              ? 'settings-card grid min-h-0 grid-rows-[auto_auto_minmax(0,1fr)] gap-4'
+              : 'topbar-popover absolute left-0 top-[calc(100%+8px)] z-50 grid max-h-[calc(100dvh-5rem)] w-80 grid-rows-[auto_auto_minmax(0,1fr)] gap-2.5 rounded-xl border border-slate-200 bg-white p-3 shadow-[0_18px_42px_rgb(28_26_23/0.13)]'
           }
           role={embedded ? undefined : 'dialog'}
           aria-label="应用更新"
@@ -399,227 +394,234 @@ export function SetupUpdateButton({ embedded = false }: { embedded?: boolean }) 
               { id: 'manual', label: '手动安装' }
             ]}
           />
-          {mode === 'now' && (
-            <section className="grid gap-2.5">
-              {isFetching ? (
-                <SettingsMessage>正在检查更新…</SettingsMessage>
-              ) : error ? (
-                <SettingsMessage tone="error">
-                  暂时无法检查更新，请稍后重试。
-                </SettingsMessage>
-              ) : data?.available ? (
-                <>
-                  <p className="m-0 text-xs leading-5 text-(--theme-text-secondary)">
-                    发现新版本，可立即更新。
-                  </p>
-                  {data.platformMatched && data.integrityReady ? (
-                    <>
-                      <div className="settings-card-actions settings-card-actions-end">
-                        <Button
-                          variant="primary"
-                          className="gap-1.5"
-                          disabled={busy}
-                          onClick={() => {
-                            setFile(null)
-                            if (data.downloadReady) setConfirmRestart(true)
-                            else void download()
-                          }}
-                        >
-                          {busy ? (
-                            <RefreshCw className="size-3.5 animate-spin" />
-                          ) : (
-                            <Download className="size-3.5" />
-                          )}
-                          {busy
-                            ? '正在下载…'
-                            : data.downloadReady
-                              ? '更新并重启'
-                              : '下载更新'}
-                        </Button>
-                      </div>
-                      {busy && !data.downloadReady && (
-                        <DownloadProgress
-                          label="正在下载并校验更新包"
-                          detail="由 AlemonX 从发布源下载；完成校验后才会提示安装。"
-                        />
-                      )}
-                    </>
-                  ) : (
-                    <SettingsMessage tone="error">
-                      {data.platformMatched
-                        ? data.integrityError
-                          ? `暂时无法读取发布校验文件：${data.integrityError}`
-                          : '该版本未提供校验文件，无法自动更新；请切换到「手动安装」。'
-                        : '当前系统没有匹配的更新包，无法自动更新；请切换到「手动安装」。'}
-                    </SettingsMessage>
-                  )}
-                </>
-              ) : (
-                <p className="m-0 flex items-center gap-2 text-xs text-(--theme-text-muted)">
-                  <CheckCircle2 className="size-4 shrink-0 text-(--theme-success)" />
-                  已是最新
-                </p>
-              )}
-            </section>
-          )}
-          {mode === 'manual' && (
-            <section className="grid gap-2.5">
-              {releasesLoading ? (
-                <SettingsMessage>
-                  正在读取可用发布版本…
-                </SettingsMessage>
-              ) : releasesError ? (
-                <SettingsMessage tone="error">
-                  暂时无法读取 GitHub 发布列表；你仍可直接选择已下载的本地安装包。
-                </SettingsMessage>
-              ) : (
-                <>
-                  <label className="grid gap-1 text-[11px] font-semibold text-slate-500">
-                    版本
-                    <select
-                      className="min-h-9 rounded-md border border-slate-200 bg-white px-2 text-xs font-normal text-slate-700"
-                      value={releaseURL || selected?.url || ''}
-                      onChange={event => setReleaseURL(event.target.value)}
-                    >
-                      {releases.map(item => (
-                        <option key={item.url} value={item.url}>
-                          {item.tag} · {item.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <div className="overflow-hidden rounded-lg border border-slate-200">
-                    {selected?.assets.map(asset => (
-                      <a
-                        className="flex min-h-8 items-center gap-2 border-b border-slate-100 px-2.5 text-xs text-brand-600 last:border-0 hover:bg-brand-50"
-                        key={asset.url}
-                        href={asset.url}
-                        target="_blank"
-                        rel="noreferrer"
-                        onClick={() =>
-                          setBrowserDownloadNotice(
-                            '下载已交给浏览器，请在浏览器下载栏查看实际进度；完成后回到这里选择 .zip 安装包。'
-                          )
-                        }
-                      >
-                        <Download className="size-3.5 shrink-0" />
-                        <span className="min-w-0 truncate">{asset.name}</span>
-                        <ExternalLink className="ml-auto size-3.5 shrink-0 text-slate-400" />
-                      </a>
-                    ))}
-                  </div>
-                  {browserDownloadNotice && (
-                    <DownloadProgress
-                      handoff
-                      label="已开始浏览器下载"
-                      detail={browserDownloadNotice}
-                    />
-                  )}
-                </>
-              )}
-              <section
-                className="grid gap-2.5"
-                onDragOver={event => event.preventDefault()}
-                onDrop={event => {
-                  event.preventDefault()
-                  if (uploadProgress !== null) return
-                  void selectUpdateArchive(event.dataTransfer.files[0] ?? null)
-                }}
-              >
-                <input
-                  className="sr-only"
-                  id={uploadInputID}
-                  type="file"
-                  accept=".zip,application/zip"
-                  onChange={event => {
-                    void selectUpdateArchive(event.target.files?.[0] ?? null)
-                    event.currentTarget.value = ''
-                  }}
-                />
-                <label
-                  htmlFor={uploadInputID}
-                  className={`flex items-center gap-2.5 rounded-lg border border-dashed p-3 text-left transition ${
-                    uploadProgress !== null
-                      ? 'cursor-default border-brand-300 bg-brand-50/60'
-                      : 'cursor-pointer border-brand-200 bg-brand-50/40 hover:border-brand-600 hover:bg-brand-50'
-                  }`}
-                >
-                  <i className="inline-flex size-8 shrink-0 items-center justify-center rounded-md bg-brand-50 text-brand-600">
-                    {uploadProgress !== null ? (
-                      <RefreshCw className="size-4 animate-spin" />
-                    ) : file ? (
-                      <FileArchive className="size-4" />
-                    ) : (
-                      <Upload className="size-4" />
-                    )}
-                  </i>
-                  <span className="grid min-w-0 flex-1 gap-1">
-                    <strong className="truncate text-xs text-slate-700">
-                      {file ? file.name : '选择更新包'}
-                    </strong>
-                    <small className="text-[11px] leading-4 text-slate-500">
-                      {uploadProgress !== null
-                        ? staged
-                          ? '已上传，等待确认安装。'
-                          : `正在上传 ${uploadProgress}%…`
-                        : '仅支持 GitHub Release 下载的 .zip，也可拖到这里。'}
-                    </small>
-                  </span>
-                </label>
-                {uploadProgress !== null && (
-                  <div className="h-1.5 overflow-hidden rounded-full bg-slate-200">
-                    <div
-                      className="h-full rounded-full bg-brand-600 transition-[width] duration-200"
-                      style={{ width: `${uploadProgress}%` }}
-                    />
-                  </div>
-                )}
-                {uploadError && (
+          <div
+            key={mode}
+            role="tabpanel"
+            aria-label={mode === 'now' ? '自动更新' : '手动安装'}
+            className="grid min-h-0 min-w-0 content-start gap-2.5 overflow-y-auto overscroll-contain"
+          >
+            {mode === 'now' && (
+              <section className="grid gap-2.5">
+                {isFetching ? (
+                  <SettingsMessage>正在检查更新…</SettingsMessage>
+                ) : error ? (
                   <SettingsMessage tone="error">
-                    {uploadError}
+                    暂时无法检查更新，请稍后重试。
                   </SettingsMessage>
-                )}
-                <Button
-                  disabled={!staged || busy}
-                  onClick={() => setConfirmRestart(true)}
-                >
-                  {busy ? '正在重启…' : '确认安装并重启'}
-                </Button>
-                {message && (
-                  <SettingsMessage>
-                    {message}
-                  </SettingsMessage>
+                ) : data?.available ? (
+                  <>
+                    <p className="m-0 text-xs leading-5 text-(--theme-text-secondary)">
+                      发现新版本，可立即更新。
+                    </p>
+                    {data.platformMatched && data.integrityReady ? (
+                      <>
+                        <div className="settings-card-actions settings-card-actions-end">
+                          <Button
+                            variant="primary"
+                            className="gap-1.5"
+                            disabled={busy}
+                            onClick={() => {
+                              setFile(null)
+                              if (data.downloadReady) setConfirmRestart(true)
+                              else void download()
+                            }}
+                          >
+                            {busy ? (
+                              <RefreshCw className="size-3.5 animate-spin" />
+                            ) : (
+                              <Download className="size-3.5" />
+                            )}
+                            {busy
+                              ? '正在下载…'
+                              : data.downloadReady
+                                ? '更新并重启'
+                                : '下载更新'}
+                          </Button>
+                        </div>
+                        {busy && !data.downloadReady && (
+                          <DownloadProgress
+                            label="正在下载并校验更新包"
+                            detail="由 AlemonX 从发布源下载；完成校验后才会提示安装。"
+                          />
+                        )}
+                      </>
+                    ) : (
+                      <SettingsMessage tone="error">
+                        {data.platformMatched
+                          ? data.integrityError
+                            ? `暂时无法读取发布校验文件：${data.integrityError}`
+                            : '该版本未提供校验文件，无法自动更新；请切换到「手动安装」。'
+                          : '当前系统没有匹配的更新包，无法自动更新；请切换到「手动安装」。'}
+                      </SettingsMessage>
+                    )}
+                  </>
+                ) : (
+                  <p className="m-0 flex items-center gap-2 text-xs text-(--theme-text-muted)">
+                    <CheckCircle2 className="size-4 shrink-0 text-(--theme-success)" />
+                    已是最新
+                  </p>
                 )}
               </section>
-            </section>
-          )}
-          {mode === 'now' && message && (
-            <SettingsMessage>
-              {message}
-            </SettingsMessage>
-          )}
-          {transaction && (
-            <SettingsMessage>
-              {updatePhaseLabels[transaction.phase] ?? '正在处理更新…'}
-              {transaction.targetVersion
-                ? ` 目标 ${transaction.targetVersion}`
-                : ''}
-              {transaction.error ? `：${transaction.error}` : ''}
-              {transaction.pluginError
-                ? ` 插件同步：${transaction.pluginError}`
-                : ''}
-            </SettingsMessage>
-          )}
-          {data?.releaseUrl && (
-            <a
-              className="inline-flex items-center gap-1 text-[11px] text-slate-500 hover:text-brand-600"
-              href={data.releaseUrl}
-              target="_blank"
-              rel="noreferrer"
-            >
-              查看发布说明 <ExternalLink className="size-3" />
-            </a>
-          )}
+            )}
+            {mode === 'manual' && (
+              <section className="grid gap-2.5">
+                {releasesLoading ? (
+                  <SettingsMessage>
+                    正在读取可用发布版本…
+                  </SettingsMessage>
+                ) : releasesError ? (
+                  <SettingsMessage tone="error">
+                    暂时无法读取 GitHub 发布列表；你仍可直接选择已下载的本地安装包。
+                  </SettingsMessage>
+                ) : (
+                  <>
+                    <label className="grid gap-1 text-[11px] font-semibold text-slate-500">
+                      版本
+                      <select
+                        className="min-h-9 rounded-md border border-slate-200 bg-white px-2 text-xs font-normal text-slate-700"
+                        value={releaseURL || selected?.url || ''}
+                        onChange={event => setReleaseURL(event.target.value)}
+                      >
+                        {releases.map(item => (
+                          <option key={item.url} value={item.url}>
+                            {item.tag} · {item.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <div className="overflow-hidden rounded-lg border border-slate-200">
+                      {selected?.assets.map(asset => (
+                        <a
+                          className="flex min-h-8 items-center gap-2 border-b border-slate-100 px-2.5 text-xs text-brand-600 last:border-0 hover:bg-brand-50"
+                          key={asset.url}
+                          href={asset.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          onClick={() =>
+                            setBrowserDownloadNotice(
+                              '下载已交给浏览器，请在浏览器下载栏查看实际进度；完成后回到这里选择 .zip 安装包。'
+                            )
+                          }
+                        >
+                          <Download className="size-3.5 shrink-0" />
+                          <span className="min-w-0 truncate">{asset.name}</span>
+                          <ExternalLink className="ml-auto size-3.5 shrink-0 text-slate-400" />
+                        </a>
+                      ))}
+                    </div>
+                    {browserDownloadNotice && (
+                      <DownloadProgress
+                        handoff
+                        label="已开始浏览器下载"
+                        detail={browserDownloadNotice}
+                      />
+                    )}
+                  </>
+                )}
+                <section
+                  className="grid gap-2.5"
+                  onDragOver={event => event.preventDefault()}
+                  onDrop={event => {
+                    event.preventDefault()
+                    if (uploadProgress !== null) return
+                    void selectUpdateArchive(event.dataTransfer.files[0] ?? null)
+                  }}
+                >
+                  <input
+                    className="sr-only"
+                    id={uploadInputID}
+                    type="file"
+                    accept=".zip,application/zip"
+                    onChange={event => {
+                      void selectUpdateArchive(event.target.files?.[0] ?? null)
+                      event.currentTarget.value = ''
+                    }}
+                  />
+                  <label
+                    htmlFor={uploadInputID}
+                    className={`flex items-center gap-2.5 rounded-lg border border-dashed p-3 text-left transition ${
+                      uploadProgress !== null
+                        ? 'cursor-default border-brand-300 bg-brand-50/60'
+                        : 'cursor-pointer border-brand-200 bg-brand-50/40 hover:border-brand-600 hover:bg-brand-50'
+                    }`}
+                  >
+                    <i className="inline-flex size-8 shrink-0 items-center justify-center rounded-md bg-brand-50 text-brand-600">
+                      {uploadProgress !== null ? (
+                        <RefreshCw className="size-4 animate-spin" />
+                      ) : file ? (
+                        <FileArchive className="size-4" />
+                      ) : (
+                        <Upload className="size-4" />
+                      )}
+                    </i>
+                    <span className="grid min-w-0 flex-1 gap-1">
+                      <strong className="truncate text-xs text-slate-700">
+                        {file ? file.name : '选择更新包'}
+                      </strong>
+                      <small className="text-[11px] leading-4 text-slate-500">
+                        {uploadProgress !== null
+                          ? staged
+                            ? '已上传，等待确认安装。'
+                            : `正在上传 ${uploadProgress}%…`
+                          : '仅支持 GitHub Release 下载的 .zip，也可拖到这里。'}
+                      </small>
+                    </span>
+                  </label>
+                  {uploadProgress !== null && (
+                    <div className="h-1.5 overflow-hidden rounded-full bg-slate-200">
+                      <div
+                        className="h-full rounded-full bg-brand-600 transition-[width] duration-200"
+                        style={{ width: `${uploadProgress}%` }}
+                      />
+                    </div>
+                  )}
+                  {uploadError && (
+                    <SettingsMessage tone="error">
+                      {uploadError}
+                    </SettingsMessage>
+                  )}
+                  <Button
+                    disabled={!staged || busy}
+                    onClick={() => setConfirmRestart(true)}
+                  >
+                    {busy ? '正在重启…' : '确认安装并重启'}
+                  </Button>
+                  {message && (
+                    <SettingsMessage>
+                      {message}
+                    </SettingsMessage>
+                  )}
+                </section>
+              </section>
+            )}
+            {mode === 'now' && message && (
+              <SettingsMessage>
+                {message}
+              </SettingsMessage>
+            )}
+            {transaction && (
+              <SettingsMessage>
+                {updatePhaseLabels[transaction.phase] ?? '正在处理更新…'}
+                {transaction.targetVersion
+                  ? ` 目标 ${transaction.targetVersion}`
+                  : ''}
+                {transaction.error ? `：${transaction.error}` : ''}
+                {transaction.pluginError
+                  ? ` 插件同步：${transaction.pluginError}`
+                  : ''}
+              </SettingsMessage>
+            )}
+            {data?.releaseUrl && (
+              <a
+                className="inline-flex items-center gap-1 text-[11px] text-slate-500 hover:text-brand-600"
+                href={data.releaseUrl}
+                target="_blank"
+                rel="noreferrer"
+              >
+                查看发布说明 <ExternalLink className="size-3" />
+              </a>
+            )}
+          </div>
         </section>
       )}
       <ConfirmDialog

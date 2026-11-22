@@ -37,6 +37,8 @@ const MAX_LENGTH = 2000;
 const SEND_COOLDOWN = 500;
 /** 单个媒体文件上限 (8MB) */
 const MAX_MEDIA_FILE_SIZE = 8 * 1024 * 1024;
+const composerToolClassName =
+  'flex cursor-pointer items-center gap-1 whitespace-nowrap rounded-md border border-[var(--editorWidget-border)] px-1 max-[360px]:gap-0.5 max-[360px]:px-0.5 max-[360px]:text-xs sm:gap-2 sm:px-2';
 
 /** 清洗粘贴文本：移除控制字符，统一换行 */
 function sanitizePlainText(text: string): string {
@@ -811,11 +813,11 @@ export default function SlateTextarea({
           </div>
         )}
         {/* 工具栏 */}
-        <div className="flex justify-between gap-2 shadow-inner rounded-md p-1">
-          <div className="flex gap-2">
+        <div className="flex min-w-0 justify-between gap-1 overflow-x-auto rounded-md p-1 shadow-inner sm:gap-2">
+          <div className="flex shrink-0 gap-1 sm:gap-2">
             <div>
               <div
-                className="cursor-pointer flex gap-2 border rounded-md px-2 border-[var(--editorWidget-border)]"
+                className={composerToolClassName}
                 onClick={e => {
                   e.stopPropagation();
                   e.preventDefault();
@@ -828,7 +830,7 @@ export default function SlateTextarea({
             </div>
             <div>
               <div
-                className="cursor-pointer flex gap-2 border rounded-md px-2 border-[var(--editorWidget-border)]"
+                className={composerToolClassName}
                 onClick={e => {
                   e.stopPropagation();
                   e.preventDefault();
@@ -855,8 +857,8 @@ export default function SlateTextarea({
             </div>
             <div>
               <div
-                className={`cursor-pointer flex gap-2 border rounded-md px-2 border-[var(--editorWidget-border)] ${
-                  recording ? 'text-red-500 border-red-500 animate-pulse' : ''
+                className={`${composerToolClassName} ${
+                  recording ? 'text-(--theme-danger-text) border-red-500 animate-pulse' : ''
                 }`}
                 onClick={e => {
                   e.stopPropagation();
@@ -875,7 +877,7 @@ export default function SlateTextarea({
             </div>
             <div>
               <div
-                className="cursor-pointer flex gap-2 border rounded-md px-2 border-[var(--editorWidget-border)]"
+                className={composerToolClassName}
                 onClick={e => {
                   e.stopPropagation();
                   e.preventDefault();
@@ -888,14 +890,14 @@ export default function SlateTextarea({
               </div>
             </div>
           </div>
-          <div>
+          <div className="shrink-0">
             <div
               onClick={e => {
                 e.stopPropagation();
                 e.preventDefault();
                 onAppClick?.('chatlogs');
               }}
-              className="cursor-pointer flex gap-2 border rounded-md px-2 border-[var(--editorWidget-border)]"
+              className={composerToolClassName}
               title="清空消息"
             >
               <ProfileOutlined />
@@ -937,7 +939,7 @@ export default function SlateTextarea({
 
         {/* 底部工具栏 */}
         <div className="flex flex-row justify-between">
-          <div className="text-[var(--textPreformat-background)] text-sm">
+          <div className="text-[var(--descriptionForeground)] text-sm">
             Shift+Enter 换行
           </div>
           <div

@@ -293,7 +293,7 @@ function HostToastCard({
     return () => window.clearTimeout(timer)
   }, [onDismiss, toast.duration, toast.id, toast.title, toast.type])
   return (
-    <div className="pointer-events-auto flex w-full max-w-md items-start gap-2 rounded-xl border border-slate-200 bg-white/95 px-3 py-2.5 shadow-lg dark:border-slate-700 dark:bg-slate-900/95">
+    <div className="plugin-host-toast pointer-events-auto flex w-full max-w-md items-start gap-2 rounded-xl border border-(--theme-border-default) bg-(--theme-surface-panel) px-3 py-2.5">
       <i
         className={`mt-0.5 inline-flex size-5 shrink-0 items-center justify-center rounded-full ${toastIconClass[toast.type]}`}
       >

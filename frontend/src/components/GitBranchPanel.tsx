@@ -25,7 +25,6 @@ export function GitBranchPanel({
     (a, b) => Number(b.current) - Number(a.current)
   )
   const remoteBranches = data?.remoteBranches ?? []
-  const remote = data?.remoteName || data?.remotes[0]?.name
   return (
     <section className="grid gap-3 rounded-lg border border-slate-200 bg-white p-4">
       <form
@@ -61,7 +60,7 @@ export function GitBranchPanel({
               className="flex min-w-0 flex-col gap-2 border-b border-slate-100 px-2 py-2 last:border-0 sm:flex-row sm:items-center sm:gap-3"
             >
               <code
-                className={`shrink-0 self-start rounded px-1.5 py-0.5 text-[10px] sm:self-auto ${item.current ? 'bg-brand-50 font-semibold text-brand-700' : 'bg-slate-100 text-slate-600'}`}
+                className={`min-w-0 max-w-full self-start rounded px-1.5 py-0.5 text-[10px] [overflow-wrap:anywhere] sm:max-w-[40%] sm:self-auto ${item.current ? 'bg-brand-50 font-semibold text-brand-700' : 'bg-slate-100 text-slate-600'}`}
               >
                 {item.name}
               </code>
@@ -69,39 +68,21 @@ export function GitBranchPanel({
                 <strong className="text-xs font-semibold text-slate-700">
                   {item.current ? '当前分支' : '本地分支'}
                 </strong>
-                <small className="text-[11px] text-slate-500">
+                <small className="text-[11px] text-slate-500 [overflow-wrap:anywhere]">
                   {item.upstream ? `跟踪 ${item.upstream}` : '尚未关联远程分支'}
                 </small>
               </span>
               <div className="flex shrink-0 flex-wrap items-center gap-1">
                 {item.current ? (
-                  <>
+                  data?.mergeInProgress && (
                     <button
                       className="text-button whitespace-nowrap"
-                      disabled={busy || !remote || data?.mergeInProgress}
-                      title={
-                        !remote
-                          ? '请先配置远程仓库'
-                          : item.upstream
-                            ? `从 ${item.upstream} 快进更新 ${item.name}`
-                            : `从 ${remote} 的同名分支更新 ${item.name}`
-                      }
-                      onClick={() =>
-                        request('pull', item.name, undefined, undefined, remote)
-                      }
+                      disabled={busy}
+                      onClick={() => request('merge-abort', item.name)}
                     >
-                      更新
+                      中止合并
                     </button>
-                    {data?.mergeInProgress && (
-                      <button
-                        className="text-button whitespace-nowrap"
-                        disabled={busy}
-                        onClick={() => request('merge-abort', item.name)}
-                      >
-                        中止合并
-                      </button>
-                    )}
-                  </>
+                  )
                 ) : (
                   <>
                     <button
@@ -136,10 +117,10 @@ export function GitBranchPanel({
               aria-label={`远程分支 ${item.name}`}
               className="flex min-w-0 flex-col gap-2 border-b border-slate-100 px-2 py-2 last:border-0 sm:flex-row sm:items-center sm:gap-3"
             >
-              <code className="shrink-0 self-start rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-600 sm:self-auto">
+              <code className="min-w-0 max-w-full self-start rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-600 [overflow-wrap:anywhere] sm:max-w-[40%] sm:self-auto">
                 {item.branch}
               </code>
-              <span className="min-w-0 flex-1 text-xs text-slate-700">
+              <span className="min-w-0 flex-1 text-xs text-slate-700 [overflow-wrap:anywhere]">
                 远程分支 · {item.name}
               </span>
               <div className="flex shrink-0 flex-wrap items-center gap-1">

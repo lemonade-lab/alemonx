@@ -496,23 +496,7 @@ func (m Manager) SetAppEnabled(root, packageName string, enabled bool) (Result, 
 	if packageName == "" {
 		return Result{}, errors.New("请选择要启动的本地包")
 	}
-	result, err := m.UpdateRuntimeConfig(root, "", func(content string) (string, error) {
-		return updateAppsConfig(content, func(apps yaml.MapSlice) (yaml.MapSlice, error) {
-			for index, item := range apps {
-				name, _ := item.Key.(string)
-				if strings.TrimSpace(name) != packageName {
-					continue
-				}
-				if options, ok := item.Value.(yaml.MapSlice); ok {
-					apps[index].Value = setAppOption(options, "enabled", enabled)
-				} else {
-					apps[index].Value = enabled
-				}
-				return apps, nil
-			}
-			return append(apps, yaml.MapItem{Key: packageName, Value: enabled}), nil
-		})
-	})
+	result, err := m.SetAppsEnabled(root, []string{packageName}, enabled)
 	if err != nil {
 		return Result{}, err
 	}
@@ -522,6 +506,36 @@ func (m Manager) SetAppEnabled(root, packageName string, enabled bool) (Result, 
 	}
 	result.Output = packageName + " " + state + "。"
 	return result, nil
+}
+
+// SetAppsEnabled applies the selected switches in one config write.
+func (m Manager) SetAppsEnabled(root string, packages []string, enabled bool) (Result, error) {
+	if len(packages) == 0 || slices.Contains(packages, "") {
+		return Result{}, errors.New("请选择要管理的本地包")
+	}
+	return m.UpdateRuntimeConfig(root, "", func(content string) (string, error) {
+		return updateAppsConfig(content, func(apps yaml.MapSlice) (yaml.MapSlice, error) {
+			indexes := make(map[string]int, len(apps))
+			for index := len(apps) - 1; index >= 0; index-- {
+				name, _ := apps[index].Key.(string)
+				indexes[strings.TrimSpace(name)] = index
+			}
+			for _, name := range packages {
+				index, found := indexes[name]
+				if !found {
+					indexes[name] = len(apps)
+					apps = append(apps, yaml.MapItem{Key: name, Value: enabled})
+					continue
+				}
+				if options, ok := apps[index].Value.(yaml.MapSlice); ok {
+					apps[index].Value = setAppOption(options, "enabled", enabled)
+				} else {
+					apps[index].Value = enabled
+				}
+			}
+			return apps, nil
+		})
+	})
 }
 
 // ValidateEnabledBackpackRelease is retained for runtime-entry compatibility.

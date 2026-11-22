@@ -1,3 +1,4 @@
+import { RefreshButton } from '../RefreshButton'
 import { useEffect, useRef } from 'react'
 import { useDispatch, useSelector } from 'react-redux'
 import { useStoreState, type RootState } from '../../store/guideStore'
@@ -281,9 +282,7 @@ export function SQLiteBrowser({
       )}
       {fixedPath ? (
         <div className="flex flex-wrap items-center gap-2">
-          <Button disabled={busy} onClick={() => void connect()}>
-            刷新表
-          </Button>
+          <RefreshButton label="刷新表" disabled={busy} onClick={() => void connect()} />
         </div>
       ) : (
         <div className="flex flex-wrap items-end gap-2">
@@ -309,12 +308,11 @@ export function SQLiteBrowser({
           >
             测试连接
           </Button>
-          <Button
+          <RefreshButton
+            label="连接 / 刷新表"
             disabled={busy || !path.trim()}
             onClick={() => void connect()}
-          >
-            连接 / 刷新表
-          </Button>
+          />
           <Button
             disabled={!saved.includes(path) || busy}
             onClick={() => dispatch(forgetSQLite(path))}

@@ -216,6 +216,15 @@ type LocalPackageVersions struct {
 }
 
 func (m Manager) LocalPackageVersions(root, packageName string, page int) (LocalPackageVersions, error) {
+	return m.localPackageVersions(root, packageName, page, true)
+}
+
+// CachedLocalPackageVersions leaves the plugin's Git metadata untouched.
+func (m Manager) CachedLocalPackageVersions(root, packageName string, page int) (LocalPackageVersions, error) {
+	return m.localPackageVersions(root, packageName, page, false)
+}
+
+func (m Manager) localPackageVersions(root, packageName string, page int, fetch bool) (LocalPackageVersions, error) {
 	if page < 1 {
 		page = 1
 	}
@@ -235,8 +244,14 @@ func (m Manager) LocalPackageVersions(root, packageName string, page int) (Local
 			if !isGitBranch(status.Branch) {
 				return LocalPackageVersions{}, errors.New("当前插件未检出有效 Git 分支")
 			}
-			if _, fetchErr := gitRun(item.Path, "fetch", "origin", localPackageBranchRefspec(status.Branch)); fetchErr != nil {
-				return LocalPackageVersions{}, errors.New("无法读取当前分支提交")
+			if fetch {
+				if _, fetchErr := gitRun(item.Path, "fetch", "origin", localPackageBranchRefspec(status.Branch)); fetchErr != nil {
+					return LocalPackageVersions{}, errors.New("无法读取当前分支提交")
+				}
+				status, statusErr = releaseGitStatus(item.Path)
+				if statusErr != nil {
+					return LocalPackageVersions{}, statusErr
+				}
 			}
 			commits, labels, hasMore, commitsErr := releaseCommits(item.Path, status.Branch, page)
 			if commitsErr != nil {
@@ -2053,6 +2068,42 @@ func (m Manager) Run(root, action, message, packageName, version, tag, token str
 		return m.syncLocalPackageOperation(root, func() (Result, error) {
 			return replaceLocalPackage(root, packageName, version)
 		})
+	case "safe-update-backpack-plugins":
+		if !confirmed {
+			return Result{}, errors.New("请确认后更新背包插件")
+		}
+		var packages []string
+		if err := json.Unmarshal([]byte(message), &packages); err != nil || len(packages) == 0 {
+			return Result{}, errors.New("请选择要更新的背包插件")
+		}
+		return m.SafeUpdateBackpackPlugins(root, packages)
+	case "import-local-backpack-plugin":
+		if !confirmed {
+			return Result{}, errors.New("请确认后导入背包插件")
+		}
+		item, err := m.ImportLocalBackpackPlugin(root, message)
+		return Result{Path: item.Path, Output: item.Name}, err
+	case "import-inline-backpack-archive":
+		if !confirmed {
+			return Result{}, errors.New("请确认后导入背包插件")
+		}
+		item, err := m.ImportInlineBackpackArchive(root, message)
+		return Result{Path: item.Path, Output: item.Name}, err
+	case "clone-backpack-plugin":
+		if !confirmed {
+			return Result{}, errors.New("请确认后克隆背包插件")
+		}
+		var options struct {
+			Repository string
+			Branch     string
+			Name       string
+			Mirror     string
+			Depth      int
+		}
+		if err := json.Unmarshal([]byte(message), &options); err != nil {
+			return Result{}, errors.New("克隆参数无效")
+		}
+		return CloneLocalPackageWithProgress(root, options.Repository, options.Branch, options.Name, options.Mirror, options.Depth, nil)
 	case "sync-local-package-release":
 		return m.syncLocalPackageOperation(root, func() (Result, error) {
 			return switchLocalPackageVersion(root, packageName, version, false)
@@ -2070,6 +2121,15 @@ func (m Manager) Run(root, action, message, packageName, version, tag, token str
 		})
 	case "refresh-local-package-history":
 		return m.RefreshLocalPackageHistory(root, packageName)
+	case "refresh-backpack-plugin-versions":
+		if !confirmed {
+			return Result{}, errors.New("请确认后刷新插件版本")
+		}
+		versions, err := m.LocalPackageVersions(root, packageName, 1)
+		if err != nil {
+			return Result{}, err
+		}
+		return Result{Path: root, Output: "已刷新插件版本，最新版本：" + versions.Latest}, nil
 	case "configure-local-package-git":
 		return m.ConfigureLocalPackageGit(root, packageName, message)
 	case "restore-local-package-stash":

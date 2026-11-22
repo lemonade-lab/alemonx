@@ -82,7 +82,7 @@ const PopoverBox: React.FC<PopoverBoxProps> = ({
       ref={ref}
       className={classNames(
         'absolute p-1 mx-4 bottom-full  max-h-60 bg-[var(--dropdown-background)] ',
-        'border border-[var(--dropdown-border)] rounded-md shadow-lg z-10 outline-none ',
+        'testone-popover border border-[var(--dropdown-border)] rounded-md z-10 outline-none ',
         {
           'left-0': direction === 'left',
           'right-0': direction === 'right',

@@ -22,23 +22,38 @@ highlighter.registerLanguage('ignore', () => ({
     { scope: 'keyword', match: /^!/ }
   ]
 }))
+highlighter.registerLanguage('settings', grammar => ({
+  contains: [
+    grammar.COMMENT(/^[ \t]*[#;]/, /$/),
+    {
+      begin: [/^[ \t]*/, /(?:export[ \t]+)?/, /[^\s=;#]+/, /(?=[ \t]*=)/],
+      beginScope: { 2: 'keyword', 3: 'attr' },
+      starts: {
+        end: /$/,
+        contains: [grammar.QUOTE_STRING_MODE, grammar.APOS_STRING_MODE, grammar.NUMBER_MODE]
+      }
+    }
+  ]
+}))
 
 const languageByExtension = new Map(Object.entries({
   js: 'javascript', jsx: 'javascript', cjs: 'javascript', mjs: 'javascript',
   ts: 'typescript', tsx: 'typescript', cts: 'typescript', mts: 'typescript',
   json: 'json', jsonc: 'json', yaml: 'yaml', yml: 'yaml', toml: 'ini', ini: 'ini',
   md: 'markdown', markdown: 'markdown', sh: 'bash', bash: 'bash', css: 'css',
-  html: 'xml', htm: 'xml', xml: 'xml', svg: 'xml'
+  html: 'xml', htm: 'xml', xml: 'xml', svg: 'xml', env: 'settings'
 }))
 
 export function highlightFileSource(file: string, content: string) {
   // Highlighting runs on the editor thread, so keep it bounded for large files.
   if (content.length > 64 * 1024) return null
-  const name = file.toLowerCase().split('/').at(-1) ?? ''
+  const name = file.toLowerCase().split(/[\\/]/).at(-1) ?? ''
   const extension = name.includes('.') ? name.split('.').at(-1) : undefined
   const language = name === '.gitignore' || name === '.dockerignore'
     ? 'ignore'
-    : languageByExtension.get(extension ?? '')
+    : name === '.npmrc' || name.startsWith('.env.')
+      ? 'settings'
+      : languageByExtension.get(extension ?? '')
   if (!language) return null
 
   const highlighted = highlighter.highlight(content, { language }).value

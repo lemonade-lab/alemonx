@@ -77,7 +77,7 @@ export default function PayloadInspector({
             </div>
           )}
           {item.IsEdited && (
-            <div className="text-yellow-500">
+            <div className="text-(--theme-warning-text)">
               已编辑{' '}
               {item.UpdateAt ? dayjs(item.UpdateAt).format('HH:mm:ss') : ''}
             </div>
@@ -102,7 +102,7 @@ export default function PayloadInspector({
             className={
               'px-4 py-1 text-xs font-semibold border-b-2 transition-colors ' +
               (tab === 'formatted'
-                ? 'border-blue-500 text-blue-400'
+                ? 'border-transparent bg-(--theme-accent-soft) text-(--theme-accent-text)'
                 : 'border-transparent')
             }
             onClick={() => setTab('formatted')}
@@ -113,7 +113,7 @@ export default function PayloadInspector({
             className={
               'px-4 py-1 text-xs font-semibold border-b-2 transition-colors ' +
               (tab === 'raw'
-                ? 'border-blue-500 text-blue-400'
+                ? 'border-transparent bg-(--theme-accent-soft) text-(--theme-accent-text)'
                 : 'border-transparent')
             }
             onClick={() => setTab('raw')}
@@ -138,7 +138,7 @@ export default function PayloadInspector({
                   className="rounded border border-[var(--panel-border)] p-2"
                 >
                   <div className="flex items-center gap-2 mb-1">
-                    <span className="text-xs font-mono px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-400">
+                    <span className="text-xs font-mono px-1.5 py-0.5 rounded bg-(--theme-info-soft) text-(--theme-info-text)">
                       {segment.type}
                     </span>
                     <span className="text-xs text-[var(--descriptionForeground)]">

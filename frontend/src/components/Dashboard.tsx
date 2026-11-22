@@ -1,3 +1,4 @@
+import { RefreshButton } from './RefreshButton'
 import { RobotRuntimeSwitch } from './RobotRuntimeSwitch'
 import { RobotDiagnostics } from './RobotDiagnostics'
 import { BackpackPackageUpdate } from './BackpackPackageUpdate'
@@ -125,6 +126,7 @@ import { setDataTab } from '../store/dataStore'
 import { Tabs } from './Tabs'
 import { NpmrcConfigForm } from './NpmrcConfigForm'
 import { EnvConfigForm } from './EnvConfigForm'
+import { SourceTextarea } from './SourceTextarea'
 import { RobotPanel } from './RobotPanel'
 import { isWorkbenchBrowserPageURL } from '../lib/workbenchBrowserAddress'
 import { EnvironmentFixDialog } from './EnvironmentFixDialog'
@@ -270,10 +272,9 @@ type Section = DashboardSection
 type Project = { id: string; path: string; name: string; pinned?: boolean }
 type SystemFeature = string
 type SystemWindowState = { minimized: boolean }
-type AuxiliaryTool = 'repository' | 'directory' | 'git'
+type AuxiliaryTool = 'directory' | 'git'
 
 const auxiliaryToolTabs = [
-  { id: 'repository', label: '仓库', icon: GitBranch },
   { id: 'directory', label: '目录', icon: Folder },
   { id: 'git', label: 'Git 管理', icon: GitBranch }
 ] as const
@@ -892,12 +893,11 @@ export function DirectoryPicker({
                 <div className="m-2 grid gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-800">
                   <strong>需要访问授权</strong>
                   <span>{directoryError}</span>
-                  <button
-                    className="secondary-button justify-self-start"
+                  <RefreshButton
+                    label="重试"
                     onClick={() => setDirectoryReload(current => current + 1)}
-                  >
-                    重试
-                  </button>
+                    className="justify-self-start"
+                  />
                 </div>
               )}
               {items.map(item => (
@@ -1269,14 +1269,15 @@ export function Dashboard({
   const [auxiliaryTab, setAuxiliaryTab] = useStoreState<'new' | 'terminal' | AuxiliaryTool | null>(null)
   const [openedAuxiliaryTools, setOpenedAuxiliaryTools] = useStoreState<AuxiliaryTool[]>([])
   const [fileTabsTarget, setFileTabsTarget] = useState<HTMLDivElement | null>(null)
+  const [gitDiffTarget, setGitDiffTarget] = useState<HTMLDivElement | null>(null)
   const [directoryTarget, setDirectoryTarget] = useState<HTMLDivElement | null>(null)
   const [auxiliaryDirectoryTarget, setAuxiliaryDirectoryTarget] = useState<HTMLDivElement | null>(null)
   const [guideStepsTarget, setGuideStepsTarget] = useState<HTMLDivElement | null>(null)
   const [guideProgressTarget, setGuideProgressTarget] = useState<HTMLDivElement | null>(null)
-  const [sourceControlTarget, setSourceControlTarget] = useState<HTMLDivElement | null>(null)
+  const [gitProjectSelection, setGitProjectSelection] = useStoreState<{ workspaceID: string; projectID: string } | null>(null)
+  const [explorerFileRequest, setExplorerFileRequest] = useStoreState<{ root: string; path: string } | null>(null)
   const [terminalToolbarTarget, setTerminalToolbarTarget] = useState<HTMLDivElement | null>(null)
   const auxiliaryVisible = auxiliaryEnabled && auxiliaryTab !== null
-  const sourceControlVisible = auxiliaryVisible && auxiliaryTab === 'repository'
   const terminalVisible = terminalOpen && (!auxiliaryEnabled || auxiliaryTab === 'terminal')
   const activateFloatingWindow = useCallback(
     (id: FloatingWindowID) => {
@@ -1375,6 +1376,9 @@ export function Dashboard({
     (state: RootState) => state.workspace.developerMode
   )
   const activeProject = projects.find(item => item.id === activeProjectID)
+  const gitProject = (gitProjectSelection?.workspaceID === activeProjectID
+    ? projects.find(item => item.id === gitProjectSelection?.projectID)
+    : undefined) ?? activeProject
   const root = activeProject?.path ?? ''
   const dshRobotRoots = useMemo(() => projects.map(project => project.path), [projects])
   const requestedDSHRoot = aiOpen ? navigationFromURL.root || root : dshRoot
@@ -1405,6 +1409,7 @@ export function Dashboard({
   }
 
   function openAuxiliaryTool(tool: AuxiliaryTool) {
+    if (tool === 'git' && !explorerActive) openExplorer()
     setOpenedAuxiliaryTools(current => current.includes(tool) ? current : [...current, tool])
     setExplorerMounted(true)
     setAuxiliaryTab(tool)
@@ -3199,6 +3204,7 @@ export function Dashboard({
           />
         ) : (
           <FileEditor
+            file="alemon.config.yaml"
             toolbar={
               <EditorMode
                 active={configEditor}
@@ -3206,9 +3212,9 @@ export function Dashboard({
                 onText={openTextConfig}
               />
             }
-            content={content}
+            content={configContent}
             placeholder="配置内容"
-            onChange={nextContent => updateFileContent(file, nextContent)}
+            onChange={nextContent => updateFileContent('alemon.config.yaml', nextContent)}
           />
         ))}
       {section === 'runtime' && (
@@ -3625,7 +3631,7 @@ export function Dashboard({
         }}
         onGit={() => {
           closeMenu?.()
-          openExplorer()
+          setGitProjectSelection(null)
           openAuxiliaryTool('git')
         }}
       />
@@ -3637,7 +3643,7 @@ export function Dashboard({
       className="workbench-content-header topbar relative z-50 flex min-w-0 shrink-0 items-center justify-between gap-x-2 bg-(--theme-surface-panel) px-3"
       data-floating={floatingHeader || undefined}
     >
-      <div className={cn('flex min-w-0 items-center gap-1.5', !inlineCaption && !explorerActive && 'flex-1')}>
+      <div className={cn('flex min-w-0 shrink-0 items-center gap-1.5', !inlineCaption && !explorerActive && 'flex-1')}>
         {workbenchView !== 'dsh' && (
           <Button
             variant="icon"
@@ -3658,11 +3664,17 @@ export function Dashboard({
       {explorerActive && (
         <div
           ref={setFileTabsTarget}
-          className={cn('flex min-w-0 items-center', !inlineCaption && 'flex-1')}
+          className={cn('workbench-file-tabs flex min-w-0 items-center', (isCompact || !inlineCaption) && 'flex-1')}
         />
       )}
       {inlineCaption && (
-        <WorkbenchDragRegion className={cn('workbench-content-drag flex-1 self-stretch', explorerActive ? 'min-w-6' : 'min-w-0')} />
+        <WorkbenchDragRegion
+          className={cn(
+            'workbench-content-drag self-stretch',
+            (!isCompact || !explorerActive) && 'flex-1',
+            explorerActive && !isCompact ? 'min-w-6' : 'min-w-0'
+          )}
+        />
       )}
       <div className="ml-auto flex shrink-0 items-center gap-1">
         <WorkbenchQuickActions
@@ -4084,7 +4096,7 @@ export function Dashboard({
                           </button>
                           {auxiliaryToolTabs.filter(tool =>
                             openedAuxiliaryTools.includes(tool.id) &&
-                            (tool.id === 'repository' || (explorerActive ? tool.id === 'git' : tool.id === 'directory'))
+                            (explorerActive ? tool.id === 'git' : tool.id === 'directory')
                           ).map(({ id, label, icon: Icon }) => (
                             <button
                               key={id}
@@ -4111,12 +4123,9 @@ export function Dashboard({
                       {auxiliaryVisible && auxiliaryTab === 'new' && (
                         <WorkbenchAuxiliaryStart
                           onOpenTerminal={openAuxiliaryTerminal}
-                          onOpenRepository={() => openAuxiliaryTool('repository')}
+                          onOpenGit={() => openAuxiliaryTool('git')}
+                          onOpenDirectory={explorerActive ? undefined : () => openAuxiliaryTool('directory')}
                           hasProject={Boolean(activeProject)}
-                          extra={{
-                            kind: explorerActive ? 'git' : 'directory',
-                            open: () => openAuxiliaryTool(explorerActive ? 'git' : 'directory')
-                          }}
                         />
                       )}
                       {terminalRoot !== null && (
@@ -4132,17 +4141,12 @@ export function Dashboard({
                               setTerminalOpen(false)
                               setTerminalRoot(null)
                               setAuxiliaryTab(current => current === 'terminal'
-                                ? openedAuxiliaryTools.includes('repository') ? 'repository' : 'new'
+                                ? explorerActive && openedAuxiliaryTools.includes('git') ? 'git' : 'new'
                                 : current)
                             }}
                           />
                         </DeferredPanel>
                       )}
-                      <div
-                        ref={setSourceControlTarget}
-                        className="flex min-h-0 min-w-0 flex-1"
-                        hidden={!sourceControlVisible}
-                      />
                       {!explorerActive && openedAuxiliaryTools.includes('directory') && (
                         <div
                           ref={setAuxiliaryDirectoryTarget}
@@ -4150,9 +4154,17 @@ export function Dashboard({
                           hidden={auxiliaryTab !== 'directory'}
                         />
                       )}
-                      {explorerActive && activeProject && openedAuxiliaryTools.includes('git') && (
+                      {explorerActive && gitProject && openedAuxiliaryTools.includes('git') && (
                         <div className="flex min-h-0 min-w-0 flex-1" hidden={auxiliaryTab !== 'git'}>
-                          <RobotGitControl key={activeProject.path} project={activeProject} />
+                          <RobotGitControl
+                            key={gitProject.path}
+                            project={gitProject}
+                            projects={projects}
+                            onSelectProject={projectID => setGitProjectSelection({ workspaceID: activeProjectID, projectID })}
+                            onOpenFile={path => setExplorerFileRequest({ root: gitProject.path, path })}
+                            diffTarget={isTablet ? null : gitDiffTarget}
+                            diffTabsTarget={isTablet ? null : fileTabsTarget}
+                          />
                         </div>
                       )}
                     </div>
@@ -4178,7 +4190,7 @@ export function Dashboard({
                         </div>
                       )}
                       {explorerMounted && (
-                        <div className={cn('min-h-0 min-w-0 flex-1', workbenchView !== 'explorer' && 'hidden')}>
+                        <div className={cn('relative min-h-0 min-w-0 flex-1', workbenchView !== 'explorer' && 'hidden')}>
                           <Suspense fallback={<p className="p-4 text-sm" role="status">正在打开资源管理器…</p>}>
                             <ResourceExplorer
                               key={robotScope}
@@ -4187,8 +4199,9 @@ export function Dashboard({
                               directoryTarget={explorerActive ? directoryTarget : auxiliaryDirectoryTarget}
                               directoryInDrawer={explorerActive && isCompact}
                               currentProjectDirectoryOnly={!explorerActive}
-                              sourceControlTarget={sourceControlTarget}
                               fileTabsTarget={fileTabsTarget}
+                              fileRequest={explorerFileRequest}
+                              onConsumeFileRequest={() => setExplorerFileRequest(null)}
                               onOpenFile={() => {
                                 setMobilePanel(null)
                                 if (!explorerActive) openExplorer()
@@ -4196,6 +4209,9 @@ export function Dashboard({
                               }}
                             />
                           </Suspense>
+                          {explorerActive && auxiliaryTab === 'git' && !isTablet && (
+                            <div ref={setGitDiffTarget} className="pointer-events-none absolute inset-0 z-10 [&>*]:pointer-events-auto" />
+                          )}
                         </div>
                       )}
                     </div>
@@ -4207,7 +4223,7 @@ export function Dashboard({
               {robotListError && (
                 <div role="alert" className="p-3 text-sm">
                   {robotListError}{' '}
-                  <Button onClick={retryRobotList}>重试读取</Button>
+                  <RefreshButton label="重试读取" onClick={retryRobotList} />
                 </div>
               )}
               {error && <ErrorNotice message={error} onClose={onClearError} />}
@@ -5020,212 +5036,218 @@ function GitCloneDialog({
             </footer>
           </form>
         ) : (
-          <div className="git-clone-form grid min-h-0 content-start gap-4 overflow-auto">
-            <section className="grid gap-3" aria-label="仓库连接">
-              <Tabs
-                ariaLabel="仓库连接方式"
-                items={[
-                  {
-                    id: 'ssh',
-                    icon: <KeyRound className="size-3.5" />,
-                    label: 'SSH',
-                    meta: sshKeys.length ? '推荐' : undefined
-                  },
-                  {
-                    id: 'https',
-                    icon: <Globe2 className="size-3.5" />,
-                    label: 'HTTPS'
-                  }
-                ]}
-                onChange={setConnection}
-                value={connection}
-                variant="inset"
-                className="w-full"
-              />
-              {connection === 'ssh' && (sshLoading || !sshKeys.length) && (
-                <p className="m-0 text-xs text-(--theme-text-muted)" role="status">
-                  {sshLoading
-                    ? '正在检查 SSH…'
-                    : 'SSH 未配置。可在设置中添加密钥，或切换到 HTTPS。'}
-                </p>
-              )}
-              <label className="grid gap-1 text-xs font-semibold text-(--theme-text-secondary)">
-                <span className="flex min-w-0 items-center justify-between gap-2">
-                  <span>仓库地址</span>
-                </span>
-                <input
-                  className="git-clone-input"
-                  autoFocus
-                  value={repository}
-                  onChange={event => {
-                    const value = event.target.value
-                    setRepository(value)
-                    setAuthorizationError('')
-                    setBranch(mode === 'package' ? 'release' : '')
-                    if (/^(git@|ssh:\/\/)/.test(value.trim()))
-                      setConnection('ssh')
-                    const derived =
-                      value
-                        .trim()
-                        .replace(/\/$/, '')
-                        .split('/')
-                        .pop()
-                        ?.replace(/\.git$/, '') ?? ''
-                    setName(derived)
-                  }}
-                  placeholder={
-                    connection === 'ssh'
-                      ? 'git@github.com:组织/机器人仓库.git'
-                      : 'https://github.com/组织/机器人仓库.git'
-                  }
-                />
-                {authorizationError && (
-                  <small className="font-normal text-red-700">
-                    {authorizationError}
-                  </small>
+          <div className="git-clone-form grid min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-3">
+            <Tabs
+              ariaLabel="仓库连接方式"
+              items={[
+                {
+                  id: 'ssh',
+                  icon: <KeyRound className="size-3.5" />,
+                  label: 'SSH',
+                  meta: sshKeys.length ? '推荐' : undefined
+                },
+                {
+                  id: 'https',
+                  icon: <Globe2 className="size-3.5" />,
+                  label: 'HTTPS'
+                }
+              ]}
+              onChange={setConnection}
+              value={connection}
+              variant="inset"
+              className="w-full"
+            />
+            <div
+              role="tabpanel"
+              aria-label={connection === 'ssh' ? 'SSH' : 'HTTPS'}
+              className="grid min-h-0 min-w-0 content-start gap-4 overflow-y-auto overscroll-contain"
+            >
+              <section className="grid gap-3" aria-label="仓库连接">
+                {connection === 'ssh' && (sshLoading || !sshKeys.length) && (
+                  <p className="m-0 text-xs text-(--theme-text-muted)" role="status">
+                    {sshLoading
+                      ? '正在检查 SSH…'
+                      : 'SSH 未配置。可在设置中添加密钥，或切换到 HTTPS。'}
+                  </p>
                 )}
-              </label>
-            </section>
-            <fieldset className="git-clone-group min-w-0">
-              <legend>克隆设置</legend>
-              <div className="git-clone-fields grid gap-3">
-                {mode === 'package' ? (
-                  <label className="grid gap-1 text-xs font-semibold text-(--theme-text-secondary)">
-                    <span className="flex items-center gap-1.5">
-                      克隆分支
-                      {branchesLoading && (
-                        <span className="inline-flex items-center gap-1 font-normal text-slate-500">
-                          <Loader2 className="size-3 animate-spin" /> 正在读取…
-                        </span>
-                      )}
-                    </span>
-                    <select
-                      className="git-clone-input"
-                      value={branch}
-                      onChange={event => setBranch(event.target.value)}
-                      disabled={!branches.length || branchesLoading}
-                    >
-                      {branchesLoading ? (
-                        <option value="">正在读取发布分支…</option>
-                      ) : !branches.length ? (
-                        <option value="">未找到可用分支</option>
-                      ) : null}
-                      {branches.map(item => (
-                        <option key={item} value={item}>
-                          {formatBranchLabel(item)}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                ) : (
-                  <label className="grid gap-1 text-xs font-semibold text-(--theme-text-secondary)">
-                    <span className="flex items-center gap-1.5">
-                      分支{branchesLoading ? '' : '（可选）'}
-                      {branchesLoading && (
-                        <span className="inline-flex items-center gap-1 font-normal text-slate-500">
-                          <Loader2 className="size-3 animate-spin" /> 正在读取…
-                        </span>
-                      )}
-                    </span>
-                    <select
-                      className="git-clone-input"
-                      value={branch}
-                      onChange={event => setBranch(event.target.value)}
-                      disabled={!branches.length || branchesLoading}
-                    >
-                      <option value="">
-                        {branchesLoading ? '正在读取远程分支…' : '默认分支'}
-                      </option>
-                      {branches.map(item => (
-                        <option key={item} value={item}>
-                          {formatBranchLabel(item)}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                )}
-                <label className="grid gap-1 text-xs font-semibold text-(--theme-text-secondary)">
-                  克隆深度
-                  <select
-                    className="git-clone-input"
-                    value={depth}
-                    onChange={event => setDepth(Number(event.target.value))}
-                  >
-                    <option value={1}>仅最新提交（推荐）</option>
-                    <option value={50}>最近 50 条提交</option>
-                    <option value={200}>最近 200 条提交</option>
-                    <option value={0}>完整历史</option>
-                  </select>
-                </label>
-                <label className="grid gap-1 text-xs font-semibold text-(--theme-text-secondary)">
-                  下载来源
-                  <select
-                    className="git-clone-input"
-                    value={mirror}
-                    onChange={event => setMirror(event.target.value)}
-                  >
-                    <option value="official">Git 官方（推荐）</option>
-                    <option value="gh-proxy">GitHub 加速 · gh-proxy</option>
-                    <option value="ghproxy-net">
-                      GitHub 加速 · ghproxy.net
-                    </option>
-                  </select>
-                </label>
-              </div>
-            </fieldset>
-            <fieldset className="git-clone-group min-w-0">
-              <legend>存放位置</legend>
-              <div className="git-clone-fields grid gap-3">
-                <label className="grid gap-1 text-xs font-semibold text-(--theme-text-secondary)">
-                  所在文件夹
-                  {mode === 'package' ? (
-                    <span
-                      className="git-clone-input truncate leading-9"
-                      title={destination}
-                    >
-                      当前机器人背包（packages）
-                    </span>
-                  ) : (
-                    <button
-                      type="button"
-                      className="git-clone-input flex items-center gap-2 text-left"
-                      onClick={onChooseDestination}
-                      title={destination || undefined}
-                    >
-                      <Folder className="size-4 shrink-0 text-(--theme-text-muted)" aria-hidden="true" />
-                      <span className="truncate">{gitDestinationLabel(destination)}</span>
-                    </button>
-                  )}
-                </label>
                 <label className="grid gap-1 text-xs font-semibold text-(--theme-text-secondary)">
                   <span className="flex min-w-0 items-center justify-between gap-2">
-                    <span>新目录名称</span>
-                    {target?.exists ? (
-                      <small
-                        className="truncate font-normal text-red-700"
-                        title={`目标已存在：${target.path}`}
-                      >
-                        目标已存在
-                      </small>
-                    ) : target?.path ? null : targetError ? (
-                      <small
-                        className="truncate font-normal text-red-700"
-                        title={targetError}
-                      >
-                        无法检查目标
-                      </small>
-                    ) : null}
+                    <span>仓库地址</span>
                   </span>
                   <input
                     className="git-clone-input"
-                    aria-invalid={Boolean(target?.exists || targetError)}
-                    value={name}
-                    onChange={event => setName(event.target.value)}
-                    placeholder="默认使用仓库名"
+                    autoFocus
+                    value={repository}
+                    onChange={event => {
+                      const value = event.target.value
+                      setRepository(value)
+                      setAuthorizationError('')
+                      setBranch(mode === 'package' ? 'release' : '')
+                      if (/^(git@|ssh:\/\/)/.test(value.trim()))
+                        setConnection('ssh')
+                      const derived =
+                        value
+                          .trim()
+                          .replace(/\/$/, '')
+                          .split('/')
+                          .pop()
+                          ?.replace(/\.git$/, '') ?? ''
+                      setName(derived)
+                    }}
+                    placeholder={
+                      connection === 'ssh'
+                        ? 'git@github.com:组织/机器人仓库.git'
+                        : 'https://github.com/组织/机器人仓库.git'
+                    }
                   />
+                  {authorizationError && (
+                    <small className="font-normal text-red-700">
+                      {authorizationError}
+                    </small>
+                  )}
                 </label>
-              </div>
-            </fieldset>
+              </section>
+              <fieldset className="git-clone-group min-w-0">
+                <legend>克隆设置</legend>
+                <div className="git-clone-fields grid gap-3">
+                  {mode === 'package' ? (
+                    <label className="grid gap-1 text-xs font-semibold text-(--theme-text-secondary)">
+                      <span className="flex items-center gap-1.5">
+                        克隆分支
+                        {branchesLoading && (
+                          <span className="inline-flex items-center gap-1 font-normal text-slate-500">
+                            <Loader2 className="size-3 animate-spin" /> 正在读取…
+                          </span>
+                        )}
+                      </span>
+                      <select
+                        className="git-clone-input"
+                        value={branch}
+                        onChange={event => setBranch(event.target.value)}
+                        disabled={!branches.length || branchesLoading}
+                      >
+                        {branchesLoading ? (
+                          <option value="">正在读取发布分支…</option>
+                        ) : !branches.length ? (
+                          <option value="">未找到可用分支</option>
+                        ) : null}
+                        {branches.map(item => (
+                          <option key={item} value={item}>
+                            {formatBranchLabel(item)}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  ) : (
+                    <label className="grid gap-1 text-xs font-semibold text-(--theme-text-secondary)">
+                      <span className="flex items-center gap-1.5">
+                        分支{branchesLoading ? '' : '（可选）'}
+                        {branchesLoading && (
+                          <span className="inline-flex items-center gap-1 font-normal text-slate-500">
+                            <Loader2 className="size-3 animate-spin" /> 正在读取…
+                          </span>
+                        )}
+                      </span>
+                      <select
+                        className="git-clone-input"
+                        value={branch}
+                        onChange={event => setBranch(event.target.value)}
+                        disabled={!branches.length || branchesLoading}
+                      >
+                        <option value="">
+                          {branchesLoading ? '正在读取远程分支…' : '默认分支'}
+                        </option>
+                        {branches.map(item => (
+                          <option key={item} value={item}>
+                            {formatBranchLabel(item)}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
+                  <label className="grid gap-1 text-xs font-semibold text-(--theme-text-secondary)">
+                    克隆深度
+                    <select
+                      className="git-clone-input"
+                      value={depth}
+                      onChange={event => setDepth(Number(event.target.value))}
+                    >
+                      <option value={1}>仅最新提交（推荐）</option>
+                      <option value={50}>最近 50 条提交</option>
+                      <option value={200}>最近 200 条提交</option>
+                      <option value={0}>完整历史</option>
+                    </select>
+                  </label>
+                  <label className="grid gap-1 text-xs font-semibold text-(--theme-text-secondary)">
+                    下载来源
+                    <select
+                      className="git-clone-input"
+                      value={mirror}
+                      onChange={event => setMirror(event.target.value)}
+                    >
+                      <option value="official">Git 官方（推荐）</option>
+                      <option value="gh-proxy">GitHub 加速 · gh-proxy</option>
+                      <option value="ghproxy-net">
+                        GitHub 加速 · ghproxy.net
+                      </option>
+                    </select>
+                  </label>
+                </div>
+              </fieldset>
+              <fieldset className="git-clone-group min-w-0">
+                <legend>存放位置</legend>
+                <div className="git-clone-fields grid gap-3">
+                  <label className="grid gap-1 text-xs font-semibold text-(--theme-text-secondary)">
+                    所在文件夹
+                    {mode === 'package' ? (
+                      <span
+                        className="git-clone-input truncate leading-9"
+                        title={destination}
+                      >
+                        当前机器人背包（packages）
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        className="git-clone-input flex items-center gap-2 text-left"
+                        onClick={onChooseDestination}
+                        title={destination || undefined}
+                      >
+                        <Folder className="size-4 shrink-0 text-(--theme-text-muted)" aria-hidden="true" />
+                        <span className="truncate">{gitDestinationLabel(destination)}</span>
+                      </button>
+                    )}
+                  </label>
+                  <label className="grid gap-1 text-xs font-semibold text-(--theme-text-secondary)">
+                    <span className="flex min-w-0 items-center justify-between gap-2">
+                      <span>新目录名称</span>
+                      {target?.exists ? (
+                        <small
+                          className="truncate font-normal text-red-700"
+                          title={`目标已存在：${target.path}`}
+                        >
+                          目标已存在
+                        </small>
+                      ) : target?.path ? null : targetError ? (
+                        <small
+                          className="truncate font-normal text-red-700"
+                          title={targetError}
+                        >
+                          无法检查目标
+                        </small>
+                      ) : null}
+                    </span>
+                    <input
+                      className="git-clone-input"
+                      aria-invalid={Boolean(target?.exists || targetError)}
+                      value={name}
+                      onChange={event => setName(event.target.value)}
+                      placeholder="默认使用仓库名"
+                    />
+                  </label>
+                </div>
+              </fieldset>
+            </div>
           </div>
         )}
         {!authorizationOpen && (
@@ -6006,34 +6028,11 @@ function EnvironmentPage({
 
       {sidebarLayout && environmentView !== 'bun' ? (
         <SidebarWindowActions>
-          <button
-            className={
-              sidebarLayout
-                ? 'sidebar-window-action'
-                : 'system-feature-refresh inline-flex min-h-8 items-center gap-1.5 justify-center rounded-lg px-3 text-xs font-semibold transition-colors'
-            }
-            disabled={checking}
-            onClick={onRefresh}
-          >
-            <RefreshCw
-              className={cn(
-                sidebarLayout ? 'size-4' : 'size-3.5',
-                checking && 'animate-spin'
-              )}
-            />
-            重新检查
-          </button>
+          <RefreshButton label="重新检查" onClick={onRefresh} busy={checking} />
         </SidebarWindowActions>
       ) : !sidebarLayout && (
         <footer className="flex justify-end border-t border-slate-100 pt-3 dark:border-slate-800">
-          <button
-            className="system-feature-refresh inline-flex min-h-8 items-center gap-1.5 justify-center rounded-lg px-3 text-xs font-semibold transition-colors"
-            disabled={checking}
-            onClick={onRefresh}
-          >
-            <RefreshCw className={cn('size-3.5', checking && 'animate-spin')} />
-            重新检查
-          </button>
+          <RefreshButton label="重新检查" onClick={onRefresh} busy={checking} />
         </footer>
       )}
     </section>
@@ -6816,13 +6815,13 @@ function SystemPluginCenter({
                         </span>
                       )}
                     </div>
-                    <div className="mt-0.5 flex items-center gap-2 text-xs text-slate-400 dark:text-slate-500">
-                      <span className="font-mono">
+                    <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-400 dark:text-slate-500 [&_svg]:shrink-0">
+                      <span className="min-w-0 break-all font-mono">
                         {isOnline
                           ? plugin.version || '安装时选择版本'
                           : (plugin.installedTag ?? `v${plugin.version}`)}
                       </span>
-                      <span className="size-0.5 rounded-full bg-slate-300 dark:bg-slate-600" />
+                      <span className="hidden size-0.5 rounded-full bg-slate-300 sm:block dark:bg-slate-600" />
                       {isOnline ? (
                         <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
                           <Globe className="size-3" />
@@ -6858,8 +6857,8 @@ function SystemPluginCenter({
                       )}
                       {!hasPanel && !isOnline && (
                         <>
-                          <span className="size-0.5 rounded-full bg-slate-300 dark:bg-slate-600" />
-                          <span className="text-slate-400 dark:text-slate-500">
+                          <span className="hidden size-0.5 rounded-full bg-slate-300 sm:block dark:bg-slate-600" />
+                          <span className="whitespace-nowrap text-slate-400 dark:text-slate-500">
                             无界面
                           </span>
                         </>
@@ -8712,26 +8711,73 @@ function BackpackPackageManager({
     await refetchStatus()
     if (tab === 'version') await refetchVersions()
   }
+  const tabs = (
+    <Tabs
+      ariaLabel="插件详情"
+      className="overflow-x-auto overflow-y-hidden [&>button]:shrink-0 [&>button]:whitespace-nowrap [&_svg]:shrink-0"
+      items={[
+        {
+          id: 'overview',
+          label: '概览',
+          icon: <Activity className="size-3.5" />
+        },
+        {
+          id: 'readme',
+          label: '文档',
+          icon: <FileText className="size-3.5" />
+        },
+        {
+          id: 'config',
+          label: '配置',
+          icon: <Settings className="size-3.5" />
+        },
+        {
+          id: 'version',
+          label: '版本',
+          icon: <GitBranch className="size-3.5" />
+        },
+        {
+          id: 'changes',
+          label: '改动',
+          icon: <FileText className="size-3.5" />
+        },
+        {
+          id: 'recovery',
+          label: '恢复',
+          icon: <Archive className="size-3.5" />
+        }
+      ]}
+      onChange={setTab}
+      value={tab}
+    />
+  )
   return (
     <RobotPanel
       className="backpack-manager"
+      scrollBody
+      bodyKey={tab}
+      bodyToolbar={tabs}
       icon={<Package className="size-4" />}
 
       title={
-        <>
+        <span className="block truncate" title={item.name}>
           {item.name}
           {item.version && (
             <em className="ml-2 not-italic text-xs text-slate-400">
               v{item.version}
             </em>
           )}
-        </>
+        </span>
       }
       actions={
         <>
-          <button className="text-button gap-1.5" onClick={onBack}>
+          <button
+            className="text-button gap-1.5"
+            title="返回背包"
+            onClick={onBack}
+          >
             <ArrowLeft className="size-4" />
-            返回背包
+            <span className="@max-[380px]/robot-panel:sr-only">返回背包</span>
           </button>
           <button
             className="icon-button size-9 p-0"
@@ -8758,43 +8804,6 @@ function BackpackPackageManager({
         </>
       }
     >
-      <Tabs
-        ariaLabel="插件详情"
-        items={[
-          {
-            id: 'overview',
-            label: '概览',
-            icon: <Activity className="size-3.5" />
-          },
-          {
-            id: 'readme',
-            label: '文档',
-            icon: <FileText className="size-3.5" />
-          },
-          {
-            id: 'config',
-            label: '配置',
-            icon: <Settings className="size-3.5" />
-          },
-          {
-            id: 'version',
-            label: '版本',
-            icon: <GitBranch className="size-3.5" />
-          },
-          {
-            id: 'changes',
-            label: '改动',
-            icon: <FileText className="size-3.5" />
-          },
-          {
-            id: 'recovery',
-            label: '恢复',
-            icon: <Archive className="size-3.5" />
-          }
-        ]}
-        onChange={setTab}
-        value={tab}
-      />
       <div className="grid gap-3">
         {!item.valid ? (
           <p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-800">
@@ -8823,13 +8832,7 @@ function BackpackPackageManager({
               </div>
             ) : null}
             <div className="flex gap-2 justify-end">
-              <button
-                className="secondary-button text-xs"
-                onClick={() => void refetchStatus()}
-              >
-                <RefreshCw className="size-3.5" />
-                重新检查
-              </button>
+              <RefreshButton label="重新检查" onClick={() => void refetchStatus()} />
               <button className="secondary-button text-xs" onClick={onOpenLogs}>
                 日志
               </button>
@@ -8911,12 +8914,7 @@ function BackpackPackageManager({
           <section className="grid gap-3 rounded-xl border border-slate-200 bg-white p-4 text-sm">
             <div className="flex items-center justify-between">
               <strong>本地改动</strong>
-              <button
-                className="secondary-button text-xs"
-                onClick={() => void refetchChanges()}
-              >
-                刷新
-              </button>
+              <RefreshButton label="刷新" onClick={() => void refetchChanges()} />
             </div>
             {!changes?.items.length ? (
               <span className="text-xs text-slate-500">
@@ -9024,7 +9022,7 @@ function BackpackPackageManager({
                   />
                 </label>
                 <button
-                  className="secondary-button"
+                  className="secondary-button gap-1.5"
                   disabled={busy || !gitRepository.trim() || !gitBranch.trim()}
                   onClick={() => void configureGit()}
                 >
@@ -9056,20 +9054,13 @@ function BackpackPackageManager({
                       <span className="rounded-full bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700">
                         正在使用
                       </span>
-                      <button
-                        className="secondary-button gap-1.5 text-xs"
+                      <RefreshButton
+                        label="刷新"
                         disabled={busy || versionsFetching}
                         onClick={() => void refreshCommitHistory()}
                         title="解除浅克隆限制并拉取当前分支完整提交记录"
-                      >
-                        <RefreshCw
-                          className={cn(
-                            'size-3.5',
-                            versionsFetching && 'animate-spin'
-                          )}
-                        />
-                        刷新
-                      </button>
+                        busy={versionsFetching}
+                      />
                     </span>
                   )}
                 </div>
@@ -9813,10 +9804,11 @@ function PM2RuntimeCard({
             </label>
             <label className="grid gap-1.5 text-xs font-medium text-slate-600">
               环境变量（每行 KEY=value）
-              <textarea
-                className="min-h-24 resize-y rounded-md border border-slate-300 bg-white px-2.5 py-2 text-sm font-normal leading-5 text-slate-800 outline-none transition focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
-                value={envText}
-                onChange={event => setEnvText(event.target.value)}
+              <SourceTextarea
+                file=".env"
+                className="w-full min-h-24 font-mono resize-y rounded-md border border-slate-300 bg-white px-2.5 py-2 text-sm font-normal leading-5 text-slate-800 outline-none transition focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
+                content={envText}
+                onChange={setEnvText}
               />
             </label>
           </div>
@@ -10120,13 +10112,14 @@ function ScriptControlCard({
             </label>
             <label className="grid gap-1.5 text-xs font-medium text-slate-600">
               命令
-              <textarea
-                className="min-h-24 resize-y rounded-md border border-slate-300 bg-white px-2.5 py-2 text-sm font-normal leading-5 text-slate-800 outline-none transition focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
-                value={editing?.command ?? ''}
-                onChange={event =>
+              <SourceTextarea
+                file="command.sh"
+                className="w-full min-h-24 font-mono resize-y rounded-md border border-slate-300 bg-white px-2.5 py-2 text-sm font-normal leading-5 text-slate-800 outline-none transition focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
+                content={editing?.command ?? ''}
+                onChange={command =>
                   setEditing(current =>
                     current
-                      ? { ...current, command: event.target.value }
+                      ? { ...current, command }
                       : current
                   )
                 }
@@ -10577,14 +10570,18 @@ function RuntimePanel({
     <RobotPanel
       className="runtime-overview"
       icon={<Play className="size-4" />}
-      title={overview?.name || '正在读取项目…'}
+      title={
+        <span className="block truncate" title={overview?.name}>
+          {overview?.name || '正在读取项目…'}
+        </span>
+      }
       description={
         overview
           ? `${overview.version || '未设置版本'} · ${overview.runtime === 'bun' ? 'Bun' : 'Node.js'} · ${overview.packageManager} · ${overview.hasDevScript ? '已配置开发命令' : '未配置 dev 命令'}`
           : '读取包信息、平台包与运行状态。'
       }
       actions={
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 @max-[380px]/robot-panel:gap-1 @max-[380px]/robot-panel:[&_.secondary-button]:px-1!">
           <RobotDiagnostics key={`diagnostics:${root}`} root={root} />
           {overview && (
             <RobotRuntimeSwitch
@@ -10700,7 +10697,7 @@ function RuntimePanel({
               {(['dependencies', 'devDependencies'] as const).map(scope => (
                 <button
                   className={cn(
-                    'h-9 rounded-md border text-xs font-medium transition disabled:cursor-not-allowed disabled:opacity-50',
+                    'h-9 min-w-0 whitespace-nowrap rounded-md border text-xs! font-medium transition disabled:cursor-not-allowed disabled:opacity-50',
                     dependencyControl?.scope === scope
                       ? 'border-brand-600 bg-brand-600 text-white'
                       : 'border-slate-200 bg-white text-slate-600 hover:border-brand-300 hover:bg-brand-50'
@@ -10974,18 +10971,12 @@ function RuntimePanel({
                   启动前会主动确认机器人要绑定的端口没有被其他进程占用。
                 </span>
               </div>
-              <button
-                className="secondary-button ml-auto gap-1.5"
-                disabled={portStatusBusy}
+              <RefreshButton
+                label="重新检测"
                 onClick={() => void refreshPorts()}
-              >
-                {portStatusBusy ? (
-                  <Loader2 className="size-4 animate-spin" />
-                ) : (
-                  <RefreshCw className="size-4" />
-                )}
-                {portStatusBusy ? '检测中…' : '重新检测'}
-              </button>
+                busy={portStatusBusy}
+                className="ml-auto"
+              />
             </div>
             <div className="divide-y divide-slate-100 border-t border-slate-100">
               {portStatusError && (
@@ -11050,7 +11041,7 @@ function RuntimePanel({
           <div className="divide-y divide-slate-200">
             <section className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 py-3">
               <div className="grid min-w-0 gap-1">
-                <strong className="block text-sm font-semibold text-slate-700">
+                <strong className="flex flex-wrap items-center gap-2 text-sm font-semibold text-slate-700">
                   依赖
                   <StatusDot
                     active={overview?.dependenciesComplete}
@@ -11913,7 +11904,15 @@ function ControlCard({
         }))}
     />
   )
-  const spinner = <span className="inline-block size-3.5 animate-spin rounded-full border-2 border-slate-300 border-t-brand-600" />
+  const spinner = (
+    <span
+      className={cn(
+        'inline-block shrink-0 animate-spin rounded-full border-2 border-slate-300 border-t-brand-600',
+        dropdown ? 'size-4' : 'size-3.5'
+      )}
+      aria-hidden="true"
+    />
+  )
   const quickActions = [
     {
       label: '应用',
@@ -12317,9 +12316,7 @@ function PM2ProcessesPanel({
             <p className="text-xs text-slate-500">
               {operationErrorMessage(error, '无法读取 PM2 进程。')}
             </p>
-            <button className="secondary-button" onClick={() => void refetch()}>
-              重试
-            </button>
+            <RefreshButton label="重试" onClick={() => void refetch()} />
           </div>
         ) : isFetching && !items.length ? (
           <div className="grid min-h-0 place-items-center p-8 text-xs text-slate-400">
@@ -12483,13 +12480,12 @@ function PM2ProcessesPanel({
               <ClipboardList className="size-4" />
               日志
             </button>
-            <button
-              className="secondary-button"
+            <RefreshButton
+              label="刷新"
               disabled={isFetching || actionBusy}
               onClick={() => void refetch()}
-            >
-              刷新
-            </button>
+              busy={isFetching}
+            />
           </div>
         </footer>
       </section>
@@ -12534,11 +12530,13 @@ function EditorMode({
   )
 }
 function FileEditor({
+  file,
   toolbar,
   content,
   placeholder,
   onChange
 }: {
+  file: string
   toolbar?: ReactNode
   content: string
   placeholder: string
@@ -12547,15 +12545,18 @@ function FileEditor({
   return (
     <RobotPanel
       className="file-editor"
+      scrollBody
       icon={<Settings className="size-4" />}
       title="文本编辑"
       description="直接编辑当前配置文件内容"
       actions={toolbar}
     >
-      <textarea
+      <SourceTextarea
+        file={file}
+        aria-label={`编辑 ${file}`}
         className="min-h-105 w-full resize-y rounded-lg border border-slate-300 bg-white p-3 font-mono text-xs leading-5 text-slate-800 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
-        value={content}
-        onChange={event => onChange(event.target.value)}
+        content={content}
+        onChange={onChange}
         placeholder={placeholder}
       />
     </RobotPanel>
@@ -12868,41 +12869,46 @@ function GitReleasePanelNext({
           >
             <RefreshCw className="size-4" />
           </button>
-          <button
-            className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg bg-brand-600 px-3 text-xs font-semibold text-white transition hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-50"
-            disabled={
-              busy ||
-              loading ||
-              phase === 'building' ||
-              (phase === 'source' && !ready) ||
-              (phase === 'artifacts' && !artifacts.length)
-            }
-            onClick={() => {
-              if (phase === 'source') void prepareBuild()
-              else if (phase === 'artifacts') setPhase('confirm')
-              else if (phase === 'confirm') void publish()
-              else if (phase === 'published') refresh()
-            }}
-          >
-            {phase === 'source' ? (
-              <Code2 className="size-4" />
-            ) : phase === 'artifacts' ? (
-              <ArrowRight className="size-4" />
-            ) : phase === 'confirm' ? (
-              <CheckCircle2 className="size-4" />
-            ) : (
-              <RefreshCw className="size-4" />
-            )}
-            {busy || phase === 'building'
-              ? '构建中…'
-              : phase === 'source'
-                ? '开始构建'
-                : phase === 'artifacts'
-                  ? '继续确认'
-                  : phase === 'confirm'
-                    ? '确认发布'
-                    : '重新开始'}
-          </button>
+          {phase === 'published' ? (
+            <RefreshButton
+              label="重新开始"
+              onClick={refresh}
+              disabled={busy || loading}
+            />
+          ) : (
+            <button
+              className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg bg-brand-600 px-3 text-xs font-semibold text-white transition hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={
+                busy ||
+                loading ||
+                phase === 'building' ||
+                (phase === 'source' && !ready) ||
+                (phase === 'artifacts' && !artifacts.length)
+              }
+              onClick={() => {
+                if (phase === 'source') void prepareBuild()
+                else if (phase === 'artifacts') setPhase('confirm')
+                else if (phase === 'confirm') void publish()
+              }}
+            >
+              {phase === 'source' ? (
+                <Code2 className="size-4" />
+              ) : phase === 'artifacts' ? (
+                <ArrowRight className="size-4" />
+              ) : phase === 'confirm' ? (
+                <CheckCircle2 className="size-4" />
+              ) : (
+                <RefreshCw className="size-4" />
+              )}
+              {busy || phase === 'building'
+                ? '构建中…'
+                : phase === 'source'
+                  ? '开始构建'
+                  : phase === 'artifacts'
+                    ? '继续确认'
+                    : '确认发布'}
+            </button>
+          )}
         </div>
       }
     >

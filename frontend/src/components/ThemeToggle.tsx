@@ -40,7 +40,7 @@ export function ThemeToggle({
   return (
     <Button
       variant={embedded ? 'secondary' : 'icon'}
-      className={menuItem ? 'workbench-action-item' : undefined}
+      className={menuItem ? 'workbench-action-item' : embedded ? 'gap-1.5' : undefined}
       onClick={() => setTheme(next)}
       aria-label={`切换到${next === 'dark' ? '暗色' : '亮色'}`}
       title={`切换到${next === 'dark' ? '暗色' : '亮色'}`}

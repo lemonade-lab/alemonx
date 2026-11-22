@@ -15,22 +15,22 @@ const cls = {
   section:
     'bg-[var(--editor-background)] rounded-lg border border-[var(--panel-border)] overflow-hidden',
   sectionHead:
-    'flex items-center justify-between px-4 py-2 border-b border-[var(--panel-border)] bg-[var(--activityBar-background)]',
-  sectionTitle: 'text-sm font-semibold text-[var(--editor-foreground)]',
+    'flex items-center justify-between gap-2 px-4 py-2 border-b border-[var(--panel-border)] bg-[var(--activityBar-background)]',
+  sectionTitle: 'min-w-0 wrap-anywhere text-sm font-semibold text-[var(--editor-foreground)]',
   row: 'flex items-center gap-2 px-4 py-2 text-xs border-b border-[var(--panel-border)] last:border-b-0 hover:bg-[var(--activityBar-background)] transition-colors',
   input:
     'flex-1 px-2 py-1 rounded text-xs bg-[var(--input-background)] text-[var(--input-foreground)] border border-[var(--input-border)] outline-none focus:border-[var(--button-background)]',
   inputSmall:
     'w-full px-2 py-1 rounded text-xs bg-[var(--input-background)] text-[var(--input-foreground)] border border-[var(--input-border)] outline-none focus:border-[var(--button-background)]',
-  btn: 'px-2 py-1 rounded text-[11px] bg-[var(--button-background)] text-[var(--button-foreground)] hover:opacity-90 cursor-pointer',
+  btn: 'inline-flex shrink-0 items-center justify-center gap-1 whitespace-nowrap px-2 py-1 rounded text-[11px] bg-[var(--button-background)] text-[var(--button-foreground)] hover:opacity-90 cursor-pointer',
   btnGhost:
-    'px-1.5 py-0.5 rounded text-[11px] hover:bg-[var(--activityBar-background)] cursor-pointer text-[var(--editor-foreground)]',
+    'inline-flex shrink-0 items-center justify-center gap-1 whitespace-nowrap px-1.5 py-0.5 rounded text-[11px] hover:bg-[var(--activityBar-background)] cursor-pointer text-[var(--editor-foreground)]',
   badge:
     'px-1.5 py-0.5 rounded text-[10px] bg-[var(--activityBar-background)] text-[var(--descriptionForeground)]',
   empty:
     'text-xs text-center py-6 text-[var(--descriptionForeground)] opacity-70',
   search:
-    'px-2 py-1 rounded text-xs bg-[var(--input-background)] text-[var(--input-foreground)] border border-[var(--input-border)] outline-none w-40'
+    'w-full px-2 py-1 rounded text-xs bg-[var(--input-background)] text-[var(--input-foreground)] border border-[var(--input-border)] outline-none'
 };
 
 /* ─── 工具 ─── */
@@ -114,12 +114,13 @@ function CommandSection({
   return (
     <div className={cls.section}>
       <div className={cls.sectionHead}>
-        <span className={cls.sectionTitle}>
-          📋 指令列表（commands.json）
-          <span className={cls.badge + ' ml-2'}>{commands.length}</span>
+        <span className={cls.sectionTitle} title="指令列表（commands.json）">
+          <span className="max-[360px]:hidden" aria-hidden="true">📋 </span>指令列表
+          <span className="max-[360px]:sr-only">（commands.json）</span>
+          <span className={cls.badge + ' ml-2 max-[360px]:ml-0'}>{commands.length}</span>
         </span>
-        <div className="flex items-center gap-2">
-          <div className="relative">
+        <div className="flex shrink-0 items-center gap-2 max-[360px]:gap-1">
+          <div className="relative w-17 sm:w-40">
             <SearchOutlined className="absolute left-2 top-1/2 -translate-y-1/2 text-[var(--descriptionForeground)] text-[10px]" />
             <input
               className={cls.search + ' pl-6'}
@@ -217,7 +218,7 @@ function CommandSection({
                 <EditOutlined />
               </button>
               <button
-                className={cls.btnGhost + ' text-red-400'}
+                className={cls.btnGhost + ' text-(--theme-danger-text)'}
                 onClick={() => remove(i)}
               >
                 <DeleteOutlined />
@@ -396,7 +397,7 @@ function UserSection({
               </button>
               {!isSingle && (
                 <button
-                  className={cls.btnGhost + ' text-red-400'}
+                  className={cls.btnGhost + ' text-(--theme-danger-text)'}
                   onClick={() => remove(i)}
                 >
                   <DeleteOutlined />
@@ -543,7 +544,7 @@ function ChannelSection({
                 <EditOutlined />
               </button>
               <button
-                className={cls.btnGhost + ' text-red-400'}
+                className={cls.btnGhost + ' text-(--theme-danger-text)'}
                 onClick={() => remove(i)}
               >
                 <DeleteOutlined />
@@ -602,7 +603,7 @@ export default function ConfigEditor() {
       style={{ color: 'var(--editor-foreground)' }}
     >
       {/* 顶部标题栏 */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-2">
         <div>
           <h1 className="text-base font-bold">⚙️ 配置编辑器</h1>
           <p className="text-[11px] text-[var(--descriptionForeground)] mt-0.5">

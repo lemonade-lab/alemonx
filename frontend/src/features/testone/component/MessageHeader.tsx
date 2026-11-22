@@ -33,7 +33,7 @@ const MessageHeader = ({ value, children, onClick }: MessageHeaderProps) => {
         </div>
         <div className="flex flex-col justify-center">
           <div className="font-semibold ">{value.Name}</div>
-          <div className="text-sm text-[var(--textPreformat-background)]">
+          <div className="text-sm text-[var(--descriptionForeground)]">
             {value.Id}
           </div>
         </div>

@@ -13,7 +13,7 @@ const Select = <T extends { value: string; label: string }>({
   className?: string;
 }) => {
   return (
-    <div className="flex flex-row items-center">
+    <div className="flex min-w-0 flex-row items-center">
       <select
         value={value}
         onChange={e => {

@@ -1,25 +1,20 @@
-import { Folder, GitBranch, GitFork, Terminal } from 'lucide-react'
+import { Folder, GitBranch, Terminal } from 'lucide-react'
 
 export function WorkbenchAuxiliaryStart({
   onOpenTerminal,
-  onOpenRepository,
-  extra,
+  onOpenGit,
+  onOpenDirectory,
   hasProject
 }: {
   onOpenTerminal: () => void
-  onOpenRepository: () => void
-  extra: { kind: 'directory' | 'git'; open: () => void }
+  onOpenGit: () => void
+  onOpenDirectory?: () => void
   hasProject: boolean
 }) {
   const shortcuts = [
     { label: '终端', icon: Terminal, open: onOpenTerminal, disabled: false },
-    { label: '仓库', icon: GitBranch, open: onOpenRepository, disabled: !hasProject },
-    {
-      label: extra.kind === 'git' ? 'Git 管理' : '目录',
-      icon: extra.kind === 'git' ? GitFork : Folder,
-      open: extra.open,
-      disabled: !hasProject
-    }
+    { label: 'Git 管理', icon: GitBranch, open: onOpenGit, disabled: !hasProject },
+    ...(onOpenDirectory ? [{ label: '目录', icon: Folder, open: onOpenDirectory, disabled: !hasProject }] : [])
   ]
 
   return (
@@ -31,7 +26,7 @@ export function WorkbenchAuxiliaryStart({
         <h2 className="mb-3 text-sm font-semibold text-(--theme-text-secondary)">
           打开
         </h2>
-        <div className="grid grid-cols-3 gap-2">
+        <div className={onOpenDirectory ? 'grid grid-cols-3 gap-2' : 'grid grid-cols-2 gap-2'}>
           {shortcuts.map(({ label, icon: Icon, open, disabled }) => (
             <button
               key={label}

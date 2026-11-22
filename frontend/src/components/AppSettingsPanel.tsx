@@ -101,6 +101,7 @@ export function AppSettingsPanel({
       items={items}
       onActiveItemChange={setActive}
       sidebarAriaLabel="设置页面"
+      bodyClassName={visibleSection === 'update' && !windowProps.native ? 'overflow-hidden!' : undefined}
       sidebarFooter={
         <>
           <button

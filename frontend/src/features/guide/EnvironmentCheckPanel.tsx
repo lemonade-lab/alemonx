@@ -1,10 +1,10 @@
+import { RefreshButton } from '../../components/RefreshButton'
 import cn from 'classnames'
 import {
   AlertCircle,
   Check,
   ChevronDown,
   Loader2,
-  RefreshCw,
   Terminal
 } from 'lucide-react'
 import { Button } from '../../components/Button'
@@ -159,21 +159,7 @@ export function EnvironmentCheckPanel({
             {summary}
           </p>
         </div>
-        <Button
-          type="button"
-          size="sm"
-          variant="secondary"
-          className="inline-flex items-center gap-1.5"
-          onClick={onCheck}
-          disabled={checking}
-        >
-          {checking ? (
-            <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
-          ) : (
-            <RefreshCw className="size-3.5" aria-hidden="true" />
-          )}
-          {checking ? '检查中' : '重新检查'}
-        </Button>
+        <RefreshButton label="重新检查" onClick={onCheck} busy={checking} />
       </header>
 
       <div

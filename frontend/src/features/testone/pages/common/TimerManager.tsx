@@ -15,9 +15,9 @@ const TimerManager = ({
   stopAllCommandTasks: () => void;
 }) => {
   return (
-    <div className="mb-2 p-2 bg-green-200 dark:bg-green-900 rounded text-xs  hover-lift">
+    <div className="mb-2 p-2 bg-(--theme-success-soft) text-(--theme-success-text) rounded text-xs  hover-lift">
       <div className="flex justify-between">
-        <div className="font-semibold text-green-800 dark:text-green-200">
+        <div className="font-semibold text-(--theme-success-text)">
           运行中的任务 ({running})
         </div>
         <div className="flex gap-2">
@@ -32,7 +32,7 @@ const TimerManager = ({
           .map(task => (
             <div
               key={task.id}
-              className="mt-1 text-green-700 dark:text-green-300 hover-lift"
+              className="mt-1 text-(--theme-success-text) hover-lift"
             >
               <div className="flex items-center">
                 <div>📋 {task.name}</div>

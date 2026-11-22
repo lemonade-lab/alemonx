@@ -1,7 +1,7 @@
+import { RefreshButton } from '../RefreshButton'
 import { useSelector } from 'react-redux'
 import type { RootState } from '../../store/guideStore'
 import { useDataCatalogQuery } from '../../store/dataApi'
-import { Button } from '../Button'
 import { RedisWorkspace } from './RedisWorkspace'
 import { BuiltinSQLite } from './BuiltinSQLite'
 import { ConnectWorkspace } from './ConnectWorkspace'
@@ -25,7 +25,7 @@ export default function DataWorkspace() {
           {catalog.isError && (
             <div role="alert">
               本地数据库建议暂不可用，仍可配置其他 SQL 连接。
-              <Button onClick={() => void catalog.refetch()}>重试</Button>
+              <RefreshButton label="重试" onClick={() => void catalog.refetch()} />
             </div>
           )}
           <ConnectWorkspace suggestions={catalog.data?.sqlite ?? []} />

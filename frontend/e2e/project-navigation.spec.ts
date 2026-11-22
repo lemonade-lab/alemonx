@@ -25,7 +25,7 @@ test('primary navigation stays reachable while switching sections', async ({
       const setSection = value => { section = value; render(); };
       function Fixture() {
         return React.createElement(ProjectNavigation, {activeID: active, items: [
-          {id:'runtime', label:'运行', onSelect: () => setActive('runtime')},
+          {id:'runtime', label:'运行', loading:true, onSelect: () => setActive('runtime')},
           {id:'config', label:'配置', onSelect: () => {setActive('config');setSection('robot')}, children: [
             {id:'robot', label:'机器人配置', active:active === 'config' && section === 'robot', onSelect: () => {setActive('config');setSection('robot')}},
             {id:'env', label:'环境变量', active:active === 'config' && section === 'env', onSelect: () => {setActive('config');setSection('env')}}
@@ -41,6 +41,10 @@ test('primary navigation stays reachable while switching sections', async ({
   await expect(running).toHaveAttribute('aria-current', 'page')
   const config = page.getByRole('button', { name: '配置', exact: true })
   const nav = page.getByRole('navigation', { name: '机器人功能' })
+  await expect(running).toHaveText('运行')
+  await expect(running).toHaveAttribute('aria-busy', 'true')
+  await expect(running.locator('svg')).toBeVisible()
+  await expect(nav.getByRole('status')).toHaveText('运行加载中…')
   const menu = page.getByRole('group', { name: '配置子菜单' })
   const before = (await nav.boundingBox())!
   await config.click()
@@ -51,6 +55,7 @@ test('primary navigation stays reachable while switching sections', async ({
   await page.getByRole('button', { name: '环境变量', exact: true }).click()
   await expect(menu).toHaveCount(0)
   await expect(config).toHaveAttribute('aria-current', 'page')
+  await expect(nav.getByRole('status')).toHaveText('')
   await config.click()
   await expect(menu.getByRole('button', { name: '环境变量', exact: true }))
     .toHaveAttribute('aria-current', 'page')

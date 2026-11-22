@@ -194,7 +194,7 @@ export function BackpackFolderInstall({
                 type="button"
                 aria-label={summary ? '重新选择文件夹' : '选择文件夹'}
                 disabled={reading || isLoading}
-                className={`flex min-w-0 min-h-44 flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed p-5 text-center transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-(--theme-accent) disabled:cursor-wait ${dragging ? 'border-(--theme-accent) bg-(--theme-accent-soft)' : 'border-(--theme-border-strong) hover:border-(--theme-accent) hover:bg-(--theme-surface-hover)'}`}
+                className={`flex min-w-0 min-h-44 flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed p-5 text-center transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-(--theme-accent) disabled:cursor-wait ${dragging ? 'border-(--theme-accent) bg-(--theme-accent-soft)' : 'border-(--theme-border-strong) bg-(--theme-surface-raised) hover:bg-(--theme-surface-hover)'}`}
                 onClick={() => input.current?.click()}
                 onDragOver={event => {
                   event.preventDefault()

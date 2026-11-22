@@ -43,14 +43,14 @@ export default function ModalTaskDeleteConfirm({
       open={!!task}
       onCancel={onCancel}
       titleIcon={
-        <div className="w-11 h-11 shrink-0 rounded-full bg-gradient-to-br from-rose-500 to-red-600 flex items-center justify-center text-white text-xl shadow">
+        <div className="w-11 h-11 shrink-0 rounded-full bg-(--theme-danger-soft) flex items-center justify-center text-(--theme-danger-text) text-xl">
           🗑️
         </div>
       }
       title={
         <>
           删除任务确认
-          <span className="px-2 py-0.5 rounded-full bg-red-500/15 text-[11px] text-red-400 border border-red-500/30">
+          <span className="px-2 py-0.5 rounded-full bg-(--theme-danger-soft) text-[11px] text-(--theme-danger-text) border border-red-500/30">
             危险操作
           </span>
         </>
@@ -82,7 +82,7 @@ export default function ModalTaskDeleteConfirm({
             </div>
             <div>
               {task.isRunning ? (
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-green-500/15 text-[10px] text-green-400 border border-green-500/30">
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-(--theme-success-soft) text-[10px] text-(--theme-success-text) border border-green-500/30">
                   <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
                   运行中
                 </span>
@@ -124,7 +124,7 @@ export default function ModalTaskDeleteConfirm({
         </div>
 
         {/* Danger Note */}
-        <div className="rounded-md border border-red-500/30 bg-red-500/10 p-3 text-[11px] leading-relaxed text-red-300">
+        <div className="rounded-md border border-red-500/30 bg-(--theme-danger-soft) p-3 text-[11px] leading-relaxed text-(--theme-danger-text)">
           ⚠️ 删除将立即停止该任务并移除记录，无法撤销。
         </div>
       </div>

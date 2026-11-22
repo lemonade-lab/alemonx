@@ -1,3 +1,4 @@
+import { RefreshButton } from './RefreshButton'
 import { useCallback, useEffect, useState } from 'react'
 import {
   Download,
@@ -163,14 +164,11 @@ export function ServiceControlCard() {
         title="AlemonX 服务"
         description="工作台后台进程"
         actions={
-          <Button
-            variant="ghost"
-            className="gap-1"
+          <RefreshButton
+            label="刷新状态"
             onClick={() => void loadServiceStatus()}
             disabled={busy}
-          >
-            刷新状态
-          </Button>
+          />
         }
       >
         <div className="settings-service-status" aria-live="polite">

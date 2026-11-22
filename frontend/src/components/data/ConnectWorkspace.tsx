@@ -1,3 +1,4 @@
+import { RefreshButton } from '../RefreshButton'
 import { useEffect, useRef } from 'react'
 import { useDispatch, useSelector } from 'react-redux'
 import { useStoreState, type RootState } from '../../store/guideStore'
@@ -456,12 +457,11 @@ export function ConnectWorkspace({ suggestions }: { suggestions: string[] }) {
               </select>
             </label>
           )}
-          <Button
+          <RefreshButton
+            label="刷新对象"
             disabled={busy || !schema}
             onClick={() => void task(() => listObjects(active, schema))}
-          >
-            刷新对象
-          </Button>
+          />
         </div>
       )}
       {message && !connectionDialog && (

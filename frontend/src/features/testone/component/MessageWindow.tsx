@@ -136,7 +136,7 @@ function MessageWindow({
   if (message.length === 0) {
     return (
       <section className="flex-1 flex flex-col overflow-y-auto scrollbar">
-        <div className="flex-1 flex items-center justify-center text-gray-500">
+        <div className="flex-1 flex items-center justify-center text-(--theme-text-muted)">
           <p>暂无消息，开始聊天吧！</p>
         </div>
       </section>

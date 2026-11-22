@@ -43,7 +43,7 @@ export default function ModalStopAllConfirm({
       width={380}
       onCancel={onCancel}
       titleIcon={
-        <div className="w-11 h-11 shrink-0 rounded-full bg-gradient-to-br from-red-500 to-rose-600 flex items-center justify-center text-white text-xl shadow">
+        <div className="w-11 h-11 shrink-0 rounded-full bg-(--theme-danger-soft) flex items-center justify-center text-(--theme-danger-text) text-xl">
           🛑
         </div>
       }
@@ -51,7 +51,7 @@ export default function ModalStopAllConfirm({
         <>
           停止所有循环任务
           {stats.running > 0 && (
-            <span className="px-2 py-0.5 rounded-full bg-red-500/15 text-[11px] text-red-400 border border-red-500/30">
+            <span className="px-2 py-0.5 rounded-full bg-(--theme-danger-soft) text-[11px] text-(--theme-danger-text) border border-red-500/30">
               运行中 {stats.running}
             </span>
           )}
@@ -78,7 +78,7 @@ export default function ModalStopAllConfirm({
           </div>
           <div className="rounded-md bg-[var(--editor-inactiveSelection)]/60 p-2 flex flex-col">
             <span className="text-[10px] opacity-70">运行中</span>
-            <span className="text-sm font-semibold text-red-400">
+            <span className="text-sm font-semibold text-(--theme-danger-text)">
               {stats.running}
             </span>
           </div>
@@ -122,7 +122,7 @@ export default function ModalStopAllConfirm({
                     </Tooltip>
                     <div className="flex items-center gap-1">
                       {t.isRunning ? (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-green-500/15 text-[10px] text-green-400 border border-green-500/30">
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-(--theme-success-soft) text-[10px] text-(--theme-success-text) border border-green-500/30">
                           <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
                           运行
                         </span>

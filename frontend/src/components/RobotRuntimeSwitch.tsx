@@ -1,3 +1,4 @@
+import { RefreshButton } from './RefreshButton'
 import { useStoreState } from '../store/guideStore'
 import {
   useApplyRobotRuntimeSwitchMutation,
@@ -133,13 +134,12 @@ export function RobotRuntimeSwitch({
             >
               取消
             </button>
-            <button
-              className="secondary-button"
+            <RefreshButton
+              label="重新检查"
               disabled={isFetching || applying}
               onClick={() => void check()}
-            >
-              重新检查
-            </button>
+              busy={isFetching}
+            />
             {missing && preview && (
               <button
                 className="secondary-button"

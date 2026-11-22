@@ -42,13 +42,15 @@ export const Switch = ({
         id={id}
         checked={checked}
         onChange={handleToggle}
-        className="sr-only"
+        className="peer sr-only"
         disabled={disabled}
         defaultChecked={defaultChecked}
       />
       <div
+        aria-hidden="true"
         className={classNames(
-          'w-12 h-6 rounded-full flex items-center cursor-pointer transition-all duration-300 border'
+          'w-12 h-6 rounded-full flex items-center cursor-pointer transition-all duration-300 border border-transparent forced-colors:border-[color:CanvasText] forced-colors:[forced-color-adjust:none] peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-(--theme-accent)',
+          checked ? 'bg-(--theme-accent) forced-colors:bg-[Highlight]' : 'bg-(--theme-control-track) forced-colors:bg-[Canvas]'
         )}
         onClick={e => {
           e.stopPropagation();
@@ -60,8 +62,8 @@ export const Switch = ({
           className={classNames(
             'w-4 h-4 bg-white rounded-full shadow transform transition-transform duration-300',
             {
-              'translate-x-7': checked,
-              'translate-x-1': !checked
+              'translate-x-7 forced-colors:bg-[HighlightText]': checked,
+              'translate-x-1 forced-colors:bg-[CanvasText]': !checked
             }
           )}
         />

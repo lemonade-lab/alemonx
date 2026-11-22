@@ -31,8 +31,17 @@ test('folder picker opens from drop zone, preserves paths and retries a failed i
   })
   await openInstaller(page)
   await expect(page.getByRole('button', { name: '安装', exact: true })).toBeDisabled()
+  const dropZone = page.getByRole('button', { name: '选择文件夹', exact: true })
+  await page.mouse.move(0, 0)
+  const bounds = await dropZone.boundingBox()
+  for (const [theme, surface] of [['light', 'rgb(239, 235, 227)'], ['dark', 'rgb(43, 39, 32)']]) {
+    await page.evaluate(theme => { document.documentElement.dataset.theme = theme }, theme)
+    await expect(dropZone).toHaveCSS('background-color', surface)
+    await expect(dropZone).toHaveCSS('border-top-color', 'rgba(0, 0, 0, 0)')
+    expect(await dropZone.boundingBox()).toEqual(bounds)
+  }
   const chooser = page.waitForEvent('filechooser')
-  await page.getByRole('button', { name: '选择文件夹', exact: true }).click()
+  await dropZone.click()
   await (await chooser).setFiles(path.resolve('e2e/fixtures/folder-plugin'))
   await expect(page.getByRole('status')).toContainText('folder-example · 2 个文件')
   await page.getByRole('button', { name: '安装', exact: true }).click()

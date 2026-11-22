@@ -1,3 +1,4 @@
+import { RefreshButton } from './components/RefreshButton'
 import type { RobotList } from './lib/workspaceRobots'
 import { openNativeWindow } from './components/nativeWindow'
 import { OfficialExtensionChoices } from './components/OfficialResources'
@@ -277,7 +278,7 @@ export default function App({ initialRobots }: { initialRobots?: Promise<RobotLi
             }}
             onMinimize={() => setSettingsMinimized(true)}
             zIndex={settingsLayer}
-            onActivate={openSettings}
+            onActivate={() => openSettings()}
             initialPosition={{ left: 180, top: 120 }}
             width={820}
             height={640}
@@ -499,9 +500,7 @@ function FlowView({
               title="正式版本列表获取失败，可能是网络或代理问题。"
             >
               读取失败
-              <button type="button" onClick={() => void refetchReleases()}>
-                重试
-              </button>
+              <RefreshButton label="重试" onClick={() => void refetchReleases()} />
             </small>
           )}
         </span>

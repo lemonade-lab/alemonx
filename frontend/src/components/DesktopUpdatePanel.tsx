@@ -1,3 +1,4 @@
+import { RefreshButton } from './RefreshButton'
 import { useEffect, useRef, useState } from 'react'
 import { RefreshCw } from 'lucide-react'
 import { frontendBuildID } from '../buildInfo'
@@ -79,9 +80,12 @@ export function DesktopUpdatePanel() {
         title="ALemonX Desktop"
         description={`当前版本 ${displayVersion(state?.current || frontendBuildID)}`}
         actions={
-          <Button onClick={() => run('check')} disabled={Boolean(busy)}>
-            检查更新
-          </Button>
+          <RefreshButton
+            label="检查更新"
+            onClick={() => run('check')}
+            disabled={Boolean(busy)}
+            busy={busy === 'check'}
+          />
         }
       >
         <div role={error && !busy ? 'alert' : 'status'}>

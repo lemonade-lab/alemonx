@@ -71,6 +71,23 @@ MCP 连接使用同一份列表。启用账户认证后，CLI 启动的 STDIO �
 
 工作台 HTTP 连接的运行操作与界面共用启动检查和任务记录，支持开发、前台和 PM2 后台模式。CLI 连接支持开发与 PM2，开发日志来自该 MCP 进程启动的开发任务。后台日志支持关键词和分页。启用或停用插件会修改加载配置，在下一次启动时生效。
 
+### 背包维护
+
+| 操作 | MCP 工具 |
+| --- | --- |
+| 查看状态、README、改动、差异和 stash | `alemonjs_get_backpack_plugin_details` |
+| 查看当前版本、候选版本、领先提交和工作区改动 | `alemonjs_list_backpack_plugin_versions` |
+| 安全更新一个或多个插件 | `alemonjs_update_backpack_plugins` |
+| 刷新版本或完整历史、配置 Git、切换版本、保存改动后切换、恢复或删除 stash | `alemonjs_manage_backpack_plugin_version` |
+| 将本地文件夹或 ZIP/TGZ/TAR.GZ 导入背包 | `alemonjs_import_backpack_plugin` |
+| 按仓库、分支、目录名、镜像和深度克隆插件 | `alemonjs_clone_backpack_plugin` |
+| 批量启停，查看和调整加载顺序 | `alemonjs_set_backpack_plugins_enabled`、`alemonjs_get_backpack_plugin_order`、`alemonjs_move_backpack_plugin` |
+| 查看和设置 `packages/*` 工作区开关 | `alemonjs_get_backpack_workspace`、`alemonjs_set_backpack_workspace` |
+
+Git 版本查询读取已拉取的远程引用。需要最新引用时，在确认后使用 `refresh-versions`。需要完整浅克隆历史时使用 `refresh-history`。安全更新跳过有本地改动或领先提交的插件，也跳过无法验证本地改动的非 Git 插件。后者可以在确认后通过 `switch` 指定 npm 版本。Git 的 `force-switch` 会丢弃本地修改或领先提交，`stash-switch` 会先保存修改并为领先提交创建备份分支。
+
+导入路径以服务器上机器人目录为基准，例如 `imports/my-plugin.zip`。客户端也可通过 `archiveBase64` 直接传入不超过 700 KiB 的压缩包。同名插件不会被覆盖。所有写入操作需要 `confirm: true`。版本维护、安全更新、导入、克隆和工作区修改返回任务 ID，可用 `alemonjs_get_project_task` 查询。保存插件配置时按字段声明提交原生 JSON 值，包括布尔值、数字、数组和对象。
+
 ## 能力模型
 
 | 层级 | MCP 能力 | 用途 |

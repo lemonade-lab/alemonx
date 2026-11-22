@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useId, useMemo, useState } from 'react';
 import { Input } from '@testone/ui/Input';
 import { Switch } from '@testone/ui/Switch';
 import dayjs from 'dayjs';
@@ -34,6 +34,7 @@ const ModalCommandTimer = ({
     selectedIndices = [] as number[],
     selectMode: savedMode
   } = values || {};
+  const frequencyId = useId();
   const [cmdSearch, setCmdSearch] = useState('');
   const [mode, setMode] = useState<SelectMode>(savedMode || 'range');
 
@@ -153,7 +154,7 @@ const ModalCommandTimer = ({
       open={open}
       onCancel={onCancel}
       titleIcon={
-        <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-indigo-500 flex items-center justify-center text-white text-lg shadow">
+        <div className="w-10 h-10 rounded-full bg-(--theme-accent-soft) flex items-center justify-center text-(--theme-accent-text) text-lg">
           ⏰
         </div>
       }
@@ -172,12 +173,12 @@ const ModalCommandTimer = ({
         <div className="space-y-3">
           {/* 执行频率 */}
           <div className="space-y-2">
-            <label className="flex items-center justify-between gap-2 text-sm font-medium text-[var(--editor-foreground)]">
+            <label htmlFor={frequencyId} className="flex items-center justify-between gap-2 text-sm font-medium text-[var(--editor-foreground)]">
               <span>速度频率（秒）⚡</span>
               <span
                 className={`truncate text-xs font-normal ${
                   timeInvalid && time
-                    ? 'text-red-500'
+                    ? 'text-(--theme-danger-text)'
                     : 'text-[var(--descriptionForeground)]'
                 }`}
                 title={
@@ -191,10 +192,12 @@ const ModalCommandTimer = ({
             </label>
             <div className="flex items-center gap-2">
               <Input
+                id={frequencyId}
                 type="number"
                 min="1"
                 max="12"
                 step="0.1"
+                aria-invalid={Boolean(time && timeInvalid)}
                 value={time}
                 onChange={e => {
                   const value = parseFloat(e.target.value);
@@ -211,11 +214,7 @@ const ModalCommandTimer = ({
                   }
                 }}
                 placeholder="1 - 12"
-                className={`w-full ${
-                  timeInvalid && time
-                    ? 'border-red-500'
-                    : 'border-[var(--input-border)]'
-                }`}
+                className="w-full"
               />
             </div>
           </div>
@@ -362,7 +361,7 @@ const ModalCommandTimer = ({
                         <label
                           key={idx}
                           className={`flex items-center gap-2 px-2 py-1.5 cursor-pointer text-xs hover:bg-[var(--activityBar-background)] border-b border-[var(--panel-border)] last:border-b-0 ${
-                            checked ? 'bg-blue-500/10' : ''
+                            checked ? 'bg-(--theme-accent-soft)' : ''
                           }`}
                         >
                           <input
@@ -387,7 +386,7 @@ const ModalCommandTimer = ({
                   )}
                 </div>
                 {selectedIndices.length === 0 && (
-                  <p className="text-xs text-yellow-500">请至少选择一条指令</p>
+                  <p className="text-xs text-(--theme-warning-text)">请至少选择一条指令</p>
                 )}
               </>
             )}
@@ -446,7 +445,7 @@ const ModalCommandTimer = ({
                       key={c.idx}
                       className={`text-[11px] px-2 py-1 rounded border border-transparent ${
                         i === 0
-                          ? 'bg-blue-500/15 border-blue-500/40 text-blue-400'
+                          ? 'bg-(--theme-accent-soft) border-transparent text-(--theme-accent-text)'
                           : 'bg-[var(--editor-inactiveSelection)]'
                       }`}
                     >

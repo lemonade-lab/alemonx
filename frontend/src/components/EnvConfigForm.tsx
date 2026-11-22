@@ -4,6 +4,7 @@ import { useEffect } from 'react'
 import { ClipboardList, FileText, KeyRound, Plus, Trash2 } from 'lucide-react'
 import { Tabs } from './Tabs'
 import { RobotPanel } from './RobotPanel'
+import { SourceTextarea } from './SourceTextarea'
 
 type Entry = { key: string; value: string }
 type Props = {
@@ -77,22 +78,28 @@ export function EnvConfigForm({ content, onChange }: Props) {
   if (mode === 'text')
     return (
       <RobotPanel
+        scrollBody
+        bodyKey={mode}
         className="env-config-form max-w-190"
         icon={<KeyRound className="size-4" />}
         title="环境变量"
         description="管理密钥、端口和第三方服务地址"
         actions={editor}
       >
-        <textarea
+        <SourceTextarea
+            file=".env"
+            aria-label="编辑 .env"
           className="min-h-72 w-full resize-y rounded-xl border border-slate-200 bg-white p-3 font-mono text-sm text-slate-700 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
-          value={content}
-          onChange={event => onChange(event.target.value)}
+          content={content}
+          onChange={onChange}
           placeholder={'BOT_TOKEN=\nPORT=17117'}
         />
       </RobotPanel>
     )
   return (
     <RobotPanel
+      scrollBody
+      bodyKey={mode}
       className="env-config-form max-w-190"
       icon={<KeyRound className="size-4" />}
       title="环境变量"

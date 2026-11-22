@@ -9,6 +9,7 @@ type Props = {
   title: string
   message: string
   confirmLabel?: string
+  confirmIcon?: ReactNode
   cancelLabel?: string
   subtitle?: string
   busy?: boolean
@@ -25,6 +26,7 @@ export function ConfirmDialog({
   title,
   message,
   confirmLabel = '确认继续',
+  confirmIcon,
   cancelLabel = '取消',
   subtitle = '',
   busy,
@@ -77,13 +79,26 @@ export function ConfirmDialog({
           <Button variant="secondary" onClick={onCancel}>
             {cancelLabel}
           </Button>
-          <Button
-            variant={destructive ? 'danger' : 'primary'}
-            loading={busy}
-            onClick={onConfirm}
-          >
-            {confirmLabel}
-          </Button>
+          {confirmIcon ? (
+            <Button
+              variant="icon"
+              aria-label={confirmLabel}
+              title={confirmLabel}
+              aria-busy={busy || undefined}
+              disabled={busy}
+              onClick={onConfirm}
+            >
+              {confirmIcon}
+            </Button>
+          ) : (
+            <Button
+              variant={destructive ? 'danger' : 'primary'}
+              loading={busy}
+              onClick={onConfirm}
+            >
+              {confirmLabel}
+            </Button>
+          )}
         </footer>
       </section>
     </Modal>

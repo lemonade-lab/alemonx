@@ -1,3 +1,4 @@
+import { RefreshButton } from './RefreshButton'
 import { useState } from 'react'
 import {
   useRobotDiagnosticLogsQuery,
@@ -90,9 +91,11 @@ export function RobotDiagnostics({ root }: { root: string }) {
           <header className="flex flex-wrap items-center justify-between gap-2">
             <h2 className="m-0 text-base font-semibold">生产诊断</h2>
             <div className="flex gap-2">
-              <Button disabled={isFetching} onClick={() => void refetch()}>
-                刷新
-              </Button>
+              <RefreshButton
+                label="刷新"
+                onClick={() => void refetch()}
+                busy={isFetching}
+              />
               <Button onClick={close}>关闭</Button>
             </div>
           </header>
@@ -188,12 +191,11 @@ export function RobotDiagnostics({ root }: { root: string }) {
                       >
                         仅 stderr
                       </Button>
-                      <Button
+                      <RefreshButton
+                        label="刷新日志"
                         disabled={loadingLogs}
                         onClick={() => void refreshLogs()}
-                      >
-                        刷新日志
-                      </Button>
+                      />
                     </div>
                     {loadingLogs && <p role="status">正在读取 PM2 日志…</p>}
                     {logError && (

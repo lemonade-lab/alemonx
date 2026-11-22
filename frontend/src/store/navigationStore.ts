@@ -84,6 +84,12 @@ export function migrateNavigationValues(
     Object.entries(value)
       .filter(([key, entry]) => validEntry(key, entry))
       .slice(-maxEntries)
+      .map(([key, entry]) => [
+        key,
+        (entry === 'branch' || entry === 'remote') && JSON.parse(key)[0] === 'git.tab'
+          ? 'commit'
+          : entry
+      ])
   )
 }
 const slice = createSlice({
@@ -108,7 +114,7 @@ export const { setNavigationValue } = slice.actions
 export const persistedNavigation = persistReducer(
   {
     key: 'alemonx-navigation',
-    version: 1,
+    version: 2,
     storage: {
       getItem: (key: string) => Promise.resolve(preferenceStorage.getItem(key)),
       setItem: (key: string, value: string) =>

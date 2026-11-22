@@ -38,7 +38,7 @@ export function RobotPanelHeader({
         .filter(Boolean)
         .join(' ')}
     >
-      <div className="flex min-w-0 flex-1 items-center gap-3">
+      <div className="flex min-w-0 flex-1 items-center gap-3 @max-[420px]/robot-panel:flex-[1_1_8rem]">
         {icon && (
           <span className="inline-flex size-7.5 shrink-0 items-center justify-center rounded-[9px] border border-(--theme-accent-soft-border) bg-(--theme-accent-soft) text-(--theme-accent-text)">
             {icon}
@@ -61,7 +61,7 @@ export function RobotPanelHeader({
         </div>
       </div>
       {actions && (
-        <div className="robot-panel-actions ml-auto flex shrink-0 flex-wrap items-center justify-end gap-2 [&_.icon-button]:size-9 [&_.icon-button]:shrink-0 [&_.primary-button]:min-h-9 [&_.secondary-button]:min-h-9 [&_.text-button]:min-h-9 [&_[role=tab]]:min-h-9">
+        <div className="robot-panel-actions ml-auto flex max-w-full shrink-0 flex-wrap items-center justify-end gap-2 [&_.icon-button]:size-9 [&_.icon-button]:shrink-0 [&_.primary-button]:min-h-9 [&_.secondary-button]:min-h-9 [&_.text-button]:min-h-9 [&_[role=tab]]:min-h-9 @max-[420px]/robot-panel:[&>div]:max-w-full @max-[420px]/robot-panel:[&>div]:flex-wrap">
           {actions}
         </div>
       )}

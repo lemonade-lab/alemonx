@@ -308,12 +308,40 @@ func (m Manager) LocalPackageChanges(root, name string) ([]LocalPackageChange, e
 }
 
 func (m Manager) LocalPackageDiff(root, name, changePath string) (GitDiffResult, error) {
+	return m.localPackageDiff(root, name, changePath, false)
+}
+
+// ManagedLocalPackageDiff uses the same path restrictions as MCP file reads.
+func (m Manager) ManagedLocalPackageDiff(root, name, changePath string) (GitDiffResult, error) {
+	return m.localPackageDiff(root, name, changePath, true)
+}
+
+func (m Manager) localPackageDiff(root, name, changePath string, managed bool) (GitDiffResult, error) {
 	item, err := m.localPackage(root, name)
 	if err != nil {
 		return GitDiffResult{}, err
 	}
 	if !isLocalPackageRepository(item.Path) {
 		return GitDiffResult{}, errors.New("该插件不是独立 Git 工作区")
+	}
+	if managed {
+		return gitDiffAtRepositoryWithPolicy(item.Path, changePath, "all", func(name string) error {
+			path, err := managedProjectFile(item.Path, filepath.FromSlash(name))
+			if err != nil {
+				return err
+			}
+			info, err := os.Lstat(path)
+			if os.IsNotExist(err) {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			if !info.Mode().IsRegular() {
+				return errors.New("只能读取普通项目文件")
+			}
+			return nil
+		})
 	}
 	return gitDiffAtRepository(item.Path, changePath)
 }
@@ -356,6 +384,7 @@ func (m Manager) StashAndSyncLocalPackage(root, name, version string) (Result, e
 		return Result{}, err
 	}
 	logs := []string{}
+	savedHead := ""
 	if status.Dirty {
 		if output, err := gitRun(item.Path, "stash", "push", "--include-untracked", "-m", "AlemonX 同步前保存"); err != nil {
 			return Result{}, errors.New("无法保存插件本地修改到 stash")
@@ -369,13 +398,11 @@ func (m Manager) StashAndSyncLocalPackage(root, name, version string) (Result, e
 			return Result{Path: item.Path, Output: strings.Join(logs, "\n") + "\n" + output}, errors.New("无法为本地领先提交创建备份分支")
 		}
 		logs = append(logs, "已创建本地提交备份分支 "+backup+"。")
+		savedHead = status.Head
 	}
-	result, err := switchLocalPackageVersion(root, name, version, true)
-	if err != nil {
-		return result, err
-	}
+	result, err := switchLocalPackageVersionWithBackup(root, name, version, false, savedHead)
 	result.Output = strings.TrimSpace(strings.Join(append(logs, result.Output), "\n"))
-	return result, nil
+	return result, err
 }
 
 func (m Manager) ApplyLocalPackageStash(root, name, ref string, drop bool) (Result, error) {

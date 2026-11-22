@@ -1,3 +1,4 @@
+import { RefreshButton } from './RefreshButton'
 import { useState } from 'react'
 import {
   useManageNVMNodeMutation,
@@ -92,7 +93,7 @@ export function NodeNVMPanel({ onChanged }: { onChanged: () => void }) {
         {isLoading ? <p className="m-0 text-xs text-slate-500">正在读取已下载版本…</p> : error ? (
           <div className="flex items-center gap-3 text-xs text-amber-700 dark:text-amber-300">
             <span>{errorMessage}</span>
-            <button className="font-semibold hover:underline" onClick={() => void refetch()}>重试</button>
+            <RefreshButton label="重试" onClick={() => void refetch()} />
           </div>
         ) : status?.versions.length ? (
           <div className="grid gap-1.5">

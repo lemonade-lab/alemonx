@@ -80,9 +80,7 @@ export default function App({ theme }: { theme: 'light' | 'dark' }) {
           <div>
             [{lastConfig.host}][{lastConfig.port}]
           </div>
-        ) : (
-          <div> </div>
-        )}
+        ) : null}
       </Footer>
     </div>
   );

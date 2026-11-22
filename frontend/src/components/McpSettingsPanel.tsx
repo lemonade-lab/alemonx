@@ -1,3 +1,4 @@
+import { RefreshButton } from './RefreshButton'
 import { useEffect, useRef, useState } from 'react'
 import { Cable } from 'lucide-react'
 import {
@@ -129,9 +130,7 @@ export function McpSettingsPanel() {
         title="流式 HTTP"
         actions={
           <>
-            <Button disabled={locked} onClick={() => void refetch()}>
-              刷新
-            </Button>
+            <RefreshButton label="刷新" disabled={locked} onClick={() => void refetch()} />
             {data?.canControl && !isError && (!external || pending) && (
               <Button
                 variant={data.autoStart ? 'secondary' : 'primary'}

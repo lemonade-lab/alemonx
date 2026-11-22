@@ -8,6 +8,9 @@ import {
 type Props = Omit<RobotPanelHeaderProps, 'className'> & {
   children: ReactNode
   footer?: ReactNode
+  bodyToolbar?: ReactNode
+  scrollBody?: boolean
+  bodyKey?: string
   /** Controls the page canvas width and layout. */
   className?: string
   /** Adds a page-specific class to the shared header when necessary. */
@@ -21,6 +24,9 @@ type Props = Omit<RobotPanelHeaderProps, 'className'> & {
 export function RobotPanel({
   children,
   footer,
+  bodyToolbar,
+  scrollBody,
+  bodyKey,
   className,
   headerClassName,
   ...header
@@ -34,6 +40,9 @@ export function RobotPanel({
         .filter(Boolean)
         .join(' ')}
       footer={footer}
+      bodyToolbar={bodyToolbar}
+      scrollBody={scrollBody}
+      bodyKey={bodyKey}
       header={<RobotPanelHeader {...header} className={headerClassName} />}
     >
       {children}

@@ -1,3 +1,4 @@
+import { RefreshButton } from './RefreshButton'
 import { useEffect } from 'react'
 import { useStoreState } from '../store/guideStore'
 import {
@@ -76,7 +77,7 @@ export function NetworkSettingsPanel() {
     return (
       <SettingsPage title="网络">
         <SettingsMessage tone="error">无法读取网络设置</SettingsMessage>
-        <Button onClick={() => void refetch()}>重试</Button>
+        <RefreshButton label="重试" onClick={() => void refetch()} />
       </SettingsPage>
     )
   const migration = data.migration?.pending
@@ -147,7 +148,7 @@ export function NetworkSettingsPanel() {
             {status.isError && (
               <div role="alert" className="py-3 text-sm">
                 检测状态读取失败{' '}
-                <Button onClick={() => void status.refetch()}>重试</Button>
+                <RefreshButton label="重试" onClick={() => void status.refetch()} />
               </div>
             )}
             {status.isLoading && <p role="status">加载分组…</p>}

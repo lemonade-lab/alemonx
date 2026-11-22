@@ -55,9 +55,18 @@ func gitDiffAtRepository(repo, changePath string) (GitDiffResult, error) {
 }
 
 func gitDiffAtRepositoryView(repo, changePath, view string) (GitDiffResult, error) {
+	return gitDiffAtRepositoryWithPolicy(repo, changePath, view, nil)
+}
+
+func gitDiffAtRepositoryWithPolicy(repo, changePath, view string, check func(string) error) (GitDiffResult, error) {
 	cleanPath, err := cleanGitChangePath(changePath)
 	if err != nil {
 		return GitDiffResult{}, err
+	}
+	if check != nil {
+		if err := check(cleanPath); err != nil {
+			return GitDiffResult{}, err
+		}
 	}
 	result := GitDiffResult{Path: cleanPath}
 	inside, err := gitRun(repo, "rev-parse", "--is-inside-work-tree")
@@ -71,6 +80,9 @@ func gitDiffAtRepositoryView(repo, changePath, view string) (GitDiffResult, erro
 		return gitUntrackedDiff(repo, cleanPath, result)
 	}
 	args := []string{"diff", "--no-ext-diff", "--unified=3", "--no-color"}
+	if check != nil {
+		args = append(args, "--no-textconv")
+	}
 	if view == "staged" {
 		args = append(args, "--cached")
 	} else if view == "all" {
@@ -83,6 +95,11 @@ func gitDiffAtRepositoryView(repo, changePath, view string) (GitDiffResult, erro
 	}
 	for _, change := range changes {
 		if change.Path == cleanPath && change.OriginalPath != "" && !strings.HasPrefix(change.OriginalPath, "../") {
+			if check != nil {
+				if err := check(change.OriginalPath); err != nil {
+					return GitDiffResult{}, err
+				}
+			}
 			args = append(args, ":(literal)"+change.OriginalPath)
 		}
 	}

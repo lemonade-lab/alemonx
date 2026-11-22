@@ -1,3 +1,4 @@
+import { RefreshButton } from './RefreshButton'
 import { Component, type ErrorInfo, type ReactNode } from 'react'
 
 type Props = { children: ReactNode }
@@ -34,12 +35,10 @@ export class ErrorBoundary extends Component<Props, State> {
               {this.state.error.message}
             </pre>
             <footer className="flex justify-end gap-2">
-              <button
-                className="secondary-button"
+              <RefreshButton
+                label="刷新"
                 onClick={() => window.location.reload()}
-              >
-                刷新
-              </button>
+              />
             </footer>
           </section>
         </main>

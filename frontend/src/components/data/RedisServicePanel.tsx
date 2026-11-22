@@ -1,10 +1,10 @@
+import { RefreshButton } from '../RefreshButton'
 import { useEffect } from 'react'
 import {
   Check,
   Copy,
   Database,
   Power,
-  RefreshCw,
   RotateCcw,
   Save,
   Settings2
@@ -58,9 +58,7 @@ export function RedisServicePanel() {
     return (
       <div className="settings-panel-content">
         暂时无法读取 Redis 状态。
-        <Button variant="ghost" onClick={() => void refetch()}>
-          重试
-        </Button>
+        <RefreshButton label="重试" onClick={() => void refetch()} />
       </div>
     )
 
@@ -153,15 +151,11 @@ export function RedisServicePanel() {
         title={title}
         description={description}
         actions={
-          <Button
-            variant="ghost"
-            className="gap-1"
+          <RefreshButton
+            label="刷新"
             onClick={() => void refetch()}
             disabled={controlling}
-          >
-            <RefreshCw className="size-3.5" />
-            刷新
-          </Button>
+          />
         }
       >
         <div className="settings-service-status" aria-live="polite">
@@ -267,7 +261,7 @@ export function RedisServicePanel() {
               />
               <Button
                 variant="secondary"
-                className="gap-1.5"
+                className="gap-1.5 whitespace-nowrap"
                 disabled={saving || !changed}
                 onClick={() => void save()}
               >
@@ -278,6 +272,7 @@ export function RedisServicePanel() {
                 <div className="settings-card-actions">
                   <Button
                     variant="secondary"
+                    className="gap-1.5"
                     disabled={controlling}
                     onClick={() => void run('restart')}
                   >
@@ -286,6 +281,7 @@ export function RedisServicePanel() {
                   </Button>
                   <Button
                     variant="danger"
+                    className="gap-1.5"
                     disabled={controlling}
                     onClick={() => void run('stop')}
                   >

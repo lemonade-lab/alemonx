@@ -21,20 +21,25 @@
   --font-weight: normal;
   --editor-font-family: Menlo, Monaco, 'Courier New', monospace;
   --editor-font-size: 12px;
+}
 
+/* Portaled dialogs need the same palette as the in-window controls. */
+.testone-root,
+.testone-modal,
+.testone-modal-surface {
   /* 表面 */
   --activityBar-background: var(--theme-surface-raised);
-  --editor-background: var(--theme-surface-page);
+  --editor-background: var(--theme-surface-panel);
   --editorGroupHeader-tabsBackground: var(--theme-surface-raised);
   --editorWidget-background: var(--theme-surface-panel);
   --dropdown-background: var(--theme-surface-panel);
   --input-background: var(--theme-surface-input);
   --panel-background: var(--theme-surface-panel);
-  --sideBar-background: var(--theme-surface-page);
+  --sideBar-background: var(--theme-surface-raised);
   --textPreformat-background: var(--theme-surface-code);
   --statusBar-background: var(--theme-surface-raised);
-  --titleBar-background: var(--theme-surface-page);
-  --tab-activeBackground: var(--theme-surface-panel);
+  --titleBar-background: var(--theme-surface-rail);
+  --tab-activeBackground: var(--theme-accent-soft);
   --tab-inactiveBackground: var(--theme-surface-raised);
 
   /* 悬停与选中 */
@@ -53,7 +58,7 @@
   --editorWidget-foreground: var(--theme-text-primary);
   --descriptionForeground: var(--theme-text-muted);
   --statusBar-foreground: var(--theme-text-secondary);
-  --tab-activeForeground: var(--theme-text-strong);
+  --tab-activeForeground: var(--theme-accent-soft-text);
   --tab-inactiveForeground: var(--theme-text-muted);
   --errorForeground: var(--theme-danger);
   --icon-foreground: var(--theme-text-secondary);
@@ -86,8 +91,8 @@
   --editor-lineHighlightBackground: var(--theme-accent-soft);
   --editorCursor-foreground: var(--theme-accent);
   --editorLineNumber-foreground: var(--theme-text-faint);
-  --editorIndentGuide-background: var(--theme-border-default);
-  --scrollbarSlider-background: var(--theme-border-strong);
+  --editorIndentGuide-background: var(--theme-surface-active);
+  --scrollbarSlider-background: var(--theme-control-track);
   --scrollbarSlider-hoverBackground: var(--theme-text-muted);
   --scrollbarSlider-activeBackground: var(--theme-text-secondary);
 
@@ -106,6 +111,16 @@
   /* 调试 */
   --debugIcon-startForeground: var(--theme-success);
   --debugIcon-breakpointForeground: var(--theme-danger);
+}
+
+/* Slate sets its placeholder opacity inline. Use the readable muted tone. */
+.testone-root [data-slate-placeholder] {
+  color: var(--theme-text-muted);
+  opacity: 1 !important;
+}
+
+.testone-popover {
+  box-shadow: var(--theme-shadow-pop);
 }
 
 /* antd App 会包一层 .ant-app 普通 div，这里保证它参与 flex 布局，
@@ -200,21 +215,6 @@
 
 .testone-modal .ant-modal-title {
   color: var(--theme-text-strong) !important;
-}
-
-/* TestOne's custom modals are portaled through the workbench Modal. Bridge
- * the feature-local aliases so they preserve the active project theme. */
-.testone-modal-surface {
-  --editorWidget-background: var(--theme-surface-panel);
-  --editor-background: var(--theme-surface-page);
-  --panel-background: var(--theme-surface-panel);
-  --input-background: var(--theme-surface-input);
-  --foreground: var(--theme-text-primary);
-  --descriptionForeground: var(--theme-text-muted);
-  --panel-border: var(--theme-border-default);
-  --editorWidget-border: var(--theme-border-strong);
-  --button-background: var(--theme-accent);
-  --button-foreground: var(--theme-accent-contrast);
 }
 
 @media (max-width: 700px) {

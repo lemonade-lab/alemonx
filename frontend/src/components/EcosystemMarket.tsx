@@ -1,3 +1,4 @@
+import { RefreshButton } from './RefreshButton'
 import { useNavigationState } from '../hooks/useNavigationState'
 import { factFor, resourceTarget } from '../lib/officialResources'
 import { useState } from 'react'
@@ -75,9 +76,7 @@ export function EcosystemMarket({
       description={`${category} · ALemon 生态资源平台`}
       icon={<Package className="size-4" />}
       actions={
-        <button className="secondary-button" onClick={() => void refetch()}>
-          刷新
-        </button>
+        <RefreshButton label="刷新" onClick={() => void refetch()} busy={isFetching} />
       }
       footer={
         <footer className="flex items-center justify-between gap-2 text-xs">
@@ -117,7 +116,7 @@ export function EcosystemMarket({
           value={search}
           onChange={event => setSearch(event.target.value)}
         />
-        <button className="secondary-button" type="submit">
+        <button className="secondary-button gap-1.5" type="submit">
           <Search className="size-4" />
           搜索
         </button>
@@ -241,13 +240,37 @@ function ResourceDetail({
       if (configPackage) void refetchConfig()
     }
   }
+  const tabs = item && (
+    <div className="flex flex-wrap gap-2" role="tablist" aria-label="资源详情">
+      {[
+        ['overview', '概览'],
+        ['document', '文档'],
+        ['config', '配置']
+      ].map(([value, label]) => (
+        <button
+          className={
+            tab === value ? 'primary-button' : 'secondary-button'
+          }
+          key={value}
+          role="tab"
+          aria-selected={tab === value}
+          onClick={() => setTab(value)}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  )
   return (
     <RobotPanel
+      scrollBody
+      bodyKey={tab}
+      bodyToolbar={tabs}
       title={item?.name ?? '资源详情'}
       description={item?.description}
       icon={<Package className="size-4" />}
       actions={
-        <button className="text-button" onClick={onBack}>
+        <button className="text-button gap-1.5" onClick={onBack}>
           <ArrowLeft className="size-4" />
           返回目录
         </button>
@@ -257,32 +280,11 @@ function ResourceDetail({
       {error && (
         <div role="alert">
           <p>{errorMessage(error)}</p>
-          <button className="secondary-button" onClick={() => void refetch()}>
-            重试
-          </button>
+          <RefreshButton label="重试" onClick={() => void refetch()} />
         </div>
       )}
       {item && (
         <>
-          <div className="flex flex-wrap gap-2" role="tablist" aria-label="资源详情">
-            {[
-              ['overview', '概览'],
-              ['document', '文档'],
-              ['config', '配置']
-            ].map(([value, label]) => (
-              <button
-                className={
-                  tab === value ? 'primary-button' : 'secondary-button'
-                }
-                key={value}
-                role="tab"
-                aria-selected={tab === value}
-                onClick={() => setTab(value)}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
           {tab === 'overview' && (
             <section className="grid gap-3 rounded-xl border border-(--theme-border-default) bg-(--theme-surface-panel) px-4 py-3 text-sm">
               <p className="m-0">{item.description}</p>

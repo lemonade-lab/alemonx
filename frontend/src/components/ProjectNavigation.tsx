@@ -1,4 +1,4 @@
-import { Check, ChevronRight } from 'lucide-react'
+import { Check, ChevronRight, LoaderCircle } from 'lucide-react'
 import { Fragment, useEffect, useId, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useViewportPopoverPosition } from '../hooks/useViewportPopoverPosition'
@@ -21,6 +21,7 @@ export function ProjectNavigation({
   const isMobile = useIsMobileViewport()
   const inlineSubmenu = isMobile && !dropdown
   const rowClass = dropdown ? 'workbench-action-item' : itemClass
+  const loadingItem = items.find(item => item.id === activeID && item.loading)
   const [expandedID, setExpandedID] = useState<string | null>(null)
   const trigger = useRef<HTMLButtonElement>(null)
   const panel = useRef<HTMLDivElement>(null)
@@ -97,7 +98,7 @@ export function ProjectNavigation({
     <nav
       aria-label="机器人功能"
       data-project-navigation
-      className={dropdown ? 'grid' : 'grid gap-1'}
+      className={dropdown ? 'grid gap-0.5' : 'grid gap-1'}
       onKeyDown={event => {
         if (event.key !== 'Escape' || !expandedID || event.defaultPrevented)
           return
@@ -109,6 +110,7 @@ export function ProjectNavigation({
     >
       {items.map(item => {
         const active = item.id === activeID
+        const loading = item === loadingItem
         const hasSubitems = Boolean(item.children?.length)
         const open = expanded?.id === item.id
         return (
@@ -126,30 +128,35 @@ export function ProjectNavigation({
               }}
               className={dropdown ? rowClass : `${rowClass} ${active || open ? selectedClass : normalClass}`}
               aria-current={active ? 'page' : undefined}
+              aria-busy={loading || undefined}
               aria-expanded={hasSubitems ? open : undefined}
               aria-controls={open ? id : undefined}
             >
-              <span className="inline-flex size-4 shrink-0" aria-hidden="true">
+              <span className="grid size-4 shrink-0 place-items-center [&>svg]:size-4" aria-hidden="true">
                 {item.icon}
               </span>
               <span>{item.label}</span>
-              {active && item.loading && (
-                <span className="ml-auto text-xs" role="status">
-                  加载中…
-                </span>
-              )}
-              {hasSubitems && (
-                <ChevronRight
-                  className="ml-auto size-4 shrink-0 opacity-60"
+              {loading && (
+                <LoaderCircle
+                  className="ml-auto size-4 shrink-0 motion-safe:animate-spin"
                   aria-hidden="true"
                 />
               )}
-              {dropdown && active && !hasSubitems && <Check className="ml-auto size-4 shrink-0" aria-hidden="true" />}
+              {hasSubitems && (
+                <ChevronRight
+                  className={`size-4 shrink-0 opacity-60 ${loading ? '' : 'ml-auto'}`}
+                  aria-hidden="true"
+                />
+              )}
+              {dropdown && active && !hasSubitems && !loading && <Check className="ml-auto size-4 shrink-0" aria-hidden="true" />}
             </button>
             {(dropdown || inlineSubmenu) && open && submenu}
           </Fragment>
         )
       })}
+      <span className="sr-only" role="status">
+        {loadingItem && `${loadingItem.label}加载中…`}
+      </span>
       {children}
       {expanded && !dropdown && !inlineSubmenu && createPortal(submenu, document.body)}
     </nav>

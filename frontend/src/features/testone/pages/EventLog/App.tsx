@@ -11,8 +11,8 @@ import dayjs from 'dayjs';
 
 // 事件类型的颜色标记
 const DIRECTION_COLORS: Record<string, string> = {
-  send: 'text-blue-400',
-  receive: 'text-green-400'
+  send: 'text-(--theme-info-text)',
+  receive: 'text-(--theme-success-text)'
 };
 
 const DIRECTION_LABELS: Record<string, string> = {
@@ -90,10 +90,10 @@ function LogEntryRow({
           className={
             'w-14 shrink-0 text-right font-mono ' +
             (entry.latency > 1000
-              ? 'text-red-400'
+              ? 'text-(--theme-danger-text)'
               : entry.latency > 300
-                ? 'text-yellow-400'
-                : 'text-green-400')
+                ? 'text-(--theme-warning-text)'
+                : 'text-(--theme-success-text)')
           }
         >
           {entry.latency}ms
@@ -201,7 +201,7 @@ export default function EventLogPanel() {
               className={
                 'text-xs px-1.5 py-0.5 rounded border border-[var(--panel-border)] ' +
                 (enabled
-                  ? 'text-red-400 border-red-400/40'
+                  ? 'text-(--theme-danger-text) border-red-400/40'
                   : 'text-[var(--descriptionForeground)]')
               }
               onClick={e => {
@@ -230,7 +230,7 @@ export default function EventLogPanel() {
             {stats.maxLatency > 0 && (
               <span className="text-xs text-[var(--descriptionForeground)]">
                 max{' '}
-                <b className={stats.maxLatency > 1000 ? 'text-red-400' : ''}>
+                <b className={stats.maxLatency > 1000 ? 'text-(--theme-danger-text)' : ''}>
                   {stats.maxLatency}ms
                 </b>
               </span>
@@ -306,10 +306,10 @@ export default function EventLogPanel() {
                     <span
                       className={
                         selectedEntry.latency > 1000
-                          ? 'text-red-400 font-bold'
+                          ? 'text-(--theme-danger-text) font-bold'
                           : selectedEntry.latency > 300
-                            ? 'text-yellow-400'
-                            : 'text-green-400'
+                            ? 'text-(--theme-warning-text)'
+                            : 'text-(--theme-success-text)'
                       }
                     >
                       {selectedEntry.latency}ms

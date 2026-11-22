@@ -480,15 +480,18 @@ test('macOS browser floating windows have working traffic-light controls', async
   await openSettings.click()
   const settings = page.getByRole('dialog', { name: '设置', exact: true })
   const header = settings.locator('header').first()
-  for (const { theme, panel, raised, border } of [
-    { theme: 'light', panel: 'rgb(255, 255, 255)', raised: 'rgb(242, 241, 238)', border: 'rgb(228, 226, 220)' },
-    { theme: 'dark', panel: 'rgb(29, 28, 26)', raised: 'rgb(35, 33, 31)', border: 'rgb(52, 49, 45)' }
+  const initialBounds = await settings.boundingBox()
+  for (const { theme, panel, raised } of [
+    { theme: 'light', panel: 'rgb(252, 250, 247)', raised: 'rgb(239, 235, 227)' },
+    { theme: 'dark', panel: 'rgb(33, 30, 25)', raised: 'rgb(43, 39, 32)' }
   ]) {
     await page.evaluate(theme => { document.documentElement.dataset.theme = theme }, theme)
     await expect(settings).toHaveCSS('background-color', panel)
-    await expect(settings).toHaveCSS('border-top-color', border)
+    await expect(settings).toHaveCSS('border-top-color', 'rgba(0, 0, 0, 0)')
+    await expect(settings).toHaveCSS('border-top-width', '1px')
     await expect(header).toHaveCSS('background-color', raised)
     await expect(header).toHaveCSS('border-bottom-width', '0px')
+    expect(await settings.boundingBox()).toEqual(initialBounds)
   }
   const controls = settings.getByRole('group', { name: '窗口控制' })
   const maximize = controls.getByRole('button', { name: '最大化设置' })
@@ -499,7 +502,6 @@ test('macOS browser floating windows have working traffic-light controls', async
     buttons.map(button => getComputedStyle(button, '::before').backgroundColor)
   )).toEqual(['rgb(255, 95, 87)', 'rgb(254, 188, 46)', 'rgb(40, 200, 64)'])
 
-  const initialBounds = await settings.boundingBox()
   await maximize.press('Enter')
   await expect(settings).toHaveCSS('width', '1408px')
   await controls.getByRole('button', { name: '还原设置' }).click()
@@ -731,8 +733,8 @@ test('terminal opens at minimum width and remembers later adjustments', async ({
   expect((await download).suggestedFilename()).toBe('fixture.log')
   await expect(terminalActions).toBeHidden()
   const originalTerminal = await terminal.elementHandle()
-  await expect(terminalOutput).toHaveCSS('background-color', 'rgb(255, 255, 255)')
-  await expect(outputRows).toHaveCSS('color', 'rgb(23, 23, 23)')
+  await expect(terminalOutput).toHaveCSS('background-color', 'rgb(252, 250, 247)')
+  await expect(outputRows).toHaveCSS('color', 'rgb(39, 35, 30)')
   const themeMenu = header.getByRole('region', { name: '操作菜单' })
   const themeMenuTrigger = header.getByRole('button', { name: '操作', exact: true })
   const contentPane = page.locator('.workbench-split-main')
@@ -751,10 +753,10 @@ test('terminal opens at minimum width and remembers later adjustments', async ({
   await themeMenuTrigger.click()
   await expectMenuAboveTerminal()
   await themeMenu.getByRole('button', { name: '切换到暗色' }).click()
-  await expect(terminalOutput).toHaveCSS('background-color', 'rgb(11, 11, 11)')
+  await expect(terminalOutput).toHaveCSS('background-color', 'rgb(21, 19, 15)')
   await expect(outputRows).toHaveCSS('color', 'rgb(245, 245, 245)')
   await themeMenu.getByRole('button', { name: '切换到亮色' }).click()
-  await expect(outputRows).toHaveCSS('color', 'rgb(23, 23, 23)')
+  await expect(outputRows).toHaveCSS('color', 'rgb(39, 35, 30)')
   await themeMenuTrigger.click()
   expect(await originalTerminal?.evaluate(node => node.isConnected)).toBe(true)
   expect(created).toBe(1)
@@ -920,7 +922,7 @@ test('native workbench docks its terminal and opens settings in a standalone pag
   ).toHaveAttribute('aria-selected', 'true')
   await expect(page.locator('.native-auxiliary-content')).toBeVisible()
   await page.evaluate(() => { document.documentElement.dataset.theme = 'dark' })
-  await expect(page.locator('header.native-workbench-header:visible')).toHaveCSS('background-color', 'rgb(29, 28, 26)')
+  await expect(page.locator('header.native-workbench-header:visible')).toHaveCSS('background-color', 'rgb(33, 30, 25)')
   await expect(page.locator('.workbench-stage')).toHaveCount(0)
 })
 
@@ -1067,7 +1069,7 @@ test('Git clone keeps its themed footer visible on a narrow window', async ({
   await page.route('**/api/v1/robot/tasks', route => route.fulfill({ json: [] }))
   await page.goto('/dashboard/robot')
   await page.getByRole('button', { name: '从 Git 克隆', exact: true }).click()
-  await page.setViewportSize({ width: 390, height: 540 })
+  await page.setViewportSize({ width: 390, height: 490 })
   const dialog = page.getByRole('dialog', { name: '从 Git 克隆机器人' }).last()
   const submit = dialog.getByRole('button', { name: '克隆并添加' })
   await expect(submit).toBeInViewport()
@@ -1078,7 +1080,15 @@ test('Git clone keeps its themed footer visible on a narrow window', async ({
     /^https:/
   )
   await expect(dialog.getByRole('group', { name: '克隆设置' })).toBeVisible()
-  await expect(dialog.getByRole('group', { name: '存放位置' })).toBeVisible()
+  const tabs = dialog.getByRole('tablist', { name: '仓库连接方式' })
+  const initialY = (await tabs.boundingBox())!.y
+  const folderName = dialog.getByRole('textbox', { name: '新目录名称' })
+  await folderName.scrollIntoViewIfNeeded()
+  await expect(folderName).toBeInViewport()
+  await expect(tabs).toBeInViewport()
+  expect((await tabs.boundingBox())!.y).toBe(initialY)
+  expect(await dialog.getByRole('tabpanel', { name: 'HTTPS' }).evaluate(body => body.scrollTop)).toBeGreaterThan(0)
+  await expect(submit).toBeInViewport()
   expect(await dialog.evaluate(element => element.scrollWidth)).toBeLessThanOrEqual(390)
 })
 

@@ -663,6 +663,9 @@ func findYAMLSection(lines []string, key string) (int, int) {
 }
 
 func yamlSectionHeader(line, key string) bool {
+	if line == "" || line[0] == ' ' || line[0] == '\t' {
+		return false
+	}
 	trimmed := strings.TrimSpace(line)
 	if trimmed == key {
 		return true
@@ -698,7 +701,7 @@ func removeYAMLSections(lines []string, keys ...string) []string {
 	removing := false
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		if !removing && keySet[trimmed] {
+		if !removing && keySet[trimmed] && yamlSectionHeader(line, trimmed) {
 			removing = true
 			continue
 		}
@@ -733,7 +736,7 @@ func keepLastYAMLSections(lines []string, keys ...string) []string {
 	var spans []sectionSpan
 	for index, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		if !keySet[trimmed] {
+		if !keySet[trimmed] || !yamlSectionHeader(line, trimmed) {
 			continue
 		}
 		end := len(lines)

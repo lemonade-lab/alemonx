@@ -1,4 +1,5 @@
-import { useEffect, useLayoutEffect, useRef } from 'react'
+import { RefreshButton } from '../RefreshButton'
+import { useCallback, useEffect, useLayoutEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import {
   FilePlus,
@@ -21,7 +22,6 @@ import {
   ExplorerFileEditor,
   type ExplorerFileDraft
 } from './ExplorerFileEditor'
-import { ExplorerSourceControl } from './ExplorerSourceControl'
 
 type Project = { id: string; name: string; path: string }
 type OpenFile = { root: string; path: string }
@@ -81,9 +81,7 @@ function ProjectFolder({
         {isError ? (
           <div className="px-2 py-1 text-sm" role="alert">
             无法读取目录。
-            <Button variant="ghost" size="sm" onClick={() => void refetch()}>
-              重试
-            </Button>
+            <RefreshButton label="重试" onClick={() => void refetch()} />
           </div>
         ) : entries.length ? (
           <ul className="m-0 list-none space-y-0.5 p-0">
@@ -135,8 +133,9 @@ export function ResourceExplorer({
   directoryTarget,
   directoryInDrawer,
   currentProjectDirectoryOnly = false,
-  sourceControlTarget,
   fileTabsTarget,
+  fileRequest,
+  onConsumeFileRequest,
   onOpenFile
 }: {
   projects: Project[]
@@ -144,8 +143,9 @@ export function ResourceExplorer({
   directoryTarget: HTMLDivElement | null
   directoryInDrawer: boolean
   currentProjectDirectoryOnly?: boolean
-  sourceControlTarget: HTMLDivElement | null
   fileTabsTarget: HTMLDivElement | null
+  fileRequest: OpenFile | null
+  onConsumeFileRequest: () => void
   onOpenFile: () => void
 }) {
   const [openFiles, setOpenFiles] = useStoreState<OpenFile[]>([])
@@ -223,13 +223,20 @@ export function ResourceExplorer({
     setPendingClose(null)
   }
 
-  function open(file: OpenFile) {
+  const open = useCallback((file: OpenFile) => {
     setOpenFiles(files =>
       files.some(item => sameFile(item, file)) ? files : [...files, file]
     )
     setSelected(file)
     onOpenFile()
-  }
+  }, [onOpenFile, setOpenFiles, setSelected])
+
+  useEffect(() => {
+    if (!fileRequest) return
+    onConsumeFileRequest()
+    if (projects.some(project => project.path === fileRequest.root))
+      open(fileRequest)
+  }, [fileRequest, onConsumeFileRequest, open, projects])
 
   function startCreate(directory: boolean) {
     if (!currentProject) return
@@ -364,25 +371,6 @@ export function ResourceExplorer({
           </form>
         </Modal>
       )}
-      {sourceControlTarget &&
-        createPortal(
-          <aside
-            className="flex min-h-0 min-w-0 flex-1 flex-col bg-(--theme-surface-raised)"
-            aria-label="仓库"
-          >
-            <div className="flex min-h-0 flex-1 flex-col overflow-auto overscroll-contain px-2 pb-2">
-              {projects.map(project => (
-                <ExplorerSourceControl
-                  key={project.id}
-                  project={project}
-                  defaultOpen={project.path === currentRoot}
-                  onOpen={path => open({ root: project.path, path })}
-                />
-              ))}
-            </div>
-          </aside>,
-          sourceControlTarget
-        )}
       {fileTabsTarget &&
         availableFiles.length > 0 &&
         createPortal(

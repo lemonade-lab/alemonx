@@ -9,6 +9,7 @@ export function WorkbenchTools({
   label = '操作',
   menuLabel = '操作菜单',
   icon = <MoreHorizontal className="size-4" aria-hidden="true" />,
+  triggerView,
   menuClassName,
   align,
   placement = 'bottom',
@@ -19,6 +20,7 @@ export function WorkbenchTools({
   label?: string
   menuLabel?: string
   icon?: ReactNode
+  triggerView?: { className: string; title?: string; content: ReactNode }
   menuClassName?: string
   align?: 'start' | 'end'
   placement?: PopoverPlacement
@@ -61,7 +63,7 @@ export function WorkbenchTools({
   return (
     <div
       ref={root}
-      className="workbench-tools relative"
+      className="workbench-tools relative min-w-0"
       onKeyDown={event => {
         if (!open || event.key !== 'Escape' || event.defaultPrevented) return
         const expanded = menu.current?.querySelector<HTMLButtonElement>(
@@ -83,15 +85,15 @@ export function WorkbenchTools({
       <button
         ref={trigger}
         type="button"
-        className="icon-button workbench-menu-trigger size-8 p-0"
+        className={`workbench-menu-trigger ${triggerView?.className ?? 'icon-button size-8 p-0'}`}
         aria-label={label}
-        title={label}
+        title={triggerView?.title ?? label}
         aria-haspopup="true"
         aria-expanded={open}
         aria-controls={id}
         onClick={() => (open ? close() : setOpen(true))}
       >
-        {icon}
+        {triggerView ? triggerView.content : icon}
       </button>
       <div
         ref={menu}

@@ -202,8 +202,7 @@
 
   .question-options button:hover {
     border-color: var(--theme-accent-soft-border);
-    box-shadow: 0 8px 20px rgb(28 26 23 / 0.06);
-  }
+    }
 
   .question-options i {
     align-items: center;
@@ -254,7 +253,7 @@
   .question-options button.selected {
     background: var(--theme-accent-soft);
     border-color: var(--theme-accent-soft-border);
-    box-shadow: inset 3px 0 var(--theme-accent);
+    background-color: var(--theme-accent-soft);
   }
 
   /* Guide wizard layout scaffolding. */
@@ -374,45 +373,48 @@
 }
 
 :root {
-  /* Warm-neutral surfaces (Codex-aligned) */
-  --theme-surface-page: #f6f5f2;
-  --theme-surface-panel: #ffffff;
-  --theme-surface-raised: #f2f1ee;
-  --theme-surface-hover: #eae8e4;
-  --theme-surface-active: #e0ddd7;
-  --theme-surface-input: #ffffffe0;
+  /* Surfaces ordered by their role in the workbench. */
+  --theme-surface-page: #f3f1ec;
+  --theme-surface-panel: #fcfaf7;
+  --theme-surface-raised: #efebe3;
+  --theme-surface-rail: #e5dfd4;
+  --theme-surface-section: #f1ede5;
+  --theme-surface-hover: #e5dfd3;
+  --theme-surface-active: #dcd3c4;
+  --theme-surface-input: #eae5db;
   --theme-surface-invert: #1c1a17;
-  --theme-surface-overlay: rgb(28 26 23 / 0.36);
-  --theme-terminal-background: #ffffff;
-  --theme-terminal-foreground: #171717;
+  --theme-surface-overlay: rgb(30 26 20 / 0.38);
+  --theme-terminal-background: #fcfaf7;
+  --theme-terminal-foreground: #27231e;
   /* Text */
-  --theme-text-strong: #1c1a17;
-  --theme-text-primary: #2a2825;
-  --theme-text-secondary: #57534a;
-  --theme-text-muted: #8a857c;
-  --theme-text-faint: #a8a39a;
+  --theme-text-strong: #27231e;
+  --theme-text-primary: #302a22;
+  --theme-text-secondary: #524a3f;
+  --theme-text-muted: #665e51;
+  --theme-text-faint: #6c6255;
   --theme-text-invert: #ffffff;
-  /* Borders */
-  --theme-border-subtle: #efeeea;
-  --theme-border-default: #e4e2dc;
-  --theme-border-strong: #d5d2ca;
+  /* Preserve the pixel footprint of existing borders. */
+  --theme-border-subtle: transparent;
+  --theme-border-default: transparent;
+  --theme-border-strong: transparent;
+  --theme-control-track: #c9beb0;
   /* Accent — warm amber */
-  --theme-accent: #c2660a;
-  --theme-accent-hover: #a05205;
-  --theme-accent-text: #b45309;
-  --theme-accent-soft: #fff7e8;
-  --theme-accent-soft-border: #f5ddb0;
-  --theme-accent-soft-text: #9a5a07;
-  --theme-accent-contrast: #ffffff;
+  --theme-accent: #8e4b13;
+  --theme-accent-hover: #74380d;
+  --theme-accent-text: #784110;
+  --theme-accent-soft: #ead6bf;
+  --theme-accent-soft-border: transparent;
+  --theme-accent-soft-text: #784110;
+  --theme-accent-contrast: #fff;
   /* Semantic */
-  --theme-surface-code: #191919;
+  --theme-surface-code: #e9e4db;
   --theme-text-code: #2b56a8;
   --theme-success: #3f8f5f;
   --theme-success-soft: #edf7f0;
   --theme-success-text: #2c7a4b;
   --theme-warning: #d98a1c;
   --theme-warning-soft: #fff8ea;
-  --theme-warning-text: #b06a0a;
+  --theme-warning-text: #8e5513;
   --theme-danger: #d64545;
   --theme-danger-soft: #fdefef;
   --theme-danger-text: #b23a3a;
@@ -420,14 +422,14 @@
   --theme-info-soft: #eef3fc;
   --theme-info-text: #2b56a8;
   /* Shadows */
-  --theme-shadow-soft: rgb(28 26 23 / 0.08);
-  --theme-shadow-panel: 0 10px 24px rgb(28 26 23 / 0.06);
-  --theme-shadow-pop: 0 18px 48px rgb(28 26 23 / 0.14);
+  --theme-shadow-soft: transparent;
+  --theme-shadow-panel: none;
+  --theme-shadow-pop: 0 18px 54px rgb(30 25 18 / 0.20);
   /* Legacy brand/ink tokens */
   --theme-brand-50: var(--theme-accent-soft);
-  --theme-brand-100: #fdeecb;
-  --theme-brand-200: var(--theme-accent-soft-border);
-  --theme-brand-300: #eec278;
+  --theme-brand-100: #e2c8ad;
+  --theme-brand-200: #d8b797;
+  --theme-brand-300: #caa179;
   --theme-brand-600: var(--theme-accent);
   --theme-brand-700: var(--theme-accent-hover);
   --theme-ink-950: var(--theme-text-strong);
@@ -450,38 +452,36 @@ body {
 
 [data-theme='dark'] {
   color-scheme: dark;
-  /* Warm-neutral surfaces (Codex-aligned) */
-  --theme-surface-page: #141312;
-  --theme-surface-panel: #1d1c1a;
-  --theme-surface-raised: #23211f;
-  --theme-surface-hover: #2b2926;
-  --theme-surface-active: #34312d;
-  --theme-surface-input: #171615;
+  /* Surfaces ordered by their role in the workbench. */
+  --theme-surface-page: #1b1916;
+  --theme-surface-panel: #211e19;
+  --theme-surface-raised: #2b2720;
+  --theme-surface-rail: #312b23;
+  --theme-surface-section: #29251e;
+  --theme-surface-hover: #40382c;
+  --theme-surface-active: #4a4033;
+  --theme-surface-input: #373128;
   --theme-surface-invert: #f2f0ec;
-  --theme-surface-overlay: rgb(0 0 0 / 0.58);
-  --theme-terminal-background: #0b0b0b;
+  --theme-surface-overlay: rgb(0 0 0 / 0.55);
+  --theme-terminal-background: #15130f;
   --theme-terminal-foreground: #f5f5f5;
   /* Text */
-  --theme-text-strong: #f2f0ec;
-  --theme-text-primary: #e4e1db;
-  --theme-text-secondary: #a9a49b;
-  --theme-text-muted: #8b867d;
-  --theme-text-faint: #63605a;
+  --theme-text-strong: #f3ede1;
+  --theme-text-primary: #e6ddd0;
+  --theme-text-secondary: #c7bbab;
+  --theme-text-muted: #b4a795;
+  --theme-text-faint: #ac9e8e;
   --theme-text-invert: #141312;
-  /* Borders */
-  --theme-border-subtle: #262421;
-  --theme-border-default: #34312d;
-  --theme-border-strong: #46423c;
+  --theme-control-track: #685d4e;
   /* Accent — warm amber */
-  --theme-accent: #e59b26;
-  --theme-accent-hover: #f0ab3c;
-  --theme-accent-text: #f0b54d;
-  --theme-accent-soft: #2c2010;
-  --theme-accent-soft-border: #4a3515;
-  --theme-accent-soft-text: #f0c378;
-  --theme-accent-contrast: #141312;
+  --theme-accent: #edb77e;
+  --theme-accent-hover: #f3c595;
+  --theme-accent-text: #f3c595;
+  --theme-accent-soft: #463325;
+  --theme-accent-soft-text: #f3c595;
+  --theme-accent-contrast: #2d2015;
   /* Semantic */
-  --theme-surface-code: #0d0d0c;
+  --theme-surface-code: #15130f;
   --theme-text-code: #cfccc4;
   --theme-success: #4fae74;
   --theme-success-soft: #16271c;
@@ -496,14 +496,14 @@ body {
   --theme-info-soft: #1b2335;
   --theme-info-text: #93b2ec;
   /* Shadows */
-  --theme-shadow-soft: rgb(0 0 0 / 0.4);
-  --theme-shadow-panel: 0 12px 30px rgb(0 0 0 / 0.28);
-  --theme-shadow-pop: 0 22px 60px rgb(0 0 0 / 0.42);
+  --theme-shadow-soft: transparent;
+  --theme-shadow-panel: none;
+  --theme-shadow-pop: 0 18px 54px rgb(0 0 0 / 0.35);
   /* Legacy brand/ink tokens */
   --theme-brand-50: var(--theme-accent-soft);
-  --theme-brand-100: #3a2c13;
-  --theme-brand-200: var(--theme-accent-soft-border);
-  --theme-brand-300: #6b4f1c;
+  --theme-brand-100: #543d2b;
+  --theme-brand-200: #674c36;
+  --theme-brand-300: #9e724d;
   --theme-brand-600: var(--theme-accent);
   --theme-brand-700: var(--theme-accent-hover);
   --theme-ink-950: var(--theme-text-strong);
@@ -534,12 +534,20 @@ body {
  * workspace all adapt together; semantic colours (emerald, amber, rose, etc.)
  * keep their own contrast rules.
  * ------------------------------------------------------------------------- */
-[data-theme='dark'] :is(.bg-white, .bg-white\/90, .bg-slate-50, .bg-slate-100) {
-  background-color: var(--theme-surface-panel) !important;
+body :is(.bg-white, .bg-white\/60, .bg-white\/70, .bg-white\/90, .bg-white\/95) {
+  background-color: var(--theme-surface-panel);
 }
 
-[data-theme='dark'] :is(.text-slate-950) {
-  color: var(--theme-text-strong) !important;
+body :is(.bg-slate-50, .bg-slate-50\/50, .bg-slate-50\/60, .bg-slate-50\/70, .bg-slate-50\/80, .bg-slate-100) {
+  background-color: var(--theme-surface-raised);
+}
+
+body :is(.text-slate-950, .text-slate-900, .text-slate-800) {
+  color: var(--theme-text-strong);
+}
+
+body :is(.text-slate-700, .text-slate-600, .text-slate-500, .text-slate-400) {
+  color: var(--theme-text-secondary);
 }
 
 [data-theme='dark'] :is(.hover\:bg-slate-700:hover) {
@@ -563,8 +571,7 @@ body {
   background-color: var(--theme-surface-raised) !important;
 }
 
-/* Code/terminal surfaces keep a genuinely dark fill in both themes, so the
- * `.bg-slate-950` and translucent `.bg-white/70` fills stay terminal-like. */
+/* Dark code and terminal surfaces use the deepest surface tone. */
 [data-theme='dark'] :is(.bg-slate-950) {
   background-color: var(--theme-surface-code) !important;
 }
@@ -581,10 +588,6 @@ body {
 [data-theme='dark']
   :is(.border-slate-600, .border-slate-700, .border-slate-800) {
   border-color: var(--theme-border-strong) !important;
-}
-
-[data-theme='dark'] :is(.text-slate-900, .text-slate-800, .text-slate-700) {
-  color: var(--theme-text-primary) !important;
 }
 
 [data-theme='dark'] :is(.text-slate-600, .text-slate-500) {
@@ -1106,7 +1109,7 @@ button {
 
 .checking-indicator {
   animation: spin 0.8s linear infinite;
-  border: 3px solid var(--theme-accent-soft-border);
+  border: 3px solid var(--theme-accent-soft);
   border-radius: 50%;
   border-top-color: var(--theme-accent);
   display: inline-block;
@@ -1577,6 +1580,13 @@ button {
 }
 .settings-redis-form .settings-switch-row {
   grid-column: 1 / -1;
+}
+
+/* Data dialogs are portaled outside the sidebar window's container. */
+@media (max-width: 420px) {
+  .settings-redis-form {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .settings-redis-field {
@@ -2356,7 +2366,7 @@ button {
 .floating-window-header-custom .readonly-console-tab.active {
   background: var(--theme-surface-raised);
   border-color: transparent;
-  box-shadow: inset 0 -2px 0 var(--theme-accent-text);
+  background-color: var(--theme-accent-soft);
 }
 
 .floating-window-header-custom .readonly-console-tab-add {
@@ -2757,10 +2767,9 @@ select.git-clone-input {
   z-index: 2;
 }
 .control-card {
-  background: var(--theme-surface-panel);
+  background: var(--theme-surface-section);
   border: 1px solid var(--theme-border-default);
   border-radius: 14px;
-  box-shadow: 0 8px 24px rgb(28 26 23 / 0.06);
   overflow: hidden;
 }
 .control-card > header {
@@ -3332,8 +3341,7 @@ select.git-clone-input {
   justify-self: end;
 }
 .editor-mode button.active {
-  background: var(--theme-surface-panel);
-  box-shadow: 0 1px 2px rgb(28 26 23 / 0.1);
+  background: var(--theme-accent-soft);
   color: var(--theme-accent-text);
   font-weight: 700;
 }
@@ -3540,15 +3548,14 @@ select.git-clone-input {
   margin-top: 0;
 }
 .build-mode button.active {
-  background: var(--theme-surface-panel);
-  box-shadow: 0 1px 2px rgb(28 26 23 / 0.1);
+  background: var(--theme-accent-soft);
   color: var(--theme-accent-text);
   font-weight: 700;
 }
 .release-mode-cards button.active {
   background: var(--theme-accent-soft);
   border-color: var(--theme-accent-soft-border);
-  box-shadow: inset 3px 0 var(--theme-accent);
+  background-color: var(--theme-accent-soft);
 }
 .git-release-panel {
   max-width: 620px;
@@ -3722,6 +3729,7 @@ select.git-clone-input {
   color: var(--theme-text-primary);
   font: inherit;
   min-height: 36px;
+  min-width: 0;
   padding: 0 9px;
   width: 100%;
 }
@@ -3739,6 +3747,14 @@ select.git-clone-input {
 }
 .release-artifact-card {
   grid-template-columns: 1fr;
+}
+@container robot-panel (max-width: 420px) {
+  .release-source-card {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .release-source-card label {
+    min-width: 0;
+  }
 }
 .release-artifacts {
   display: flex;
@@ -5248,7 +5264,6 @@ textarea:focus-visible {
 }
 .setup-plugin-cards button:hover {
   border-color: var(--theme-accent-soft-border);
-  box-shadow: 0 10px 22px rgb(194 102 10 / 0.09);
   transform: translateY(-1px);
 }
 .setup-plugin-cards i {
@@ -5527,7 +5542,7 @@ textarea:focus-visible {
   padding: 7px 10px;
 }
 .setup-plugin-layout nav button.active {
-  box-shadow: inset 0 -2px var(--theme-accent);
+  background-color: var(--theme-accent-soft);
 }
 .setup-plugin-layout nav b {
   display: none;
@@ -5734,7 +5749,7 @@ textarea:focus-visible {
   width: min(800px, calc(100% - 32px));
 }
 .finder-sidebar button.active {
-  background: var(--theme-border-strong);
+  background: var(--theme-accent-soft);
 }
 .finder-picker .directory-picker-list {
   padding: 6px 14px;
@@ -5821,7 +5836,6 @@ textarea:focus-visible {
 }
 .finder-picker .directory-picker-list button.selected {
   background: var(--theme-info);
-  box-shadow: inset 0 0 0 1px var(--theme-accent-soft-border);
 }
 .finder-picker footer {
   background: var(--theme-surface-panel);
@@ -5990,7 +6004,6 @@ textarea:hover {
 .control-card {
   border-color: var(--line);
   border-radius: var(--radius-surface);
-  box-shadow: 0 10px 24px rgb(28 26 23 / 0.05);
 }
 .control-card > header,
 .control-card footer {
@@ -6152,150 +6165,70 @@ textarea:hover {
   cursor: grabbing;
 }
 
-/* Runtime is a short decision flow, not a stack of competing cards. */
-.runtime-overview > article button:not([role='tab']) {
-  background: var(--theme-surface-raised);
+/* These action groups sit on raised sections, so the controls use the
+ * input tone to stay identifiable without an inset stroke. */
+.runtime-overview > article button:not([role='tab'], .primary-button, .danger-button),
+.backpack-panel > article button:not([role='tab'], .primary-button, [data-backpack-list] *),
+:is(.backpack-manager, .catalog-workspace, .catalog-detail, .npm-publish-panel, .git-release-panel)
+  > article button:not([role='tab'], .primary-button),
+.env-config-add,
+.config-field-action {
+  background: var(--theme-surface-input);
   border-color: transparent;
-  box-shadow:
-    inset 0 1px 2px
-      color-mix(in srgb, var(--theme-surface-invert) 12%, transparent),
-    inset 0 -1px 0
-      color-mix(in srgb, var(--theme-surface-panel) 88%, transparent);
 }
-.runtime-overview > article button:not([role='tab']):hover:not(:disabled) {
+
+.env-config-add,
+.config-field-action {
+  border: 1px solid transparent;
+}
+
+.runtime-overview > article button:not([role='tab'], .primary-button, .danger-button):hover:not(:disabled),
+.backpack-panel > article button:not([role='tab'], .primary-button, [data-backpack-list] *):hover:not(:disabled),
+:is(.backpack-manager, .catalog-workspace, .catalog-detail, .npm-publish-panel, .git-release-panel)
+  > article button:not([role='tab'], .primary-button):hover:not(:disabled),
+:is(.env-config-add, .config-field-action, .env-config-remove, .config-field-remove):hover:not(:disabled) {
   background: var(--theme-surface-hover);
   color: var(--theme-text-strong);
 }
-.runtime-overview > article button:not([role='tab']):active {
-  background: var(--theme-surface-panel);
-  box-shadow:
-    inset 0 0 0 1px var(--theme-accent-soft-border),
-    inset 0 1px 0
-      color-mix(in srgb, var(--theme-surface-invert) 8%, transparent),
-    0 1px 1px var(--theme-shadow-soft);
+
+.runtime-overview > article button:not([role='tab'], .primary-button, .danger-button):active,
+.backpack-panel > article button:not([role='tab'], .primary-button, [data-backpack-list] *):active,
+:is(.backpack-manager, .catalog-workspace, .catalog-detail, .npm-publish-panel, .git-release-panel)
+  > article button:not([role='tab'], .primary-button):active,
+:is(.env-config-add, .config-field-action, .env-config-remove, .config-field-remove):active {
+  background: var(--theme-surface-active);
 }
-.runtime-overview > article .primary-button {
+
+.runtime-overview > article button.primary-button {
   background: var(--theme-accent-soft);
+  border-color: transparent;
   color: var(--theme-accent-soft-text);
 }
+
+.runtime-overview > article button.primary-button:hover:not(:disabled) {
+  background: var(--theme-brand-100);
+}
+
+.runtime-overview > article button.primary-button:active:not(:disabled) {
+  background: var(--theme-brand-200);
+  color: var(--theme-text-strong);
+}
+
+:is(.backpack-panel, .backpack-manager, .catalog-detail, .npm-publish-panel) > article .primary-button,
+:is(.npm-publish-panel, .git-release-panel) > article button.bg-brand-600 {
+  background: var(--theme-accent);
+  color: var(--theme-accent-contrast);
+}
+
+:is(.backpack-panel, .backpack-manager, .catalog-detail, .npm-publish-panel) > article .primary-button:hover:not(:disabled),
+:is(.npm-publish-panel, .git-release-panel) > article button.bg-brand-600:hover:not(:disabled) {
+  background: var(--theme-accent-hover);
+  color: var(--theme-accent-contrast);
+}
+
 .runtime-overview > article .danger-button {
   background: var(--theme-danger-soft);
   color: var(--theme-danger-text);
-}
-.backpack-panel > article button:not([role='tab'], [data-backpack-list] *),
-.backpack-manager > article button:not([role='tab']) {
-  background: var(--theme-surface-raised);
-  border-color: transparent;
-  box-shadow:
-    inset 0 1px 2px
-      color-mix(in srgb, var(--theme-surface-invert) 12%, transparent),
-    inset 0 -1px 0
-      color-mix(in srgb, var(--theme-surface-panel) 88%, transparent);
-}
-.backpack-panel > article button:not([role='tab'], [data-backpack-list] *):hover:not(:disabled),
-.backpack-manager > article button:not([role='tab']):hover:not(:disabled) {
-  background: var(--theme-surface-hover);
-}
-.backpack-panel > article button:not([role='tab'], [data-backpack-list] *):active,
-.backpack-manager > article button:not([role='tab']):active {
-  background: var(--theme-surface-panel);
-  box-shadow:
-    inset 0 0 0 1px var(--theme-accent-soft-border),
-    inset 0 1px 0
-      color-mix(in srgb, var(--theme-surface-invert) 8%, transparent),
-    0 1px 1px var(--theme-shadow-soft);
-}
-.backpack-panel > article .primary-button,
-.backpack-manager > article .primary-button {
-  background: var(--theme-accent-soft);
-  color: var(--theme-accent-soft-text);
-}
-.catalog-workspace > article button:not([role='tab']),
-.catalog-detail > article button:not([role='tab']) {
-  background: var(--theme-surface-raised);
-  border-color: transparent;
-  box-shadow:
-    inset 0 1px 2px
-      color-mix(in srgb, var(--theme-surface-invert) 12%, transparent),
-    inset 0 -1px 0
-      color-mix(in srgb, var(--theme-surface-panel) 88%, transparent);
-}
-.catalog-workspace > article button:not([role='tab']):hover:not(:disabled),
-.catalog-detail > article button:not([role='tab']):hover:not(:disabled) {
-  background: var(--theme-surface-hover);
-}
-.catalog-workspace > article button:not([role='tab']):active,
-.catalog-detail > article button:not([role='tab']):active {
-  background: var(--theme-surface-panel);
-  box-shadow:
-    inset 0 0 0 1px var(--theme-accent-soft-border),
-    inset 0 1px 0
-      color-mix(in srgb, var(--theme-surface-invert) 8%, transparent),
-    0 1px 1px var(--theme-shadow-soft);
-}
-.catalog-detail > article .primary-button {
-  background: var(--theme-accent-soft);
-  color: var(--theme-accent-soft-text);
-}
-.npm-publish-panel > article button:not([role='tab']),
-.git-release-panel > article button:not([role='tab']) {
-  background: var(--theme-surface-raised);
-  border-color: transparent;
-  box-shadow:
-    inset 0 1px 2px
-      color-mix(in srgb, var(--theme-surface-invert) 12%, transparent),
-    inset 0 -1px 0
-      color-mix(in srgb, var(--theme-surface-panel) 88%, transparent);
-}
-.npm-publish-panel > article button:not([role='tab']):hover:not(:disabled),
-.git-release-panel > article button:not([role='tab']):hover:not(:disabled) {
-  background: var(--theme-surface-hover);
-}
-.npm-publish-panel > article button:not([role='tab']):active,
-.git-release-panel > article button:not([role='tab']):active {
-  background: var(--theme-surface-panel);
-  box-shadow:
-    inset 0 0 0 1px var(--theme-accent-soft-border),
-    inset 0 1px 0
-      color-mix(in srgb, var(--theme-surface-invert) 8%, transparent),
-    0 1px 1px var(--theme-shadow-soft);
-}
-.npm-publish-panel > article .primary-button,
-.npm-publish-panel > article button.bg-brand-600,
-.git-release-panel > article button.bg-brand-600 {
-  background: var(--theme-accent-soft);
-  color: var(--theme-accent-soft-text);
-}
-.env-config-add,
-.config-field-action {
-  background: var(--theme-surface-raised);
-  border: 1px solid transparent;
-  box-shadow:
-    inset 0 1px 2px
-      color-mix(in srgb, var(--theme-surface-invert) 12%, transparent),
-    inset 0 -1px 0
-      color-mix(in srgb, var(--theme-surface-panel) 88%, transparent);
-}
-.env-config-remove:hover:not(:disabled),
-.env-config-add:hover:not(:disabled),
-.config-field-action:hover:not(:disabled) {
-  background: var(--theme-surface-hover);
-}
-.env-config-add:active,
-.config-field-action:active {
-  background: var(--theme-surface-panel);
-  box-shadow:
-    inset 0 0 0 1px var(--theme-accent-soft-border),
-    inset 0 1px 0
-      color-mix(in srgb, var(--theme-surface-invert) 8%, transparent),
-    0 1px 1px var(--theme-shadow-soft);
-}
-.env-config-remove:active,
-.config-field-remove:active {
-  background: var(--theme-surface-active);
-}
-.config-field-remove:hover:not(:disabled) {
-  background: var(--theme-surface-hover);
 }
 .runtime-overview > header:not([data-robot-panel-header]) {
   align-items: center;
@@ -6811,14 +6744,6 @@ button > svg,
 .system-feature-card:hover {
   background: var(--theme-surface-hover);
 }
-.system-feature-refresh {
-  background: var(--theme-surface-hover);
-  color: var(--theme-text-secondary);
-}
-.system-feature-refresh:hover {
-  background: var(--theme-border-subtle);
-  color: var(--theme-text-primary);
-}
 .system-feature-empty {
   background: var(--theme-surface-hover);
   border-radius: 10px;
@@ -6908,8 +6833,7 @@ button > svg,
   grid-template-rows: auto minmax(0, 1fr) auto;
 }
 .update-modes button.active {
-  background: var(--theme-surface-panel);
-  box-shadow: 0 1px 2px rgb(28 26 23 / 0.12);
+  background: var(--theme-accent-soft);
   color: var(--theme-accent-text);
 }
 .update-version-status.is-current {
@@ -7391,15 +7315,14 @@ button > svg,
   }
 }
 
-/* Codex-aligned control card: a proper card for the detail/navigation rail. */
+/* Keep the action dock distinct from the main work surface. */
 .control-dock {
   padding: 10px 8px 10px 4px;
 }
 .control-card {
-  background: var(--theme-surface-panel);
+  background: var(--theme-surface-section);
   border: 1px solid var(--theme-border-default);
   border-radius: 12px;
-  box-shadow: 0 6px 20px rgb(28 26 23 / 0.05);
 }
 
 /* Neutralise legacy control-card child rules so the component's own Tailwind
@@ -7453,30 +7376,18 @@ button > svg,
   background: var(--theme-surface-hover) !important;
 }
 
-/* Robot-panel actions use a shallow recessed well instead of a separate
- * outlined button. A selected or pressed action gets a thin inner highlight,
- * which makes the control feel raised from inside the well. */
+/* Robot-panel actions share the input surface and use fill for selection. */
 .robot-panel-actions button:not([role='tab']) {
-  background: var(--theme-surface-raised) !important;
+  background: var(--theme-surface-input) !important;
   border-color: transparent !important;
-  box-shadow:
-    inset 0 1px 2px
-      color-mix(in srgb, var(--theme-surface-invert) 12%, transparent),
-    inset 0 -1px 0
-      color-mix(in srgb, var(--theme-surface-panel) 88%, transparent) !important;
 }
 .robot-panel-actions button:not([role='tab']):hover:not(:disabled) {
   background: var(--theme-surface-hover) !important;
   color: var(--theme-text-strong) !important;
 }
 .robot-panel-actions [role='tab'] {
-  background: var(--theme-surface-raised) !important;
+  background: var(--theme-surface-input) !important;
   border: 1px solid transparent !important;
-  box-shadow:
-    inset 0 1px 2px
-      color-mix(in srgb, var(--theme-surface-invert) 12%, transparent),
-    inset 0 -1px 0
-      color-mix(in srgb, var(--theme-surface-panel) 88%, transparent) !important;
 }
 .robot-panel-actions [role='tab']:hover:not(:disabled) {
   background: var(--theme-surface-hover) !important;
@@ -7485,12 +7396,7 @@ button > svg,
 .robot-panel-actions button:not([role='tab']):active,
 .robot-panel-actions button[aria-pressed='true'],
 .robot-panel-actions [role='tab'][aria-selected='true'] {
-  background: var(--theme-surface-panel) !important;
-  box-shadow:
-    inset 0 0 0 1px var(--theme-accent-soft-border),
-    inset 0 1px 0
-      color-mix(in srgb, var(--theme-surface-invert) 8%, transparent),
-    0 1px 1px var(--theme-shadow-soft) !important;
+  background: var(--theme-accent-soft) !important;
   color: var(--theme-accent-text) !important;
 }
 .robot-panel-actions .primary-button,
@@ -8103,8 +8009,18 @@ button > svg,
   grid-column: auto;
 }
 
+.git-tag-panel {
+  container: git-tag-panel / inline-size;
+}
+
 .git-tag-form {
-  grid-template-columns: 1fr 1.4fr auto;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@container git-tag-panel (min-width: 30rem) {
+  .git-tag-form {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) auto;
+  }
 }
 
 /* Operations appears both in a desktop window and as a system page. Give the
@@ -8202,8 +8118,7 @@ button > svg,
 }
 
 @container desktop-window (max-width: 759px) {
-  .git-commit-heading,
-  .git-tag-form {
+  .git-commit-heading {
     grid-template-columns: 1fr;
   }
 
@@ -8211,8 +8126,7 @@ button > svg,
     grid-column: auto;
   }
 
-  .git-commit-heading .primary-button,
-  .git-tag-form .secondary-button {
+  .git-commit-heading .primary-button {
     width: 100%;
   }
 
@@ -8277,6 +8191,9 @@ button > svg,
 }
 
 .workbench-tools-menu {
+  display: grid;
+  align-content: start;
+  gap: 2px;
   z-index: var(--workbench-menu-layer, 60);
   width: min(190px, calc(100vw - 24px));
   padding: 5px;
@@ -8304,6 +8221,11 @@ button > svg,
   text-align: left;
   box-shadow: none;
 }
+.workbench-tools-menu .workbench-action-item > svg {
+  width: 1rem;
+  height: 1rem;
+}
+
 .workbench-tools-menu .workbench-action-item:is(:focus-visible, [aria-expanded='true'], :hover:not(:disabled)) {
   background: var(--theme-surface-hover);
 }
@@ -8646,8 +8568,7 @@ button > svg,
   color: var(--theme-text-strong);
 }
 .pm2-audit-source-btn.active {
-  background: var(--theme-surface-panel);
-  box-shadow: 0 1px 2px rgb(28 26 23 / 0.1);
+  background: var(--theme-accent-soft);
   color: var(--theme-accent-text);
   font-weight: 700;
 }
@@ -8754,22 +8675,8 @@ button > svg,
 }
 
 /* Git 变更对比 */
-.git-diff-panel {
-  border: 1px solid var(--theme-border-default);
-  border-radius: 10px;
-  overflow: hidden;
-}
-.git-diff-head {
-  align-items: center;
-  background: var(--theme-surface-raised);
-  border-bottom: 1px solid var(--theme-border-default);
-  display: flex;
-  gap: 8px;
-  min-height: 34px;
-  padding: 6px 8px 6px 10px;
-}
 .git-diff-body {
-  background: var(--theme-surface-code);
+  background: var(--theme-surface-panel);
   color: var(--theme-text-secondary);
   font:
     0.72rem/1.55 ui-monospace,
@@ -8777,26 +8684,34 @@ button > svg,
     Menlo,
     monospace;
   margin: 0;
-  max-height: 300px;
-  overflow: auto;
+  min-width: 0;
   padding: 8px 0;
 }
 .git-diff-line {
-  padding: 0 12px;
+  display: grid;
+  grid-template-columns: 4ch 4ch minmax(0, 1fr);
+  min-height: 1.55em;
+  gap: 0 0.5rem;
+  padding: 1px 10px;
   white-space: pre-wrap;
-  word-break: break-all;
+  overflow-wrap: anywhere;
+}
+.git-diff-number {
+  color: var(--theme-text-muted);
+  text-align: right;
+  user-select: none;
 }
 .git-diff-add {
-  background: rgba(34, 197, 94, 0.12);
-  color: #16a34a;
+  background: var(--theme-success-soft);
+  color: var(--theme-success-text);
 }
 .git-diff-del {
-  background: rgba(239, 68, 68, 0.12);
-  color: #dc2626;
+  background: var(--theme-danger-soft);
+  color: var(--theme-danger-text);
 }
 .git-diff-hunk {
-  background: rgba(59, 130, 246, 0.1);
-  color: #2563eb;
+  background: var(--theme-surface-raised);
+  color: var(--theme-text-secondary);
   font-weight: 600;
 }
 .git-diff-meta {
@@ -8807,34 +8722,6 @@ button > svg,
   font-size: 0.72rem;
   margin: 0;
   padding: 12px;
-}
-
-/* Git 提交面板：够宽时变更树与 diff 左右并排，窄时纵向堆叠。 */
-.git-commit-panel {
-  container-name: git-commit-panel;
-  container-type: inline-size;
-}
-.git-commit-workspace {
-  display: grid;
-  gap: 12px;
-  min-width: 0;
-}
-.git-commit-tree {
-  min-width: 0;
-}
-@container git-commit-panel (min-width: 640px) {
-  .git-commit-workspace {
-    align-items: start;
-    grid-template-columns: minmax(200px, 280px) minmax(0, 1fr);
-  }
-  .git-commit-tree {
-    max-height: 420px;
-    overflow-y: auto;
-    padding-right: 2px;
-  }
-  .git-diff-panel .git-diff-body {
-    max-height: 360px;
-  }
 }
 
 /* 设置窗口统一骨架 */
@@ -8862,10 +8749,9 @@ button > svg,
   margin: 0;
 }
 .settings-card {
-  background: var(--theme-surface-panel);
+  background: var(--theme-surface-section);
   border: 1px solid var(--theme-border-default);
   border-radius: 12px;
-  box-shadow: 0 1px 2px rgb(28 26 23 / 0.05);
   display: grid;
   gap: 14px;
   min-width: 0;
@@ -9015,7 +8901,7 @@ button > svg,
 }
 .settings-switch input {
   appearance: none;
-  background: var(--theme-border-strong);
+  background: var(--theme-control-track);
   border: 0;
   border-radius: 999px;
   cursor: pointer;
@@ -9143,6 +9029,10 @@ button > svg,
 .robot-workspace-content > .console-page:has(> .ecosystem-market-list) {
   grid-template-rows: minmax(0, 1fr);
 }
+.robot-workspace-content > .console-page:has(> [data-scroll-body]) {
+  grid-template-rows: minmax(0, 1fr);
+  overflow: hidden;
+}
 .robot-workspace-content > .console-page > :is([data-workbench-page], .bot-build-page) {
   width: calc(100% - 2 * var(--robot-panel-gutter));
   margin-inline: auto;
@@ -9268,6 +9158,22 @@ button > svg,
   }
   :is(.dashboard-window, [role='dialog']) :is(input, select, textarea) {
     font-size: 16px;
+  }
+}
+
+@media (max-width: 480px) {
+  .workbench-terminal-layout:has(.workbench-file-tabs > nav) {
+    --workbench-file-tab-row-height: 3rem;
+  }
+  .workbench-content-header:has(.workbench-file-tabs > nav) {
+    flex-wrap: wrap;
+  }
+  .workbench-content-header .workbench-file-tabs:has(> nav) {
+    flex: 0 0 100%;
+    order: 1;
+  }
+  .workbench-content-header .workbench-file-tabs .terminal-tab-viewport {
+    padding: 0;
   }
 }
 
@@ -9603,40 +9509,41 @@ body:has(.native-workbench-header:not([data-fallback]), .workbench-content-drag)
   overflow: visible;
 }
 
-.explorer-source-paint,
 .explorer-file-editor {
   @apply font-mono text-sm leading-6;
   color: var(--theme-text-primary);
   font-variant-ligatures: none;
   tab-size: 4;
 }
-.explorer-file-editor-highlighted {
-  background: transparent;
-  caret-color: var(--theme-text-primary);
-  color: transparent;
-}
-.explorer-file-editor-highlighted::selection {
-  background: var(--theme-accent-soft-border);
+.source-textarea-paint {
   color: var(--theme-text-primary);
 }
-.explorer-source-paint :is(.hljs-comment, .hljs-quote) {
+.source-textarea-highlighted {
+  caret-color: var(--theme-text-primary);
+  color: transparent !important;
+}
+.source-textarea-highlighted::selection {
+  background: var(--theme-accent-soft);
+  color: var(--theme-text-primary);
+}
+.source-textarea-paint :is(.hljs-comment, .hljs-quote) {
   color: var(--theme-text-muted);
 }
-.explorer-source-paint :is(.hljs-string, .hljs-regexp, .hljs-addition) {
+.source-textarea-paint :is(.hljs-string, .hljs-regexp, .hljs-addition) {
   color: var(--theme-success-text);
 }
-.explorer-source-paint :is(.hljs-keyword, .hljs-literal, .hljs-number, .hljs-meta) {
+.source-textarea-paint :is(.hljs-keyword, .hljs-literal, .hljs-number, .hljs-meta) {
   color: var(--theme-accent-text);
 }
-.explorer-source-paint :is(.hljs-attr, .hljs-attribute, .hljs-selector-tag, .hljs-title, .hljs-name, .hljs-built_in) {
+.source-textarea-paint :is(.hljs-attr, .hljs-attribute, .hljs-selector-tag, .hljs-title, .hljs-name, .hljs-built_in) {
   color: var(--theme-info-text);
 }
 @media (forced-colors: active) {
-  .explorer-source-paint {
+  .source-textarea-paint {
     display: none;
   }
-  .explorer-file-editor-highlighted {
-    color: CanvasText;
+  .source-textarea-highlighted {
+    color: CanvasText !important;
     caret-color: auto;
   }
 }
@@ -9691,7 +9598,7 @@ body:has(.native-workbench-header:not([data-fallback]), .workbench-content-drag)
 }
 
 .workbench-terminal-layout {
-  --workbench-content-header-height: calc(2.75rem + var(--workbench-content-header-inset, 0px));
+  --workbench-content-header-height: calc(2.75rem + var(--workbench-content-header-inset, 0px) + var(--workbench-file-tab-row-height, 0px));
   --workbench-floating-header-inset: max(0.375rem, env(safe-area-inset-top));
 }
 
@@ -9772,5 +9679,109 @@ body:has(.native-workbench-header:not([data-fallback]), .workbench-content-drag)
   }
   .workbench-terminal-layout[data-terminal-open]:has(.workbench-content-header[data-floating]) > .workbench-terminal-splitter > .workbench-split-terminal {
     inset-block-start: calc(var(--workbench-floating-header-inset) + 2.75rem);
+  }
+}
+
+/* Legacy utilities and portal content share the same paint rules. Keep their
+ * border widths and geometry; exclude functional strokes and native widgets. */
+@media (forced-colors: none) {
+  :root[data-theme] body :not(:where(
+    svg, svg *, iframe, canvas, .xterm, .xterm *, [role='switch'], [role='switch'] *,
+    [type='checkbox'], [type='radio'], [type='range'], .checking-indicator,
+    .desktop-window-resize, [class~='animate-spin']
+  )) {
+    border-color: transparent !important;
+  }
+}
+
+.plugin-host-toast {
+  box-shadow: var(--theme-shadow-pop);
+}
+
+/* Overlays still need separation from the window behind them. */
+:root[data-theme] :is([class~='shadow'], [class*='shadow-'], [class*='ring-']):not(:where(
+  .modal-surface, .floating-window, [role='dialog'], [role='menu'], [role='listbox'],
+  [aria-modal='true'] > *, .directory-picker,
+  [role='switch'], [role='switch'] *, [type='checkbox'], [type='radio'],
+  .xterm, .xterm *
+)) {
+  box-shadow: none !important;
+}
+
+body :is(.workbench-content-body, [data-sidebar-window-body], .native-auxiliary-content) {
+  background-color: var(--theme-surface-panel);
+}
+
+body :is(.project-rail, .robot-workspace-list, [data-sidebar-window-sidebar]) {
+  background-color: var(--theme-surface-raised);
+}
+
+body .workbench-tool-rail {
+  background-color: var(--theme-surface-rail);
+}
+
+body :is(.runtime-overview, .backpack-panel, .npm-publish-panel) > article section:where(.bg-white, .bg-slate-50) {
+  background-color: var(--theme-surface-section);
+}
+
+body :is(.directory-picker-list, .git-commit-panel, .git-remote-editor) {
+  background-color: var(--theme-surface-section);
+}
+
+body :is(.workspace-content, [data-sidebar-window-body]) :where(thead, tbody tr:nth-child(even)) {
+  background-color: var(--theme-surface-section);
+}
+
+:root[data-theme] body :is(
+  input:not([type='checkbox'], [type='radio'], [type='range'], [type='file'], [type='hidden'], [readonly]),
+  select,
+  textarea
+):not(:where(.xterm *, [role='switch'] *, .explorer-file-editor, .qq9-text-input)) {
+  background-color: var(--theme-surface-input) !important;
+  color: var(--theme-text-strong);
+}
+
+:root[data-theme] body :is(input, select, textarea):not(:where(.xterm *))[aria-invalid='true'] {
+  background-color: var(--theme-danger-soft) !important;
+}
+
+body .secondary-button:not(:where(.workbench-tools-menu .workbench-action-item), :hover, :active) {
+  background-color: var(--theme-surface-input);
+}
+
+body :is(.primary-button, .next-button):not(:hover, :active) {
+  background-color: var(--theme-accent);
+  color: var(--theme-accent-contrast);
+}
+
+body .bg-brand-600.text-white {
+  color: var(--theme-accent-contrast);
+}
+
+:root[data-theme] body button:is([aria-selected='true'], [aria-current='page']):not([role='switch']) {
+  background-color: var(--theme-accent-soft) !important;
+  color: var(--theme-accent-soft-text) !important;
+}
+
+:root[data-theme] body :is(button, a[href], input, select, textarea, summary, [role='menuitem'], [contenteditable='true'], [tabindex]:not([tabindex='-1'])):focus-visible:not(:where(.xterm *, .explorer-file-editor)) {
+  outline: 2px solid var(--theme-accent) !important;
+  outline-offset: 2px;
+}
+
+@media (forced-colors: active) {
+  :root {
+    --theme-border-default: CanvasText;
+    --theme-border-strong: CanvasText;
+    --theme-accent-soft-border: Highlight;
+  }
+
+  :root[data-theme] body button:is([aria-selected='true'], [aria-current='page']):not([role='switch']) {
+    forced-color-adjust: none;
+    background-color: Highlight !important;
+    color: HighlightText !important;
+  }
+
+  :root[data-theme] body :is(button, a[href], input, select, textarea, summary, [role='menuitem'], [contenteditable='true'], [tabindex]:not([tabindex='-1'])):focus-visible {
+    outline-color: Highlight !important;
   }
 }

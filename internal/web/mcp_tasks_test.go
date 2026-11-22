@@ -94,14 +94,24 @@ printf 'fixture %s token=fixture-secret-value\n' "$*"
 	}
 	ctx := context.Background()
 	taskIDs := map[string]string{}
-	for _, action := range []string{"build", "install", "npm-publish"} {
+	for _, action := range []string{"build", "install", "npm-publish", "enable-backpack-workspace"} {
 		// An invalid tag exercises the production publish path and fails before
 		// it can contact a registry or remote repository.
 		tag := ""
 		if action == "npm-publish" {
 			tag = "!invalid-tag"
 		}
-		result, failed := start(operatorKey, action, tag)
+		var result string
+		var failed bool
+		if action == "enable-backpack-workspace" {
+			args := map[string]any{"root": root, "enabled": true, "confirm": true}
+			if _, failed := call(adminKey, "alemonjs_set_backpack_workspace", args); !failed {
+				t.Fatal("another account changed a robot outside its list")
+			}
+			result, failed = call(operatorKey, "alemonjs_set_backpack_workspace", args)
+		} else {
+			result, failed = start(operatorKey, action, tag)
+		}
 		var task operationTask
 		if failed || json.Unmarshal([]byte(result), &task) != nil || task.ID == "" || task.Status != "running" ||
 			task.Account != "fixture-operator" || task.Root != root || task.Source != "mcp" {
@@ -155,7 +165,7 @@ printf 'fixture %s token=fixture-secret-value\n' "$*"
 		t.Fatalf("project task list: %s", result)
 	}
 
-	for _, id := range append([]string{pending.ID}, taskIDs["build"], taskIDs["install"], taskIDs["npm-publish"]) {
+	for _, id := range []string{pending.ID, taskIDs["build"], taskIDs["install"], taskIDs["npm-publish"], taskIDs["enable-backpack-workspace"]} {
 		rows, err := s.operationEvents.db.Query(`SELECT type FROM event_journal WHERE topic='mcp'
 			AND json_extract(CAST(payload AS TEXT), '$.task_id')=? ORDER BY id`, id)
 		if err != nil {

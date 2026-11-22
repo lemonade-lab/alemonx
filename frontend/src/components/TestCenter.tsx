@@ -153,9 +153,10 @@ export function TestCenter({ root }: { root: string }) {
 
   return (
     <div className="testone-root testone-window relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-      <div className="absolute right-3 top-3 z-50 flex gap-1.5">
+      <div className="absolute right-3 top-3 z-50">
         <button
           type="button"
+          aria-expanded={recordsOpen}
           className="rounded-md border border-slate-200 bg-white/90 px-2.5 py-1 text-xs text-slate-600 shadow-sm backdrop-blur hover:border-brand-300 hover:text-brand-600"
           onClick={() => {
             setRecordsOpen(current => !current)
@@ -165,7 +166,7 @@ export function TestCenter({ root }: { root: string }) {
           记录
         </button>
         {recordsOpen && (
-          <div className="grid w-56 gap-2 rounded-lg border border-slate-200 bg-white p-3 text-xs text-slate-700 shadow-md">
+          <div className="absolute right-0 top-full mt-1.5 grid w-56 gap-2 rounded-lg border border-slate-200 bg-white p-3 text-xs text-slate-700 shadow-md">
             <strong className="text-slate-800">服务端记录</strong>
             <span className="text-slate-400">
               临时测试数据，自动保留 {TESTONE_RETENTION_DAYS} 天
@@ -196,7 +197,7 @@ export function TestCenter({ root }: { root: string }) {
         )}
       </div>
       {connectionError ? (
-        <div className="m-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+        <div className="m-4 rounded-lg border border-amber-200 bg-amber-50 p-3 pr-16 text-sm text-amber-800">
           {connectionError}
         </div>
       ) : null}

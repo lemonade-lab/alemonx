@@ -1,3 +1,4 @@
+import { RefreshButton } from './RefreshButton'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import cn from 'classnames'
 import {
@@ -689,9 +690,7 @@ export function PM2LogsPanel({
         {error && (
           <div className="pm2-audit-notice" role="alert">
             {error}
-            <button className="pm2-audit-tool-btn" onClick={refresh}>
-              重试
-            </button>
+            <RefreshButton label="重试" onClick={refresh} />
           </div>
         )}
         {daysError && (

@@ -50,8 +50,8 @@ const MessageRow = memo(
             className={classNames(
               'w-5 h-5 mt-3 rounded border flex items-center justify-center cursor-pointer select-none',
               selected
-                ? 'bg-blue-500 border-blue-500 text-white'
-                : 'border-gray-400 text-transparent'
+                ? 'bg-(--theme-accent) border-transparent text-(--theme-accent-contrast)'
+                : 'border-transparent bg-(--theme-control-track) text-transparent'
             )}
           >
             ✓
@@ -65,8 +65,8 @@ const MessageRow = memo(
             alt="用户头像"
           />
         ) : (
-          <div className="size-12 rounded-full bg-gray-300 flex items-center justify-center">
-            <span className="text-gray-600 text-sm">用户</span>
+          <div className="size-12 rounded-full bg-(--theme-surface-raised) flex items-center justify-center">
+            <span className="text-(--theme-text-secondary) text-sm">用户</span>
           </div>
         )}
 

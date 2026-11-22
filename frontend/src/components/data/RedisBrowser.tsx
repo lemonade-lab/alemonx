@@ -1,3 +1,4 @@
+import { RefreshButton } from '../RefreshButton'
 import { useEffect, useRef } from 'react'
 import { useStoreState } from '../../store/guideStore'
 import {
@@ -485,9 +486,7 @@ export function RedisBrowser({
             }}
           />
         </label>
-        <Button disabled={busy} onClick={() => void scan()}>
-          扫描键
-        </Button>
+        <RefreshButton label="扫描键" disabled={busy} onClick={() => void scan()} />
         <Button
           disabled={busy || !scanned || cursor === '0'}
           onClick={() => void scan(cursor)}

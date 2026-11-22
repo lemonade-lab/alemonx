@@ -24,19 +24,19 @@ const Footer = ({ children }: { children: React.ReactNode }) => {
         ? 'bg-red-400'
         : 'bg-slate-400';
   return (
-    <footer className="flex justify-between  px-2 py-1">
-      <div className="flex gap-2 items-center justify-center">
+    <footer className="flex min-w-0 items-center justify-between gap-2 px-2 py-1">
+      <div className="flex min-w-0 items-center gap-2">
         <span
-          className="inline-flex items-center gap-1 text-[11px] text-[var(--descriptionForeground)]"
+          className="inline-flex min-w-0 max-w-24 shrink-0 items-center gap-1 text-[11px] text-[var(--descriptionForeground)] sm:max-w-64"
           title={statusText}
         >
-          <i className={`inline-block size-2 rounded-full ${statusTone}`} />
-          {statusText}
+          <i className={`inline-block size-2 shrink-0 rounded-full ${statusTone}`} />
+          <span className="truncate">{statusText}</span>
         </span>
-        {children}
-        <div className="testone-mobile-user flex gap-2">
+        {children && <div className="sr-only sm:not-sr-only sm:min-w-0 sm:truncate">{children}</div>}
+        <div className="testone-mobile-user flex min-w-0 items-center gap-1 sm:gap-2">
           <Select
-            className="py-0 px-0"
+            className="max-w-full truncate px-0 py-0"
             value={user?.UserId || ''}
             options={users.map(u => ({
               ...u,
@@ -51,10 +51,10 @@ const Footer = ({ children }: { children: React.ReactNode }) => {
               dispatch(setCurrentUser(user));
             }}
           />
-          {user?.UserId}
+          {user && <span className="min-w-0 truncate max-[360px]:sr-only" title={user.UserId}>{user.UserId}</span>}
         </div>
       </div>
-      <NavActions />
+      <NavActions className="shrink-0" />
     </footer>
   );
 };

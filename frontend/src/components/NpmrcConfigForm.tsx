@@ -4,6 +4,7 @@ import { useEffect } from 'react'
 import { ClipboardList, FileText, Package } from 'lucide-react'
 import { Tabs } from './Tabs'
 import { RobotPanel } from './RobotPanel'
+import { SourceTextarea } from './SourceTextarea'
 
 type Props = {
   content: string
@@ -69,6 +70,8 @@ export function NpmrcConfigForm({ content, onChange }: Props) {
       icon={<Package className="size-4" />}
       title="npm 源"
       description="配置当前机器人的包下载源"
+      scrollBody
+      bodyKey={editor}
       actions={mode}
     >
       {editor === 'visual' ? (
@@ -107,10 +110,12 @@ export function NpmrcConfigForm({ content, onChange }: Props) {
           </div>
         </>
       ) : (
-        <textarea
+        <SourceTextarea
+          file=".npmrc"
+          aria-label="编辑 .npmrc"
           className="min-h-72 w-full resize-y rounded-xl border border-slate-200 bg-white p-3 font-mono text-sm text-slate-700 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
-          value={content}
-          onChange={event => onChange(event.target.value)}
+          content={content}
+          onChange={onChange}
           placeholder="npm 配置"
         />
       )}

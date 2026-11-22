@@ -49,9 +49,11 @@ const MAX_ITEMS = 400
 // eslint-disable-next-line no-control-regex -- terminal output can include ANSI CSI sequences.
 const ANSI_PATTERN = /\x1b\[[0-?]*[ -/]*[@-~]/g
 const TIMESTAMP_PATTERN =
-  /^\[(?:\d{4}-)?(\d{2}-\d{2}\s+)?(\d{2}:\d{2}:\d{2})(?:\.\d{1,3})?\](?:\[(?:TRACE|DEBUG|INFO|WARN|WARNING|ERROR|FATAL)\])?\s*(.*)$/i
-const STREAM_PATTERN = /^\[(?:stdout|stderr)\]\s*/i
-const LEVEL_PATTERN = /^\[(?:TRACE|DEBUG|INFO|WARN|WARNING|ERROR|FATAL)\]\s*/i
+  /^\[(?:(\d{4}-\d{2}-\d{2}|\d{2}-\d{2})[ \t]+)?(\d{2}:\d{2}:\d{2})(?:\.\d{1,3})?\][ \t]*/
+const STREAM_PATTERN = /^\[(?:stdout|stderr)\][ \t]*/i
+const LEVEL_PATTERN = /^\[(?:TRACE|DEBUG|INFO|WARN|WARNING|ERROR|FATAL)\][ \t]*/i
+const ERROR_LEVEL_PATTERN = /^\[(?:ERROR|FATAL)\]/i
+const BARE_ERROR_HEADER_PATTERN = /^[\w$]*Error(?: \[[\w-]+\])?:/i
 const DEPENDENCY_PATTERN =
   /(Cannot find (?:module|package)|MODULE_NOT_FOUND|ERR_MODULE_NOT_FOUND|缺少依赖|依赖(?:未安装|缺失)|ERESOLVE|EINTEGRITY)/i
 const PORT_PATTERN =
@@ -70,8 +72,6 @@ const SUCCESS_PATTERN =
 const WARNING_PATTERN = /(\bWARN(?:ING)?\b|警告|重试)/i
 const ERROR_PATTERN =
   /(\bERROR\b|\bFATAL\b|异常|失败|崩溃|uncaught|SyntaxError|TypeError)/i
-const NOISE_PATTERN =
-  /^(?:\s*at\s+|node:internal|file:\/\/|\{|\}|\[stdout\]\s+at\s+|\[stderr\]\s+at\s+|[A-Za-z_$][\w$]*:\s*(?:\{|\[|'.*'|".*"|\d+|true|false|null|undefined),?$)/i
 const URL_PATTERN = /https?:\/\/[^\s'"<>]+/gi
 const BARE_LOCAL_SERVICE_PATTERN =
   /(?:localhost|127\.0\.0\.1|0\.0\.0\.0|(?:10|192\.168)\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}):\d{2,5}(?:\/[^\s'"<>]*)?/i
@@ -129,50 +129,43 @@ function trimContent(value: string) {
   const start = value.indexOf('\n', value.length - MAX_CONTENT_CHARS)
   return start < 0 ? value.slice(-MAX_CONTENT_CHARS) : value.slice(start + 1)
 }
-function stripLogPrefix(value: string) {
-  const clean = value.replace(ANSI_PATTERN, '').trim()
-  const matched = clean.match(TIMESTAMP_PATTERN)
-  return (matched ? (matched[3] ?? '') : clean)
+function stripTimestampAndStream(value: string) {
+  return value
     .replace(STREAM_PATTERN, '')
+    .replace(TIMESTAMP_PATTERN, '')
+    .replace(STREAM_PATTERN, '')
+}
+function stripLogPrefix(value: string) {
+  return stripTimestampAndStream(value.replace(ANSI_PATTERN, '').trim())
     .replace(LEVEL_PATTERN, '')
-    .trim()
+    .replace(/^\r?\n/, '')
 }
-function timeLabel(value: string) {
-  const clean = value.replace(ANSI_PATTERN, '').trim()
-  if (!clean.match(TIMESTAMP_PATTERN)) return '本次运行'
-  return (
-    clean.match(
-      /^\[(\d{4}-\d{2}-\d{2}|\d{2}-\d{2})\s+\d{2}:\d{2}:\d{2}/
-    )?.[1] || '本次运行'
-  )
-}
-function clockTime(value: string) {
-  return (
-    value.replace(ANSI_PATTERN, '').trim().match(TIMESTAMP_PATTERN)?.[2] ?? null
-  )
-}
-function isBlockStart(value: string) {
-  const clean = value.replace(ANSI_PATTERN, '').trim()
-  if (stripLogPrefix(clean).startsWith('{')) return true
-  if (!clean || NOISE_PATTERN.test(clean)) return false
-  return (
-    TIMESTAMP_PATTERN.test(clean) ||
-    STREAM_PATTERN.test(clean) ||
-    LEVEL_PATTERN.test(clean) ||
-    /(?:AxiosError|Error|TypeError|SyntaxError|ReferenceError):\s+/i.test(clean)
-  )
+function isBlockStart(line: string, inExplicitError: boolean) {
+  const clean = line.trimStart()
+  const withoutStream = clean.replace(STREAM_PATTERN, '')
+  if (TIMESTAMP_PATTERN.test(withoutStream) || LEVEL_PATTERN.test(withoutStream))
+    return true
+  if (withoutStream !== clean) return !/^at\s+/i.test(withoutStream)
+  // Bare error names and object fields can occur inside a logged error.
+  if (inExplicitError) return false
+  return line.startsWith('{') || BARE_ERROR_HEADER_PATTERN.test(line)
 }
 function buildBlocks(content: string) {
   const blocks: string[] = []
   let current = ''
+  let inExplicitError = false
   for (const line of trimContent(content).split(/\r?\n/)) {
-    if (!line.trim()) continue
-    if (!current || isBlockStart(line)) {
-      if (current) blocks.push(current)
+    if (!current && !line.trim()) continue
+    const clean = line.replace(ANSI_PATTERN, '')
+    if (!current || isBlockStart(clean, inExplicitError)) {
+      if (current) blocks.push(current.trimEnd())
       current = line
+      inExplicitError = ERROR_LEVEL_PATTERN.test(
+        stripTimestampAndStream(clean.trimStart())
+      )
     } else current += `\n${line}`
   }
-  if (current) blocks.push(current)
+  if (current) blocks.push(current.trimEnd())
   return blocks
 }
 function sanitizeSimpleText(value: string) {
@@ -261,6 +254,13 @@ function structuredSummary(details: Array<{ label: string; value: string }>) {
 function classify(raw: string, index: number): ForegroundLogItem {
   const safeRaw = redactForegroundLog(raw),
     firstLine = safeRaw.split(/\r?\n/, 1)[0] ?? safeRaw
+  const cleanHeader = firstLine.replace(ANSI_PATTERN, '').trimStart()
+  const timestamp = cleanHeader
+    .replace(STREAM_PATTERN, '')
+    .match(TIMESTAMP_PATTERN)
+  const header = stripTimestampAndStream(cleanHeader)
+  const errorHeader =
+    ERROR_LEVEL_PATTERN.test(header) || BARE_ERROR_HEADER_PATTERN.test(header)
   const url = serviceURL(raw),
     details = structuredDetails(safeRaw),
     masterUserID = masterCommandUserID(raw)
@@ -312,7 +312,7 @@ function classify(raw: string, index: number): ForegroundLogItem {
     title = /二维码|扫码|qrcode/i.test(safeRaw)
       ? '等待扫码登录'
       : '登录连接状态'
-  } else if (url) {
+  } else if (url && !errorHeader) {
     domain = 'service'
     level = 'success'
     title = '服务地址已就绪'
@@ -322,6 +322,9 @@ function classify(raw: string, index: number): ForegroundLogItem {
     level = 'error'
     title = '运行进程异常'
     action = 'open-environment'
+  } else if (errorHeader) {
+    level = 'error'
+    title = '运行异常'
   } else if (SUCCESS_PATTERN.test(safeRaw)) {
     level = 'success'
     title = '运行正常'
@@ -343,9 +346,9 @@ function classify(raw: string, index: number): ForegroundLogItem {
       stripLogPrefix(firstLine) ||
       '运行输出',
     title,
-    timeLabel: timeLabel(firstLine),
-    time: clockTime(firstLine),
-    level,
+    timeLabel: timestamp?.[1] ?? '本次运行',
+    time: timestamp?.[2] ?? null,
+    level: errorHeader ? 'error' : level,
     domain,
     action,
     serviceURL: url,
@@ -424,6 +427,7 @@ export function collapseForegroundLog(items: ForegroundLogItem[]) {
     const previous = collapsed[collapsed.length - 1]
     if (
       previous &&
+      previous.level === item.level &&
       stripLogPrefix(previous.safeRaw) === stripLogPrefix(item.safeRaw)
     ) {
       previous.count += 1
@@ -467,8 +471,8 @@ export function foregroundLogDisplayText(
   mode: ForegroundLogMode
 ) {
   if (mode === 'advanced') return item.safeRaw.replace(ANSI_PATTERN, '')
-  return mode === 'common' &&
-    (item.level === 'error' || item.level === 'warning')
+  return item.level === 'error' ||
+    (mode === 'common' && item.level === 'warning')
     ? stripLogPrefix(item.safeRaw)
     : item.text
 }

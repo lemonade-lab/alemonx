@@ -1,3 +1,4 @@
+import { RefreshButton } from './RefreshButton'
 import { useStoreState } from '../store/guideStore'
 import cn from 'classnames'
 import { useEffect, type ReactNode } from 'react'
@@ -208,12 +209,7 @@ export function NpmPublishPanel({ root, busy, onRun }: Props) {
       >
         <section className="grid min-h-32 place-items-center gap-3 rounded-xl border border-rose-200 bg-rose-50 p-5 text-sm text-rose-700 dark:border-rose-900 dark:bg-rose-950/30 dark:text-rose-300">
           <p className="m-0">无法读取 npm 发布状态。</p>
-          <button
-            className="inline-flex min-h-9 items-center justify-center gap-1.5 rounded-lg border border-rose-300 bg-white px-3 text-xs font-semibold text-rose-700 dark:border-rose-800 dark:bg-slate-900 dark:text-rose-300"
-            onClick={() => void refresh()}
-          >
-            <RefreshCw className="size-4" />重新检查
-          </button>
+          <RefreshButton label="重新检查" onClick={() => void refresh()} />
         </section>
       </RobotPanel>
     )
@@ -318,10 +314,10 @@ export function NpmPublishPanel({ root, busy, onRun }: Props) {
             npm 会从这个已提交版本打包，不会包含尚未提交的文件。
           </small>
         </div>
-        <label className="grid min-w-65 gap-1 text-[11px] font-semibold text-slate-500">
+        <label className="grid min-w-[min(100%,16.25rem)] max-w-full gap-1 text-[11px] font-semibold text-slate-500">
           {status.branch || '当前分支'}
           <select
-            className="h-9 rounded-md border border-slate-300 bg-white px-2 text-xs font-medium text-slate-700 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
+            className="h-9 w-full min-w-0 rounded-md border border-slate-300 bg-white px-2 text-xs font-medium text-slate-700 outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
             value={sourceCommit}
             onChange={event => {
               setSourceCommit(event.target.value)
@@ -436,18 +432,27 @@ export function NpmPublishPanel({ root, busy, onRun }: Props) {
                 : '先生成预览，确认实际会上传的文件。'}
             </span>
           </div>
-          <button
-            className="secondary-button gap-1.5"
-            disabled={busy || previewing}
-            onClick={() => void createPreview()}
-          >
-            {previewing ? (
-              <RefreshCw className="size-4 animate-spin" />
-            ) : (
-              <Eye className="size-4" />
-            )}
-            {previewing ? '预览中…' : preview ? '重新预览' : '查看打包内容'}
-          </button>
+          {preview ? (
+            <RefreshButton
+              label="重新预览"
+              busy={previewing}
+              disabled={busy}
+              onClick={() => void createPreview()}
+            />
+          ) : (
+            <button
+              className="secondary-button gap-1.5"
+              disabled={busy || previewing}
+              onClick={() => void createPreview()}
+            >
+              {previewing ? (
+                <RefreshCw className="size-4 animate-spin" />
+              ) : (
+                <Eye className="size-4" />
+              )}
+              {previewing ? '预览中…' : '查看打包内容'}
+            </button>
+          )}
         </header>
         {previewError && (
           <ErrorNotice

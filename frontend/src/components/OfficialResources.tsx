@@ -1,3 +1,4 @@
+import { RefreshButton } from './RefreshButton'
 import { resourceTarget, findResource, factFor } from '../lib/officialResources'
 import { useState } from 'react'
 import { DeferredMarkdown } from './DeferredMarkdown'
@@ -26,13 +27,7 @@ export function OfficialExtensionChoices({
       {error ? (
         <p role="alert" className="text-xs">
           扩展选项暂时无法读取。
-          <button
-            type="button"
-            className="text-button"
-            onClick={() => void refetch()}
-          >
-            重试
-          </button>
+          <RefreshButton label="重试" onClick={() => void refetch()} />
         </p>
       ) : isFetching ? (
         <p role="status" className="text-xs">
@@ -89,9 +84,7 @@ export function ResourceDocument({ id }: { id: string }) {
       ) : error ? (
         <p role="alert">
           文档读取失败。
-          <button className="text-button" onClick={() => void refetch()}>
-            重试
-          </button>
+          <RefreshButton label="重试" onClick={() => void refetch()} />
         </p>
       ) : (
         <article className="markdown-page">

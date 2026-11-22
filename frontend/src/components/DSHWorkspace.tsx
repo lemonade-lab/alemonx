@@ -1,3 +1,4 @@
+import { RefreshButton } from './RefreshButton'
 import { useEffect, useRef } from 'react'
 import {
   useDshWebStatusQuery,
@@ -123,9 +124,7 @@ export function DSHWorkspace({ root, robotRoots, visible }: DSHWorkspaceProps) {
               : status?.message ||
                 '尚未安装 DSH。请准备好 DSH 运行环境后重试。'}
           </p>
-          <Button variant="secondary" onClick={() => void refetch()}>
-            重新检查
-          </Button>
+          <RefreshButton label="重新检查" onClick={() => void refetch()} />
         </>
       )}
     </section>

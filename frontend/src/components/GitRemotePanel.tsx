@@ -1,6 +1,7 @@
 import { useStoreState } from '../store/guideStore'
 import { GitSettingsDialog } from './GitSettingsDialog'
-import { CloudDownload, Plus, Trash2 } from 'lucide-react'
+import { Plus, Trash2 } from 'lucide-react'
+import { RefreshButton } from './RefreshButton'
 import type { GitAction, GitWorkspace } from '../store/workspaceApi'
 
 type Props = {
@@ -144,15 +145,12 @@ export function GitRemotePanel({
                     )}
                   </div>
                   <div className="flex shrink-0 flex-wrap items-center gap-2">
-                    <button
-                      className="secondary-button whitespace-nowrap"
+                    <RefreshButton
+                      label={`获取 ${item.name} 的更新`}
                       disabled={busy}
                       onClick={() => remoteAction('fetch', item.name)}
                       title={`获取 ${item.name} 的分支和标签，不修改工作区`}
-                    >
-                      <CloudDownload className="mr-1 size-3.5" />
-                      获取更新
-                    </button>
+                    />
                     <button
                       className="text-button whitespace-nowrap"
                       disabled={busy}
