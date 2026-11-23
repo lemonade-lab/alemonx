@@ -103,7 +103,7 @@ func (m Manager) RuntimeRepairPlan(root, mode string) (RuntimeRepairPlan, error)
 		} else if data, readErr := os.ReadFile(config); readErr == nil && !isManagedPM2Config(path, string(data)) {
 			plan.RequiresConfirmation = append(plan.RequiresConfirmation, "覆盖自定义 pm2.config.cjs（将先备份）")
 		} else if data, readErr := os.ReadFile(config); readErr == nil && string(data) != defaultPM2Config(path) {
-			plan.Automatic = append(plan.Automatic, "升级默认 PM2 配置，隔离同名项目进程")
+			plan.Automatic = append(plan.Automatic, "升级默认 PM2 配置，隔离同名项目进程并由 PM2 统一保存日志")
 		}
 	}
 	if len(plan.Blocked) > 0 {
@@ -302,7 +302,16 @@ func defaultPM2Config(root string) string {
 }
 
 func isManagedPM2Config(root, config string) bool {
-	return config == defaultPM2Config(root) || config == legacyRepairPM2Config || config == legacyTemplatePM2Config || config == legacyDevTemplatePM2Config
+	if config == defaultPM2Config(root) || config == legacyRepairPM2Config || config == legacyTemplatePM2Config || config == legacyDevTemplatePM2Config {
+		return true
+	}
+	previous := pm2config.DefaultOptions(root)
+	previous.LogDateFormat = ""
+	if config == pm2config.ConfigWithOptions(root, previous) {
+		return true
+	}
+	delete(previous.Env, "LOG_FILE")
+	return config == pm2config.ConfigWithOptions(root, previous)
 }
 
 const legacyRepairPM2Config = "const pm2 = globalThis.pm2;\n\nmodule.exports = pm2 || {\n  apps: [\n    {\n      name: 'alemonb',\n      script: './index.js',\n      env: {\n        NODE_ENV: 'production'\n      }\n    }\n  ]\n};\n"

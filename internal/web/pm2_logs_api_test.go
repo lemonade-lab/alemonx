@@ -2,6 +2,7 @@ package web
 
 import (
 	"bufio"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -148,6 +149,54 @@ func lineKeys(lines []robot.PM2AuditLine) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+func TestPM2HistoryIncludesArchivesAndExplainsUndatedErrors(t *testing.T) {
+	f := newPM2HTTPFixture(t)
+	stamp := time.Date(2026, 10, 21, 15, 0, 0, 0, time.Local)
+	if err := os.WriteFile(f.errLog, []byte(stamp.Format(time.RFC3339)+": PM2 dated error\nundated error\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	archive, err := os.Create(filepath.Join(f.root, "err__2026-10-21_00-00-00.log.gz"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	gz := gzip.NewWriter(archive)
+	if _, err := io.WriteString(gz, "{\"timestamp\":\""+stamp.AddDate(0, 0, -1).UTC().Format(time.RFC3339)+"\",\"type\":\"err\",\"message\":\"archived error\"}\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := archive.Close(); err != nil {
+		t.Fatal(err)
+	}
+	undated := f.page(t, url.Values{"source": {"err"}, "query": {"undated"}})
+	if undated.Total != 1 || undated.UndatedExcluded != 0 {
+		t.Fatalf("all-date history: %+v", undated)
+	}
+	for _, tc := range []struct{ date, text string }{
+		{"2026-10-20", "archived error"},
+		{"2026-10-21", "PM2 dated error"},
+	} {
+		params := url.Values{"source": {"err"}, "date": {tc.date}}
+		page := f.page(t, params)
+		if page.Total != 1 || page.UndatedExcluded != 1 || !strings.Contains(page.Output, tc.text) {
+			t.Fatalf("%s history: %+v", tc.date, page)
+		}
+		_, exported := f.request(t, http.MethodGet, "/export", params)
+		if !strings.Contains(string(exported), tc.text) {
+			t.Fatalf("%s export: %s", tc.date, exported)
+		}
+	}
+	_, body := f.request(t, http.MethodGet, "/days", nil)
+	var index struct{ Days []robot.PM2LogDay }
+	if err := json.Unmarshal(body, &index); err != nil {
+		t.Fatal(err)
+	}
+	if len(index.Days) != 3 || index.Days[1].Err != 1 || index.Days[2].Err != 1 {
+		t.Fatalf("date index: %s", body)
+	}
 }
 
 func TestPM2LogsHTTPFilterPaginationMatrix(t *testing.T) {
@@ -574,8 +623,15 @@ func TestPM2LogsHTTPEmptyAndMissingFiles(t *testing.T) {
 			if response.StatusCode != 200 {
 				t.Fatalf("days=%d %s", response.StatusCode, body)
 			}
-			if mode != "missing-out" && strings.TrimSpace(string(body)) != "{\"days\":[]}" {
-				t.Fatalf("empty dates must be a successful empty list: %s", body)
+			var index struct {
+				Days      []robot.PM2LogDay
+				Truncated bool
+			}
+			if err := json.Unmarshal(body, &index); err != nil || index.Days == nil || (mode != "missing-out" && len(index.Days) != 0) {
+				t.Fatalf("date listing must return a non-null array: %s (%v)", body, err)
+			}
+			if index.Truncated != strings.HasPrefix(mode, "missing-") {
+				t.Fatalf("date listing did not report missing files correctly: %s", body)
 			}
 			response, body = f.request(t, "GET", "/export", nil)
 			if response.StatusCode != 200 {

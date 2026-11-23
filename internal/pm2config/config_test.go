@@ -32,6 +32,8 @@ func TestConfigPinsNameNamespaceAndSelfLocatedCWD(t *testing.T) {
 		"max_restarts: 10",
 		"restart_delay: 3000",
 		"exp_backoff_restart_delay: 1000",
+		"LOG_FILE: 'false'",
+		"log_date_format: 'YYYY-MM-DDTHH:mm:ss.SSSZ'",
 	} {
 		if !strings.Contains(config, want) {
 			t.Fatalf("config missing %q:\n%s", want, config)
@@ -39,6 +41,16 @@ func TestConfigPinsNameNamespaceAndSelfLocatedCWD(t *testing.T) {
 	}
 	if strings.Contains(config, "/robots/example") {
 		t.Fatalf("config must not embed the absolute project path:\n%s", config)
+	}
+}
+
+func TestConfigPreservesExplicitLogFileSetting(t *testing.T) {
+	root := t.TempDir()
+	options := DefaultOptions(root)
+	options.Env["LOG_FILE"] = "true"
+	config := ConfigWithOptions(root, options)
+	if !strings.Contains(config, "LOG_FILE: 'true'") || strings.Contains(config, "LOG_FILE: 'false'") {
+		t.Fatalf("explicit framework logging setting was not preserved:\n%s", config)
 	}
 }
 

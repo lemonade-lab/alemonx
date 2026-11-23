@@ -10,10 +10,12 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 )
 
 const diagnosticLogBytes int64 = 4 << 20
 const diagnosticLogFiles = 16
+const diagnosticLogLines = 20_000
 
 // DiagnosticPM2Logs reads a bounded tail of logs attributable to this project.
 // PM2 can be offline if its saved process list identifies the files.
@@ -31,11 +33,11 @@ func (Manager) DiagnosticPM2Logs(ctx context.Context, root string, query PM2Audi
 	}
 	home := pm2HomePath(path)
 	files := diagnosticPM2Files(path, home, processes)
-	if len(files) == 0 {
-		if saved, err := savedPM2Processes(home); err == nil {
-			// Include live entries so a shared path remains ineligible.
-			files = diagnosticPM2Files(path, home, append(processes, saved...))
-		}
+	saved, savedErr := savedPM2Processes(home)
+	registered := append(processes, saved...)
+	if len(files) == 0 && savedErr == nil {
+		// Include live entries so a shared path remains ineligible.
+		files = diagnosticPM2Files(path, home, registered)
 	}
 	if len(files) == 0 {
 		if err != nil && !errors.Is(err, errPM2Offline) {
@@ -45,25 +47,74 @@ func (Manager) DiagnosticPM2Logs(ctx context.Context, root string, query PM2Audi
 	}
 	truncated := len(files) > diagnosticLogFiles
 	files = files[:min(len(files), diagnosticLogFiles)]
+	bases := diagnosticPM2Files(path, home, registered)
+	archives, incomplete, err := pm2LogArchives(ctx, bases, registered, diagnosticLogFiles-len(files))
+	if err != nil {
+		return PM2AuditPage{}, err
+	}
+	truncated = truncated || incomplete
+	scope := PM2LogReadScope{
+		ArchiveFormats:  []string{"pm2-logrotate-default", "logrotate-numbered"},
+		MaxFiles:        diagnosticLogFiles,
+		MaxBytesPerFile: diagnosticLogBytes,
+		MaxLinesPerFile: diagnosticLogLines,
+	}
 	var lines []pm2AuditLogLine
 	sources := make([]string, 0, 2)
-	for _, file := range files {
-		items, cut, err := readDiagnosticPM2File(ctx, file)
-		if os.IsNotExist(err) {
-			continue // PM2 may have rotated the file since discovery.
+	read := func(files []pm2LogFile, archive bool) error {
+		for _, file := range files {
+			items, cut, err := readDiagnosticPM2File(ctx, file)
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if (archive && err != nil) || os.IsNotExist(err) {
+				truncated = true
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			truncated = truncated || cut
+			lines = append(lines, items...)
+			if archive {
+				scope.ArchiveFiles++
+			} else {
+				scope.ActiveFiles++
+			}
+			if !slices.Contains(sources, file.Source) {
+				sources = append(sources, file.Source)
+			}
 		}
-		if err != nil {
-			return PM2AuditPage{}, err
-		}
-		truncated = truncated || cut
-		lines = append(lines, items...)
-		if !slices.Contains(sources, file.Source) {
-			sources = append(sources, file.Source)
-		}
+		return nil
+	}
+	if err := read(archives, true); err != nil {
+		return PM2AuditPage{}, err
+	}
+	if err := read(files, false); err != nil {
+		return PM2AuditPage{}, err
 	}
 	sortPM2AuditLines(lines)
+	var oldest, newest time.Time
+	for _, line := range lines {
+		if query.Source != "" && !strings.EqualFold(query.Source, "all") && !strings.EqualFold(query.Source, line.Source) {
+			continue
+		}
+		scope.ScannedLines++
+		if line.HasTime {
+			if newest.IsZero() {
+				newest = line.Timestamp.UTC()
+			}
+			oldest = line.Timestamp.UTC()
+		}
+	}
+	if !newest.IsZero() {
+		scope.OldestTimestamp = &oldest
+		scope.NewestTimestamp = &newest
+	}
 	query.includeTimestamps = true
-	return buildPM2AuditPageContext(ctx, lines, sources, truncated, query)
+	page, err := buildPM2AuditPageContext(ctx, lines, sources, truncated, query)
+	page.ReadScope = &scope
+	return page, err
 }
 
 // dump.pm2 records the cwd and log paths directly, unlike getMonitorData,
@@ -111,16 +162,22 @@ func diagnosticPM2Files(project, home string, processes []PM2Process) []pm2LogFi
 				continue
 			}
 			resolved, err := filepath.EvalSymlinks(log.Path)
+			if os.IsNotExist(err) {
+				var dir string
+				dir, err = filepath.EvalSymlinks(filepath.Dir(log.Path))
+				resolved = filepath.Join(dir, filepath.Base(log.Path))
+			}
 			if err != nil || (!diagnosticPathInside(projectRoot, resolved) && !diagnosticPathInside(logRoot, resolved)) {
 				continue
 			}
+			key := pm2AbsolutePath("", resolved)
 			if !sameWorkspacePath(process.CWD, project) {
-				shared[resolved] = true
+				shared[key] = true
 				continue
 			}
-			if _, exists := paths[resolved]; !exists {
-				ordered = append(ordered, resolved)
-				paths[resolved] = pm2LogFile{Source: log.Source, Path: resolved}
+			if _, exists := paths[key]; !exists {
+				ordered = append(ordered, key)
+				paths[key] = pm2LogFile{Source: log.Source, Path: resolved}
 			}
 		}
 	}
@@ -154,22 +211,20 @@ func readDiagnosticPM2File(ctx context.Context, log pm2LogFile) ([]pm2AuditLogLi
 		return nil, false, err
 	}
 	defer file.Close()
-	start := max(0, info.Size()-diagnosticLogBytes)
-	reader := bufio.NewReader(pm2ContextReader{ctx, io.NewSectionReader(file, start, info.Size()-start)})
-	if start > 0 {
-		// Skip a partial line without allocating a multi-megabyte string.
-		for {
-			_, err := reader.ReadSlice('\n')
-			if err == bufio.ErrBufferFull {
-				continue
-			}
-			if err != nil && err != io.EOF {
-				return nil, false, err
-			}
-			break
-		}
+	opened, err := file.Stat()
+	if err != nil {
+		return nil, false, err
 	}
-	lines, truncated, err := readPM2LogReader(reader, 20_000)
+	if !os.SameFile(info, opened) {
+		return nil, false, errors.New("PM2 日志文件在打开时发生变化")
+	}
+	var lines []pm2AuditLogLine
+	var truncated bool
+	if strings.HasSuffix(log.Path, ".gz") {
+		lines, truncated, err = readCompressedPM2Log(ctx, file)
+	} else {
+		lines, truncated, err = readDiagnosticPM2Tail(ctx, file, info.Size())
+	}
 	for i := range lines {
 		if i%256 == 0 && ctx.Err() != nil {
 			return nil, false, ctx.Err()
@@ -183,5 +238,25 @@ func readDiagnosticPM2File(ctx context.Context, log pm2LogFile) ([]pm2AuditLogLi
 			truncated = true
 		}
 	}
+	return lines, truncated, err
+}
+
+func readDiagnosticPM2Tail(ctx context.Context, file *os.File, size int64) ([]pm2AuditLogLine, bool, error) {
+	start := max(0, size-diagnosticLogBytes)
+	reader := bufio.NewReader(pm2ContextReader{ctx, io.NewSectionReader(file, start, size-start)})
+	if start > 0 {
+		// Skip a partial line without allocating a multi-megabyte string.
+		for {
+			_, err := reader.ReadSlice('\n')
+			if err == bufio.ErrBufferFull {
+				continue
+			}
+			if err != nil && err != io.EOF {
+				return nil, false, err
+			}
+			break
+		}
+	}
+	lines, truncated, err := readPM2LogReader(reader, diagnosticLogLines)
 	return lines, start > 0 || truncated, err
 }

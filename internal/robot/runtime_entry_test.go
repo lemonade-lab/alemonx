@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"alemonx/internal/pm2config"
 	"alemonx/internal/system"
 )
 
@@ -45,6 +46,9 @@ func TestRepairRuntimePM2UsesIndexJSEntry(t *testing.T) {
 	if !strings.Contains(string(config), `script: './index.js'`) {
 		t.Fatalf("PM2 config should run index.js:\n%s", config)
 	}
+	if !strings.Contains(string(config), "LOG_FILE: 'false'") {
+		t.Fatalf("PM2 config should delegate log files to PM2:\n%s", config)
+	}
 	if strings.Contains(string(config), "lib/index.js") {
 		t.Fatalf("PM2 config must not reference the build artifact:\n%s", config)
 	}
@@ -75,6 +79,31 @@ func TestRuntimeRepairUpgradesLegacyPM2ConfigWithoutTreatingItAsCustom(t *testin
 	}
 	if !strings.Contains(strings.Join(plan.Automatic, "\n"), "隔离同名项目进程") {
 		t.Fatalf("legacy PM2 config should be marked for upgrade: %#v", plan)
+	}
+}
+
+func TestRuntimeRepairRecognizesPreviousGeneratedPM2Config(t *testing.T) {
+	root := t.TempDir()
+	writeAppPageFixture(t, filepath.Join(root, "package.json"), `{"name":"bot","dependencies":{"alemonjs":"^2"},"scripts":{}}`)
+	writeAppPageFixture(t, filepath.Join(root, "app.js"), "export default {}\n")
+	if err := pm2config.EnsureID(root); err != nil {
+		t.Fatal(err)
+	}
+	options := pm2config.DefaultOptions(root)
+	options.LogDateFormat = ""
+	delete(options.Env, "LOG_FILE")
+	configPath := filepath.Join(root, "pm2.config.cjs")
+	previous := pm2config.ConfigWithOptions(root, options)
+	writeAppPageFixture(t, configPath, previous)
+
+	manager := Manager{}
+	plan, err := manager.RuntimeRepairPlan(root, "pm2")
+	if err != nil || len(plan.RequiresConfirmation) != 0 || !strings.Contains(strings.Join(plan.Automatic, "\n"), "由 PM2 统一保存日志") {
+		t.Fatalf("previous generated config should be recognized and marked for upgrade: %+v (%v)", plan, err)
+	}
+	current, err := os.ReadFile(configPath)
+	if err != nil || string(current) != previous {
+		t.Fatalf("repair preview changed the file: %s (%v)", current, err)
 	}
 }
 

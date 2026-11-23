@@ -99,6 +99,8 @@ loginctl enable-linger "$(id -un)"
 
 机器人生产运行应使用 PM2。ALemonX 在启动、重启或 reload 成功后会执行 `pm2 save` 保存恢复清单；首次部署仍需由服务器管理员按 PM2 输出完成一次 `pm2 startup` 注册，避免在主机重启后丢失 PM2 守护进程。
 
+新生成的 PM2 配置在应用环境中设置 `LOG_FILE: 'false'`，由 PM2 保存 stdout 和 stderr，并为输出添加带时区的时间戳，供历史查询使用。需要同时保留 AlemonJS 的项目日志时，将 PM2 环境变量设为 `LOG_FILE=true`。已有项目可在确认 PM2 日志轮转和现有采集需求后，将该值设为 `false`，并在下次应用配置时生效。
+
 PM2 应用名使用**稳定的项目身份**：机器人根目录的 `.alemonx-id` 与 `package.json` 名称共同决定，移动或改名目录不会改变身份；存量项目没有该文件时沿用旧路径摘要名，直到配置被重写（重写时工作台会自动清理旧 PM2 登记）。生成的 `pm2.config.cjs` 使用 `cwd: __dirname`（配置随目录自定位）并内置重启退避字段。
 
 生成的 start/stop 脚本直接调用 `pm2`（不再经过 npx），避免 npm 解析项目 `.npmrc` 并把异常配置值打印进日志；`npm run`/`yarn run` 会自动把项目 `node_modules/.bin` 加入 PATH。

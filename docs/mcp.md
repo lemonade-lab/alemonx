@@ -135,7 +135,7 @@ Git 版本查询读取已拉取的远程引用。需要最新引用时，在确�
 
 1. 用 `alemonjs_get_robot_diagnostics` 查看采集时间、项目版本、依赖或登录配置缺项、本机受管运行记录、PM2 进程和已配置端口的回环 TCP 连通性。PM2 报告会区分守护进程离线、项目未登记、已登记和无法读取。工作台优先探测已观测到的实际端口（包括 autoPort），同时报告配置端口。TCP 可达性、监听归属和应用 HTTP 就绪分别报告。仅核实到本项目的监听进程后才访问本地应用入口，并记录 HTTP 状态。平台连接没有会话证据时返回 `unknown`，独立于这些信号。
 2. 用 `alemonjs_list_robot_operations` 按 `status: "failed"` 查近期失败，按 `taskId` 调用 `alemonjs_get_project_task` 查看时间、步骤和脱敏输出。工作台 HTTP 合并实时任务、持久化任务和仍在保留期内的事件日志，每个机器人最多列出近期 40 条。事件日志的保留期最长为 7 天，并受存储上限限制。CLI 连接可查看本 MCP 进程的任务。
-3. 用 `alemonjs_get_robot_logs` 的 `background` 模式按 `source: "err"`、`since`、`until`、`query` 和 `page` 缩小范围。时间范围采用带时区的 RFC3339。带时间戳的行会返回 `timestamp`。PM2 诊断只连接已有守护进程。后台日志从可信的进程登记或保存的进程列表定位，读取范围为每个合规日志文件尾部最多 4 MiB。如果 `truncated` 为真，返回的结果仅覆盖一段日志。
+3. 用 `alemonjs_get_robot_logs` 的 `background` 模式默认读取 stdout 和 stderr，可用 `since`、`until`、`query` 和 `page` 缩小范围。AlemonJS 默认把 `logger.error` 的控制台输出写到 stdout。仅需查看某个通道时可指定 `source: "out"` 或 `source: "err"`，响应中的 `sourceFilter` 显示实际使用的来源筛选。时间范围采用带时区的 RFC3339。带时间戳的行会返回 `timestamp`。PM2 诊断只连接已有守护进程。后台日志从可信的进程登记或保存的进程列表定位，包含可归属的默认命名 `pm2-logrotate` 归档及系统 `logrotate` 的编号归档（普通或 gzip）。`readScope` 返回实际读取的当前文件数、归档数和限制，以及所选通道读取到的行数和时间跨度。每次最多 16 个文件，每个文件最多读取 4 MiB 和 20,000 行。普通文件从尾部读取，gzip 归档从开头限量解压。`undatedExcluded` 表示因日期或时间范围筛选而排除的匹配行数。`truncated` 为真表示部分文件或内容未读入。
 
 ## 推荐的 Agent 工作流
 

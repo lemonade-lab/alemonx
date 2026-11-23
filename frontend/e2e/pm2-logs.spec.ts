@@ -37,17 +37,19 @@ test('PM2 logs keep live search and historical pagination bounded', async ({
         }
       })
     const query = url.searchParams.get('query') || ''
+    const stderrOnly = url.searchParams.get('source') === 'err'
+    const lineCount = stderrOnly ? 0 : query ? 1 : 120
     const pageNumber = Number(url.searchParams.get('page') || 1)
     const snapshot = {
-      lines: Array.from({ length: query ? 1 : 120 }, (_, index) => ({
+      lines: Array.from({ length: lineCount }, (_, index) => ({
         source: 'out',
-        text: query ? `matched ${query}` : `page ${pageNumber} record ${index}`
+        text: query ? `[ERROR] matched ${query}` : `page ${pageNumber} record ${index}`
       })),
       page: pageNumber,
       perPage: 120,
       hasOlder: !query,
       hasNewer: pageNumber > 1,
-      total: query ? 1 : 100000,
+      total: stderrOnly ? 0 : query ? 1 : 100000,
       truncated: false,
       sources: ['out'],
       diagnostics: []
@@ -64,7 +66,11 @@ test('PM2 logs keep live search and historical pagination bounded', async ({
   await expect(output).toContainText('page 1 record 119')
   await expect(output).not.toContainText('record 120')
   await page.getByRole('textbox', { name: '搜索 PM2 日志' }).fill('needle')
-  await expect(output).toHaveText('OUTmatched needle')
+  await expect(output).toHaveText('OUT[ERROR] matched needle')
+  await page.getByRole('button', { name: '标准错误', exact: true }).click()
+  await expect(output).toContainText('标准输出也可能包含错误日志')
+  await page.getByRole('button', { name: '全部', exact: true }).click()
+  await expect(output).toHaveText('OUT[ERROR] matched needle')
   await expect
     .poll(() =>
       queries.some(
@@ -84,6 +90,61 @@ test('PM2 logs keep live search and historical pagination bounded', async ({
   await expect(page.getByText('显示 120 行 · 共 100000 条匹配')).toBeVisible()
   await page.getByRole('button', { name: '恢复实时', exact: true }).click()
   await expect(output).toContainText('page 1 record 119')
+})
+
+test('PM2 history searches undated logs and clears live results while switching dates', async ({
+  page
+}) => {
+  let releaseDatedHistory: (() => void) | undefined
+  const waitForRelease = new Promise<void>(resolve => {
+    releaseDatedHistory = resolve
+  })
+  await page.route('**/api/v1/robot/pm2-logs**', async route => {
+    const url = new URL(route.request().url())
+    if (url.pathname.endsWith('/days')) {
+      return route.fulfill({
+        json: { days: [{ date: '2026-11-22', count: 1, out: 0, err: 1 }] }
+      })
+    }
+    const dated = url.searchParams.has('date')
+    const snapshot = {
+      lines: [{ source: 'err', text: dated ? 'archived error' : 'undated error' }],
+      page: 1,
+      total: 1,
+      undatedExcluded: dated ? 1 : 0
+    }
+    if (url.pathname.endsWith('/stream')) {
+      return route.fulfill({
+        contentType: 'text/event-stream',
+        body: `data: ${JSON.stringify({ snapshot })}\n\n`
+      })
+    }
+    if (dated) await waitForRelease
+    return route.fulfill({ json: snapshot })
+  })
+  await mountPM2Logs(page)
+  const output = page.getByRole('region', { name: 'PM2 日志内容' })
+  await expect(output).toContainText('undated error')
+  const allHistory = page.getByRole('button', { name: '历史 · 全部日期' })
+  const historyRequest = page.waitForRequest(request => {
+    const url = new URL(request.url())
+    return url.pathname.endsWith('/pm2-logs') && !url.searchParams.has('date')
+  })
+  await allHistory.click()
+  await historyRequest
+  await expect(output).toContainText('undated error')
+  await page.getByRole('combobox', { name: '按日期查看 PM2 日志' }).selectOption('2026-11-22')
+  try {
+    await expect(output).toContainText('正在读取 PM2 日志')
+    await expect(output).not.toContainText('undated error')
+  } finally {
+    releaseDatedHistory?.()
+  }
+  await expect(output).toContainText('archived error')
+  await expect(page.getByText('1 行没有可识别的时间戳', { exact: false })).toBeVisible()
+  await allHistory.click()
+  await expect(output).toContainText('undated error')
+  await expect(output).not.toContainText('archived error')
 })
 
 test('PM2 keeps the selection on a retained log line when old records rotate out', async ({

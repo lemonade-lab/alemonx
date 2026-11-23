@@ -103,6 +103,8 @@ loginctl enable-linger "$(id -un)"
 
 Robots should run with PM2 in production. ALemonX runs `pm2 save` after a successful start, restart, or reload to persist the recovery list; on first deployment a server administrator still needs to run `pm2 startup` once per the PM2 output, so the PM2 daemon survives host reboots.
 
+New PM2 configurations set `LOG_FILE: 'false'` in the app environment so PM2 persists stdout and stderr and timestamps both streams for history queries. Set `LOG_FILE=true` in that environment to also keep AlemonJS project logs. For existing projects, check PM2 log rotation and any log collectors before setting the value to `false` and applying the configuration.
+
 PM2 app names use a **stable project identity**: the `.alemonx-id` file in the robot root combined with the `package.json` name, so moving or renaming the directory does not change the identity. Projects without the identity file keep the legacy path-digest name until the config is rewritten (the workbench then removes the old PM2 registration). The generated `pm2.config.cjs` uses `cwd: __dirname` (the config self-locates with the directory) and includes restart backoff fields.
 
 Generated start/stop scripts call `pm2` directly (no longer through npx), so npm never parses the project `.npmrc` and cannot echo stray config values into logs; `npm run`/`yarn run` add the project `node_modules/.bin` to PATH automatically.

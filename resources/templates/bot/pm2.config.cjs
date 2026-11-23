@@ -14,11 +14,13 @@ module.exports = {
       script: './index.js',
       autorestart: true,
       min_uptime: '10s',
+      log_date_format: 'YYYY-MM-DDTHH:mm:ss.SSSZ',
       max_restarts: 10,
       restart_delay: 3000,
       exp_backoff_restart_delay: 1000,
       env: {
-        NODE_ENV: 'production'
+        NODE_ENV: 'production',
+        LOG_FILE: 'false'
       }
     }
   ]

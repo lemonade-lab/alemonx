@@ -28,15 +28,18 @@ func robotTools() []map[string]any {
 			"root": root, "status": map[string]any{"type": "string", "enum": []string{"running", "completed", "failed", "stopped", "cancelled"}},
 			"limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 40},
 		}, "root"), true, false),
-		tool("alemonjs_get_robot_logs", "查看机器人日志", "读取脱敏日志。本机模式返回近期运行日志。PM2 模式支持日志来源、时间范围、关键词和分页，时间筛选会忽略无时间戳的行。", objectSchema(map[string]any{
+		tool("alemonjs_get_robot_logs", "查看机器人日志", "读取脱敏日志。本机模式返回近期运行日志。PM2 模式默认查询 stdout 和 stderr。排查应用错误时，请保留两路来源并用关键词或时间范围缩小结果。时间筛选会排除无法识别时间戳的行，并返回排除条数和实际读取范围。", objectSchema(map[string]any{
 			"root": root, "mode": map[string]any{"type": "string", "enum": []string{"local", "background"}},
 			"query":   stringSchema("可选关键词。"),
 			"page":    map[string]any{"type": "integer", "minimum": 1},
 			"perPage": map[string]any{"type": "integer", "minimum": 1, "maximum": 100},
-			"source":  map[string]any{"type": "string", "enum": []string{"all", "out", "err"}},
-			"date":    stringSchema("仅 PM2。工作台本地时区 YYYY-MM-DD。"),
-			"since":   stringSchema("仅 PM2。RFC3339 开始时间。"),
-			"until":   stringSchema("仅 PM2。RFC3339 结束时间。"),
+			"source": map[string]any{
+				"type": "string", "enum": []string{"all", "out", "err"},
+				"description": "仅 PM2。省略或使用 all 时查询两路，out 为 stdout，err 为 stderr。AlemonJS 的 logger.error 默认写到 stdout。",
+			},
+			"date":  stringSchema("仅 PM2。工作台本地时区 YYYY-MM-DD。"),
+			"since": stringSchema("仅 PM2。RFC3339 开始时间。"),
+			"until": stringSchema("仅 PM2。RFC3339 结束时间。"),
 		}, "root", "mode"), true, false),
 	}
 }
@@ -178,14 +181,21 @@ func (s *Server) robotTool(ctx context.Context, name string, arguments []byte) (
 			}
 			ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 			defer cancel()
+			source := strings.ToLower(input.Source)
+			if source == "" {
+				source = "all"
+			}
 			result, err := s.robots.DiagnosticPM2Logs(ctx, root, robot.PM2AuditQuery{
 				Page: input.Page, PerPage: perPage,
-				Query: strings.TrimSpace(input.Query), Source: input.Source, Date: input.Date, Since: input.Since, Until: input.Until,
+				Query: strings.TrimSpace(input.Query), Source: source, Date: input.Date, Since: input.Since, Until: input.Until,
 			})
 			if err != nil {
 				return "", err
 			}
-			return encodeResult(result)
+			return encodeResult(struct {
+				robot.PM2AuditPage
+				SourceFilter string `json:"sourceFilter"`
+			}{PM2AuditPage: result, SourceFilter: source})
 		}
 		if input.Source != "" || input.Date != "" || input.Since != "" || input.Until != "" || input.PerPage != 0 {
 			return "", fmt.Errorf("日志来源、日期和分页筛选适用于 PM2 日志")

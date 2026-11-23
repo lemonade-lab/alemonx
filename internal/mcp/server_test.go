@@ -12,6 +12,8 @@ import (
 	"testing"
 	"testing/fstest"
 	"time"
+
+	"alemonx/internal/robot"
 )
 
 func TestServeInitializesAndListsTools(t *testing.T) {
@@ -39,6 +41,92 @@ func TestToolSchemasNeverEmitNullRequired(t *testing.T) {
 	}
 	if strings.Contains(string(encoded), `"required":null`) {
 		t.Fatalf("tool schema contains invalid null required: %s", encoded)
+	}
+}
+
+func TestRobotLogsReportStreamFilter(t *testing.T) {
+	server, root := backpackFixture(t)
+	home := t.TempDir()
+	t.Setenv("PM2_HOME", home)
+	t.Setenv("PM2_DAEMON_RPC_PORT", "")
+
+	stdout := filepath.Join(root, "out.log")
+	stderr := filepath.Join(root, "err.log")
+	backpackWrite(t, stdout, "[ERROR] framework request failed\n")
+	backpackWrite(t, stderr, "runtime diagnostic\n")
+	dump, err := json.Marshal([]map[string]string{{
+		"pm_cwd": root, "pm_out_log_path": stdout, "pm_err_log_path": stderr,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	backpackWrite(t, filepath.Join(home, "dump.pm2"), string(dump))
+
+	for _, tc := range []struct {
+		name   string
+		source string
+		filter string
+		total  int
+	}{
+		{name: "omitted source", filter: "all", total: 1},
+		{name: "stdout", source: "out", filter: "out", total: 1},
+		{name: "stderr", source: "err", filter: "err", total: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := map[string]any{"root": root, "mode": "background", "query": "framework request failed"}
+			if tc.source != "" {
+				args["source"] = tc.source
+			}
+			raw := backpackOK(t, server, "alemonjs_get_robot_logs", args)
+			var result struct {
+				robot.PM2AuditPage
+				SourceFilter string `json:"sourceFilter"`
+			}
+			if err := json.Unmarshal([]byte(raw), &result); err != nil {
+				t.Fatal(err)
+			}
+			if result.SourceFilter != tc.filter || result.Total != tc.total || len(result.Lines) != tc.total {
+				t.Fatalf("unexpected filtered result: %s", raw)
+			}
+			if tc.total > 0 && result.Lines[0].Source != "out" {
+				t.Fatalf("framework error should retain its stdout source: %s", raw)
+			}
+		})
+	}
+}
+
+func TestRobotLogHistoryReportsPM2ArchiveAndTimeCoverage(t *testing.T) {
+	server, root := backpackFixture(t)
+	home := t.TempDir()
+	t.Setenv("PM2_HOME", home)
+	t.Setenv("PM2_DAEMON_RPC_PORT", "")
+	stderr := filepath.Join(root, "err.log")
+	backpackWrite(t, stderr, "failure without time\n")
+	backpackWrite(t, filepath.Join(root, "err__2026-11-22_01-00-00.log"), "2026-11-22T00:00:00+08:00: archived failure\n")
+	backpackWrite(t, filepath.Join(root, "err.log.1"), "2026-11-22T00:20:00+08:00: numbered failure\n")
+	excluded := filepath.Join(root, "err__2026-11-22_02-00-00.log")
+	backpackWrite(t, excluded, "2026-11-22T00:00:00+08:00: foreign failure\n")
+	dump, err := json.Marshal([]map[string]string{
+		{"pm_cwd": root, "pm_err_log_path": stderr},
+		{"pm_cwd": t.TempDir(), "pm_err_log_path": excluded},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	backpackWrite(t, filepath.Join(home, "dump.pm2"), string(dump))
+	raw := backpackOK(t, server, "alemonjs_get_robot_logs", map[string]any{
+		"root": root, "mode": "background", "source": "err", "query": "failure",
+		"since": "2026-11-22T00:00:00+08:00", "until": "2026-11-22T01:00:00+08:00",
+	})
+	var result robot.PM2AuditPage
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Total != 2 || result.UndatedExcluded != 1 || len(result.Lines) != 2 ||
+		result.Lines[0].Timestamp == nil || !strings.Contains(result.Output, "archived failure") || !strings.Contains(result.Output, "numbered failure") ||
+		result.ReadScope == nil || result.ReadScope.ArchiveFiles != 2 || result.ReadScope.ActiveFiles != 1 ||
+		result.ReadScope.ScannedLines != 3 || result.ReadScope.OldestTimestamp == nil || result.ReadScope.NewestTimestamp == nil {
+		t.Fatalf("unexpected history coverage: %s", raw)
 	}
 }
 

@@ -95,12 +95,13 @@ func (m Manager) SavePM2Registration(root string, settings PM2RegistrationSettin
 		return PM2RegistrationSettings{}, err
 	}
 	if err := os.WriteFile(configPath, []byte(pm2config.ConfigWithOptions(path, pm2config.Options{
-		Name:        settings.Name,
-		Script:      settings.Script,
-		Autorestart: settings.Autorestart,
-		MaxRestarts: settings.MaxRestarts,
-		MaxMemory:   settings.MaxMemory,
-		Env:         settings.Env,
+		Name:          settings.Name,
+		Script:        settings.Script,
+		Autorestart:   settings.Autorestart,
+		MaxRestarts:   settings.MaxRestarts,
+		MaxMemory:     settings.MaxMemory,
+		Env:           settings.Env,
+		LogDateFormat: pm2config.DefaultLogDateFormat,
 	})), 0o644); err != nil {
 		return PM2RegistrationSettings{}, fmt.Errorf("保存 PM2 配置失败：%w", err)
 	}

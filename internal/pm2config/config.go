@@ -19,19 +19,21 @@ import (
 )
 
 const (
-	namespace  = "alemonx"
-	idFileName = ".alemonx-id"
+	namespace            = "alemonx"
+	idFileName           = ".alemonx-id"
+	DefaultLogDateFormat = "YYYY-MM-DDTHH:mm:ss.SSSZ"
 )
 
 // Options is the small, safe subset of PM2 settings exposed by the workbench.
 // Low-level ecosystem fields remain generated defaults.
 type Options struct {
-	Name        string            `json:"name"`
-	Script      string            `json:"script"`
-	Autorestart bool              `json:"autorestart"`
-	MaxRestarts int               `json:"maxRestarts"`
-	MaxMemory   string            `json:"maxMemory,omitempty"`
-	Env         map[string]string `json:"env"`
+	Name          string            `json:"name"`
+	Script        string            `json:"script"`
+	Autorestart   bool              `json:"autorestart"`
+	MaxRestarts   int               `json:"maxRestarts"`
+	MaxMemory     string            `json:"maxMemory,omitempty"`
+	Env           map[string]string `json:"env"`
+	LogDateFormat string            `json:"logDateFormat,omitempty"`
 }
 
 var unsafeName = regexp.MustCompile(`[^a-z0-9]+`)
@@ -121,11 +123,12 @@ func Config(root string) string {
 // DefaultOptions describes the conventional production registration.
 func DefaultOptions(root string) Options {
 	return Options{
-		Name:        Name(root),
-		Script:      "./index.js",
-		Autorestart: true,
-		MaxRestarts: 10,
-		Env:         map[string]string{"NODE_ENV": "production"},
+		Name:          Name(root),
+		Script:        "./index.js",
+		Autorestart:   true,
+		MaxRestarts:   10,
+		Env:           map[string]string{"NODE_ENV": "production", "LOG_FILE": "false"},
+		LogDateFormat: DefaultLogDateFormat,
 	}
 }
 
@@ -167,6 +170,9 @@ func ConfigWithOptions(root string, options Options) string {
 	fields.WriteString("      max_restarts: " + strconv.Itoa(options.MaxRestarts) + ",\n")
 	if strings.TrimSpace(options.MaxMemory) != "" {
 		fields.WriteString("      max_memory_restart: " + strconv.Quote(options.MaxMemory) + ",\n")
+	}
+	if options.LogDateFormat != "" {
+		fields.WriteString("      log_date_format: " + jsSingleQuote(options.LogDateFormat) + ",\n")
 	}
 	fields.WriteString("      restart_delay: 3000,\n")
 	fields.WriteString("      exp_backoff_restart_delay: 1000,\n")

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -70,18 +71,33 @@ func (Manager) ValidatePM2LogRequest(root string, q PM2AuditQuery) error {
 
 // PM2AuditPage is one page of filtered PM2 output plus pagination metadata.
 type PM2AuditPage struct {
-	Output      string             `json:"output"`
-	Lines       []PM2AuditLine     `json:"lines"`
-	Page        int                `json:"page"`
-	PerPage     int                `json:"perPage"`
-	HasOlder    bool               `json:"hasOlder"`
-	HasNewer    bool               `json:"hasNewer"`
-	Total       int                `json:"total"`
-	Truncated   bool               `json:"truncated"`
-	Sources     []string           `json:"sources"`
-	Date        string             `json:"date,omitempty"`
-	Query       string             `json:"query,omitempty"`
-	Diagnostics []PM2LogDiagnostic `json:"diagnostics,omitempty"`
+	Output          string             `json:"output"`
+	Lines           []PM2AuditLine     `json:"lines"`
+	Page            int                `json:"page"`
+	PerPage         int                `json:"perPage"`
+	HasOlder        bool               `json:"hasOlder"`
+	HasNewer        bool               `json:"hasNewer"`
+	Total           int                `json:"total"`
+	Truncated       bool               `json:"truncated"`
+	Sources         []string           `json:"sources"`
+	Date            string             `json:"date,omitempty"`
+	Query           string             `json:"query,omitempty"`
+	Diagnostics     []PM2LogDiagnostic `json:"diagnostics,omitempty"`
+	UndatedExcluded int                `json:"undatedExcluded,omitempty"`
+	ReadScope       *PM2LogReadScope   `json:"readScope,omitempty"`
+}
+
+// PM2LogReadScope describes the bounded history available to a diagnostics caller.
+type PM2LogReadScope struct {
+	ActiveFiles     int        `json:"activeFiles"`
+	ArchiveFiles    int        `json:"archiveFiles"`
+	ArchiveFormats  []string   `json:"archiveFormats"`
+	MaxFiles        int        `json:"maxFiles"`
+	MaxBytesPerFile int64      `json:"maxBytesPerFile"`
+	MaxLinesPerFile int        `json:"maxLinesPerFile"`
+	ScannedLines    int        `json:"scannedLines"`
+	OldestTimestamp *time.Time `json:"oldestTimestamp,omitempty"`
+	NewestTimestamp *time.Time `json:"newestTimestamp,omitempty"`
 }
 
 // PM2AuditLine is one log line with its source stream ("out" or "err") so the
@@ -150,6 +166,7 @@ type pm2LogFile struct {
 
 type pm2LogPathCacheEntry struct {
 	files     []pm2LogFile
+	processes []PM2Process
 	fetchedAt time.Time
 }
 
@@ -166,10 +183,12 @@ func init() {
 
 var pm2LogTimeLayouts = []string{
 	"2006-01-02 15:04:05",
-	"2006-01-02 15:04:05.000",
-	"2006-01-02T15:04:05Z07:00",
-	"2006-01-02T15:04:05.000Z07:00",
+	time.RFC3339Nano,
+	"2006-01-02T15:04:05",
+	"2006-01-02-15:04:05",
 	"2006-01-02 15:04:05 -0700",
+	"2006-01-02 15:04:05 Z07:00",
+	"2006-01-02 15:04 Z07:00",
 }
 
 var (
@@ -273,12 +292,34 @@ var pm2DiagnosticRules = []pm2DiagnosticRule{
 	},
 }
 
+var pm2ANSIPrefix = regexp.MustCompile(`^(?:\x1b\[[0-9;]*m)+`)
+
 func parsePM2LogTimestamp(line string) (time.Time, bool) {
+	if strings.HasPrefix(line, "\x1b") {
+		line = pm2ANSIPrefix.ReplaceAllString(line, "")
+	}
 	candidate := line
-	if strings.HasPrefix(candidate, "[") {
-		if end := strings.IndexByte(candidate, ']'); end > 0 {
-			candidate = candidate[1:end]
+	switch {
+	case strings.HasPrefix(line, "["):
+		if end := strings.IndexByte(line, ']'); end > 0 {
+			candidate = line[1:end]
 		}
+	case strings.HasPrefix(line, "{") && strings.Contains(line, `"timestamp"`):
+		var record struct {
+			Timestamp string  `json:"timestamp"`
+			Message   *string `json:"message"`
+			Type      string  `json:"type"`
+		}
+		if json.Unmarshal([]byte(line), &record) != nil || record.Message == nil || (record.Type != "out" && record.Type != "err") {
+			return time.Time{}, false
+		}
+		candidate = record.Timestamp
+	case len(line) >= 19 && line[4] == '-' && line[7] == '-':
+		// PM2 raw output separates the timestamp and the text with ": ".
+		candidate, _, _ = strings.Cut(line, ": ")
+	}
+	if len(candidate) < 19 || candidate[4] != '-' || candidate[7] != '-' {
+		return time.Time{}, false
 	}
 	for _, layout := range pm2LogTimeLayouts {
 		if parsed, err := time.ParseInLocation(layout, candidate, time.Local); err == nil {
@@ -402,25 +443,30 @@ func diagnosePM2LogLinesContext(ctx context.Context, lines []pm2AuditLogLine) ([
 
 // pm2LogFiles resolves the out/err log file paths belonging to the given
 // robot directory. Results are cached briefly because pm2 jlist is not free.
-func (Manager) pm2LogFiles(ctx context.Context, root string) ([]pm2LogFile, error) {
+func (m Manager) pm2LogFiles(ctx context.Context, root string) ([]pm2LogFile, error) {
+	entry, err := m.pm2LogFileSet(ctx, root)
+	return entry.files, err
+}
+
+func (Manager) pm2LogFileSet(ctx context.Context, root string) (pm2LogPathCacheEntry, error) {
 	project, err := projectPath(root)
 	if err != nil {
-		return nil, err
+		return pm2LogPathCacheEntry{}, err
 	}
 	pm2LogPathCache.Lock()
 	entry := pm2LogPathCache.entries[root]
 	pm2LogPathCache.Unlock()
 	if time.Since(entry.fetchedAt) < pm2LogPathCacheTTL {
-		return entry.files, nil
+		return entry, nil
 	}
-	processes, err := pm2JList(ctx, project, true)
-	if err != nil {
-		return nil, fmt.Errorf("无法读取 PM2 进程：%w", err)
+	processes, processErr := pm2JList(ctx, project, true)
+	if err := ctx.Err(); err != nil {
+		return pm2LogPathCacheEntry{}, err
 	}
 	var files []pm2LogFile
 	seen := make(map[string]bool)
 	for _, p := range processes {
-		if !sameWorkspacePath(p.CWD, root) {
+		if !sameWorkspacePath(p.CWD, project) {
 			continue
 		}
 		for _, candidate := range []pm2LogFile{
@@ -434,27 +480,34 @@ func (Manager) pm2LogFiles(ctx context.Context, root string) ([]pm2LogFile, erro
 			files = append(files, candidate)
 		}
 	}
+	home := pm2HomePath(project)
+	if saved, err := savedPM2Processes(home); err == nil {
+		processes = append(processes, saved...)
+		if len(files) == 0 {
+			files = diagnosticPM2Files(project, home, processes)
+		}
+	}
 	if len(files) == 0 {
+		if processErr != nil {
+			return pm2LogPathCacheEntry{}, fmt.Errorf("无法读取 PM2 进程：%w", processErr)
+		}
 		files = defaultPM2LogFiles(project)
 	}
 	if len(files) == 0 {
-		return nil, fmt.Errorf("未找到当前机器人的 PM2 日志文件，请确认已用 PM2 启动。")
+		return pm2LogPathCacheEntry{}, fmt.Errorf("未找到当前机器人的 PM2 日志文件，请确认已用 PM2 启动。")
 	}
+	entry = pm2LogPathCacheEntry{files: files, processes: processes, fetchedAt: time.Now()}
 	pm2LogPathCache.Lock()
-	pm2LogPathCache.entries[root] = pm2LogPathCacheEntry{files: files, fetchedAt: time.Now()}
+	pm2LogPathCache.entries[root] = entry
 	pm2LogPathCache.Unlock()
-	return files, nil
+	return entry, nil
 }
 
 // defaultPM2LogFiles locates the robot's PM2 log files under ~/.pm2/logs by
 // project name when the daemon currently has no matching process (for example
 // after the robot stopped), so past logs remain available for audit.
 func defaultPM2LogFiles(project string) []pm2LogFile {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil
-	}
-	logsDir := filepath.Join(home, ".pm2", "logs")
+	logsDir := filepath.Join(pm2HomePath(project), "logs")
 	base := strings.ToLower(filepath.Base(project))
 	entries, err := os.ReadDir(logsDir)
 	if err != nil {
@@ -558,32 +611,70 @@ func (m Manager) readPM2AuditLines(root string) ([]pm2AuditLogLine, []string, bo
 	return m.readPM2AuditLinesContext(context.Background(), root)
 }
 
-func (m Manager) readPM2AuditLinesContext(ctx context.Context, root string) ([]pm2AuditLogLine, []string, bool, error) {
-	files, err := m.pm2LogFiles(ctx, root)
+// scanPM2History visits archives oldest first, followed by current logs.
+func (m Manager) scanPM2History(ctx context.Context, root string, visit func(string, []pm2AuditLogLine) error) (bool, error) {
+	entry, err := m.pm2LogFileSet(ctx, root)
 	if err != nil {
-		return nil, nil, false, err
+		return false, err
 	}
-	var lines []pm2AuditLogLine
-	sourceSet := make(map[string]bool)
-	truncated := false
-	for _, file := range files {
-		fileLines, cut, readErr := readCachedPM2LogFile(ctx, file.Path, pm2LogMaxLines)
-		if readErr != nil {
-			if os.IsNotExist(readErr) {
-				continue
-			}
-			return nil, nil, false, fmt.Errorf("读取日志失败：%w", readErr)
+	project, err := projectPath(root)
+	if err != nil {
+		return false, err
+	}
+	home := pm2HomePath(project)
+	bases := diagnosticPM2Files(project, home, entry.processes)
+	archives, truncated, err := pm2LogArchives(ctx, bases, entry.processes, diagnosticLogFiles)
+	if err != nil {
+		return false, err
+	}
+	for _, archive := range archives {
+		lines, cut, err := readDiagnosticPM2File(ctx, archive)
+		if ctx.Err() != nil {
+			return false, ctx.Err()
+		}
+		if err != nil {
+			truncated = true
+			continue
 		}
 		truncated = truncated || cut
-		sourceSet[file.Source] = true
+		if err := visit(archive.Source, lines); err != nil {
+			return false, err
+		}
+	}
+	for _, file := range entry.files {
+		lines, cut, err := readCachedPM2LogFile(ctx, file.Path, pm2LogMaxLines)
+		if os.IsNotExist(err) {
+			truncated = true
+			continue
+		}
+		if err != nil {
+			return false, fmt.Errorf("读取日志失败：%w", err)
+		}
+		truncated = truncated || cut
+		if err := visit(file.Source, lines); err != nil {
+			return false, err
+		}
+	}
+	return truncated, nil
+}
+
+func (m Manager) readPM2AuditLinesContext(ctx context.Context, root string) ([]pm2AuditLogLine, []string, bool, error) {
+	var lines []pm2AuditLogLine
+	sourceSet := make(map[string]bool)
+	truncated, err := m.scanPM2History(ctx, root, func(source string, fileLines []pm2AuditLogLine) error {
+		sourceSet[source] = true
 		for i := range fileLines {
-			fileLines[i].Source = file.Source
+			fileLines[i].Source = source
 		}
 		if len(lines) == 0 {
 			lines = fileLines
 		} else {
 			lines = append(lines, fileLines...)
 		}
+		return ctx.Err()
+	})
+	if err != nil {
+		return nil, nil, false, err
 	}
 	sortPM2AuditLines(lines)
 	sources := make([]string, 0, len(sourceSet))
@@ -656,7 +747,7 @@ func filterPM2AuditLinesContext(ctx context.Context, lines []pm2AuditLogLine, q 
 			return q.Date == "" && since.IsZero() && until.IsZero()
 		}
 		if !date.IsZero() {
-			y, mo, d := line.Timestamp.Date()
+			y, mo, d := line.Timestamp.In(time.Local).Date()
 			dy, dmo, dd := date.Date()
 			if y != dy || mo != dmo || d != dd {
 				return false
@@ -738,24 +829,43 @@ func buildPM2AuditPageContext(ctx context.Context, allLines []pm2AuditLogLine, s
 		return PM2AuditPage{}, err
 	}
 	total := len(matched)
+	undatedExcluded := 0
+	if q.Date != "" || q.Since != "" || q.Until != "" {
+		source := strings.ToLower(q.Source)
+		keyword := strings.ToLower(q.Query)
+		for i, line := range allLines {
+			if i%256 == 0 && ctx.Err() != nil {
+				return PM2AuditPage{}, ctx.Err()
+			}
+			if !line.HasTime && (source == "" || source == "all" || line.Source == source) &&
+				(keyword == "" || strings.Contains(strings.ToLower(line.Text), keyword)) {
+				undatedExcluded++
+			}
+		}
+	}
 	// Bound the page before multiplication to prevent signed integer overflow.
 	start := total
 	if q.Page-1 <= total/q.PerPage {
 		start = (q.Page - 1) * q.PerPage
 	}
 	if start >= total {
+		output := "没有更早的 PM2 日志。"
+		if total == 0 {
+			output = "在已读取的 PM2 日志范围内没有匹配记录。"
+		}
 		return PM2AuditPage{
-			Output:      "没有更早的 PM2 日志。",
-			Lines:       []PM2AuditLine{},
-			Page:        q.Page,
-			PerPage:     q.PerPage,
-			HasNewer:    q.Page > 1 && total > 0,
-			Total:       total,
-			Truncated:   truncated,
-			Sources:     sources,
-			Date:        q.Date,
-			Query:       q.Query,
-			Diagnostics: diagnostics,
+			Output:          output,
+			UndatedExcluded: undatedExcluded,
+			Lines:           []PM2AuditLine{},
+			Page:            q.Page,
+			PerPage:         q.PerPage,
+			HasNewer:        q.Page > 1 && total > 0,
+			Total:           total,
+			Truncated:       truncated,
+			Sources:         sources,
+			Date:            q.Date,
+			Query:           q.Query,
+			Diagnostics:     diagnostics,
 		}, nil
 	}
 	end := start + q.PerPage
@@ -782,18 +892,19 @@ func buildPM2AuditPageContext(ctx context.Context, allLines []pm2AuditLogLine, s
 		builder.WriteString("PM2 暂无可读取的日志。")
 	}
 	return PM2AuditPage{
-		Output:      builder.String(),
-		Lines:       lines,
-		Page:        q.Page,
-		PerPage:     q.PerPage,
-		HasOlder:    end < total,
-		HasNewer:    start > 0,
-		Total:       total,
-		Truncated:   truncated,
-		Sources:     sources,
-		Date:        q.Date,
-		Query:       q.Query,
-		Diagnostics: diagnostics,
+		Output:          builder.String(),
+		UndatedExcluded: undatedExcluded,
+		Lines:           lines,
+		Page:            q.Page,
+		PerPage:         q.PerPage,
+		HasOlder:        end < total,
+		HasNewer:        start > 0,
+		Total:           total,
+		Truncated:       truncated,
+		Sources:         sources,
+		Date:            q.Date,
+		Query:           q.Query,
+		Diagnostics:     diagnostics,
 	}, nil
 }
 
@@ -804,43 +915,36 @@ func (m Manager) PM2LogDays(root string) ([]PM2LogDay, error) {
 }
 
 func (m Manager) PM2LogDaysContext(ctx context.Context, root string) ([]PM2LogDay, error) {
-	files, err := m.pm2LogFiles(ctx, root)
-	if err != nil {
-		return nil, err
-	}
+	days, _, err := m.PM2LogDateIndex(ctx, root)
+	return days, err
+}
+
+func (m Manager) PM2LogDateIndex(ctx context.Context, root string) ([]PM2LogDay, bool, error) {
 	type dayStats struct {
 		day   *PM2LogDay
 		first time.Time
 		last  time.Time
 	}
 	days := make(map[string]*dayStats)
-	for _, file := range files {
-		lines, _, readErr := readCachedPM2LogFile(ctx, file.Path, pm2LogMaxLines)
-		if readErr != nil {
-			if os.IsNotExist(readErr) {
-				continue
-			}
-			return nil, fmt.Errorf("读取日志失败：%w", readErr)
-		}
+	truncated, err := m.scanPM2History(ctx, root, func(source string, lines []pm2AuditLogLine) error {
 		for i := range lines {
 			if i%256 == 0 {
 				if err := ctx.Err(); err != nil {
-					return nil, err
+					return err
 				}
 			}
 			line := lines[i]
-			line.Source = file.Source
 			if !line.HasTime {
 				continue
 			}
-			key := line.Timestamp.Format("2006-01-02")
+			key := line.Timestamp.In(time.Local).Format("2006-01-02")
 			stats, ok := days[key]
 			if !ok {
 				stats = &dayStats{day: &PM2LogDay{Date: key}}
 				days[key] = stats
 			}
 			stats.day.Count++
-			if line.Source == "err" {
+			if source == "err" {
 				stats.day.Err++
 			} else {
 				stats.day.Out++
@@ -852,21 +956,25 @@ func (m Manager) PM2LogDaysContext(ctx context.Context, root string) ([]PM2LogDa
 				stats.last = line.Timestamp
 			}
 		}
+		return nil
+	})
+	if err != nil {
+		return nil, false, err
 	}
 	result := make([]PM2LogDay, 0, len(days))
 	for _, stats := range days {
 		if !stats.first.IsZero() {
-			stats.day.First = stats.first.Format("2006-01-02 15:04:05")
+			stats.day.First = stats.first.In(time.Local).Format("2006-01-02 15:04:05")
 		}
 		if !stats.last.IsZero() {
-			stats.day.Last = stats.last.Format("2006-01-02 15:04:05")
+			stats.day.Last = stats.last.In(time.Local).Format("2006-01-02 15:04:05")
 		}
 		result = append(result, *stats.day)
 	}
 	sort.Slice(result, func(i, j int) bool {
 		return result[i].Date > result[j].Date
 	})
-	return result, nil
+	return result, truncated, nil
 }
 
 // DeletePM2Logs removes only timestamped records in the requested calendar
@@ -913,7 +1021,7 @@ func (m Manager) DeletePM2Logs(root string, q PM2AuditQuery) (PM2LogDeleteResult
 		for _, line := range strings.SplitAfter(string(content), "\n") {
 			text := strings.TrimSuffix(line, "\n")
 			stamp, hasTime := parsePM2LogTimestamp(text)
-			if hasTime && stamp.Year() == day.Year() && stamp.YearDay() == day.YearDay() {
+			if local := stamp.In(time.Local); hasTime && local.Year() == day.Year() && local.YearDay() == day.YearDay() {
 				removed++
 				continue
 			}

@@ -7,6 +7,7 @@ import {
   ArrowRight,
   ChevronRight,
   Download,
+  History,
   Pause,
   Radio,
   RefreshCw,
@@ -26,14 +27,14 @@ type PM2AuditLine = { source: string; text: string }
 type PM2LiveLine = PM2AuditLine & { id: number }
 
 const PM2LogLine = memo(function PM2LogLine({ line }: { line: PM2AuditLine }) {
-  const error = line.source === 'err'
+  const isStderr = line.source === 'err'
   return (
-    <div className={cn('pm2-audit-line', error && 'pm2-audit-line-err')}>
+    <div className={cn('pm2-audit-line', isStderr && 'pm2-audit-line-err')}>
       <span
         className="pm2-audit-line-source"
-        title={error ? '标准错误 stderr' : '标准输出 stdout'}
+        title={isStderr ? '标准错误 stderr' : '标准输出 stdout'}
       >
-        {error ? 'ERR' : 'OUT'}
+        {isStderr ? 'ERR' : 'OUT'}
       </span>
       <span>{line.text}</span>
     </div>
@@ -80,6 +81,7 @@ export function PM2LogsPanel({
     date?: string
     query?: string
     diagnostics?: PM2LogDiagnostic[]
+    undatedExcluded?: number
   }
   type PM2LogDay = {
     date: string
@@ -95,10 +97,11 @@ export function PM2LogsPanel({
   const [source, setSource] = useState('all')
   const [query, setQuery] = useState('')
   const [committedQuery, setCommittedQuery] = useState('')
-  const [data, setData] = useState<PM2AuditPage | null>(null)
+  const [response, setResponse] = useState<{ root: string; key: string; page: PM2AuditPage } | null>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [days, setDays] = useState<PM2LogDay[]>([])
+  const [daysTruncated, setDaysTruncated] = useState(false)
   const [live, setLive] = useState(true)
   const [liveConnected, setLiveConnected] = useState(false)
   const [streamFailed, setStreamFailed] = useState(false)
@@ -116,6 +119,11 @@ export function PM2LogsPanel({
   const [following, setFollowing] = useState(true)
   const [daysError, setDaysError] = useState('')
   const daysRequest = useRef({ id: 0 })
+  const requestKey = JSON.stringify([root, live, date, source, page, perPage, committedQuery, revision])
+  const data =
+    response?.root === root && (frozen || response.key === requestKey)
+      ? response.page
+      : null
 
   const loadDays = useCallback(async () => {
     const request = ++daysRequest.current.id
@@ -127,6 +135,7 @@ export function PM2LogsPanel({
       if (request !== daysRequest.current.id) return
       if (!response.ok) throw new Error(result.error || '无法读取日志日期')
       setDays(result.days ?? [])
+      setDaysTruncated(result.truncated === true)
       setDaysError('')
     } catch (reason) {
       if (request === daysRequest.current.id)
@@ -142,9 +151,11 @@ export function PM2LogsPanel({
     setSource('all')
     setQuery('')
     setCommittedQuery('')
-    setData(null)
+    setResponse(null)
     setError('')
     setDays([])
+    setDaysTruncated(false)
+    setDaysError('')
     setLive(true)
     setFrozen(false)
     setLiveLines([])
@@ -199,7 +210,7 @@ export function PM2LogsPanel({
           const result = await response.json()
           if (!active) return
           if (!response.ok) throw new Error(result.error || '无法读取 PM2 日志')
-          setData(result)
+          setResponse({ root, key: requestKey, page: result })
           setLiveLines([])
         } catch (reason) {
           if (active)
@@ -254,7 +265,7 @@ export function PM2LogsPanel({
         }
         if (payload.snapshot) {
           pending = []
-          setData(payload.snapshot)
+          setResponse({ root, key: requestKey, page: payload.snapshot })
           setLiveLines([])
           setLoading(false)
           setLiveConnected(true)
@@ -293,6 +304,7 @@ export function PM2LogsPanel({
     page,
     perPage,
     revision,
+    requestKey,
     root,
     source
   ])
@@ -327,7 +339,8 @@ export function PM2LogsPanel({
   }, [committedQuery, data?.lines, source])
   const visibleLines = useMemo(() => {
     const q = committedQuery.trim().toLowerCase()
-    const updates = source === 'all' && !q ? liveLines : liveLines.filter(
+    const liveUpdates = data && (live || frozen) ? liveLines : []
+    const updates = source === 'all' && !q ? liveUpdates : liveUpdates.filter(
       line =>
         (source === 'all' || line.source === source) &&
         (!q || line.text.toLowerCase().includes(q))
@@ -338,7 +351,7 @@ export function PM2LogsPanel({
       updates,
       count
     }
-  }, [committedQuery, history, liveLines, source])
+  }, [committedQuery, data, frozen, history, live, liveLines, source])
   const diagnostics = data?.diagnostics ?? []
 
   useEffect(() => {
@@ -357,6 +370,9 @@ export function PM2LogsPanel({
     dayIndex >= 0 && dayIndex + 1 < days.length ? days[dayIndex + 1].date : ''
   const newerDay = dayIndex > 0 ? days[dayIndex - 1].date : ''
   const selectDay = (target: string) => {
+    if (!live && !frozen && date === target && page === 1) return
+    if (live || frozen) void loadDays()
+    setLoading(true)
     setFrozen(false)
     setLive(false)
     setDate(target)
@@ -432,7 +448,7 @@ export function PM2LogsPanel({
     }
   }
   const selectedLogScope = `${date} · ${
-    source === 'all' ? '全部日志' : source === 'out' ? '输出日志' : '错误日志'
+    source === 'all' ? '全部日志' : source === 'out' ? '标准输出' : '标准错误'
   }`
 
   if (!open) return null
@@ -484,6 +500,14 @@ export function PM2LogsPanel({
             {live ? <Pause className="size-3" /> : <Radio className="size-3" />}
             {live ? '暂停接收' : '恢复实时'}
           </button>
+          <button
+            className="pm2-audit-tool-btn"
+            aria-pressed={!live && !frozen && !date}
+            onClick={() => selectDay('')}
+          >
+            <History className="size-3" />
+            历史 · 全部日期
+          </button>
           <div className="pm2-audit-source" role="group" aria-label="日志来源">
             {[
               ['all', '全部'],
@@ -499,7 +523,7 @@ export function PM2LogsPanel({
                 aria-pressed={source === value}
                 title={
                   value === 'err'
-                    ? 'stderr 来源，不代表每一行都是错误'
+                    ? '仅显示 stderr。AlemonJS 的错误也可能出现在标准输出。'
                     : undefined
                 }
                 onClick={() => {
@@ -544,10 +568,10 @@ export function PM2LogsPanel({
             aria-label="按日期查看 PM2 日志"
             title="按日期查看日志"
           >
-            <option value="">最新（全部日期）</option>
+            <option value="">全部日期</option>
             {days.map(day => (
               <option key={day.date} value={day.date}>
-                {day.date}（{day.count} 条 · err {day.err}）
+                {day.date}（{day.count} 条 · 标准错误 {day.err} 条）
               </option>
             ))}
           </select>
@@ -698,6 +722,16 @@ export function PM2LogsPanel({
             日期列表不可用：{daysError}
           </div>
         )}
+        {daysTruncated && (
+          <div className="pm2-audit-notice" role="status">
+            日期列表仅覆盖可读取的日志范围。
+          </div>
+        )}
+        {!!data?.undatedExcluded && (
+          <div className="pm2-audit-notice" role="status">
+            {data.undatedExcluded} 行没有可识别的时间戳，可在「历史 · 全部日期」中查找。
+          </div>
+        )}
         <div
           className={cn('pm2-audit-body', !wrap && 'pm2-audit-nowrap')}
           ref={outputRef}
@@ -716,9 +750,11 @@ export function PM2LogsPanel({
             <div className="pm2-audit-hint">正在读取 PM2 日志…</div>
           ) : visibleLines.count === 0 ? (
             <div className="pm2-audit-hint">
-              {committedQuery || date || source !== 'all'
-                ? '没有匹配的日志，请调整筛选条件。'
-                : '暂无日志，进程产生输出后会显示在这里。'}
+              {source === 'err'
+                ? '标准错误中没有匹配记录。标准输出也可能包含错误日志，请切换到「全部」查找。'
+                : committedQuery || date || source !== 'all'
+                  ? '没有匹配的日志，请调整筛选条件。'
+                  : '暂无日志，进程产生输出后会显示在这里。'}
             </div>
           ) : (
             <>
@@ -748,7 +784,7 @@ export function PM2LogsPanel({
           <span>
             显示 {visibleLines.count} 行
             {!live && !frozen && data ? ` · 共 ${data.total} 条匹配` : ''}
-            {data?.truncated ? ' · 超出读取上限，仅显示最近记录' : ''}
+            {data?.truncated ? ' · 部分日志未读入' : ''}
           </span>
           {!following && (
             <button
@@ -769,7 +805,7 @@ export function PM2LogsPanel({
         open={deleteDialogOpen}
         title="删除指定 PM2 日志"
         subtitle={date ? selectedLogScope : ''}
-        message="会删除所选日期和来源的日志记录；删除后无法恢复。未带时间戳的记录会保留。"
+        message="会删除当前日志文件中符合日期和来源的记录，删除后无法恢复。轮转归档和没有时间戳的记录会保留。"
         confirmLabel="删除日志"
         destructive
         busy={deleteBusy}

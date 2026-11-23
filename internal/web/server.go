@@ -4714,12 +4714,15 @@ func (s *server) robotPM2LogDaysHandler(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "日志参数编码无效或 root 重复")
 		return
 	}
-	days, err := s.robots.PM2LogDaysContext(r.Context(), root)
+	days, truncated, err := s.robots.PM2LogDateIndex(r.Context(), root)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"days": days})
+	writeJSON(w, http.StatusOK, struct {
+		Days      []robot.PM2LogDay `json:"days"`
+		Truncated bool              `json:"truncated,omitempty"`
+	}{Days: days, Truncated: truncated})
 }
 
 func (s *server) robotPM2LogExportHandler(w http.ResponseWriter, r *http.Request) {
